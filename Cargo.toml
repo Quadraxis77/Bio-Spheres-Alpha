@@ -1,0 +1,52 @@
+[package]
+name = "bio-spheres"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "bio_spheres"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bio-spheres"
+path = "src/main.rs"
+
+[dependencies]
+wgpu = "22.1"
+winit = "0.30"
+pollster = "0.4"
+bytemuck = { version = "1.14", features = ["derive"] }
+env_logger = "0.11"
+log = "0.4"
+egui = "0.29"
+egui-wgpu = "0.29"
+egui-winit = "0.29"
+egui_dock = { version = "0.14", features = ["serde"] }
+ron = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rfd = "0.15"
+thiserror = "2.0"
+crossbeam-channel = "0.5"
+futures-lite = "2.0"
+rayon = "1.10"
+glam = "0.29"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["wincon", "consoleapi"] }
+
+[build-dependencies]
+winres = "0.1"
+
+[dev-dependencies]
+proptest = "1.4"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = true
+codegen-units = 1

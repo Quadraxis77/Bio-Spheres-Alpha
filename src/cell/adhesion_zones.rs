@@ -1,0 +1,1 @@
+// Adhesion zone definitions

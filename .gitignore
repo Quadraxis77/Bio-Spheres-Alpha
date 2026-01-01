@@ -1,0 +1,30 @@
+# Rust build artifacts
+/target
+Cargo.lock
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# User genomes (keep these local)
+genomes/*
+!genomes/README.md
+
+# OS files
+.DS_Store
+Thumbs.db
+nul
+
+# Kiro/Claude settings
+.kiro/
+.claude/
+
+# Crash logs
+crash_log_*.txt
+
+# UI state files
+dock_state*.ron
+ui_settings.json
