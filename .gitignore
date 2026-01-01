@@ -28,3 +28,6 @@ crash_log_*.txt
 # UI state files
 dock_state*.ron
 ui_settings.json
+
+# Reference projects
+references/
