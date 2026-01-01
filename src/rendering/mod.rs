@@ -5,4 +5,4 @@ pub mod debug;
 pub mod skybox;
 pub mod volumetric_fog;
 
-// wgpu rendering pipeline
+pub use cells::CellRenderer;

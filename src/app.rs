@@ -1,4 +1,6 @@
-use crate::preview::PreviewScene;
+use crate::scene::SceneManager;
+use crate::ui::{DockManager, SimulationMode, UiSystem};
+use egui_wgpu::ScreenDescriptor;
 use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
@@ -13,21 +15,34 @@ pub struct App {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    scene: PreviewScene,
+    scene_manager: SceneManager,
+    dock_manager: DockManager,
+    ui: UiSystem,
     last_render_time: std::time::Instant,
     frame_count: u32,
     fps_timer: std::time::Instant,
 }
 
 impl App {
-    pub fn new(window: Arc<Window>, surface: wgpu::Surface<'static>, device: wgpu::Device, queue: wgpu::Queue, config: wgpu::SurfaceConfiguration, scene: PreviewScene) -> Self {
+    pub fn new(
+        window: Arc<Window>,
+        surface: wgpu::Surface<'static>,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        config: wgpu::SurfaceConfiguration,
+        scene_manager: SceneManager,
+        dock_manager: DockManager,
+        ui: UiSystem,
+    ) -> Self {
         Self {
             window,
             surface,
             device,
             queue,
             config,
-            scene,
+            scene_manager,
+            dock_manager,
+            ui,
             last_render_time: std::time::Instant::now(),
             frame_count: 0,
             fps_timer: std::time::Instant::now(),
@@ -39,34 +54,57 @@ impl App {
     }
     
     pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
+        // First, let egui handle the event
+        let egui_response = self.ui.handle_event(&self.window, event);
+        
         match event {
             WindowEvent::CloseRequested => {
                 log::info!("Close requested");
+                // Save dock layouts before exit
+                self.dock_manager.save_all();
                 return false;
             }
             WindowEvent::Resized(physical_size) => {
                 self.config.width = physical_size.width;
                 self.config.height = physical_size.height;
                 self.surface.configure(&self.device, &self.config);
-                self.scene.resize(&self.device, physical_size.width, physical_size.height);
+                self.scene_manager.resize(&self.device, physical_size.width, physical_size.height);
             }
             WindowEvent::MouseInput { button, state, .. } => {
-                self.scene.camera.handle_mouse_button(*button, *state);
+                // Only pass to camera if egui doesn't want the input
+                if !self.ui.wants_pointer_input() {
+                    self.scene_manager.active_scene_mut().camera_mut().handle_mouse_button(*button, *state);
+                }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.scene.camera.handle_mouse_move(*position);
+                // Only pass to camera if egui doesn't want the input
+                if !self.ui.wants_pointer_input() {
+                    self.scene_manager.active_scene_mut().camera_mut().handle_mouse_move(*position);
+                }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                self.scene.camera.handle_scroll(*delta);
+                // Only pass to camera if egui doesn't want the input
+                if !self.ui.wants_pointer_input() {
+                    self.scene_manager.active_scene_mut().camera_mut().handle_scroll(*delta);
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                self.scene.camera.handle_keyboard(event);
+                // Only pass to camera if egui doesn't want the input
+                if !self.ui.wants_keyboard_input() {
+                    self.scene_manager.active_scene_mut().camera_mut().handle_keyboard(event);
+                }
             }
             WindowEvent::RedrawRequested => {
                 self.render();
             }
             _ => {}
         }
+        
+        // Request repaint if egui needs it
+        if egui_response.repaint {
+            self.window.request_redraw();
+        }
+        
         true
     }
     
@@ -75,13 +113,89 @@ impl App {
         let dt = now.duration_since(self.last_render_time).as_secs_f32();
         self.last_render_time = now;
         
-        self.scene.camera.update(dt);
-        self.scene.update(dt);
+        // Update camera and scene
+        self.scene_manager.active_scene_mut().camera_mut().update(dt);
+        self.scene_manager.update(dt);
+        
+        // Auto-save dock layouts periodically
+        self.dock_manager.auto_save();
         
         let output = self.surface.get_current_texture().unwrap();
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         
-        self.scene.render(&self.device, &self.queue, &view);
+        // Render 3D scene first
+        self.scene_manager.render(&self.device, &self.queue, &view);
+        
+        // Begin egui frame
+        self.ui.begin_frame(&self.window);
+        
+        // Get current mode info for UI
+        let current_mode = self.scene_manager.current_mode();
+        let cell_count = self.scene_manager.active_scene().cell_count();
+        let sim_time = self.scene_manager.active_scene().current_time();
+        let is_paused = self.scene_manager.active_scene().is_paused();
+        
+        // Render scene info panel
+        egui::Window::new("Bio-Spheres")
+            .default_pos([10.0, 10.0])
+            .show(self.ui.ctx(), |ui| {
+                ui.label(format!("Mode: {}", current_mode.display_name()));
+                ui.label(format!("Cells: {}", cell_count));
+                ui.label(format!("Time: {:.2}s", sim_time));
+                ui.label(format!("FPS: {}", self.frame_count));
+                ui.separator();
+                
+                // Scene switching buttons
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(current_mode == SimulationMode::Preview, "Preview").clicked() {
+                        self.dock_manager.switch_mode(SimulationMode::Preview);
+                    }
+                    if ui.selectable_label(current_mode == SimulationMode::Gpu, "GPU").clicked() {
+                        self.dock_manager.switch_mode(SimulationMode::Gpu);
+                    }
+                });
+                
+                ui.separator();
+                
+                // Pause/Resume button
+                if ui.button(if is_paused { "▶ Resume" } else { "⏸ Pause" }).clicked() {
+                    let new_paused = !is_paused;
+                    self.scene_manager.active_scene_mut().set_paused(new_paused);
+                }
+            });
+        
+        // Check if mode switch was requested via dock manager
+        let dock_mode = self.dock_manager.current_mode();
+        if dock_mode != current_mode {
+            self.scene_manager.switch_mode(dock_mode, &self.device, &self.queue, &self.config);
+        }
+        
+        // End egui frame and get output
+        let egui_output = self.ui.end_frame();
+        
+        // Create command encoder for egui rendering
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("egui_encoder"),
+        });
+        
+        // Create screen descriptor
+        let screen_descriptor = ScreenDescriptor {
+            size_in_pixels: [self.config.width, self.config.height],
+            pixels_per_point: self.window.scale_factor() as f32,
+        };
+        
+        // Render egui
+        self.ui.render(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            &view,
+            screen_descriptor,
+            egui_output,
+        );
+        
+        // Submit egui commands
+        self.queue.submit(std::iter::once(encoder.finish()));
         
         output.present();
         
@@ -117,7 +231,7 @@ impl ApplicationHandler for AppState {
         window.set_maximized(true);
         
         // Initialize wgpu
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
         });
@@ -137,8 +251,9 @@ impl ApplicationHandler for AppState {
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
                 memory_hints: Default::default(),
+                trace: Default::default(),
+                experimental_features: Default::default(),
             },
-            None,
         ))
         .unwrap();
         
@@ -164,9 +279,16 @@ impl ApplicationHandler for AppState {
         
         surface.configure(&device, &config);
         
-        let scene = PreviewScene::new(&device, &queue, &config);
+        // Create scene manager (starts with preview scene)
+        let scene_manager = SceneManager::new(&device, &queue, &config);
         
-        self.app = Some(App::new(window, surface, device, queue, config, scene));
+        // Create dock manager for UI layout persistence
+        let dock_manager = DockManager::new();
+        
+        // Create UI system
+        let ui = UiSystem::new(&device, surface_format, &window);
+        
+        self.app = Some(App::new(window, surface, device, queue, config, scene_manager, dock_manager, ui));
     }
     
     fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
