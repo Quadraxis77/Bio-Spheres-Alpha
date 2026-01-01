@@ -74,6 +74,32 @@ pub struct GenomeEditorState {
     pub qball2_locked_axis: i32,
     /// Initial distance for second quaternion ball
     pub qball2_initial_distance: f32,
+    /// Persistent orientation for Child A quaternion ball
+    pub child_a_orientation: glam::Quat,
+    /// Persistent orientation for Child B quaternion ball
+    pub child_b_orientation: glam::Quat,
+    
+    // Axis tracking for Child A quaternion ball (UI feedback only)
+    pub child_a_x_axis_lat: f32,
+    pub child_a_x_axis_lon: f32,
+    pub child_a_y_axis_lat: f32,
+    pub child_a_y_axis_lon: f32,
+    pub child_a_z_axis_lat: f32,
+    pub child_a_z_axis_lon: f32,
+    
+    // Axis tracking for Child B quaternion ball (UI feedback only)
+    pub child_b_x_axis_lat: f32,
+    pub child_b_x_axis_lon: f32,
+    pub child_b_y_axis_lat: f32,
+    pub child_b_y_axis_lon: f32,
+    pub child_b_z_axis_lat: f32,
+    pub child_b_z_axis_lon: f32,
+
+    // Keep Adhesion state
+    /// Whether Child A should keep adhesion
+    pub child_a_keep_adhesion: bool,
+    /// Whether Child B should keep adhesion
+    pub child_b_keep_adhesion: bool,
 
     // Circular slider state
     /// Whether angle snapping is enabled for circular sliders
@@ -97,11 +123,27 @@ impl GenomeEditorState {
             copy_into_dialog_open: false,
             copy_into_source: 0,
             color_picker_state: None,
-            qball_snapping: false,
+            qball_snapping: true,
             qball1_locked_axis: -1,
             qball1_initial_distance: 1.0,
             qball2_locked_axis: -1,
             qball2_initial_distance: 1.0,
+            child_a_orientation: glam::Quat::IDENTITY,
+            child_b_orientation: glam::Quat::IDENTITY,
+            child_a_x_axis_lat: 0.0,
+            child_a_x_axis_lon: 0.0,
+            child_a_y_axis_lat: 0.0,
+            child_a_y_axis_lon: 0.0,
+            child_a_z_axis_lat: 0.0,
+            child_a_z_axis_lon: 0.0,
+            child_b_x_axis_lat: 0.0,
+            child_b_x_axis_lon: 0.0,
+            child_b_y_axis_lat: 0.0,
+            child_b_y_axis_lon: 0.0,
+            child_b_z_axis_lat: 0.0,
+            child_b_z_axis_lon: 0.0,
+            child_a_keep_adhesion: false,
+            child_b_keep_adhesion: false,
             enable_snapping: true,
             time_value: 0.0,
             max_preview_duration: 10.0,
@@ -225,7 +267,7 @@ mod tests {
         assert!(state.renaming_mode.is_none());
         assert!(state.rename_buffer.is_empty());
         assert!(!state.copy_into_dialog_open);
-        assert!(!state.qball_snapping);
+        assert!(state.qball_snapping);
         assert!(state.enable_snapping);
         assert_eq!(state.qball1_locked_axis, -1);
         assert_eq!(state.time_value, 0.0);

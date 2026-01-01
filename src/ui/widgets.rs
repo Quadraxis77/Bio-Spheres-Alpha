@@ -380,6 +380,470 @@ pub fn circular_slider_float(
     response
 }
 
+/// Quaternion trackball widget with independent lat/lon tracking per axis
+/// The lat/lon values are relative offsets from each axis's starting position
+/// and are purely for player feedback - they don't affect the quaternion
+pub fn quaternion_ball(
+    ui: &mut egui::Ui,
+    orientation: &mut glam::Quat,
+    x_axis_lat: &mut f32,
+    x_axis_lon: &mut f32,
+    y_axis_lat: &mut f32,
+    y_axis_lon: &mut f32,
+    z_axis_lat: &mut f32,
+    z_axis_lon: &mut f32,
+    radius: f32,
+    enable_snapping: bool,
+    locked_axis: &mut i32,
+    initial_distance: &mut f32,
+) -> Response {
+    let container_size = radius * 2.5;
+    
+    let (rect, mut response) = ui.allocate_exact_size(
+        Vec2::new(container_size, container_size),
+        Sense::click_and_drag(),
+    );
+    
+    let center = Pos2::new(
+        rect.left() + container_size / 2.0,
+        rect.top() + container_size / 2.0,
+    );
+    
+    let painter = ui.painter();
+    
+    // Get colors - match reference implementation exactly
+    let col_ball = ui.visuals().widgets.inactive.weak_bg_fill;
+    let col_ball_hovered = ui.visuals().widgets.hovered.weak_bg_fill;
+    let col_axes_x = Color32::from_rgb(79, 120, 255); // Blue for X
+    let col_axes_y = Color32::from_rgb(79, 255, 79);  // Green for Y
+    let col_axes_z = Color32::from_rgb(255, 79, 79);  // Red for Z
+    
+    // Check mouse position
+    let mouse_pos = ui.input(|i| i.pointer.hover_pos()).unwrap_or(Pos2::ZERO);
+    let distance_from_center = (mouse_pos - center).length();
+    let is_mouse_in_ball = distance_from_center <= radius && response.hovered();
+    
+    // Draw filled circle with exact transparency from reference
+    painter.circle_filled(center, radius, Color32::from_rgba_unmultiplied(51, 51, 64, 77));
+    
+    // Draw grid lines (only if snapping is enabled) - match reference implementation
+    if enable_snapping {
+        let col_grid = Color32::from_rgba_unmultiplied(100, 100, 120, 120);
+        let grid_divisions = 16;
+        let angle_step = 360.0f32 / grid_divisions as f32;
+        
+        // Draw longitude lines
+        for i in 0..grid_divisions {
+            let angle_deg = i as f32 * angle_step;
+            let angle_rad = angle_deg.to_radians();
+            
+            for j in 0..32 {
+                let t1 = (j as f32 / 32.0) * 2.0 * PI;
+                let t2 = ((j + 1) as f32 / 32.0) * 2.0 * PI;
+                
+                let x1 = t1.sin() * angle_rad.cos();
+                let y1 = t1.cos();
+                let z1 = t1.sin() * angle_rad.sin();
+                
+                let x2 = t2.sin() * angle_rad.cos();
+                let y2 = t2.cos();
+                let z2 = t2.sin() * angle_rad.sin();
+                
+                let p1 = Pos2::new(center.x + x1 * radius, center.y - y1 * radius);
+                let p2 = Pos2::new(center.x + x2 * radius, center.y - y2 * radius);
+                
+                if z1 > 0.0 && z2 > 0.0 {
+                    painter.line_segment([p1, p2], egui::Stroke::new(1.0, col_grid));
+                }
+            }
+        }
+        
+        // Draw latitude lines
+        for i in 1..grid_divisions {
+            let angle_deg = i as f32 * angle_step;
+            let angle_rad = (angle_deg - 180.0).to_radians();
+            
+            let circle_y = angle_rad.sin();
+            let circle_radius = angle_rad.cos();
+            
+            for j in 0..32 {
+                let t1 = (j as f32 / 32.0) * 2.0 * PI;
+                let t2 = ((j + 1) as f32 / 32.0) * 2.0 * PI;
+                
+                let x1 = t1.cos() * circle_radius;
+                let z1 = t1.sin() * circle_radius;
+                let x2 = t2.cos() * circle_radius;
+                let z2 = t2.sin() * circle_radius;
+                
+                let p1 = Pos2::new(center.x + x1 * radius, center.y - circle_y * radius);
+                let p2 = Pos2::new(center.x + x2 * radius, center.y - circle_y * radius);
+                
+                if z1 > 0.0 && z2 > 0.0 {
+                    painter.line_segment([p1, p2], egui::Stroke::new(1.0, col_grid));
+                }
+            }
+        }
+    }
+    
+    // Get current axis directions from quaternion
+    let rotation_matrix = glam::Mat3::from_quat(*orientation);
+    let x_axis = rotation_matrix * glam::Vec3::X;
+    let y_axis = rotation_matrix * glam::Vec3::Y;
+    let z_axis = rotation_matrix * glam::Vec3::Z;
+    
+    // Helper to draw axis with depth-based brightness - match reference exactly
+    let draw_axis = |axis: glam::Vec3, color: Color32, axis_length: f32| {
+        let behind_threshold = -0.01;
+        let is_behind = axis.z < behind_threshold;
+        
+        let end = Pos2::new(
+            center.x + axis.x * axis_length,
+            center.y - axis.y * axis_length,
+        );
+        
+        let alpha = ((axis.z + 1.0) / 2.0).clamp(0.2, 1.0) * 0.8 + 0.2;
+        let line_thickness = (2.0 + alpha * 2.0).clamp(2.0, 4.0);
+        
+        let faded_color = Color32::from_rgba_unmultiplied(
+            color.r(),
+            color.g(),
+            color.b(),
+            (alpha * 255.0) as u8,
+        );
+        
+        if is_behind {
+            // Draw dotted line for axes behind the plane
+            let num_dots = 10;
+            for i in (0..num_dots).step_by(2) {
+                let t1 = i as f32 / num_dots as f32;
+                let t2 = (i + 1) as f32 / num_dots as f32;
+                let p1 = Pos2::new(
+                    center.x + (end.x - center.x) * t1,
+                    center.y + (end.y - center.y) * t1,
+                );
+                let p2 = Pos2::new(
+                    center.x + (end.x - center.x) * t2,
+                    center.y + (end.y - center.y) * t2,
+                );
+                painter.line_segment([p1, p2], egui::Stroke::new(line_thickness, faded_color));
+            }
+        } else {
+            painter.line_segment([center, end], egui::Stroke::new(line_thickness, faded_color));
+        }
+        
+        let circle_radius = (4.0 + alpha * 2.0).clamp(4.0, 6.0) * 0.5; // Reduced by 50%
+        painter.circle_filled(end, circle_radius, faded_color);
+    };
+    
+    draw_axis(x_axis, col_axes_x, radius);
+    draw_axis(y_axis, col_axes_y, radius);
+    draw_axis(z_axis, col_axes_z, radius);
+    
+    // Draw outer circle
+    let ball_color = if is_mouse_in_ball {
+        col_ball_hovered
+    } else {
+        col_ball
+    };
+    painter.circle_stroke(center, radius, egui::Stroke::new(2.0, ball_color));
+    
+    // Handle mouse interaction - rotate quaternion and track relative lat/lon changes
+    let mut orientation_changed = false;
+    
+    if response.dragged() {
+        let drag_delta = response.drag_delta();
+        
+        if drag_delta.x.abs() > 0.001 || drag_delta.y.abs() > 0.001 {
+            // Determine axis lock on first drag
+            if *locked_axis == -1 {
+                let mouse_start_x = mouse_pos.x - center.x;
+                let mouse_start_y = mouse_pos.y - center.y;
+                *initial_distance = (mouse_start_x.powi(2) + mouse_start_y.powi(2)).sqrt();
+                
+                let perimeter_threshold = radius * 0.7;
+                
+                if *initial_distance >= perimeter_threshold {
+                    *locked_axis = 2; // Roll (Z-axis)
+                } else {
+                    if drag_delta.x.abs() > drag_delta.y.abs() {
+                        *locked_axis = 1; // Yaw (Y-axis)
+                    } else {
+                        *locked_axis = 0; // Pitch (X-axis)
+                    }
+                }
+            }
+            
+            // Store previous axis positions to calculate movement
+            let prev_x = x_axis;
+            let prev_y = y_axis;
+            let prev_z = z_axis;
+            
+            // Apply rotation to quaternion
+            let sensitivity = 0.02;
+            
+            if *locked_axis == 2 {
+                // Roll rotation around screen Z-axis (view direction)
+                let current_pos = [mouse_pos.x - center.x, mouse_pos.y - center.y];
+                let prev_pos = [
+                    current_pos[0] - drag_delta.x,
+                    current_pos[1] - drag_delta.y,
+                ];
+                
+                let current_angle = current_pos[1].atan2(current_pos[0]);
+                let prev_angle = prev_pos[1].atan2(prev_pos[0]);
+                let mut angle_delta = current_angle - prev_angle;
+                
+                while angle_delta > PI {
+                    angle_delta -= 2.0 * PI;
+                }
+                while angle_delta < -PI {
+                    angle_delta += 2.0 * PI;
+                }
+                
+                // Rotate around screen Z-axis (world space)
+                let rotation = glam::Quat::from_axis_angle(glam::Vec3::Z, -angle_delta);
+                *orientation = (rotation * *orientation).normalize();
+                orientation_changed = true;
+            } else {
+                let rotation = if *locked_axis == 1 {
+                    // Yaw - rotate around screen Y-axis (world up/down)
+                    let angle_y = drag_delta.x * sensitivity;
+                    glam::Quat::from_axis_angle(glam::Vec3::Y, angle_y)
+                } else {
+                    // Pitch - rotate around screen X-axis (world left/right)
+                    let angle_x = drag_delta.y * sensitivity;
+                    glam::Quat::from_axis_angle(glam::Vec3::X, angle_x)
+                };
+                
+                // Apply world-space rotation (multiply on the left)
+                *orientation = (rotation * *orientation).normalize();
+                orientation_changed = true;
+            }
+            
+            // Calculate new axis positions after rotation
+            let new_rotation_matrix = glam::Mat3::from_quat(*orientation);
+            let new_x = new_rotation_matrix * glam::Vec3::X;
+            let new_y = new_rotation_matrix * glam::Vec3::Y;
+            let new_z = new_rotation_matrix * glam::Vec3::Z;
+            
+            // Helper to calculate spherical coordinate change
+            let calc_spherical_delta = |prev: glam::Vec3, new: glam::Vec3| -> (f32, f32) {
+                // Clamp z values to avoid NaN from asin
+                let prev_z = prev.z.clamp(-1.0, 1.0);
+                let new_z = new.z.clamp(-1.0, 1.0);
+                
+                // Calculate latitude change (vertical angle)
+                let prev_lat = prev_z.asin();
+                let new_lat = new_z.asin();
+                let lat_delta = (new_lat - prev_lat).to_degrees();
+                
+                // Calculate longitude change (horizontal angle in XY plane)
+                let prev_lon = prev.y.atan2(prev.x);
+                let new_lon = new.y.atan2(new.x);
+                let mut lon_delta = (new_lon - prev_lon).to_degrees();
+                
+                // Normalize longitude delta to avoid jumps at ±180°
+                while lon_delta > 180.0 {
+                    lon_delta -= 360.0;
+                }
+                while lon_delta < -180.0 {
+                    lon_delta += 360.0;
+                }
+                
+                (lat_delta, lon_delta)
+            };
+            
+            // Update all axis coordinates based on their movement
+            let (x_lat_d, x_lon_d) = calc_spherical_delta(prev_x, new_x);
+            *x_axis_lat += x_lat_d;
+            *x_axis_lon += x_lon_d;
+            
+            let (y_lat_d, y_lon_d) = calc_spherical_delta(prev_y, new_y);
+            *y_axis_lat += y_lat_d;
+            *y_axis_lon += y_lon_d;
+            
+            let (z_lat_d, z_lon_d) = calc_spherical_delta(prev_z, new_z);
+            *z_axis_lat += z_lat_d;
+            *z_axis_lon += z_lon_d;
+            
+            // Normalize all coordinates to keep them in reasonable ranges
+            let normalize_coords = |lat: &mut f32, lon: &mut f32| {
+                // Normalize longitude to -180 to 180
+                while *lon > 180.0 {
+                    *lon -= 360.0;
+                }
+                while *lon < -180.0 {
+                    *lon += 360.0;
+                }
+                
+                // Handle latitude wrapping at poles
+                if *lat > 90.0 {
+                    *lat = 180.0 - *lat;
+                    *lon += 180.0;
+                    // Normalize longitude again after flip
+                    while *lon > 180.0 {
+                        *lon -= 360.0;
+                    }
+                } else if *lat < -90.0 {
+                    *lat = -180.0 - *lat;
+                    *lon += 180.0;
+                    // Normalize longitude again after flip
+                    while *lon > 180.0 {
+                        *lon -= 360.0;
+                    }
+                }
+            };
+            
+            normalize_coords(x_axis_lat, x_axis_lon);
+            normalize_coords(y_axis_lat, y_axis_lon);
+            normalize_coords(z_axis_lat, z_axis_lon);
+        }
+    } else if response.drag_stopped() && *locked_axis != -1 {
+        if enable_snapping {
+            // Store the identity axis positions for reference
+            let identity_x = glam::Vec3::X;
+            let identity_y = glam::Vec3::Y;
+            let identity_z = glam::Vec3::Z;
+            
+            // Snap quaternion to grid
+            *orientation = snap_quaternion_to_grid(*orientation, 11.25);
+            
+            // Recalculate relative coordinates after snapping
+            let rotation_matrix = glam::Mat3::from_quat(*orientation);
+            let snapped_x = rotation_matrix * glam::Vec3::X;
+            let snapped_y = rotation_matrix * glam::Vec3::Y;
+            let snapped_z = rotation_matrix * glam::Vec3::Z;
+            
+            // Helper to calculate offset from identity position
+            let calc_offset = |current: glam::Vec3, identity: glam::Vec3| -> (f32, f32) {
+                // Clamp z values to avoid NaN
+                let current_z = current.z.clamp(-1.0, 1.0);
+                let identity_z = identity.z.clamp(-1.0, 1.0);
+                
+                let current_lat = current_z.asin().to_degrees();
+                let identity_lat = identity_z.asin().to_degrees();
+                let lat_offset = current_lat - identity_lat;
+                
+                let current_lon = current.y.atan2(current.x).to_degrees();
+                let identity_lon = identity.y.atan2(identity.x).to_degrees();
+                let mut lon_offset = current_lon - identity_lon;
+                
+                // Normalize to -180 to 180
+                while lon_offset > 180.0 {
+                    lon_offset -= 360.0;
+                }
+                while lon_offset < -180.0 {
+                    lon_offset += 360.0;
+                }
+                
+                (lat_offset, lon_offset)
+            };
+            
+            let (x_lat, x_lon) = calc_offset(snapped_x, identity_x);
+            let (y_lat, y_lon) = calc_offset(snapped_y, identity_y);
+            let (z_lat, z_lon) = calc_offset(snapped_z, identity_z);
+            
+            *x_axis_lat = x_lat;
+            *x_axis_lon = x_lon;
+            *y_axis_lat = y_lat;
+            *y_axis_lon = y_lon;
+            *z_axis_lat = z_lat;
+            *z_axis_lon = z_lon;
+            
+            orientation_changed = true;
+        }
+        *locked_axis = -1;
+        *initial_distance = 0.0;
+    }
+    
+    // Mark response as changed if orientation was modified
+    if orientation_changed {
+        response.mark_changed();
+    }
+    
+    response
+}
+
+/// Snap quaternion to nearest grid angles - Z-axis first, then Y-axis
+fn snap_quaternion_to_grid(q: glam::Quat, grid_angle_deg: f32) -> glam::Quat {
+    let rotation_matrix = glam::Mat3::from_quat(q);
+    let y_axis = rotation_matrix * glam::Vec3::Y;
+    let z_axis = rotation_matrix * glam::Vec3::Z;
+    
+    let grid_rad = grid_angle_deg.to_radians();
+    let divisions = (360.0 / grid_angle_deg) as i32;
+    
+    // Find closest grid-aligned direction for Z-axis first
+    let mut best_z_axis = z_axis;
+    let mut best_z_dot = -1.0;
+    
+    for lat in (-divisions / 4)..=(divisions / 4) {
+        let theta = lat as f32 * grid_rad;
+        for lon in 0..divisions {
+            let phi = lon as f32 * grid_rad;
+            
+            let test_dir = glam::Vec3::new(
+                theta.cos() * phi.cos(),
+                theta.cos() * phi.sin(),
+                theta.sin(),
+            );
+            
+            let dot = z_axis.dot(test_dir);
+            if dot > best_z_dot {
+                best_z_dot = dot;
+                best_z_axis = test_dir;
+            }
+        }
+    }
+    best_z_axis = best_z_axis.normalize();
+    
+    // Find closest grid-aligned direction for Y-axis
+    let mut best_y_axis = y_axis;
+    let mut best_y_dot = -1.0;
+    
+    for lat in (-divisions / 4)..=(divisions / 4) {
+        let theta = lat as f32 * grid_rad;
+        for lon in 0..divisions {
+            let phi = lon as f32 * grid_rad;
+            
+            let test_dir = glam::Vec3::new(
+                theta.cos() * phi.cos(),
+                theta.cos() * phi.sin(),
+                theta.sin(),
+            );
+            
+            let perpendicularity = best_z_axis.dot(test_dir).abs();
+            if perpendicularity < 0.1 {
+                let dot = y_axis.dot(test_dir);
+                if dot > best_y_dot {
+                    best_y_dot = dot;
+                    best_y_axis = test_dir;
+                }
+            }
+        }
+    }
+    
+    // Project Y onto plane perpendicular to Z if needed
+    if best_y_dot < 0.0 {
+        best_y_axis = y_axis - best_z_axis * y_axis.dot(best_z_axis);
+        if best_y_axis.length() < 0.001 {
+            best_y_axis = glam::Vec3::X - best_z_axis * glam::Vec3::X.dot(best_z_axis);
+            if best_y_axis.length() < 0.001 {
+                best_y_axis = glam::Vec3::Y - best_z_axis * glam::Vec3::Y.dot(best_z_axis);
+            }
+        }
+    }
+    best_y_axis = best_y_axis.normalize();
+    
+    // Compute X-axis as cross product
+    let best_x_axis = best_y_axis.cross(best_z_axis).normalize();
+    
+    // Construct rotation matrix from orthonormal basis
+    let snapped_matrix = glam::Mat3::from_cols(best_x_axis, best_y_axis, best_z_axis);
+    
+    glam::Quat::from_mat3(&snapped_matrix).normalize()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

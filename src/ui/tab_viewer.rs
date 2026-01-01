@@ -10,6 +10,7 @@ use egui_dock::tab_viewer::OnCloseResponse;
 use crate::ui::panel::Panel;
 use crate::ui::panel_context::PanelContext;
 use crate::ui::types::GlobalUiState;
+use crate::ui::widgets::quaternion_ball;
 
 /// TabViewer implementation for Bio-Spheres panels.
 ///
@@ -193,7 +194,7 @@ fn render_viewport(ui: &mut Ui, viewport_rect: &mut Option<egui::Rect>) {
     *viewport_rect = Some(rect);
 
     // Allocate the full space - the 3D scene will be rendered behind this
-    let response = ui.allocate_rect(rect, egui::Sense::hover());
+    let _response = ui.allocate_rect(rect, egui::Sense::hover());
 
     // Draw a subtle border to indicate the viewport area
     if ui.is_rect_visible(rect) {
@@ -205,13 +206,6 @@ fn render_viewport(ui: &mut Ui, viewport_rect: &mut Option<egui::Rect>) {
             egui::StrokeKind::Inside,
         );
     }
-
-    // Show tooltip with viewport info on hover
-    response.on_hover_text(format!(
-        "Viewport: {:.0}x{:.0}",
-        rect.width(),
-        rect.height()
-    ));
 }
 
 /// Render the SceneManager panel.
@@ -272,7 +266,9 @@ fn render_genome_editor(ui: &mut Ui, context: &mut PanelContext) {
     ui.separator();
     ui.label(format!("Genome: {}", context.genome.name));
     ui.label(format!("Initial Mode: {}", context.genome.initial_mode));
-    // TODO: Implement full genome editor
+    
+    ui.separator();
+    ui.label("Use the individual panels (Rotation, Parent Settings, etc.) to edit genome properties.");
 }
 
 /// Render the PerformanceMonitor panel (placeholder).
@@ -435,12 +431,118 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
     }
 }
 
-/// Render the QuaternionBall panel (placeholder).
+/// Render the QuaternionBall panel with two quaternion balls for Child A and Child B.
 fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
-    ui.heading("Rotation");
-    ui.separator();
-    ui.checkbox(&mut context.editor_state.qball_snapping, "Enable Snapping");
-    // TODO: Implement quaternion ball widget
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+        ui.checkbox(&mut context.editor_state.qball_snapping, "Enable Snapping (11.25°)");
+        ui.add_space(10.0);
+
+        // Calculate responsive ball size - match reference implementation
+        let available_width = ui.available_width();
+        // Reserve space for padding and two balls side by side
+        let max_radius = ((available_width - 40.0) / 2.0 - 20.0) / 2.0;
+        let ball_radius = max_radius.clamp(20.0, 60.0);
+        let ball_container_width = ball_radius * 2.0 + 20.0;
+
+        // Use persistent orientations from editor state
+        let mut child_a_orientation = context.editor_state.child_a_orientation;
+        let mut child_b_orientation = context.editor_state.child_b_orientation;
+
+        // Display balls horizontally with controls directly below each ball
+        ui.horizontal_top(|ui| {
+            ui.add_space(10.0);
+
+            // Ball 1 (Child A) with controls below
+            ui.allocate_ui_with_layout(
+                egui::vec2(ball_container_width, 0.0),
+                egui::Layout::top_down(egui::Align::Center),
+                |ui| {
+                    ui.label("Child A");
+
+                    let response = quaternion_ball(
+                        ui,
+                        &mut child_a_orientation,
+                        &mut context.editor_state.child_a_x_axis_lat,
+                        &mut context.editor_state.child_a_x_axis_lon,
+                        &mut context.editor_state.child_a_y_axis_lat,
+                        &mut context.editor_state.child_a_y_axis_lon,
+                        &mut context.editor_state.child_a_z_axis_lat,
+                        &mut context.editor_state.child_a_z_axis_lon,
+                        ball_radius,
+                        context.editor_state.qball_snapping,
+                        &mut context.editor_state.qball1_locked_axis,
+                        &mut context.editor_state.qball1_initial_distance,
+                    );
+
+                    if response.changed() {
+                        // Store the updated orientation back to editor state
+                        context.editor_state.child_a_orientation = child_a_orientation;
+                    }
+
+                    ui.add_space(5.0);
+
+                    // Keep Adhesion checkbox for Child A
+                    ui.checkbox(&mut context.editor_state.child_a_keep_adhesion, "Keep Adhesion");
+
+                    // Mode dropdown for Child A (placeholder)
+                    ui.label("Mode:");
+                    egui::ComboBox::from_id_salt("qball1_mode")
+                        .selected_text("Mode 0")
+                        .width(ball_container_width - 20.0)
+                        .show_ui(ui, |ui| {
+                            // TODO: Populate with actual modes when genome structure is complete
+                            let _ = ui.selectable_label(true, "Mode 0");
+                        });
+                }
+            );
+
+            // Ball 2 (Child B) with controls below
+            ui.allocate_ui_with_layout(
+                egui::vec2(ball_container_width, 0.0),
+                egui::Layout::top_down(egui::Align::Center),
+                |ui| {
+                    ui.label("Child B");
+
+                    let response = quaternion_ball(
+                        ui,
+                        &mut child_b_orientation,
+                        &mut context.editor_state.child_b_x_axis_lat,
+                        &mut context.editor_state.child_b_x_axis_lon,
+                        &mut context.editor_state.child_b_y_axis_lat,
+                        &mut context.editor_state.child_b_y_axis_lon,
+                        &mut context.editor_state.child_b_z_axis_lat,
+                        &mut context.editor_state.child_b_z_axis_lon,
+                        ball_radius,
+                        context.editor_state.qball_snapping,
+                        &mut context.editor_state.qball2_locked_axis,
+                        &mut context.editor_state.qball2_initial_distance,
+                    );
+
+                    if response.changed() {
+                        // Store the updated orientation back to editor state
+                        context.editor_state.child_b_orientation = child_b_orientation;
+                    }
+
+                    ui.add_space(5.0);
+
+                    // Keep Adhesion checkbox for Child B
+                    ui.checkbox(&mut context.editor_state.child_b_keep_adhesion, "Keep Adhesion");
+
+                    // Mode dropdown for Child B (placeholder)
+                    ui.label("Mode:");
+                    egui::ComboBox::from_id_salt("qball2_mode")
+                        .selected_text("Mode 0")
+                        .width(ball_container_width - 20.0)
+                        .show_ui(ui, |ui| {
+                            // TODO: Populate with actual modes when genome structure is complete
+                            let _ = ui.selectable_label(true, "Mode 0");
+                        });
+                }
+            );
+        });
+    });
 }
 
 /// Render the TimeSlider panel (placeholder).
