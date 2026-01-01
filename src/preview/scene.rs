@@ -1,6 +1,7 @@
 use super::{PreviewState, PreviewRenderer};
 use crate::genome::Genome;
 use crate::simulation::PhysicsConfig;
+use crate::ui::camera::CameraController;
 use glam::{Vec3, Quat};
 
 pub struct PreviewScene {
@@ -9,8 +10,7 @@ pub struct PreviewScene {
     pub genome: Genome,
     pub config: PhysicsConfig,
     pub paused: bool,
-    pub camera_pos: Vec3,
-    pub camera_distance: f32,
+    pub camera: CameraController,
 }
 
 impl PreviewScene {
@@ -45,8 +45,7 @@ impl PreviewScene {
             genome,
             config,
             paused: false,
-            camera_pos: Vec3::new(0.0, 0.0, 50.0),
-            camera_distance: 50.0,
+            camera: CameraController::new(),
         }
     }
     
@@ -60,7 +59,7 @@ impl PreviewScene {
     }
     
     pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView) {
-        self.renderer.render(device, queue, view, &self.state.canonical_state, self.camera_pos, self.camera_distance);
+        self.renderer.render(device, queue, view, &self.state.canonical_state, self.camera.position(), self.camera.rotation);
     }
     
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {

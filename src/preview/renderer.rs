@@ -6,10 +6,13 @@ pub struct PreviewRenderer {
     render_pipeline: wgpu::RenderPipeline,
     camera_bind_group: wgpu::BindGroup,
     camera_buffer: wgpu::Buffer,
+    quad_vertex_buffer: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
+    width: u32,
+    height: u32,
 }
 
 #[repr(C)]
@@ -74,6 +77,22 @@ impl PreviewRenderer {
             size: (instance_capacity * std::mem::size_of::<CellInstance>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
+        });
+        
+        // Create quad vertex buffer once (two triangles forming a square from -1 to 1)
+        let quad_vertices: &[[f32; 2]] = &[
+            [-1.0, -1.0], // Bottom-left
+            [ 1.0, -1.0], // Bottom-right
+            [ 1.0,  1.0], // Top-right
+            [-1.0, -1.0], // Bottom-left
+            [ 1.0,  1.0], // Top-right
+            [-1.0,  1.0], // Top-left
+        ];
+        
+        let quad_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Quad Vertex Buffer"),
+            contents: bytemuck::cast_slice(quad_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
         });
         
         // Load shader
@@ -180,10 +199,13 @@ impl PreviewRenderer {
             render_pipeline,
             camera_bind_group,
             camera_buffer,
+            quad_vertex_buffer,
             instance_buffer,
             instance_capacity,
             depth_texture,
             depth_view,
+            width: config.width,
+            height: config.height,
         }
     }
     
@@ -214,16 +236,26 @@ impl PreviewRenderer {
         let (depth_texture, depth_view) = Self::create_depth_texture(device, width, height);
         self.depth_texture = depth_texture;
         self.depth_view = depth_view;
+        self.width = width;
+        self.height = height;
     }
     
-    pub fn render(&self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView, state: &CanonicalState, camera_pos: Vec3, camera_distance: f32) {
-        // Update camera
+    pub fn render(&self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView, state: &CanonicalState, camera_pos: Vec3, camera_rotation: glam::Quat) {
+        // Update camera - calculate look target from rotation
+        let forward = camera_rotation * Vec3::NEG_Z; // Camera looks down -Z
+        let look_target = camera_pos + forward;
+        let up = camera_rotation * Vec3::Y;
+        
+        log::debug!("Camera: pos={:?}, look_at={:?}", camera_pos, look_target);
+        
         let view_matrix = Mat4::look_at_rh(
             camera_pos,
-            Vec3::ZERO,
-            Vec3::Y,
+            look_target,
+            up,
         );
-        let aspect = 16.0 / 9.0; // TODO: Get from actual window size
+        
+        // Calculate correct aspect ratio from actual window dimensions
+        let aspect = self.width as f32 / self.height as f32;
         let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
         let view_proj = proj_matrix * view_matrix;
         
@@ -252,26 +284,15 @@ impl PreviewRenderer {
             });
         }
         
+        if instances.len() > 0 {
+            log::debug!("Rendering {} cells. First cell: pos={:?}, radius={}", 
+                instances.len(), instances[0].position, instances[0].radius);
+        }
+        
         // Update instance buffer
         if !instances.is_empty() {
             queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
         }
-        
-        // Create quad vertex buffer (two triangles forming a square from -1 to 1)
-        let quad_vertices: &[[f32; 2]] = &[
-            [-1.0, -1.0], // Bottom-left
-            [ 1.0, -1.0], // Bottom-right
-            [ 1.0,  1.0], // Top-right
-            [-1.0, -1.0], // Bottom-left
-            [ 1.0,  1.0], // Top-right
-            [-1.0,  1.0], // Top-left
-        ];
-        
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Quad Vertex Buffer"),
-            contents: bytemuck::cast_slice(quad_vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
         
         // Create command encoder
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -308,7 +329,7 @@ impl PreviewRenderer {
             
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
             render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             
             // Draw instanced quads (6 vertices per quad, one instance per cell)

@@ -1,3 +1,4 @@
+pub mod app;
 pub mod cell;
 pub mod genome;
 pub mod input;

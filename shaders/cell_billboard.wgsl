@@ -23,6 +23,9 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,         // UV coordinates for circle rendering
     @location(1) color: vec4<f32>,      // Cell color
     @location(2) world_pos: vec3<f32>,  // World position for depth
+    @location(3) billboard_right: vec3<f32>,  // Billboard right vector
+    @location(4) billboard_up: vec3<f32>,     // Billboard up vector
+    @location(5) billboard_forward: vec3<f32>, // Billboard forward vector (to camera)
 }
 
 @vertex
@@ -54,6 +57,11 @@ fn vs_main(
     // Pass through color
     out.color = instance.color;
     
+    // Pass billboard basis vectors for normal calculation in fragment shader
+    out.billboard_right = right;
+    out.billboard_up = billboard_up;
+    out.billboard_forward = to_camera;
+    
     return out;
 }
 
@@ -68,25 +76,34 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
     
-    // Calculate sphere normal for lighting
+    // Calculate sphere normal in billboard space
     let z = sqrt(1.0 - dist * dist);
-    let normal = normalize(vec3<f32>(centered_uv.x, centered_uv.y, z));
+    let normal_billboard = vec3<f32>(centered_uv.x, centered_uv.y, z);
     
-    // Simple directional lighting
-    let light_dir = normalize(vec3<f32>(1.0, 1.0, 1.0));
-    let diffuse = max(dot(normal, light_dir), 0.0);
+    // Transform normal to world space using billboard basis vectors
+    let world_normal = normalize(
+        in.billboard_right * normal_billboard.x + 
+        in.billboard_up * normal_billboard.y + 
+        in.billboard_forward * normal_billboard.z
+    );
     
-    // Ambient + diffuse lighting
+    // Single directional light from upper-right (fixed in world space)
+    let light_dir = normalize(vec3<f32>(0.5, 0.7, 0.3));
+    let diffuse = max(dot(world_normal, light_dir), 0.0);
+    
+    // Ambient + diffuse lighting only
     let ambient = 0.3;
-    let lighting = ambient + (1.0 - ambient) * diffuse;
+    let lighting = ambient + diffuse * 0.7;
     
     // Apply lighting to color
     var final_color = in.color;
     final_color = vec4<f32>(final_color.rgb * lighting, final_color.a);
     
-    // Add subtle rim lighting for depth perception
-    let rim = pow(1.0 - dist, 2.0) * 0.2;
-    final_color = vec4<f32>(final_color.rgb + rim, final_color.a);
+    // Add specular highlight
+    let view_dir = normalize(camera.camera_pos - in.world_pos);
+    let reflect_dir = reflect(-light_dir, world_normal);
+    let spec = pow(max(dot(view_dir, reflect_dir), 0.0), 32.0) * 0.3;
+    final_color = vec4<f32>(final_color.rgb + spec, final_color.a);
     
     return final_color;
 }
