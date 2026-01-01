@@ -1,11 +1,13 @@
 use crate::simulation::CanonicalState;
 use wgpu::util::DeviceExt;
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec3, Vec4};
 
 pub struct PreviewRenderer {
     render_pipeline: wgpu::RenderPipeline,
     camera_bind_group: wgpu::BindGroup,
     camera_buffer: wgpu::Buffer,
+    instance_buffer: wgpu::Buffer,
+    instance_capacity: usize,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
 }
@@ -14,6 +16,16 @@ pub struct PreviewRenderer {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
+    camera_pos: [f32; 3],
+    _padding: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct CellInstance {
+    position: [f32; 3],
+    radius: f32,
+    color: [f32; 4],
 }
 
 impl PreviewRenderer {
@@ -21,6 +33,8 @@ impl PreviewRenderer {
         // Create camera buffer
         let camera_uniform = CameraUniform {
             view_proj: Mat4::IDENTITY.to_cols_array_2d(),
+            camera_pos: [0.0, 0.0, 50.0],
+            _padding: 0.0,
         };
         
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -34,7 +48,7 @@ impl PreviewRenderer {
             label: Some("Camera Bind Group Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -53,10 +67,19 @@ impl PreviewRenderer {
             }],
         });
         
+        // Create instance buffer (for up to 256 cells)
+        let instance_capacity = 256;
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Instance Buffer"),
+            size: (instance_capacity * std::mem::size_of::<CellInstance>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
         // Load shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Cell Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cell.wgsl").into()),
+            label: Some("Cell Billboard Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cell_billboard.wgsl").into()),
         });
         
         // Create pipeline layout
@@ -66,14 +89,53 @@ impl PreviewRenderer {
             push_constant_ranges: &[],
         });
         
+        // Vertex buffer layout for billboard quad (per-vertex data)
+        let vertex_buffer_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+            ],
+        };
+        
+        // Instance buffer layout (per-instance data)
+        let instance_buffer_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<CellInstance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                // Position
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                // Radius
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                // Color
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        };
+        
         // Create render pipeline
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
+            label: Some("Cell Billboard Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[],
+                buffers: &[vertex_buffer_layout, instance_buffer_layout],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -81,7 +143,7 @@ impl PreviewRenderer {
                 entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -90,7 +152,7 @@ impl PreviewRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: None, // No culling for billboards
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -118,6 +180,8 @@ impl PreviewRenderer {
             render_pipeline,
             camera_bind_group,
             camera_buffer,
+            instance_buffer,
+            instance_capacity,
             depth_texture,
             depth_view,
         }
@@ -152,24 +216,65 @@ impl PreviewRenderer {
         self.depth_view = depth_view;
     }
     
-    pub fn render(&self, _device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView, _state: &CanonicalState) {
+    pub fn render(&self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView, state: &CanonicalState, camera_pos: Vec3, camera_distance: f32) {
         // Update camera
         let view_matrix = Mat4::look_at_rh(
-            Vec3::new(0.0, 0.0, 50.0),
+            camera_pos,
             Vec3::ZERO,
             Vec3::Y,
         );
-        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 1000.0);
+        let aspect = 16.0 / 9.0; // TODO: Get from actual window size
+        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
         let view_proj = proj_matrix * view_matrix;
         
         let camera_uniform = CameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
+            camera_pos: camera_pos.to_array(),
+            _padding: 0.0,
         };
         
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
         
+        // Prepare instance data
+        let mut instances = Vec::with_capacity(state.cell_count.min(self.instance_capacity));
+        for i in 0..state.cell_count.min(self.instance_capacity) {
+            let position = state.positions[i];
+            let radius = state.radii[i];
+            
+            // Default white color for now
+            // TODO: Get color from genome mode
+            let color = Vec4::new(0.8, 0.9, 1.0, 0.9);
+            
+            instances.push(CellInstance {
+                position: position.to_array(),
+                radius,
+                color: color.to_array(),
+            });
+        }
+        
+        // Update instance buffer
+        if !instances.is_empty() {
+            queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
+        }
+        
+        // Create quad vertex buffer (two triangles forming a square from -1 to 1)
+        let quad_vertices: &[[f32; 2]] = &[
+            [-1.0, -1.0], // Bottom-left
+            [ 1.0, -1.0], // Bottom-right
+            [ 1.0,  1.0], // Top-right
+            [-1.0, -1.0], // Bottom-left
+            [ 1.0,  1.0], // Top-right
+            [-1.0,  1.0], // Top-left
+        ];
+        
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Quad Vertex Buffer"),
+            contents: bytemuck::cast_slice(quad_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        
         // Create command encoder
-        let mut encoder = queue.device().create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
         
@@ -181,9 +286,9 @@ impl PreviewRenderer {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.1,
-                            b: 0.15,
+                            r: 0.05,
+                            g: 0.05,
+                            b: 0.08,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
@@ -203,9 +308,13 @@ impl PreviewRenderer {
             
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             
-            // TODO: Draw cells
-            // For now, just clear the screen
+            // Draw instanced quads (6 vertices per quad, one instance per cell)
+            if !instances.is_empty() {
+                render_pass.draw(0..6, 0..instances.len() as u32);
+            }
         }
         
         queue.submit(std::iter::once(encoder.finish()));

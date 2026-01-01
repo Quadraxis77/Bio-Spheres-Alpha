@@ -9,6 +9,8 @@ pub struct PreviewScene {
     pub genome: Genome,
     pub config: PhysicsConfig,
     pub paused: bool,
+    pub camera_pos: Vec3,
+    pub camera_distance: f32,
 }
 
 impl PreviewScene {
@@ -43,6 +45,8 @@ impl PreviewScene {
             genome,
             config,
             paused: false,
+            camera_pos: Vec3::new(0.0, 0.0, 50.0),
+            camera_distance: 50.0,
         }
     }
     
@@ -56,7 +60,7 @@ impl PreviewScene {
     }
     
     pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView) {
-        self.renderer.render(device, queue, view, &self.state.canonical_state);
+        self.renderer.render(device, queue, view, &self.state.canonical_state, self.camera_pos, self.camera_distance);
     }
     
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
