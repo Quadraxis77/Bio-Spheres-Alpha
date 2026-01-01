@@ -16,6 +16,12 @@ pub enum Panel {
     // Structural panels
     /// The main 3D viewport where the simulation is displayed.
     Viewport,
+    /// Left placeholder panel for dock layout.
+    LeftPanel,
+    /// Right placeholder panel for dock layout.
+    RightPanel,
+    /// Bottom placeholder panel for dock layout.
+    BottomPanel,
 
     // Dynamic windows
     /// Inspector for viewing selected cell properties.
@@ -64,6 +70,9 @@ impl Panel {
         match self {
             // Always available
             Panel::Viewport => true,
+            Panel::LeftPanel => true,
+            Panel::RightPanel => true,
+            Panel::BottomPanel => true,
             Panel::SceneManager => true,
             Panel::ThemeEditor => true,
             Panel::CameraSettings => true,
@@ -118,6 +127,9 @@ impl Panel {
     pub fn all() -> &'static [Panel] {
         &[
             Panel::Viewport,
+            Panel::LeftPanel,
+            Panel::RightPanel,
+            Panel::BottomPanel,
             Panel::CellInspector,
             Panel::GenomeEditor,
             Panel::SceneManager,
@@ -141,6 +153,9 @@ impl Panel {
     pub fn display_name(&self) -> &'static str {
         match self {
             Panel::Viewport => "Viewport",
+            Panel::LeftPanel => "Left Panel",
+            Panel::RightPanel => "Right Panel",
+            Panel::BottomPanel => "Bottom Panel",
             Panel::CellInspector => "Cell Inspector",
             Panel::GenomeEditor => "Genome Editor",
             Panel::SceneManager => "Scene Manager",
@@ -165,17 +180,21 @@ impl Panel {
         matches!(self, Panel::Viewport)
     }
 
+    /// Check if this panel is a placeholder layout panel.
+    pub fn is_placeholder(&self) -> bool {
+        matches!(self, Panel::LeftPanel | Panel::RightPanel | Panel::BottomPanel | Panel::Viewport)
+    }
+
     /// Check if this panel should be closeable by the user.
     ///
-    /// The Viewport panel cannot be closed as it's essential for the application.
+    /// All panels are closeable by default - locking is handled at the UI level.
     pub fn is_closeable(&self) -> bool {
-        !matches!(self, Panel::Viewport)
+        true // All panels are closeable unless locked by the UI system
     }
 
     /// Check if this panel can be floated into a separate window.
     pub fn allowed_in_windows(&self) -> bool {
-        // Viewport should stay in the main dock area
-        !matches!(self, Panel::Viewport)
+        true // All panels can be floated
     }
 }
 
@@ -221,8 +240,12 @@ mod tests {
     }
 
     #[test]
-    fn test_viewport_not_closeable() {
-        assert!(!Panel::Viewport.is_closeable());
+    fn test_all_panels_are_closeable() {
+        // All panels should be closeable by default - locking is handled at UI level
+        assert!(Panel::Viewport.is_closeable());
         assert!(Panel::CellInspector.is_closeable());
+        assert!(Panel::LeftPanel.is_closeable());
+        assert!(Panel::RightPanel.is_closeable());
+        assert!(Panel::BottomPanel.is_closeable());
     }
 }

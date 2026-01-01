@@ -9,6 +9,153 @@ use winit::window::Window;
 
 use crate::ui::types::GlobalUiState;
 
+/// Simple tab viewer for basic dock functionality
+struct SimpleTabViewer<'a> {
+    viewport_rect: &'a mut Option<egui::Rect>,
+    ui_state: &'a mut GlobalUiState,
+    scene_manager: &'a crate::scene::SceneManager,
+}
+
+impl<'a> egui_dock::TabViewer for SimpleTabViewer<'a> {
+    type Tab = crate::ui::panel::Panel;
+
+    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+        tab.display_name().into()
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        match tab {
+            crate::ui::panel::Panel::Viewport => {
+                // Get the available rect for the viewport
+                let rect = ui.available_rect_before_wrap();
+                *self.viewport_rect = Some(rect);
+
+                // Allocate the full space - the 3D scene will be rendered behind this
+                ui.allocate_rect(rect, egui::Sense::hover());
+            }
+            crate::ui::panel::Panel::LeftPanel => {
+                // Empty placeholder panel - no content
+            }
+            crate::ui::panel::Panel::RightPanel => {
+                // Empty placeholder panel - no content
+            }
+            crate::ui::panel::Panel::BottomPanel => {
+                // Empty placeholder panel - no content
+            }
+            crate::ui::panel::Panel::SceneManager => {
+                ui.heading("Scene Manager");
+                ui.separator();
+                
+                ui.label("Simulation Mode:");
+                ui.horizontal(|ui| {
+                    let current_mode = self.scene_manager.current_mode();
+                    let is_preview = current_mode == crate::ui::types::SimulationMode::Preview;
+                    let is_gpu = current_mode == crate::ui::types::SimulationMode::Gpu;
+
+                    if ui.selectable_label(is_preview, "Preview")
+                        .on_hover_text("Genome editor with CPU simulation")
+                        .clicked() && !is_preview
+                    {
+                        // Request mode switch to Preview
+                        self.ui_state.request_mode_switch(crate::ui::types::SimulationMode::Preview);
+                        log::info!("Requested switch to Preview mode");
+                    }
+
+                    if ui.selectable_label(is_gpu, "GPU")
+                        .on_hover_text("Full GPU simulation")
+                        .clicked() && !is_gpu
+                    {
+                        // Request mode switch to GPU
+                        self.ui_state.request_mode_switch(crate::ui::types::SimulationMode::Gpu);
+                        log::info!("Requested switch to GPU mode");
+                    }
+                });
+
+                ui.separator();
+                
+                // Show real scene information
+                let current_mode = self.scene_manager.current_mode();
+                ui.label(format!("Current Mode: {}", current_mode.display_name()));
+                ui.label(format!("Cell Count: {}", self.scene_manager.active_scene().cell_count()));
+                ui.label(format!("Time: {:.2}s", self.scene_manager.active_scene().current_time()));
+                
+                if self.scene_manager.active_scene().is_paused() {
+                    ui.colored_label(egui::Color32::YELLOW, "⏸ Paused");
+                } else {
+                    ui.colored_label(egui::Color32::GREEN, "▶ Running");
+                }
+                
+                ui.separator();
+                
+                // Add simulation controls
+                ui.horizontal(|ui| {
+                    if self.scene_manager.active_scene().is_paused() {
+                        if ui.button("▶ Play").clicked() {
+                            // TODO: Implement play/pause functionality
+                            log::info!("Play requested");
+                        }
+                    } else {
+                        if ui.button("⏸ Pause").clicked() {
+                            // TODO: Implement play/pause functionality
+                            log::info!("Pause requested");
+                        }
+                    }
+                    
+                    if ui.button("⏹ Reset").clicked() {
+                        // TODO: Implement reset functionality
+                        log::info!("Reset requested");
+                    }
+                });
+            }
+            _ => {
+                ui.centered_and_justified(|ui| {
+                    ui.label(format!("{} (Not Implemented)", tab.display_name()));
+                });
+            }
+        }
+    }
+
+    fn is_closeable(&self, tab: &Self::Tab) -> bool {
+        // Check if this specific panel is locked
+        let panel_name = format!("{:?}", tab);
+        let is_locked = self.ui_state.is_panel_locked(&panel_name);
+        
+        // Panel is closeable if it's not locked AND global close buttons aren't locked
+        !is_locked && !self.ui_state.lock_close_buttons
+    }
+
+    fn allowed_in_windows(&self, tab: &mut Self::Tab) -> bool {
+        tab.allowed_in_windows()
+    }
+
+    fn is_viewport(&self, tab: &Self::Tab) -> bool {
+        tab.is_viewport()
+    }
+
+    fn clear_background(&self, tab: &Self::Tab) -> bool {
+        // Viewport should have transparent background to show 3D content
+        !tab.is_viewport()
+    }
+
+    fn is_draggable(&self, tab: &Self::Tab) -> bool {
+        // Check if this specific panel is locked
+        let panel_name = format!("{:?}", tab);
+        let is_locked = self.ui_state.is_panel_locked(&panel_name);
+        
+        // Panel is draggable if it's not locked AND global tabs aren't locked
+        !is_locked && !self.ui_state.lock_tabs
+    }
+
+    fn hide_tab_button(&self, tab: &Self::Tab) -> bool {
+        // Check if this specific panel is locked
+        let panel_name = format!("{:?}", tab);
+        let is_locked = self.ui_state.is_panel_locked(&panel_name);
+        
+        // Hide tab button if panel is locked OR if global lock_tabs is enabled
+        is_locked || self.ui_state.lock_tabs
+    }
+}
+
 /// The main UI system that manages egui rendering.
 ///
 /// This struct coordinates between egui-winit for input handling and
@@ -26,6 +173,13 @@ pub struct UiSystem {
     pub viewport_rect: Option<egui::Rect>,
     /// Last applied UI scale for change detection
     last_scale: f32,
+    /// Original style values for scaling
+    original_spacing: Option<egui::style::Spacing>,
+    original_text_styles: Option<std::collections::BTreeMap<egui::TextStyle, egui::FontId>>,
+    /// Timer for auto-save functionality
+    save_timer: std::time::Instant,
+    /// Whether the UI state has changed since last save
+    ui_state_dirty: bool,
 }
 
 impl UiSystem {
@@ -62,7 +216,7 @@ impl UiSystem {
         );
 
         // Create default UI state
-        let state = GlobalUiState::default();
+        let state = GlobalUiState::load();
 
         Self {
             ctx,
@@ -71,6 +225,10 @@ impl UiSystem {
             state,
             viewport_rect: None,
             last_scale: 1.0,
+            original_spacing: None,
+            original_text_styles: None,
+            save_timer: std::time::Instant::now(),
+            ui_state_dirty: false,
         }
     }
 
@@ -119,10 +277,165 @@ impl UiSystem {
         self.viewport_rect = None;
     }
 
+    /// Apply UI scale to the egui context style.
+    ///
+    /// This method scales spacing, text sizes, and other UI elements based on
+    /// the current ui_scale factor.
+    fn apply_ui_scale(&mut self) {
+        let scale = self.state.ui_scale;
+        
+        self.ctx.global_style_mut(|style| {
+            // Store original values on first run
+            if self.original_spacing.is_none() {
+                self.original_spacing = Some(style.spacing.clone());
+                self.original_text_styles = Some(style.text_styles.clone());
+            }
+            
+            // Apply scale from original values (not multiplicatively)
+            if let Some(ref original_spacing) = self.original_spacing {
+                style.spacing.item_spacing = original_spacing.item_spacing * scale;
+                style.spacing.button_padding = original_spacing.button_padding * scale;
+                style.spacing.menu_margin = original_spacing.menu_margin * scale;
+                style.spacing.indent = original_spacing.indent * scale;
+                style.spacing.interact_size = original_spacing.interact_size * scale;
+                style.spacing.slider_width = original_spacing.slider_width * scale;
+                style.spacing.combo_width = original_spacing.combo_width * scale;
+                style.spacing.text_edit_width = original_spacing.text_edit_width * scale;
+                style.spacing.icon_width = original_spacing.icon_width * scale;
+                style.spacing.icon_width_inner = original_spacing.icon_width_inner * scale;
+                style.spacing.icon_spacing = original_spacing.icon_spacing * scale;
+                style.spacing.tooltip_width = original_spacing.tooltip_width * scale;
+                style.spacing.menu_width = original_spacing.menu_width * scale;
+                style.spacing.combo_height = original_spacing.combo_height * scale;
+            }
+            
+            // Scale text sizes from original values
+            if let Some(ref original_text_styles) = self.original_text_styles {
+                for (text_style, font_id) in style.text_styles.iter_mut() {
+                    if let Some(original_font) = original_text_styles.get(text_style) {
+                        font_id.size = original_font.size * scale;
+                    }
+                }
+            }
+        });
+        
+        log::debug!("Applied UI scale: {:.2}x", scale);
+    }
+
+    /// Mark UI state as dirty (needs saving).
+    pub fn mark_ui_state_dirty(&mut self) {
+        self.ui_state_dirty = true;
+    }
+
+    /// Auto-save UI state if needed.
+    pub fn auto_save_ui_state(&mut self) {
+        const AUTO_SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+        
+        if self.ui_state_dirty && self.save_timer.elapsed() >= AUTO_SAVE_INTERVAL {
+            if let Err(e) = self.state.save() {
+                log::warn!("Failed to auto-save UI state: {}", e);
+            } else {
+                log::debug!("Auto-saved UI state");
+                self.ui_state_dirty = false;
+                self.save_timer = std::time::Instant::now();
+            }
+        }
+    }
+
+    /// Save UI state immediately.
+    pub fn save_ui_state(&mut self) {
+        if let Err(e) = self.state.save() {
+            log::warn!("Failed to save UI state: {}", e);
+        } else {
+            log::info!("Saved UI state");
+            self.ui_state_dirty = false;
+        }
+    }
+
     /// End the egui frame and get the output.
     ///
     /// Call this after all UI rendering is complete.
-    pub fn end_frame(&mut self) -> egui::FullOutput {
+    pub fn end_frame(
+        &mut self, 
+        dock_manager: &mut crate::ui::dock::DockManager,
+        scene_manager: &crate::scene::SceneManager,
+    ) -> egui::FullOutput {
+        // Apply UI scale only when it changes
+        let scale_changed = (self.last_scale - self.state.ui_scale).abs() > 0.001;
+        if scale_changed {
+            self.apply_ui_scale();
+            self.last_scale = self.state.ui_scale;
+        }
+
+        // Auto-save UI state periodically
+        self.auto_save_ui_state();
+
+        // Show menu bar at the top using the deprecated but still functional API
+        // This is the correct pattern for top-level panels with just a Context
+        let mut ui_state_copy = self.state.clone();
+        
+        #[allow(deprecated)]
+        egui::Panel::top("menu_bar").show(&self.ctx, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
+                use egui::containers::menu::{MenuButton, MenuConfig};
+                use egui::PopupCloseBehavior;
+                
+                let config = MenuConfig::new()
+                    .close_behavior(PopupCloseBehavior::CloseOnClickOutside);
+                
+                MenuButton::new("Windows")
+                    .config(config)
+                    .ui(ui, |ui| {
+                        show_windows_menu(ui, &mut ui_state_copy, dock_manager);
+                    });
+            });
+        });
+        
+        // Show dock area in remaining space
+        let mut style = egui_dock::Style::from_egui(self.ctx.global_style().as_ref());
+        style.separator.extra = 75.0; // Reduce separator minimum constraint
+
+        // Apply lock settings to hide tab bar height if locked
+        if ui_state_copy.lock_tab_bar {
+            style.tab_bar.height = 0.0;
+        }
+
+        let mut dock_area = egui_dock::DockArea::new(dock_manager.current_tree_mut())
+            .style(style)
+            .show_leaf_collapse_buttons(false)
+            .show_leaf_close_all_buttons(false)
+            .draggable_tabs(true) // Explicitly enable tab dragging for docking
+            .window_bounds(self.ctx.content_rect()); // Set window bounds for floating windows
+
+        // Apply lock settings for tabs and close buttons
+        if ui_state_copy.lock_tabs {
+            dock_area = dock_area
+                .show_tab_name_on_hover(false)
+                .draggable_tabs(false); // Disable dragging when tabs are locked
+        }
+
+        if ui_state_copy.lock_close_buttons {
+            dock_area = dock_area.show_close_buttons(false);
+        }
+
+        // Create a simple tab viewer that renders basic panels
+        let mut tab_viewer = SimpleTabViewer {
+            viewport_rect: &mut self.viewport_rect,
+            ui_state: &mut ui_state_copy,
+            scene_manager,
+        };
+
+        dock_area.show(&self.ctx, &mut tab_viewer);
+        
+        // Apply any changes back to the original state
+        let state_changed = self.state != ui_state_copy;
+        self.state = ui_state_copy;
+        
+        // Mark UI state as dirty if it changed
+        if state_changed {
+            self.mark_ui_state_dirty();
+        }
+
         self.ctx.end_pass()
     }
 
@@ -209,4 +522,173 @@ impl UiSystem {
     pub fn get_viewport_rect(&self) -> Option<egui::Rect> {
         self.viewport_rect
     }
+}
+
+/// Show the Windows menu for panel visibility toggles.
+fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager: &mut crate::ui::dock::DockManager) {
+    use crate::ui::panel::Panel;
+
+    // UI Scale radio buttons
+    ui.label("UI Scale:");
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            if ui.radio(state.ui_scale == 0.5, "0.5x").clicked() {
+                state.ui_scale = 0.5;
+            }
+            if ui.radio(state.ui_scale == 1.0, "1.0x").clicked() {
+                state.ui_scale = 1.0;
+            }
+            if ui.radio(state.ui_scale == 1.5, "1.5x").clicked() {
+                state.ui_scale = 1.5;
+            }
+            if ui.radio(state.ui_scale == 3.0, "3.0x").clicked() {
+                state.ui_scale = 3.0;
+            }
+        });
+        ui.vertical(|ui| {
+            if ui.radio(state.ui_scale == 0.75, "0.75x").clicked() {
+                state.ui_scale = 0.75;
+            }
+            if ui.radio(state.ui_scale == 1.25, "1.25x").clicked() {
+                state.ui_scale = 1.25;
+            }
+            if ui.radio(state.ui_scale == 2.0, "2.0x").clicked() {
+                state.ui_scale = 2.0;
+            }
+            if ui.radio(state.ui_scale == 4.0, "4.0x").clicked() {
+                state.ui_scale = 4.0;
+            }
+        });
+    });
+
+    ui.separator();
+
+    // List of genome editor panels that can be toggled (only show in Preview mode)
+    let genome_editor_panels = [
+        Panel::Modes,
+        Panel::NameTypeEditor,
+        Panel::AdhesionSettings,
+        Panel::ParentSettings,
+        Panel::CircleSliders,
+        Panel::QuaternionBall,
+        Panel::TimeSlider,
+    ];
+
+    // Only show genome editor windows in Preview mode
+    if state.current_mode == crate::ui::types::SimulationMode::Preview {
+        ui.label("Genome Editor:");
+        for panel in &genome_editor_panels {
+            let is_open = is_panel_open(dock_manager.current_tree(), panel);
+            let panel_name = format!("{:?}", panel);
+            let is_locked = state.is_panel_locked(&panel_name);
+
+            ui.horizontal(|ui| {
+                // Window toggle button
+                if ui.selectable_label(is_open, format!("  {}", panel.display_name())).clicked() {
+                    if is_open {
+                        close_panel(dock_manager.current_tree_mut(), panel);
+                    } else {
+                        open_panel(dock_manager.current_tree_mut(), panel);
+                    }
+                }
+                
+                // Lock/Unlock button
+                let lock_icon = if is_locked { "🔒" } else { "🔓" };
+                if ui.small_button(lock_icon).clicked() {
+                    state.set_panel_locked(&panel_name, !is_locked);
+                }
+            });
+        }
+
+        ui.separator();
+    }
+
+    // Layout Panels
+    ui.label("Layout Panels:");
+    
+    let layout_panels = [
+        Panel::LeftPanel,
+        Panel::RightPanel,
+        Panel::BottomPanel,
+        Panel::Viewport,
+    ];
+    
+    for panel in &layout_panels {
+        let is_open = is_panel_open(dock_manager.current_tree(), panel);
+        let panel_name = format!("{:?}", panel);
+        let is_locked = state.is_panel_locked(&panel_name);
+
+        ui.horizontal(|ui| {
+            // Window toggle button
+            if ui.selectable_label(is_open, format!("  {}", panel.display_name())).clicked() {
+                if is_open {
+                    close_panel(dock_manager.current_tree_mut(), panel);
+                } else {
+                    open_panel(dock_manager.current_tree_mut(), panel);
+                }
+            }
+            
+            // Lock/Unlock button
+            let lock_icon = if is_locked { "🔒" } else { "🔓" };
+            if ui.small_button(lock_icon).clicked() {
+                state.set_panel_locked(&panel_name, !is_locked);
+            }
+        });
+    }
+
+    ui.separator();
+
+    // Other Windows
+    ui.label("Other Windows:");
+
+    // Scene Manager
+    let scene_manager_open = is_panel_open(dock_manager.current_tree(), &Panel::SceneManager);
+    let scene_manager_name = format!("{:?}", Panel::SceneManager);
+    let scene_manager_locked = state.is_panel_locked(&scene_manager_name);
+    
+    ui.horizontal(|ui| {
+        if ui.selectable_label(scene_manager_open, "  Scene Manager").clicked() {
+            if scene_manager_open {
+                close_panel(dock_manager.current_tree_mut(), &Panel::SceneManager);
+            } else {
+                open_panel(dock_manager.current_tree_mut(), &Panel::SceneManager);
+            }
+        }
+        
+        let lock_icon = if scene_manager_locked { "🔒" } else { "🔓" };
+        if ui.small_button(lock_icon).clicked() {
+            state.set_panel_locked(&scene_manager_name, !scene_manager_locked);
+        }
+    });
+
+    ui.separator();
+
+    // Reset to Default Layout button
+    if ui.button("Reset to Default Layout").clicked() {
+        dock_manager.reset_current_to_default();
+        log::info!("Reset to default layout");
+    }
+    
+    // Save Current as Default button
+    if ui.button("Save Current as Default").clicked() {
+        dock_manager.save_current();
+        log::info!("Saved current layout");
+    }
+}
+
+/// Check if a panel is currently open in the dock tree
+fn is_panel_open(tree: &egui_dock::DockState<crate::ui::panel::Panel>, panel: &crate::ui::panel::Panel) -> bool {
+    tree.iter_all_tabs().any(|(_, tab)| tab == panel)
+}
+
+/// Close a panel in the dock tree
+fn close_panel(tree: &mut egui_dock::DockState<crate::ui::panel::Panel>, panel: &crate::ui::panel::Panel) {
+    // Simple approach: just remove all instances of this panel
+    tree.retain_tabs(|tab| tab != panel);
+}
+
+/// Open a panel in the dock tree
+fn open_panel(tree: &mut egui_dock::DockState<crate::ui::panel::Panel>, panel: &crate::ui::panel::Panel) {
+    // Add the panel to the focused leaf
+    tree.push_to_focused_leaf(*panel);
 }

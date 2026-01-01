@@ -55,7 +55,7 @@ impl std::fmt::Display for SimulationMode {
 ///
 /// Each simulation mode can have its own independent window configuration,
 /// visibility settings, and locked windows.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SceneUiConfig {
     /// Which panels are visible in this scene.
     pub visibility: WindowVisibilitySettings,
@@ -114,7 +114,7 @@ impl SceneUiConfig {
 }
 
 /// Window visibility settings for each panel type.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct WindowVisibilitySettings {
     pub show_cell_inspector: bool,
     pub show_genome_editor: bool,
@@ -144,7 +144,7 @@ impl Default for WindowVisibilitySettings {
 }
 
 /// Lock settings for UI elements.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct LockSettings {
     /// Whether the tab bar is locked (can't be dragged).
     pub lock_tab_bar: bool,
@@ -168,7 +168,7 @@ impl Default for LockSettings {
 ///
 /// This struct tracks the current simulation mode, UI scale, lock settings,
 /// and per-scene configurations.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GlobalUiState {
     /// Current simulation mode/scene.
     pub current_mode: SimulationMode,
@@ -190,6 +190,10 @@ pub struct GlobalUiState {
 
     /// Per-scene configurations.
     pub scene_configs: HashMap<SimulationMode, SceneUiConfig>,
+
+    /// Requested mode change (processed by main app loop)
+    #[serde(skip)]
+    pub mode_request: Option<SimulationMode>,
 }
 
 impl Default for GlobalUiState {
@@ -207,6 +211,7 @@ impl Default for GlobalUiState {
             lock_tabs: false,
             lock_close_buttons: false,
             scene_configs,
+            mode_request: None,
         }
     }
 }
@@ -274,4 +279,70 @@ impl GlobalUiState {
             config.locked_windows.remove(panel_name);
         }
     }
+
+    /// Request a mode switch.
+    pub fn request_mode_switch(&mut self, mode: SimulationMode) {
+        if mode != self.current_mode {
+            self.mode_request = Some(mode);
+        }
+    }
+
+    /// Take the pending mode request, if any.
+    pub fn take_mode_request(&mut self) -> Option<SimulationMode> {
+        self.mode_request.take()
+    }
+
+    /// Save UI state to disk.
+    pub fn save(&self) -> Result<(), UiStateSaveError> {
+        let path = std::path::PathBuf::from("ui_state.ron");
+        let contents = ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())?;
+        std::fs::write(path, contents)?;
+        Ok(())
+    }
+
+    /// Load UI state from disk, or create default if file doesn't exist.
+    pub fn load() -> Self {
+        let path = std::path::PathBuf::from("ui_state.ron");
+        
+        if path.exists() {
+            match Self::load_from_file(&path) {
+                Ok(state) => {
+                    log::info!("Loaded UI state from {:?}", path);
+                    return state;
+                }
+                Err(e) => {
+                    log::warn!("Failed to load UI state: {}. Using default.", e);
+                }
+            }
+        }
+        
+        Self::default()
+    }
+
+    /// Load UI state from a specific file.
+    fn load_from_file(path: &std::path::PathBuf) -> Result<Self, UiStateLoadError> {
+        let contents = std::fs::read_to_string(path)?;
+        let mut state: Self = ron::from_str(&contents)?;
+        // Clear mode request on load (it's transient)
+        state.mode_request = None;
+        Ok(state)
+    }
+}
+
+/// Error type for UI state loading.
+#[derive(Debug, thiserror::Error)]
+pub enum UiStateLoadError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("RON parse error: {0}")]
+    Ron(#[from] ron::error::SpannedError),
+}
+
+/// Error type for UI state saving.
+#[derive(Debug, thiserror::Error)]
+pub enum UiStateSaveError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("RON serialize error: {0}")]
+    Ron(#[from] ron::Error),
 }

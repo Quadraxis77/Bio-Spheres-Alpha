@@ -1,0 +1,58 @@
+(
+    current_mode: Preview,
+    ui_scale: 1.15,
+    windows_locked: false,
+    lock_tab_bar: false,
+    lock_tabs: false,
+    lock_close_buttons: false,
+    scene_configs: {
+        Gpu: (
+            visibility: (
+                show_cell_inspector: true,
+                show_genome_editor: false,
+                show_scene_manager: true,
+                show_performance_monitor: true,
+                show_rendering_controls: true,
+                show_time_scrubber: false,
+                show_theme_editor: false,
+                show_camera_settings: true,
+                show_lighting_settings: false,
+            ),
+            locked_windows: [
+                "RightPanel",
+                "SceneManager",
+                "Viewport",
+            ],
+            lock_settings: (
+                lock_tab_bar: false,
+                lock_tabs: false,
+                lock_close_buttons: false,
+            ),
+        ),
+        Preview: (
+            visibility: (
+                show_cell_inspector: false,
+                show_genome_editor: true,
+                show_scene_manager: true,
+                show_performance_monitor: false,
+                show_rendering_controls: false,
+                show_time_scrubber: true,
+                show_theme_editor: false,
+                show_camera_settings: false,
+                show_lighting_settings: false,
+            ),
+            locked_windows: [
+                "LeftPanel",
+                "Viewport",
+                "RightPanel",
+                "BottomPanel",
+                "SceneManager",
+            ],
+            lock_settings: (
+                lock_tab_bar: false,
+                lock_tabs: false,
+                lock_close_buttons: false,
+            ),
+        ),
+    },
+)

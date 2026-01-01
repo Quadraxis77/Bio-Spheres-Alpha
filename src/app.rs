@@ -1,5 +1,5 @@
 use crate::scene::SceneManager;
-use crate::ui::{DockManager, SimulationMode, UiSystem};
+use crate::ui::{DockManager, UiSystem};
 use egui_wgpu::ScreenDescriptor;
 use std::sync::Arc;
 use winit::{
@@ -62,6 +62,8 @@ impl App {
                 log::info!("Close requested");
                 // Save dock layouts before exit
                 self.dock_manager.save_all();
+                // Save UI state before exit
+                self.ui.save_ui_state();
                 return false;
             }
             WindowEvent::Resized(physical_size) => {
@@ -131,47 +133,30 @@ impl App {
         
         // Get current mode info for UI
         let current_mode = self.scene_manager.current_mode();
-        let cell_count = self.scene_manager.active_scene().cell_count();
-        let sim_time = self.scene_manager.active_scene().current_time();
-        let is_paused = self.scene_manager.active_scene().is_paused();
+        let _cell_count = self.scene_manager.active_scene().cell_count();
+        let _sim_time = self.scene_manager.active_scene().current_time();
+        let _is_paused = self.scene_manager.active_scene().is_paused();
         
-        // Render scene info panel
-        egui::Window::new("Bio-Spheres")
-            .default_pos([10.0, 10.0])
-            .show(self.ui.ctx(), |ui| {
-                ui.label(format!("Mode: {}", current_mode.display_name()));
-                ui.label(format!("Cells: {}", cell_count));
-                ui.label(format!("Time: {:.2}s", sim_time));
-                ui.label(format!("FPS: {}", self.frame_count));
-                ui.separator();
-                
-                // Scene switching buttons
-                ui.horizontal(|ui| {
-                    if ui.selectable_label(current_mode == SimulationMode::Preview, "Preview").clicked() {
-                        self.dock_manager.switch_mode(SimulationMode::Preview);
-                    }
-                    if ui.selectable_label(current_mode == SimulationMode::Gpu, "GPU").clicked() {
-                        self.dock_manager.switch_mode(SimulationMode::Gpu);
-                    }
-                });
-                
-                ui.separator();
-                
-                // Pause/Resume button
-                if ui.button(if is_paused { "▶ Resume" } else { "⏸ Pause" }).clicked() {
-                    let new_paused = !is_paused;
-                    self.scene_manager.active_scene_mut().set_paused(new_paused);
-                }
-            });
+        // Update UI state with current simulation info
+        self.ui.state.current_mode = current_mode;
         
-        // Check if mode switch was requested via dock manager
+        // End egui frame and get output (this now includes the dock system)
+        let egui_output = self.ui.end_frame(&mut self.dock_manager, &self.scene_manager);
+        
+        // Check if mode switch was requested via UI
+        if let Some(requested_mode) = self.ui.state.take_mode_request() {
+            if requested_mode != current_mode {
+                self.scene_manager.switch_mode(requested_mode, &self.device, &self.queue, &self.config);
+                self.dock_manager.switch_mode(requested_mode);
+                log::info!("Switched to {} mode", requested_mode.display_name());
+            }
+        }
+        
+        // Check if mode switch was requested via dock manager (for layout persistence)
         let dock_mode = self.dock_manager.current_mode();
         if dock_mode != current_mode {
             self.scene_manager.switch_mode(dock_mode, &self.device, &self.queue, &self.config);
         }
-        
-        // End egui frame and get output
-        let egui_output = self.ui.end_frame();
         
         // Create command encoder for egui rendering
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -211,6 +196,8 @@ impl App {
     pub fn request_redraw(&self) {
         self.window.request_redraw();
     }
+    
+
 }
 
 struct AppState {
