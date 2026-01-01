@@ -18,10 +18,10 @@ pollster = "0.4"
 bytemuck = { version = "1.14", features = ["derive"] }
 env_logger = "0.11"
 log = "0.4"
-egui = "0.29"
-egui-wgpu = "0.29"
-egui-winit = "0.29"
-egui_dock = { version = "0.14", features = ["serde"] }
+egui = { path = "./egui_local/crates/egui" }
+egui-wgpu = { path = "./egui_local/crates/egui-wgpu" }
+egui-winit = { path = "./egui_local/crates/egui-winit" }
+egui_dock = { path = "./egui_dock_local", features = ["serde"] }
 ron = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -50,3 +50,9 @@ opt-level = 3
 [profile.release]
 lto = true
 codegen-units = 1
+
+# Use local egui forks
+[patch.crates-io]
+emath = { path = "./egui_local/crates/emath" }
+epaint = { path = "./egui_local/crates/epaint" }
+ecolor = { path = "./egui_local/crates/ecolor" }
