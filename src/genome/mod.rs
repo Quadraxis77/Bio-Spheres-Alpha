@@ -1,8 +1,6 @@
 pub mod node_graph;
 
-pub use node_graph::*;
-
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 #[derive(Debug, Clone, Hash)]
 pub struct Genome {
