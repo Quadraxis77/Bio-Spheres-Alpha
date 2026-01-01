@@ -21,6 +21,8 @@ pub struct App {
     last_render_time: std::time::Instant,
     frame_count: u32,
     fps_timer: std::time::Instant,
+    /// Persistent genome editor state
+    editor_state: crate::ui::panel_context::GenomeEditorState,
 }
 
 impl App {
@@ -46,6 +48,7 @@ impl App {
             last_render_time: std::time::Instant::now(),
             frame_count: 0,
             fps_timer: std::time::Instant::now(),
+            editor_state: crate::ui::panel_context::GenomeEditorState::new(),
         }
     }
     
@@ -140,8 +143,48 @@ impl App {
         // Update UI state with current simulation info
         self.ui.state.current_mode = current_mode;
         
-        // End egui frame and get output (this now includes the dock system)
-        let egui_output = self.ui.end_frame(&mut self.dock_manager, &self.scene_manager);
+        // Use persistent editor state and create scene request
+        let mut scene_request = crate::ui::panel_context::SceneModeRequest::None;
+        
+        // For now, use a simpler approach that avoids the borrowing issue
+        // We'll provide dummy data for non-Preview modes and real data for Preview mode
+        let egui_output = {
+            let mut working_genome = crate::genome::Genome::default();
+            let mut dummy_camera = crate::ui::camera::CameraController::new();
+            
+            // Get real data if in Preview mode
+            if current_mode == crate::ui::types::SimulationMode::Preview {
+                if let Some(preview_scene) = self.scene_manager.get_preview_scene() {
+                    // Copy the genome data for editing
+                    working_genome = preview_scene.genome.clone();
+                }
+            }
+            
+            let output = self.ui.end_frame(
+                &mut self.dock_manager,
+                &mut working_genome,
+                &mut self.editor_state,
+                &self.scene_manager,
+                &mut dummy_camera,
+                &mut scene_request,
+            );
+            
+            // Sync genome changes back to the scene if in Preview mode
+            if current_mode == crate::ui::types::SimulationMode::Preview {
+                if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut() {
+                    preview_scene.genome = working_genome;
+                }
+            }
+            
+            output
+        };
+        
+        // Handle scene mode requests from UI panels
+        if scene_request.is_requested() {
+            if let Some(target_mode) = scene_request.target_mode() {
+                self.ui.state.request_mode_switch(target_mode);
+            }
+        }
         
         // Check if mode switch was requested via UI
         if let Some(requested_mode) = self.ui.state.take_mode_request() {

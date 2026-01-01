@@ -116,6 +116,26 @@ impl SceneManager {
         self.gpu_scene.as_mut()
     }
 
+    /// Get a reference to the preview scene for UI access.
+    /// Returns None if preview scene doesn't exist or current mode is not Preview.
+    pub fn get_preview_scene(&self) -> Option<&PreviewScene> {
+        if self.current_mode == SimulationMode::Preview {
+            self.preview_scene.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Get a mutable reference to the preview scene for UI access.
+    /// Returns None if preview scene doesn't exist or current mode is not Preview.
+    pub fn get_preview_scene_mut(&mut self) -> Option<&mut PreviewScene> {
+        if self.current_mode == SimulationMode::Preview {
+            self.preview_scene.as_mut()
+        } else {
+            None
+        }
+    }
+
     /// Handle window resize for all existing scenes.
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         if let Some(scene) = &mut self.preview_scene {

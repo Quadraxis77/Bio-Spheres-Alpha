@@ -102,7 +102,7 @@ impl GenomeEditorState {
             qball1_initial_distance: 1.0,
             qball2_locked_axis: -1,
             qball2_initial_distance: 1.0,
-            enable_snapping: false,
+            enable_snapping: true,
             time_value: 0.0,
             max_preview_duration: 10.0,
             time_slider_dragging: false,
@@ -226,6 +226,7 @@ mod tests {
         assert!(state.rename_buffer.is_empty());
         assert!(!state.copy_into_dialog_open);
         assert!(!state.qball_snapping);
+        assert!(state.enable_snapping);
         assert_eq!(state.qball1_locked_axis, -1);
         assert_eq!(state.time_value, 0.0);
     }

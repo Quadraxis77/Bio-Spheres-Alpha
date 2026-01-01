@@ -151,6 +151,22 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             self.state.set_panel_locked(&panel_name, !is_locked);
         }
     }
+
+    fn hide_tab_button(&self, tab: &Self::Tab) -> bool {
+        // Hide tab button if tabs are locked globally
+        if self.state.lock_tabs {
+            return true;
+        }
+        
+        // Hide tab button if this specific panel is locked
+        let panel_name = format!("{:?}", tab);
+        if self.state.is_panel_locked(&panel_name) {
+            return true;
+        }
+        
+        // Use the panel's own settings (viewport tabs are typically hidden)
+        tab.is_viewport()
+    }
 }
 
 // ============================================================================
@@ -369,12 +385,54 @@ fn render_parent_settings(ui: &mut Ui, _context: &mut PanelContext) {
     // TODO: Implement parent settings with quaternion ball
 }
 
-/// Render the CircleSliders panel (placeholder).
+/// Render the CircleSliders panel with pitch and yaw controls for parent split direction.
 fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
-    ui.heading("Circle Sliders");
-    ui.separator();
-    ui.checkbox(&mut context.editor_state.enable_snapping, "Enable Snapping");
-    // TODO: Implement circular slider widgets
+    use crate::ui::widgets::circular_slider_float;
+    
+    ui.checkbox(&mut context.editor_state.enable_snapping, "Enable Snapping (11.25°)");
+    ui.add_space(10.0);
+    
+    // Ensure we have at least one mode
+    if context.genome.modes.is_empty() {
+        context.genome.modes.push(crate::genome::ModeSettings::default());
+    }
+    
+    // Get the current mode (default to first mode if available)
+    if let Some(mode) = context.genome.modes.get_mut(0) {
+        // Calculate responsive slider size
+        let available_width = ui.available_width();
+        let max_radius = ((available_width - 40.0) / 2.0 - 20.0) / 2.0;
+        let radius = max_radius.clamp(20.0, 60.0);
+        
+        // Side by side layout
+        ui.horizontal(|ui| {
+            ui.add_space(10.0);
+            
+            ui.vertical(|ui| {
+                ui.label("Pitch:");
+                circular_slider_float(
+                    ui,
+                    &mut mode.parent_split_direction.x,
+                    -180.0,
+                    180.0,
+                    radius,
+                    context.editor_state.enable_snapping,
+                );
+            });
+            
+            ui.vertical(|ui| {
+                ui.label("Yaw:");
+                circular_slider_float(
+                    ui,
+                    &mut mode.parent_split_direction.y,
+                    -180.0,
+                    180.0,
+                    radius,
+                    context.editor_state.enable_snapping,
+                );
+            });
+        });
+    }
 }
 
 /// Render the QuaternionBall panel (placeholder).

@@ -9,153 +9,6 @@ use winit::window::Window;
 
 use crate::ui::types::GlobalUiState;
 
-/// Simple tab viewer for basic dock functionality
-struct SimpleTabViewer<'a> {
-    viewport_rect: &'a mut Option<egui::Rect>,
-    ui_state: &'a mut GlobalUiState,
-    scene_manager: &'a crate::scene::SceneManager,
-}
-
-impl<'a> egui_dock::TabViewer for SimpleTabViewer<'a> {
-    type Tab = crate::ui::panel::Panel;
-
-    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        tab.display_name().into()
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
-        match tab {
-            crate::ui::panel::Panel::Viewport => {
-                // Get the available rect for the viewport
-                let rect = ui.available_rect_before_wrap();
-                *self.viewport_rect = Some(rect);
-
-                // Allocate the full space - the 3D scene will be rendered behind this
-                ui.allocate_rect(rect, egui::Sense::hover());
-            }
-            crate::ui::panel::Panel::LeftPanel => {
-                // Empty placeholder panel - no content
-            }
-            crate::ui::panel::Panel::RightPanel => {
-                // Empty placeholder panel - no content
-            }
-            crate::ui::panel::Panel::BottomPanel => {
-                // Empty placeholder panel - no content
-            }
-            crate::ui::panel::Panel::SceneManager => {
-                ui.heading("Scene Manager");
-                ui.separator();
-                
-                ui.label("Simulation Mode:");
-                ui.horizontal(|ui| {
-                    let current_mode = self.scene_manager.current_mode();
-                    let is_preview = current_mode == crate::ui::types::SimulationMode::Preview;
-                    let is_gpu = current_mode == crate::ui::types::SimulationMode::Gpu;
-
-                    if ui.selectable_label(is_preview, "Preview")
-                        .on_hover_text("Genome editor with CPU simulation")
-                        .clicked() && !is_preview
-                    {
-                        // Request mode switch to Preview
-                        self.ui_state.request_mode_switch(crate::ui::types::SimulationMode::Preview);
-                        log::info!("Requested switch to Preview mode");
-                    }
-
-                    if ui.selectable_label(is_gpu, "GPU")
-                        .on_hover_text("Full GPU simulation")
-                        .clicked() && !is_gpu
-                    {
-                        // Request mode switch to GPU
-                        self.ui_state.request_mode_switch(crate::ui::types::SimulationMode::Gpu);
-                        log::info!("Requested switch to GPU mode");
-                    }
-                });
-
-                ui.separator();
-                
-                // Show real scene information
-                let current_mode = self.scene_manager.current_mode();
-                ui.label(format!("Current Mode: {}", current_mode.display_name()));
-                ui.label(format!("Cell Count: {}", self.scene_manager.active_scene().cell_count()));
-                ui.label(format!("Time: {:.2}s", self.scene_manager.active_scene().current_time()));
-                
-                if self.scene_manager.active_scene().is_paused() {
-                    ui.colored_label(egui::Color32::YELLOW, "⏸ Paused");
-                } else {
-                    ui.colored_label(egui::Color32::GREEN, "▶ Running");
-                }
-                
-                ui.separator();
-                
-                // Add simulation controls
-                ui.horizontal(|ui| {
-                    if self.scene_manager.active_scene().is_paused() {
-                        if ui.button("▶ Play").clicked() {
-                            // TODO: Implement play/pause functionality
-                            log::info!("Play requested");
-                        }
-                    } else {
-                        if ui.button("⏸ Pause").clicked() {
-                            // TODO: Implement play/pause functionality
-                            log::info!("Pause requested");
-                        }
-                    }
-                    
-                    if ui.button("⏹ Reset").clicked() {
-                        // TODO: Implement reset functionality
-                        log::info!("Reset requested");
-                    }
-                });
-            }
-            _ => {
-                ui.centered_and_justified(|ui| {
-                    ui.label(format!("{} (Not Implemented)", tab.display_name()));
-                });
-            }
-        }
-    }
-
-    fn is_closeable(&self, tab: &Self::Tab) -> bool {
-        // Check if this specific panel is locked
-        let panel_name = format!("{:?}", tab);
-        let is_locked = self.ui_state.is_panel_locked(&panel_name);
-        
-        // Panel is closeable if it's not locked AND global close buttons aren't locked
-        !is_locked && !self.ui_state.lock_close_buttons
-    }
-
-    fn allowed_in_windows(&self, tab: &mut Self::Tab) -> bool {
-        tab.allowed_in_windows()
-    }
-
-    fn is_viewport(&self, tab: &Self::Tab) -> bool {
-        tab.is_viewport()
-    }
-
-    fn clear_background(&self, tab: &Self::Tab) -> bool {
-        // Viewport should have transparent background to show 3D content
-        !tab.is_viewport()
-    }
-
-    fn is_draggable(&self, tab: &Self::Tab) -> bool {
-        // Check if this specific panel is locked
-        let panel_name = format!("{:?}", tab);
-        let is_locked = self.ui_state.is_panel_locked(&panel_name);
-        
-        // Panel is draggable if it's not locked AND global tabs aren't locked
-        !is_locked && !self.ui_state.lock_tabs
-    }
-
-    fn hide_tab_button(&self, tab: &Self::Tab) -> bool {
-        // Check if this specific panel is locked
-        let panel_name = format!("{:?}", tab);
-        let is_locked = self.ui_state.is_panel_locked(&panel_name);
-        
-        // Hide tab button if panel is locked OR if global lock_tabs is enabled
-        is_locked || self.ui_state.lock_tabs
-    }
-}
-
 /// The main UI system that manages egui rendering.
 ///
 /// This struct coordinates between egui-winit for input handling and
@@ -358,7 +211,11 @@ impl UiSystem {
     pub fn end_frame(
         &mut self, 
         dock_manager: &mut crate::ui::dock::DockManager,
+        genome: &mut crate::genome::Genome,
+        editor_state: &mut crate::ui::panel_context::GenomeEditorState,
         scene_manager: &crate::scene::SceneManager,
+        camera: &mut crate::ui::camera::CameraController,
+        scene_request: &mut crate::ui::panel_context::SceneModeRequest,
     ) -> egui::FullOutput {
         // Apply UI scale only when it changes
         let scale_changed = (self.last_scale - self.state.ui_scale).abs() > 0.001;
@@ -418,12 +275,22 @@ impl UiSystem {
             dock_area = dock_area.show_close_buttons(false);
         }
 
-        // Create a simple tab viewer that renders basic panels
-        let mut tab_viewer = SimpleTabViewer {
-            viewport_rect: &mut self.viewport_rect,
-            ui_state: &mut ui_state_copy,
+        // Create panel context for PanelTabViewer
+        let mut panel_context = crate::ui::panel_context::PanelContext::new(
+            genome,
+            editor_state,
             scene_manager,
-        };
+            camera,
+            scene_request,
+            ui_state_copy.current_mode,
+        );
+
+        // Use PanelTabViewer for full functionality
+        let mut tab_viewer = crate::ui::tab_viewer::PanelTabViewer::new(
+            &mut ui_state_copy,
+            &mut panel_context,
+            &mut self.viewport_rect,
+        );
 
         dock_area.show(&self.ctx, &mut tab_viewer);
         
