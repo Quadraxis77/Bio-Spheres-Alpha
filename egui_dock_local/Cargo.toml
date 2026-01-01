@@ -18,7 +18,7 @@ default = []
 serde = ["dep:serde", "egui/serde"]
 
 [dependencies]
-egui = { version = "0.33", default-features = false }
+egui = { path = "../egui_local/crates/egui", default-features = false }
 serde = { version = "1", optional = true, features = ["derive"] }
 
 duplicate = "2.0"

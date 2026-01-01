@@ -1,19 +1,20 @@
 use bio_spheres::preview::PreviewScene;
+use std::sync::Arc;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
-    window::WindowBuilder,
 };
 
 fn main() {
     env_logger::init();
     
     let event_loop = EventLoop::new().unwrap();
-    let window = WindowBuilder::new()
+    
+    let window_attributes = winit::window::Window::default_attributes()
         .with_title("Bio-Spheres Preview")
-        .with_inner_size(winit::dpi::PhysicalSize::new(1920, 1080))
-        .build(&event_loop)
-        .unwrap();
+        .with_inner_size(winit::dpi::PhysicalSize::new(1920, 1080));
+    
+    let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
     
     window.set_maximized(true);
     
@@ -23,7 +24,7 @@ fn main() {
         ..Default::default()
     });
     
-    let surface = instance.create_surface(&window).unwrap();
+    let surface = instance.create_surface(window.clone()).unwrap();
     
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
