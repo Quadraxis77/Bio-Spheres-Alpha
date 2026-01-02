@@ -1,6 +1,9 @@
 pub mod node_graph;
+pub mod serialization;
 
 use glam::{Vec2, Vec3, Quat};
+
+pub use serialization::{GenomeDeserializeError, GenomeSerializeError};
 
 #[derive(Debug, Clone)]
 pub struct Genome {

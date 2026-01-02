@@ -1047,12 +1047,30 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
             // Three buttons at the top
             ui.horizontal(|ui| {
                 if ui.button("Save Genome").clicked() {
-                    // TODO: Implement save dialog
-                    log::info!("Save Genome clicked - not yet implemented");
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Genome", &["genome"])
+                        .set_file_name(&format!("{}.genome", context.genome.name))
+                        .save_file()
+                    {
+                        match context.genome.save_to_file(&path) {
+                            Ok(()) => log::info!("Genome saved to {:?}", path),
+                            Err(e) => log::error!("Failed to save genome: {}", e),
+                        }
+                    }
                 }
                 if ui.button("Load Genome").clicked() {
-                    // TODO: Implement load dialog
-                    log::info!("Load Genome clicked - not yet implemented");
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Genome", &["genome"])
+                        .pick_file()
+                    {
+                        match crate::genome::Genome::load_from_file(&path) {
+                            Ok(loaded) => {
+                                *context.genome = loaded;
+                                log::info!("Genome loaded from {:?}", path);
+                            }
+                            Err(e) => log::error!("Failed to load genome: {}", e),
+                        }
+                    }
                 }
                 if ui.button("Genome Graph").clicked() {
                     // TODO: Implement genome graph
