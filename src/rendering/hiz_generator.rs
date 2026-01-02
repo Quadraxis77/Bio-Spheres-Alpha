@@ -24,6 +24,10 @@ pub struct HizGenerator {
     hiz_view: Option<wgpu::TextureView>,
     mip_views: Vec<wgpu::TextureView>,
     
+    // Cached bind groups (recreated on resize)
+    copy_bind_group: Option<wgpu::BindGroup>,
+    downsample_bind_groups: Vec<wgpu::BindGroup>,
+    
     width: u32,
     height: u32,
     mip_count: u32,
@@ -181,6 +185,8 @@ impl HizGenerator {
             hiz_texture: None,
             hiz_view: None,
             mip_views: Vec::new(),
+            copy_bind_group: None,
+            downsample_bind_groups: Vec::new(),
             width: 0,
             height: 0,
             mip_count: 0,
@@ -196,6 +202,10 @@ impl HizGenerator {
         self.width = width;
         self.height = height;
         self.mip_count = ((width.max(height) as f32).log2().floor() as u32 + 1).max(1);
+
+        // Clear cached bind groups (will be recreated on first generate)
+        self.copy_bind_group = None;
+        self.downsample_bind_groups.clear();
 
         // Create Hi-Z texture with full mip chain
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -241,7 +251,7 @@ impl HizGenerator {
     /// Generate the Hi-Z mip chain from a depth texture.
     /// The depth texture should be Depth32Float format.
     pub fn generate(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
@@ -251,41 +261,22 @@ impl HizGenerator {
             return;
         }
 
+        // Create bind groups on first use (or after resize)
+        if self.copy_bind_group.is_none() {
+            self.create_bind_groups(device, depth_view);
+        }
+
+        let copy_bind_group = self.copy_bind_group.as_ref().unwrap();
+
         // Pass 0: Copy depth buffer to Hi-Z mip 0
         {
-            let params = HizParams {
-                src_width: self.width,
-                src_height: self.height,
-                _pad: [0; 2],
-            };
-            queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
-
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Hi-Z Copy Bind Group"),
-                layout: &self.copy_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.params_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(depth_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&self.mip_views[0]),
-                    },
-                ],
-            });
-
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Hi-Z Copy Pass"),
                 timestamp_writes: None,
             });
 
             compute_pass.set_pipeline(&self.copy_pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
+            compute_pass.set_bind_group(0, copy_bind_group, &[]);
 
             let workgroups_x = (self.width + 7) / 8;
             let workgroups_y = (self.height + 7) / 8;
@@ -300,6 +291,7 @@ impl HizGenerator {
             let dst_width = (src_width / 2).max(1);
             let dst_height = (src_height / 2).max(1);
 
+            // Update params for this mip level
             let params = HizParams {
                 src_width,
                 src_height,
@@ -307,6 +299,50 @@ impl HizGenerator {
             };
             queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 
+            let bind_group = &self.downsample_bind_groups[mip as usize];
+
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some(&format!("Hi-Z Downsample {} Pass", mip + 1)),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(&self.downsample_pipeline);
+            compute_pass.set_bind_group(0, bind_group, &[]);
+
+            let workgroups_x = (dst_width + 7) / 8;
+            let workgroups_y = (dst_height + 7) / 8;
+            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+
+            src_width = dst_width;
+            src_height = dst_height;
+        }
+    }
+
+    /// Create and cache bind groups for Hi-Z generation.
+    fn create_bind_groups(&mut self, device: &wgpu::Device, depth_view: &wgpu::TextureView) {
+        // Create copy bind group
+        self.copy_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Hi-Z Copy Bind Group"),
+            layout: &self.copy_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(depth_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.mip_views[0]),
+                },
+            ],
+        }));
+
+        // Create downsample bind groups for each mip transition
+        self.downsample_bind_groups.clear();
+        for mip in 0..(self.mip_count - 1) {
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(&format!("Hi-Z Downsample {} Bind Group", mip + 1)),
                 layout: &self.downsample_bind_group_layout,
@@ -325,21 +361,7 @@ impl HizGenerator {
                     },
                 ],
             });
-
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some(&format!("Hi-Z Downsample {} Pass", mip + 1)),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(&self.downsample_pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            let workgroups_x = (dst_width + 7) / 8;
-            let workgroups_y = (dst_height + 7) / 8;
-            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-
-            src_width = dst_width;
-            src_height = dst_height;
+            self.downsample_bind_groups.push(bind_group);
         }
     }
 

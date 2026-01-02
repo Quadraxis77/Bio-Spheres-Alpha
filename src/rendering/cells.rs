@@ -907,7 +907,88 @@ impl CellRenderer {
     }
 
     /// Render cells using a pre-built instance buffer from InstanceBuilder (with GPU culling).
-    /// This is more efficient for large cell counts as culling happens on the GPU.
+    /// Uses an external encoder to allow batching with other GPU work.
+    pub fn render_with_encoder(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+        instance_builder: &InstanceBuilder,
+        instance_count: u32,
+        camera_pos: Vec3,
+        camera_rotation: Quat,
+        time: f32,
+    ) {
+        if instance_count == 0 {
+            return;
+        }
+
+        // Update camera uniform
+        let view_matrix = Mat4::look_at_rh(
+            camera_pos,
+            camera_pos + camera_rotation * Vec3::NEG_Z,
+            camera_rotation * Vec3::Y,
+        );
+        let aspect = self.width as f32 / self.height as f32;
+        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
+        let view_proj = proj_matrix * view_matrix;
+
+        let camera_uniform = CameraUniform {
+            view_proj: view_proj.to_cols_array_2d(),
+            camera_pos: camera_pos.to_array(),
+            _padding: 0.0,
+        };
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
+
+        // Update lighting uniform
+        let light_dir = Vec3::new(0.5, 1.0, 0.3).normalize();
+        let lighting_uniform = LightingUniform {
+            light_direction: light_dir.to_array(),
+            _padding1: 0.0,
+            light_color: [0.8, 0.8, 0.8],
+            _padding2: 0.0,
+            ambient_color: [0.3, 0.3, 0.35],
+            time,
+        };
+        queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
+
+        // Render all cells as opaque (GPU culling doesn't separate opaque/transparent yet)
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Cell Culled Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&self.opaque_pipeline);
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, instance_builder.get_instance_buffer().slice(..));
+            // Use indirect draw to get instance count from GPU buffer
+            render_pass.draw_indirect(instance_builder.get_indirect_buffer(), 0);
+        }
+    }
+
+    /// Render cells using a pre-built instance buffer from InstanceBuilder (with GPU culling).
+    /// Creates its own encoder and submits - use render_with_encoder for batching.
+    #[allow(dead_code)]
     pub fn render_with_instance_builder(
         &self,
         device: &wgpu::Device,

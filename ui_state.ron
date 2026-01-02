@@ -19,8 +19,8 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "RightPanel",
                 "Viewport",
+                "RightPanel",
                 "SceneManager",
             ],
             lock_settings: (
@@ -42,15 +42,15 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "LeftPanel",
-                "NameTypeEditor",
-                "BottomPanel",
                 "Modes",
-                "QuaternionBall",
                 "SceneManager",
-                "CircleSliders",
-                "RightPanel",
+                "NameTypeEditor",
                 "Viewport",
+                "LeftPanel",
+                "QuaternionBall",
+                "CircleSliders",
+                "BottomPanel",
+                "RightPanel",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -63,6 +63,6 @@
     occlusion_mip_override: -1,
     occlusion_min_screen_size: 50.0,
     occlusion_min_distance: 50.0,
-    occlusion_enabled: true,
+    occlusion_enabled: false,
     frustum_enabled: true,
 )

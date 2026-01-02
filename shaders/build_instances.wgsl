@@ -97,35 +97,53 @@ struct BuildParams {
 // Frustum Culling
 // ============================================================================
 
-// Simple clip-space frustum culling for spheres.
+// Frustum culling for spheres using clip-space bounds.
 // Projects the sphere center and checks if it's within NDC bounds,
-// accounting for the sphere radius in screen space.
+// with a conservative margin for the sphere radius.
 fn sphere_in_frustum(center: vec3<f32>, radius: f32) -> bool {
     // Project center to clip space
     let clip = params.view_proj * vec4<f32>(center, 1.0);
     
     // Behind camera check (w <= 0 means behind or at camera)
-    if (clip.w <= 0.0) {
+    // Use small epsilon to handle cells very close to near plane
+    if (clip.w <= 0.001) {
         return false;
     }
     
-    // Convert to NDC
-    let ndc = clip.xyz / clip.w;
+    // For proper frustum culling, we need to check if the sphere
+    // is completely outside any of the 6 frustum planes.
+    // In clip space, a point is inside if: -w <= x,y,z <= w
+    // For a sphere, we add radius margin in world space, which maps to clip space.
     
-    // Calculate a conservative screen-space radius
-    // This is approximate but works well for perspective projection
-    let screen_radius = radius / clip.w;
+    // Calculate clip-space radius (conservative estimate)
+    // The sphere extends 'radius' in world space, which in clip space
+    // is approximately radius * (projection_scale / distance)
+    // Since clip.w ≈ distance for perspective, we use:
+    let clip_radius = radius * 2.0;  // Conservative multiplier for edge cases
     
-    // Check if sphere is completely outside NDC cube [-1, 1]
-    // Add screen_radius as margin to account for sphere size
-    if (ndc.x < -1.0 - screen_radius || ndc.x > 1.0 + screen_radius) {
+    // Check against frustum planes in clip space
+    // Left plane: x >= -w  =>  x + w >= 0
+    if (clip.x < -clip.w - clip_radius) {
         return false;
     }
-    if (ndc.y < -1.0 - screen_radius || ndc.y > 1.0 + screen_radius) {
+    // Right plane: x <= w  =>  w - x >= 0
+    if (clip.x > clip.w + clip_radius) {
         return false;
     }
-    // For depth, check against [0, 1] range (wgpu convention)
-    if (ndc.z < 0.0 - screen_radius || ndc.z > 1.0 + screen_radius) {
+    // Bottom plane: y >= -w
+    if (clip.y < -clip.w - clip_radius) {
+        return false;
+    }
+    // Top plane: y <= w
+    if (clip.y > clip.w + clip_radius) {
+        return false;
+    }
+    // Near plane: z >= 0 (wgpu uses [0,1] depth range)
+    if (clip.z < -clip_radius) {
+        return false;
+    }
+    // Far plane: z <= w
+    if (clip.z > clip.w + clip_radius) {
         return false;
     }
     

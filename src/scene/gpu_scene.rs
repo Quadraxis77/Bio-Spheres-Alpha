@@ -287,9 +287,15 @@ impl Scene for GpuScene {
         }
         // Don't override culling mode here - it's set by app.rs based on UI settings
 
-        // Build instances with GPU culling (frustum + occlusion)
-        self.instance_builder.build_instances(
-            device,
+        // Create single command encoder for all GPU work to avoid multiple queue.submit() calls
+        // (each submit is a sync point that kills performance)
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("GPU Scene Encoder"),
+        });
+
+        // Build instances with GPU culling (compute pass)
+        self.instance_builder.build_instances_with_encoder(
+            &mut encoder,
             queue,
             self.canonical_state.cell_count,
             self.genome.modes.len(),
@@ -300,50 +306,41 @@ impl Scene for GpuScene {
             self.renderer.height,
         );
 
-        // Pass 1: Clear background
+        // Clear pass
         {
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("GPU Scene Clear Encoder"),
-            });
-
-            {
-                let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("GPU Scene Clear Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.02,
-                                g: 0.02,
-                                b: 0.05,
-                                a: 1.0,
-                            }),
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.renderer.depth_view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Store,
+            let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("GPU Scene Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.02,
+                            g: 0.02,
+                            b: 0.05,
+                            a: 1.0,
                         }),
-                        stencil_ops: None,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.renderer.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
                     }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-                // Pass ends here, just clearing
-            }
-
-            queue.submit(std::iter::once(encoder.finish()));
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
         }
 
-        // Pass 2: Render cells using GPU-culled instance buffer
+        // Render cells using GPU-culled instance buffer
         let visible_count = self.instance_builder.visible_count();
-        self.renderer.render_with_instance_builder(
-            device,
+        self.renderer.render_with_encoder(
+            &mut encoder,
             queue,
             view,
             &self.instance_builder,
@@ -353,21 +350,19 @@ impl Scene for GpuScene {
             self.current_time,
         );
 
-        // Pass 3: Generate Hi-Z from depth buffer for next frame's occlusion culling
-        {
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Hi-Z Generation Encoder"),
-            });
-
+        // Generate Hi-Z from depth buffer for next frame's occlusion culling
+        // Skip if no cells (nothing to cull) or culling is disabled
+        if self.canonical_state.cell_count > 0 && self.instance_builder.culling_mode() != CullingMode::Disabled {
             self.hiz_generator.generate(
                 device,
                 queue,
                 &mut encoder,
                 &self.renderer.depth_view,
             );
-
-            queue.submit(std::iter::once(encoder.finish()));
         }
+
+        // Single submit for all GPU work
+        queue.submit(std::iter::once(encoder.finish()));
 
         // Mark that we now have Hi-Z data for next frame
         self.first_frame = false;
@@ -376,6 +371,7 @@ impl Scene for GpuScene {
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         self.renderer.resize(device, width, height);
         self.hiz_generator.resize(device, width, height);
+        self.instance_builder.reset_hiz(); // Reset Hi-Z config so bind group is recreated with new texture
         self.first_frame = true; // Need to regenerate Hi-Z
     }
 
