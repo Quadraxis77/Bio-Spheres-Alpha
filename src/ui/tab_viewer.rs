@@ -57,7 +57,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::SceneManager => render_scene_manager(ui, self.context, self.state),
             Panel::CellInspector => render_cell_inspector(ui, self.context),
             Panel::GenomeEditor => render_genome_editor(ui, self.context),
-            Panel::PerformanceMonitor => render_performance_monitor(ui, self.context),
+            Panel::PerformanceMonitor => render_performance_monitor(ui, self.context, self.state),
             Panel::RenderingControls => render_rendering_controls(ui),
             Panel::TimeScrubber => render_time_scrubber(ui, self.context),
             Panel::ThemeEditor => render_theme_editor(ui),
@@ -325,7 +325,7 @@ fn render_genome_editor(ui: &mut Ui, context: &mut PanelContext) {
 }
 
 /// Render the PerformanceMonitor panel.
-fn render_performance_monitor(ui: &mut Ui, context: &PanelContext) {
+fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
     let perf = context.performance;
     
     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -412,6 +412,77 @@ fn render_performance_monitor(ui: &mut Ui, context: &PanelContext) {
             ui.label("Mode:");
             ui.label(format!("{:?}", context.current_mode));
         });
+        
+        // Culling section (GPU mode only)
+        if context.current_mode == crate::ui::types::SimulationMode::Gpu {
+            ui.add_space(8.0);
+            ui.heading("GPU Culling");
+            ui.separator();
+            
+            let (total, visible, frustum_culled, occluded) = perf.culling_stats();
+            
+            ui.horizontal(|ui| {
+                ui.label("Total Cells:");
+                ui.label(format!("{}", total));
+            });
+            
+            ui.horizontal(|ui| {
+                ui.label("Visible:");
+                ui.label(format!("{}", visible));
+            });
+            
+            ui.horizontal(|ui| {
+                ui.label("Frustum Culled:");
+                ui.label(format!("{}", frustum_culled));
+            });
+            
+            ui.horizontal(|ui| {
+                ui.label("Occluded:");
+                ui.label(format!("{}", occluded));
+            });
+            
+            if total > 0 {
+                let cull_percent = ((total - visible) as f32 / total as f32) * 100.0;
+                ui.horizontal(|ui| {
+                    ui.label("Cull Rate:");
+                    ui.label(format!("{:.1}%", cull_percent));
+                });
+            }
+            
+            ui.add_space(4.0);
+            
+            // Enable/disable toggles
+            ui.checkbox(&mut state.frustum_enabled, "Enable Frustum Culling");
+            ui.checkbox(&mut state.occlusion_enabled, "Enable Occlusion Culling");
+            
+            if state.occlusion_enabled {
+                ui.add_space(4.0);
+                
+                ui.label("Depth Bias:");
+                ui.add(egui::Slider::new(&mut state.occlusion_bias, -0.1..=0.1)
+                    .step_by(0.001)
+                    .fixed_decimals(3));
+                
+                ui.add_space(4.0);
+                
+                ui.label("Mip Level (-1 = auto):");
+                ui.add(egui::Slider::new(&mut state.occlusion_mip_override, -1..=10));
+                
+                ui.add_space(4.0);
+                
+                ui.label("Min Screen Size (px):");
+                ui.add(egui::Slider::new(&mut state.occlusion_min_screen_size, 0.0..=100.0)
+                    .step_by(1.0)
+                    .fixed_decimals(0));
+                
+                ui.add_space(4.0);
+                
+                ui.label("Min Distance:");
+                ui.add(egui::Slider::new(&mut state.occlusion_min_distance, 0.0..=100.0)
+                    .step_by(0.5)
+                    .fixed_decimals(1));
+            }
+        }
         
         ui.add_space(8.0);
         

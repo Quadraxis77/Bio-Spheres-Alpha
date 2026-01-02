@@ -191,9 +191,41 @@ pub struct GlobalUiState {
     /// Per-scene configurations.
     pub scene_configs: HashMap<SimulationMode, SceneUiConfig>,
 
+    /// Occlusion culling bias (negative = more aggressive, positive = more conservative)
+    #[serde(default)]
+    pub occlusion_bias: f32,
+
+    /// Occlusion mip level override (-1 = auto, 0+ = force specific mip)
+    #[serde(default = "default_mip_override")]
+    pub occlusion_mip_override: i32,
+
+    /// Minimum screen-space size (pixels) for occlusion culling
+    #[serde(default)]
+    pub occlusion_min_screen_size: f32,
+
+    /// Minimum distance for occlusion culling
+    #[serde(default)]
+    pub occlusion_min_distance: f32,
+
+    /// Whether occlusion culling is enabled
+    #[serde(default = "default_true")]
+    pub occlusion_enabled: bool,
+
+    /// Whether frustum culling is enabled
+    #[serde(default = "default_true")]
+    pub frustum_enabled: bool,
+
     /// Requested mode change (processed by main app loop)
     #[serde(skip)]
     pub mode_request: Option<SimulationMode>,
+}
+
+fn default_mip_override() -> i32 {
+    -1
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for GlobalUiState {
@@ -211,6 +243,12 @@ impl Default for GlobalUiState {
             lock_tabs: false,
             lock_close_buttons: false,
             scene_configs,
+            occlusion_bias: 0.0,
+            occlusion_mip_override: -1,
+            occlusion_min_screen_size: 0.0,
+            occlusion_min_distance: 0.0,
+            occlusion_enabled: true,
+            frustum_enabled: true,
             mode_request: None,
         }
     }

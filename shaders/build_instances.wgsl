@@ -1,4 +1,5 @@
 // Compute shader for building cell instance buffers on the GPU
+// Includes frustum culling and occlusion culling via Hi-Z depth buffer
 // Eliminates CPU-side iteration and reduces CPU→GPU data transfer
 
 // Input: Cell simulation data (SoA layout from CanonicalState)
@@ -37,12 +38,34 @@ struct CellTypeVisuals {
     _pad: vec2<f32>,
 }
 
+// Frustum plane (normal.xyz, distance)
+struct FrustumPlane {
+    normal_and_dist: vec4<f32>,
+}
+
 // Uniforms
 struct BuildParams {
     cell_count: u32,
     mode_count: u32,
     cell_type_count: u32,
-    _pad: u32,
+    culling_enabled: u32,  // 0 = disabled, 1 = frustum only, 2 = frustum + occlusion, 3 = occlusion only
+    // View-projection matrix for occlusion culling
+    view_proj: mat4x4<f32>,
+    // Camera position for distance-based LOD
+    camera_pos: vec3<f32>,
+    near_plane: f32,
+    far_plane: f32,
+    // Screen dimensions for Hi-Z lookup
+    screen_width: f32,
+    screen_height: f32,
+    hiz_mip_count: u32,
+    // Occlusion culling parameters
+    occlusion_bias: f32,
+    occlusion_mip_override: i32,  // -1 = auto, 0+ = force specific mip level
+    min_screen_size: f32,         // Minimum screen-space size (pixels) to cull
+    min_distance: f32,            // Don't cull objects closer than this distance
+    // Frustum planes (6 planes: left, right, bottom, top, near, far)
+    frustum_planes: array<FrustumPlane, 6>,
 }
 
 @group(0) @binding(0) var<uniform> params: BuildParams;
@@ -62,9 +85,135 @@ struct BuildParams {
 // Output buffer (write-only)
 @group(0) @binding(9) var<storage, read_write> instances: array<CellInstance>;
 
-// Atomic counter for output index (for separating opaque/transparent)
+// Atomic counter for visible instance count
 @group(0) @binding(10) var<storage, read_write> counters: array<atomic<u32>>;
-// counters[0] = opaque count, counters[1] = transparent start index
+// counters[0] = visible count, counters[1] = total processed, counters[2] = frustum culled, counters[3] = occluded
+
+// Hi-Z depth texture for occlusion culling (optional, binding 11)
+// Note: R32Float is not filterable, so we use textureLoad instead of textureSample
+@group(0) @binding(11) var hiz_texture: texture_2d<f32>;
+
+// ============================================================================
+// Frustum Culling
+// ============================================================================
+
+// Simple clip-space frustum culling for spheres.
+// Projects the sphere center and checks if it's within NDC bounds,
+// accounting for the sphere radius in screen space.
+fn sphere_in_frustum(center: vec3<f32>, radius: f32) -> bool {
+    // Project center to clip space
+    let clip = params.view_proj * vec4<f32>(center, 1.0);
+    
+    // Behind camera check (w <= 0 means behind or at camera)
+    if (clip.w <= 0.0) {
+        return false;
+    }
+    
+    // Convert to NDC
+    let ndc = clip.xyz / clip.w;
+    
+    // Calculate a conservative screen-space radius
+    // This is approximate but works well for perspective projection
+    let screen_radius = radius / clip.w;
+    
+    // Check if sphere is completely outside NDC cube [-1, 1]
+    // Add screen_radius as margin to account for sphere size
+    if (ndc.x < -1.0 - screen_radius || ndc.x > 1.0 + screen_radius) {
+        return false;
+    }
+    if (ndc.y < -1.0 - screen_radius || ndc.y > 1.0 + screen_radius) {
+        return false;
+    }
+    // For depth, check against [0, 1] range (wgpu convention)
+    if (ndc.z < 0.0 - screen_radius || ndc.z > 1.0 + screen_radius) {
+        return false;
+    }
+    
+    return true;
+}
+
+// ============================================================================
+// Occlusion Culling (Hi-Z)
+// ============================================================================
+
+// Project a world-space point to NDC
+fn project_to_ndc(world_pos: vec3<f32>) -> vec4<f32> {
+    let clip = params.view_proj * vec4<f32>(world_pos, 1.0);
+    return clip;
+}
+
+// Convert NDC to screen UV [0, 1]
+fn ndc_to_uv(ndc: vec2<f32>) -> vec2<f32> {
+    return ndc * 0.5 + 0.5;
+}
+
+// Get the appropriate Hi-Z mip level for a given screen-space size
+fn get_hiz_mip_level(screen_size: f32) -> u32 {
+    // Use a mip level where one texel covers approximately the object's screen size
+    let mip = log2(max(screen_size, 1.0));
+    return clamp(u32(mip), 0u, params.hiz_mip_count - 1u);
+}
+
+// Test if a billboard sprite is occluded using Hi-Z
+// Returns true if occluded (should be culled), false if potentially visible
+// Note: Cells are rendered as camera-facing billboards, not 3D spheres
+fn sphere_occluded_hiz(center: vec3<f32>, radius: f32) -> bool {
+    // Distance check - don't cull objects closer than min_distance
+    let dist_to_camera = length(params.camera_pos - center);
+    if (dist_to_camera < params.min_distance) {
+        return false;
+    }
+    
+    // Project billboard center to clip space
+    let center_clip = project_to_ndc(center);
+    
+    // Behind camera check
+    if (center_clip.w <= 0.0) {
+        return false;
+    }
+    
+    // Convert to NDC
+    let center_ndc = center_clip.xyz / center_clip.w;
+    
+    // Check if in screen bounds (with some margin)
+    if (abs(center_ndc.x) > 1.2 || abs(center_ndc.y) > 1.2) {
+        return false;
+    }
+    
+    // Calculate screen-space size (diameter in pixels)
+    let screen_size = (radius * 2.0 / dist_to_camera) * max(params.screen_width, params.screen_height) * 0.5;
+    
+    // Don't cull if screen size is below threshold
+    if (screen_size < params.min_screen_size) {
+        return false;
+    }
+    
+    // Convert NDC to UV (flip Y for texture coordinates)
+    let uv = vec2<f32>(center_ndc.x * 0.5 + 0.5, -center_ndc.y * 0.5 + 0.5);
+    let clamped_uv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
+    
+    // Select mip level: use override if >= 0, otherwise use mip 0
+    var mip_level = 0u;
+    if (params.occlusion_mip_override >= 0) {
+        mip_level = clamp(u32(params.occlusion_mip_override), 0u, params.hiz_mip_count - 1u);
+    }
+    
+    // Get texture dimensions at selected mip level
+    let tex_dims = textureDimensions(hiz_texture, mip_level);
+    let texel_coord = vec2<i32>(clamped_uv * vec2<f32>(tex_dims));
+    let clamped_coord = clamp(texel_coord, vec2<i32>(0), vec2<i32>(tex_dims) - vec2<i32>(1));
+    
+    // Load Hi-Z depth at billboard center
+    let hiz_depth = textureLoad(hiz_texture, clamped_coord, mip_level).r;
+    
+    // Billboard is at center depth (flat quad facing camera)
+    // Occluded if billboard depth is behind the Hi-Z depth
+    return center_ndc.z > (hiz_depth + params.occlusion_bias);
+}
+
+// ============================================================================
+// Main Compute Shader
+// ============================================================================
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -80,6 +229,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mode_index = mode_indices[idx];
     let cell_id = cell_ids[idx];
     let cell_type = genome_ids[idx];
+    
+    // Increment total processed counter
+    atomicAdd(&counters[1], 1u);
+    
+    // ============== CULLING ==============
+    if (params.culling_enabled >= 1u) {
+        // Frustum culling (modes 1 and 2)
+        if (params.culling_enabled == 1u || params.culling_enabled == 2u) {
+            if (!sphere_in_frustum(position, radius)) {
+                atomicAdd(&counters[2], 1u); // Frustum culled counter
+                return;
+            }
+        }
+        
+        // Occlusion culling (modes 2 and 3)
+        if ((params.culling_enabled == 2u || params.culling_enabled == 3u) && params.hiz_mip_count > 0u) {
+            if (sphere_occluded_hiz(position, radius)) {
+                atomicAdd(&counters[3], 1u); // Occluded counter
+                return;
+            }
+        }
+    }
+    
+    // ============== BUILD INSTANCE ==============
     
     // Look up mode visuals (with bounds check)
     var color = vec3<f32>(0.5, 0.5, 0.5);
@@ -121,7 +294,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     instance.membrane_params = vec4<f32>(noise_scale, noise_strength, noise_speed, anim_offset);
     instance.rotation = rotation;
     
-    // Write to output buffer
-    // For now, write sequentially (opaque/transparent sorting can be added later)
-    instances[idx] = instance;
+    // Atomically get output index and write instance
+    let output_idx = atomicAdd(&counters[0], 1u);
+    instances[output_idx] = instance;
 }

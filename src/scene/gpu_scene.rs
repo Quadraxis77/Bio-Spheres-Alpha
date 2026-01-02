@@ -4,11 +4,12 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::CellRenderer;
+use crate::rendering::{CellRenderer, CullingMode, HizGenerator, InstanceBuilder};
 use crate::scene::Scene;
 use crate::simulation::{CanonicalState, PhysicsConfig};
 use crate::simulation::cpu_physics;
 use crate::ui::camera::CameraController;
+use glam::Mat4;
 
 /// GPU simulation scene for large-scale simulations.
 ///
@@ -19,6 +20,10 @@ pub struct GpuScene {
     pub canonical_state: CanonicalState,
     /// Cell renderer for visualization
     pub renderer: CellRenderer,
+    /// GPU instance builder with frustum and occlusion culling
+    pub instance_builder: InstanceBuilder,
+    /// Hi-Z generator for occlusion culling
+    pub hiz_generator: HizGenerator,
     /// Physics configuration
     pub config: PhysicsConfig,
     /// Whether simulation is paused
@@ -31,6 +36,8 @@ pub struct GpuScene {
     pub genome: Genome,
     /// Accumulated time for fixed timestep physics
     time_accumulator: f32,
+    /// Whether this is the first frame (no Hi-Z data yet)
+    first_frame: bool,
 }
 
 impl GpuScene {
@@ -40,22 +47,32 @@ impl GpuScene {
         queue: &wgpu::Queue,
         surface_config: &wgpu::SurfaceConfiguration,
     ) -> Self {
-        let capacity = 20_000; // 20k cell cap for GPU scene
+        let capacity = 10_000; // 10k cell cap for GPU scene
         // Use 64x64x64 grid for spatial partitioning
         let canonical_state = CanonicalState::with_grid_density(capacity, 64);
         let config = PhysicsConfig::default();
 
         let renderer = CellRenderer::new(device, queue, surface_config, capacity);
+        
+        // Create instance builder - culling mode will be set per-frame in render()
+        let instance_builder = InstanceBuilder::new(device, capacity);
+        
+        // Create Hi-Z generator for occlusion culling
+        let mut hiz_generator = HizGenerator::new(device);
+        hiz_generator.resize(device, surface_config.width, surface_config.height);
 
         Self {
             canonical_state,
             renderer,
+            instance_builder,
+            hiz_generator,
             config,
             paused: false,
             camera: CameraController::new(),
             current_time: 0.0,
             genome: Genome::default(),
             time_accumulator: 0.0,
+            first_frame: true,
         }
     }
 
@@ -66,9 +83,59 @@ impl GpuScene {
         self.current_time = 0.0;
         self.time_accumulator = 0.0;
         self.paused = false;
+        self.first_frame = true;
         // Clear adhesion connections
         self.canonical_state.adhesion_connections.active_count = 0;
         self.canonical_state.adhesion_manager.reset();
+        // Mark instance builder dirty
+        self.instance_builder.mark_all_dirty();
+    }
+    
+    /// Set the culling mode for the instance builder.
+    pub fn set_culling_mode(&mut self, mode: CullingMode) {
+        self.instance_builder.set_culling_mode(mode);
+    }
+    
+    /// Get the current culling mode.
+    pub fn culling_mode(&self) -> CullingMode {
+        self.instance_builder.culling_mode()
+    }
+    
+    /// Get culling statistics from the last frame.
+    pub fn culling_stats(&self) -> crate::rendering::CullingStats {
+        self.instance_builder.culling_stats()
+    }
+    
+    /// Set the occlusion bias for culling.
+    /// Negative values = more aggressive culling (cull more cells).
+    /// Positive values = more conservative culling (cull fewer cells).
+    pub fn set_occlusion_bias(&mut self, bias: f32) {
+        self.instance_builder.set_occlusion_bias(bias);
+    }
+    
+    /// Get the current occlusion bias.
+    pub fn occlusion_bias(&self) -> f32 {
+        self.instance_builder.occlusion_bias()
+    }
+    
+    /// Set the mip level override for occlusion culling.
+    pub fn set_occlusion_mip_override(&mut self, mip: i32) {
+        self.instance_builder.set_occlusion_mip_override(mip);
+    }
+    
+    /// Set the minimum screen-space size for occlusion culling.
+    pub fn set_occlusion_min_screen_size(&mut self, size: f32) {
+        self.instance_builder.set_min_screen_size(size);
+    }
+    
+    /// Set the minimum distance for occlusion culling.
+    pub fn set_occlusion_min_distance(&mut self, distance: f32) {
+        self.instance_builder.set_min_distance(distance);
+    }
+    
+    /// Read culling statistics from GPU (blocking).
+    pub fn read_culling_stats(&mut self, device: &wgpu::Device) -> crate::rendering::CullingStats {
+        self.instance_builder.read_culling_stats_blocking(device)
     }
 
     /// Run physics step using CPU physics with genome-based features.
@@ -188,6 +255,51 @@ impl Scene for GpuScene {
         view: &wgpu::TextureView,
         cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
     ) {
+        // Calculate view-projection matrix for culling
+        let view_matrix = Mat4::look_at_rh(
+            self.camera.position(),
+            self.camera.position() + self.camera.rotation * glam::Vec3::NEG_Z,
+            self.camera.rotation * glam::Vec3::Y,
+        );
+        let aspect = self.renderer.width as f32 / self.renderer.height as f32;
+        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
+        let view_proj = proj_matrix * view_matrix;
+
+        // Update instance builder with simulation state FIRST
+        // (this may resize buffers and invalidate bind group)
+        self.instance_builder.update_from_state(
+            device,
+            queue,
+            &self.canonical_state,
+            Some(&self.genome),
+            cell_type_visuals,
+        );
+
+        // Set up Hi-Z texture for occlusion culling AFTER update_from_state
+        // (so the bind group is created with the correct Hi-Z texture)
+        // On first frame, disable culling since we don't have Hi-Z data yet
+        if self.first_frame {
+            self.instance_builder.set_culling_mode(CullingMode::Disabled);
+        } else if let Some(hiz_view) = self.hiz_generator.hiz_view() {
+            // Pass Hi-Z texture to instance builder for occlusion culling
+            // Note: culling mode is set by app.rs based on UI settings, we just provide the texture
+            self.instance_builder.set_hiz_texture(device, hiz_view, self.hiz_generator.mip_count());
+        }
+        // Don't override culling mode here - it's set by app.rs based on UI settings
+
+        // Build instances with GPU culling (frustum + occlusion)
+        self.instance_builder.build_instances(
+            device,
+            queue,
+            self.canonical_state.cell_count,
+            self.genome.modes.len(),
+            cell_type_visuals.map(|v| v.len()).unwrap_or(1),
+            view_proj,
+            self.camera.position(),
+            self.renderer.width,
+            self.renderer.height,
+        );
+
         // Pass 1: Clear background
         {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -228,22 +340,43 @@ impl Scene for GpuScene {
             queue.submit(std::iter::once(encoder.finish()));
         }
 
-        // Pass 2: Render cells with OIT (handles its own render passes)
-        self.renderer.render_oit(
+        // Pass 2: Render cells using GPU-culled instance buffer
+        let visible_count = self.instance_builder.visible_count();
+        self.renderer.render_with_instance_builder(
             device,
             queue,
             view,
-            &self.canonical_state,
-            Some(&self.genome),
-            cell_type_visuals,
+            &self.instance_builder,
+            visible_count,
             self.camera.position(),
             self.camera.rotation,
-            self.current_time,  // Use simulation time for noise animation
+            self.current_time,
         );
+
+        // Pass 3: Generate Hi-Z from depth buffer for next frame's occlusion culling
+        {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Hi-Z Generation Encoder"),
+            });
+
+            self.hiz_generator.generate(
+                device,
+                queue,
+                &mut encoder,
+                &self.renderer.depth_view,
+            );
+
+            queue.submit(std::iter::once(encoder.finish()));
+        }
+
+        // Mark that we now have Hi-Z data for next frame
+        self.first_frame = false;
     }
 
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         self.renderer.resize(device, width, height);
+        self.hiz_generator.resize(device, width, height);
+        self.first_frame = true; // Need to regenerate Hi-Z
     }
 
     fn camera(&self) -> &CameraController {

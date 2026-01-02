@@ -275,11 +275,17 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let anim_offset = in.membrane_params.w;
     let anim_time = lighting.time * noise_speed + anim_offset;
     
+    // LOD: Reduce noise strength for cells that cover many pixels (large on screen)
+    // This improves fill-rate performance for close/large cells
+    let screen_size = in.cell_radius / max(length(in.cell_center - camera.camera_pos), 0.1);
+    let lod_factor = saturate(1.0 - screen_size * 2.0);  // Fade out noise when cell is large on screen
+    let effective_noise_strength = noise_strength * lod_factor;
+    
     let perturbed_normal = perturb_normal(
         world_normal,
         local_noise_pos,
         noise_scale,
-        noise_strength,
+        effective_noise_strength,
         anim_time
     );
     

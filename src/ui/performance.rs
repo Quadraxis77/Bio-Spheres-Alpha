@@ -20,6 +20,8 @@ pub struct PerformanceMetrics {
     system: System,
     /// Time since last system refresh.
     time_since_refresh: f32,
+    /// Time since last culling stats refresh.
+    time_since_culling_refresh: f32,
     /// Cached CPU core count.
     cpu_core_count: usize,
     /// Cached per-core CPU usage (0-100%).
@@ -30,6 +32,10 @@ pub struct PerformanceMetrics {
     memory_used: u64,
     /// Total system memory in bytes.
     memory_total: u64,
+    /// Culling statistics (total, visible, frustum culled, occluded)
+    culling_stats: (u32, u32, u32, u32),
+    /// Frame counter for periodic operations.
+    frame_count: u64,
 }
 
 impl PerformanceMetrics {
@@ -46,11 +52,14 @@ impl PerformanceMetrics {
             frame_times: VecDeque::with_capacity(FRAME_TIME_SAMPLES),
             system,
             time_since_refresh: 0.0,
+            time_since_culling_refresh: 0.0,
             cpu_core_count,
             cpu_usage_per_core: vec![0.0; cpu_core_count],
             cpu_usage_total: 0.0,
             memory_used: 0,
             memory_total,
+            culling_stats: (0, 0, 0, 0),
+            frame_count: 0,
         }
     }
     
@@ -62,11 +71,27 @@ impl PerformanceMetrics {
         }
         self.frame_times.push_back(dt);
         
+        // Increment frame counter
+        self.frame_count = self.frame_count.wrapping_add(1);
+        
+        // Track time for culling stats refresh
+        self.time_since_culling_refresh += dt;
+        
         // Refresh system info periodically
         self.time_since_refresh += dt;
         if self.time_since_refresh >= SYSTEM_REFRESH_INTERVAL {
             self.time_since_refresh = 0.0;
             self.refresh_system_info();
+        }
+    }
+    
+    /// Check if culling stats should be refreshed (once per second).
+    pub fn should_refresh_culling_stats(&mut self) -> bool {
+        if self.time_since_culling_refresh >= 1.0 {
+            self.time_since_culling_refresh = 0.0;
+            true
+        } else {
+            false
         }
     }
     
@@ -163,6 +188,21 @@ impl PerformanceMetrics {
     /// Get frame time history for plotting.
     pub fn frame_time_history(&self) -> impl Iterator<Item = f32> + '_ {
         self.frame_times.iter().map(|&t| t * 1000.0)
+    }
+    
+    /// Update culling statistics.
+    pub fn set_culling_stats(&mut self, total: u32, visible: u32, frustum_culled: u32, occluded: u32) {
+        self.culling_stats = (total, visible, frustum_culled, occluded);
+    }
+    
+    /// Get culling statistics: (total, visible, frustum_culled, occluded).
+    pub fn culling_stats(&self) -> (u32, u32, u32, u32) {
+        self.culling_stats
+    }
+    
+    /// Get the current frame count.
+    pub fn frame_count(&self) -> u64 {
+        self.frame_count
     }
 }
 

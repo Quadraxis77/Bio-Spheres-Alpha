@@ -271,7 +271,13 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // Use stable animation offset from cell ID (membrane_params.w) so splits don't cause jumps
     let anim_offset = in.membrane_params.w;
     let anim_time = lighting.time * noise_speed + anim_offset;
-    let perturbed_normal = perturb_normal(world_normal, local_surface_pos, noise_scale, noise_strength, anim_time);
+    
+    // LOD: Reduce noise strength for cells that cover many pixels (large on screen)
+    let screen_size = in.cell_radius / max(length(in.cell_center - camera.camera_pos), 0.1);
+    let lod_factor = saturate(1.0 - screen_size * 2.0);
+    let effective_noise_strength = noise_strength * lod_factor;
+    
+    let perturbed_normal = perturb_normal(world_normal, local_surface_pos, noise_scale, effective_noise_strength, anim_time);
     
     // Nucleus
     let nucleus_size = 0.55;
