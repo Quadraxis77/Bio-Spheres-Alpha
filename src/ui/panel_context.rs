@@ -7,6 +7,7 @@
 use crate::genome::Genome;
 use crate::scene::SceneManager;
 use crate::ui::camera::CameraController;
+use crate::ui::performance::PerformanceMetrics;
 use crate::ui::types::SimulationMode;
 
 /// Request for scene mode changes.
@@ -188,6 +189,8 @@ pub struct PanelContext<'a> {
     pub scene_request: &'a mut SceneModeRequest,
     /// Current simulation mode
     pub current_mode: SimulationMode,
+    /// Performance metrics
+    pub performance: &'a PerformanceMetrics,
 }
 
 impl<'a> PanelContext<'a> {
@@ -199,6 +202,7 @@ impl<'a> PanelContext<'a> {
         camera: &'a mut CameraController,
         scene_request: &'a mut SceneModeRequest,
         current_mode: SimulationMode,
+        performance: &'a PerformanceMetrics,
     ) -> Self {
         Self {
             genome,
@@ -207,6 +211,7 @@ impl<'a> PanelContext<'a> {
             camera,
             scene_request,
             current_mode,
+            performance,
         }
     }
 

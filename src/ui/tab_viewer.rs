@@ -285,13 +285,220 @@ fn render_genome_editor(ui: &mut Ui, context: &mut PanelContext) {
     ui.label("Use the individual panels (Rotation, Parent Settings, etc.) to edit genome properties.");
 }
 
-/// Render the PerformanceMonitor panel (placeholder).
+/// Render the PerformanceMonitor panel.
 fn render_performance_monitor(ui: &mut Ui, context: &PanelContext) {
-    ui.heading("Performance");
-    ui.separator();
-    ui.label(format!("Cells: {}", context.cell_count()));
-    ui.label(format!("Time: {:.2}s", context.current_time()));
-    // TODO: Add FPS, frame time, GPU stats
+    let perf = context.performance;
+    
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        // FPS and Frame Time section
+        ui.heading("Frame Rate");
+        ui.separator();
+        
+        ui.horizontal(|ui| {
+            ui.label("FPS:");
+            ui.label(format!("{:.1}", perf.fps()));
+        });
+        
+        ui.horizontal(|ui| {
+            ui.label("Frame Time:");
+            ui.label(format!("{:.2} ms", perf.average_frame_time_ms()));
+        });
+        
+        ui.horizontal(|ui| {
+            ui.label("Min/Max:");
+            ui.label(format!("{:.2} / {:.2} ms", perf.min_frame_time_ms(), perf.max_frame_time_ms()));
+        });
+        
+        // Frame time graph
+        let frame_times: Vec<f32> = perf.frame_time_history().collect();
+        if !frame_times.is_empty() {
+            let max_time = frame_times.iter().cloned().fold(16.67, f32::max);
+            ui.add_space(4.0);
+            
+            let plot_height = 40.0;
+            let (response, painter) = ui.allocate_painter(
+                egui::vec2(ui.available_width(), plot_height),
+                egui::Sense::hover(),
+            );
+            let rect = response.rect;
+            
+            // Background
+            painter.rect_filled(rect, 2.0, egui::Color32::from_gray(30));
+            
+            // 16.67ms line (60 FPS target)
+            let target_y = rect.bottom() - (16.67 / max_time) * rect.height();
+            painter.line_segment(
+                [egui::pos2(rect.left(), target_y), egui::pos2(rect.right(), target_y)],
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 100, 50)),
+            );
+            
+            // Frame time bars
+            let bar_width = rect.width() / frame_times.len() as f32;
+            for (i, &time) in frame_times.iter().enumerate() {
+                let x = rect.left() + i as f32 * bar_width;
+                let height = (time / max_time) * rect.height();
+                let y = rect.bottom() - height;
+                
+                let color = if time > 16.67 {
+                    egui::Color32::from_rgb(200, 80, 80)
+                } else {
+                    egui::Color32::from_rgb(80, 200, 80)
+                };
+                
+                painter.rect_filled(
+                    egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(bar_width.max(1.0), height)),
+                    0.0,
+                    color,
+                );
+            }
+        }
+        
+        ui.add_space(8.0);
+        
+        // Simulation section
+        ui.heading("Simulation");
+        ui.separator();
+        
+        ui.horizontal(|ui| {
+            ui.label("Cells:");
+            ui.label(format!("{}", context.cell_count()));
+        });
+        
+        ui.horizontal(|ui| {
+            ui.label("Time:");
+            ui.label(format!("{:.2}s", context.current_time()));
+        });
+        
+        ui.horizontal(|ui| {
+            ui.label("Mode:");
+            ui.label(format!("{:?}", context.current_mode));
+        });
+        
+        ui.add_space(8.0);
+        
+        // CPU section
+        ui.heading("CPU");
+        ui.separator();
+        
+        ui.horizontal(|ui| {
+            ui.label("Cores:");
+            ui.label(format!("{}", perf.cpu_core_count()));
+        });
+        
+        ui.horizontal(|ui| {
+            ui.label("Usage:");
+            ui.label(format!("{:.1}%", perf.cpu_usage_total()));
+        });
+        
+        // Per-core usage bars
+        let core_usage = perf.cpu_usage_per_core();
+        if !core_usage.is_empty() {
+            ui.add_space(4.0);
+            
+            let bar_height = 8.0;
+            let spacing = 2.0;
+            let total_height = core_usage.len() as f32 * (bar_height + spacing);
+            
+            let (response, painter) = ui.allocate_painter(
+                egui::vec2(ui.available_width(), total_height),
+                egui::Sense::hover(),
+            );
+            let rect = response.rect;
+            
+            for (i, &usage) in core_usage.iter().enumerate() {
+                let y = rect.top() + i as f32 * (bar_height + spacing);
+                let bar_rect = egui::Rect::from_min_size(
+                    egui::pos2(rect.left(), y),
+                    egui::vec2(rect.width(), bar_height),
+                );
+                
+                // Background
+                painter.rect_filled(bar_rect, 2.0, egui::Color32::from_gray(40));
+                
+                // Usage bar
+                let usage_width = (usage / 100.0) * rect.width();
+                let usage_rect = egui::Rect::from_min_size(
+                    egui::pos2(rect.left(), y),
+                    egui::vec2(usage_width, bar_height),
+                );
+                
+                let color = if usage > 80.0 {
+                    egui::Color32::from_rgb(200, 80, 80)
+                } else if usage > 50.0 {
+                    egui::Color32::from_rgb(200, 180, 80)
+                } else {
+                    egui::Color32::from_rgb(80, 180, 80)
+                };
+                
+                painter.rect_filled(usage_rect, 2.0, color);
+            }
+        }
+        
+        ui.add_space(8.0);
+        
+        // Memory section
+        ui.heading("Memory");
+        ui.separator();
+        
+        let mem_used_mb = perf.memory_used() as f64 / (1024.0 * 1024.0);
+        let mem_total_mb = perf.memory_total() as f64 / (1024.0 * 1024.0);
+        let mem_used_gb = mem_used_mb / 1024.0;
+        let mem_total_gb = mem_total_mb / 1024.0;
+        
+        ui.horizontal(|ui| {
+            ui.label("Used:");
+            if mem_used_gb >= 1.0 {
+                ui.label(format!("{:.2} GB", mem_used_gb));
+            } else {
+                ui.label(format!("{:.0} MB", mem_used_mb));
+            }
+        });
+        
+        ui.horizontal(|ui| {
+            ui.label("Total:");
+            ui.label(format!("{:.1} GB", mem_total_gb));
+        });
+        
+        // Memory usage bar
+        let usage_percent = perf.memory_usage_percent();
+        ui.add_space(4.0);
+        
+        let bar_height = 12.0;
+        let (response, painter) = ui.allocate_painter(
+            egui::vec2(ui.available_width(), bar_height),
+            egui::Sense::hover(),
+        );
+        let rect = response.rect;
+        
+        // Background
+        painter.rect_filled(rect, 2.0, egui::Color32::from_gray(40));
+        
+        // Usage bar
+        let usage_width = (usage_percent / 100.0) * rect.width();
+        let usage_rect = egui::Rect::from_min_size(
+            rect.min,
+            egui::vec2(usage_width, bar_height),
+        );
+        
+        let color = if usage_percent > 90.0 {
+            egui::Color32::from_rgb(200, 80, 80)
+        } else if usage_percent > 70.0 {
+            egui::Color32::from_rgb(200, 180, 80)
+        } else {
+            egui::Color32::from_rgb(80, 140, 200)
+        };
+        
+        painter.rect_filled(usage_rect, 2.0, color);
+        
+        // Percentage text
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            format!("{:.1}%", usage_percent),
+            egui::FontId::default(),
+            egui::Color32::WHITE,
+        );
+    });
 }
 
 /// Render the RenderingControls panel (placeholder).

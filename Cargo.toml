@@ -32,6 +32,7 @@ futures-lite = "2.0"
 rayon = "1.10"
 glam = "0.29"
 web-time = "1.1"
+sysinfo = "0.32"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["wincon", "consoleapi"] }

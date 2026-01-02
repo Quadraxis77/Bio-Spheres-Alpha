@@ -158,20 +158,16 @@ impl SceneManager {
 
     /// Update gizmo configuration for all existing scenes.
     pub fn update_gizmo_config(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
+        // Only preview scene has gizmos
         if let Some(scene) = &mut self.preview_scene {
-            scene.update_gizmo_config(editor_state);
-        }
-        if let Some(scene) = &mut self.gpu_scene {
             scene.update_gizmo_config(editor_state);
         }
     }
 
     /// Update split ring configuration for all existing scenes.
     pub fn update_split_ring_config(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
+        // Only preview scene has split rings
         if let Some(scene) = &mut self.preview_scene {
-            scene.update_split_ring_config(editor_state);
-        }
-        if let Some(scene) = &mut self.gpu_scene {
             scene.update_split_ring_config(editor_state);
         }
     }

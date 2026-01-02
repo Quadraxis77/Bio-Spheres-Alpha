@@ -216,6 +216,7 @@ impl UiSystem {
         scene_manager: &crate::scene::SceneManager,
         camera: &mut crate::ui::camera::CameraController,
         scene_request: &mut crate::ui::panel_context::SceneModeRequest,
+        performance: &crate::ui::performance::PerformanceMetrics,
     ) -> egui::FullOutput {
         // Apply UI scale only when it changes
         let scale_changed = (self.last_scale - self.state.ui_scale).abs() > 0.001;
@@ -269,6 +270,7 @@ impl UiSystem {
                 camera,
                 scene_request,
                 current_mode,
+                performance,
             );
             
             let mut dock_area = egui_dock::DockArea::new(dock_manager.current_tree_mut())
@@ -536,6 +538,26 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
         let lock_icon = if scene_manager_locked { "🔒" } else { "🔓" };
         if ui.small_button(lock_icon).clicked() {
             state.set_panel_locked(&scene_manager_name, !scene_manager_locked);
+        }
+    });
+
+    // Performance Monitor
+    let perf_open = is_panel_open(dock_manager.current_tree(), &Panel::PerformanceMonitor);
+    let perf_name = format!("{:?}", Panel::PerformanceMonitor);
+    let perf_locked = state.is_panel_locked(&perf_name);
+    
+    ui.horizontal(|ui| {
+        if ui.selectable_label(perf_open, "  Performance").clicked() {
+            if perf_open {
+                close_panel(dock_manager.current_tree_mut(), &Panel::PerformanceMonitor);
+            } else {
+                open_panel(dock_manager.current_tree_mut(), &Panel::PerformanceMonitor);
+            }
+        }
+        
+        let lock_icon = if perf_locked { "🔒" } else { "🔓" };
+        if ui.small_button(lock_icon).clicked() {
+            state.set_panel_locked(&perf_name, !perf_locked);
         }
     });
 

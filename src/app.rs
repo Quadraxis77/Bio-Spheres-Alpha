@@ -1,5 +1,5 @@
 use crate::scene::SceneManager;
-use crate::ui::{DockManager, UiSystem};
+use crate::ui::{DockManager, PerformanceMetrics, UiSystem};
 use egui_wgpu::ScreenDescriptor;
 use std::sync::Arc;
 use winit::{
@@ -23,6 +23,12 @@ pub struct App {
     fps_timer: std::time::Instant,
     /// Persistent genome editor state
     editor_state: crate::ui::panel_context::GenomeEditorState,
+    /// Current mouse position for tool interactions
+    mouse_position: (f32, f32),
+    /// Current working genome (shared between preview and GPU scenes)
+    working_genome: crate::genome::Genome,
+    /// Performance metrics tracker
+    performance: PerformanceMetrics,
 }
 
 impl App {
@@ -49,6 +55,9 @@ impl App {
             frame_count: 0,
             fps_timer: std::time::Instant::now(),
             editor_state: crate::ui::panel_context::GenomeEditorState::new(),
+            mouse_position: (0.0, 0.0),
+            working_genome: crate::genome::Genome::default(),
+            performance: PerformanceMetrics::new(),
         }
     }
     
@@ -91,6 +100,26 @@ impl App {
                         self.window.request_redraw();
                         return true;
                     }
+                    
+                    // Handle Insert tool click
+                    if !menu.visible 
+                        && self.editor_state.radial_menu.active_tool == crate::ui::radial_menu::RadialTool::Insert
+                        && *button == MouseButton::Left 
+                        && *state == ElementState::Pressed
+                        && !self.ui.wants_pointer_input()
+                    {
+                        if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                            let world_pos = gpu_scene.screen_to_world(
+                                self.mouse_position.0,
+                                self.mouse_position.1,
+                            );
+                            if let Some(_idx) = gpu_scene.insert_cell_from_genome(world_pos, &self.working_genome) {
+                                log::info!("Inserted cell at {:?}, total: {}", world_pos, gpu_scene.canonical_state.cell_count);
+                            }
+                        }
+                        self.window.request_redraw();
+                        return true;
+                    }
                 }
                 
                 // Only pass to camera if egui doesn't want the input
@@ -99,6 +128,9 @@ impl App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                // Track mouse position for tool interactions
+                self.mouse_position = (position.x as f32, position.y as f32);
+                
                 // Update radial menu hover state (GPU mode only)
                 if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
                     let menu = &mut self.editor_state.radial_menu;
@@ -181,6 +213,9 @@ impl App {
         let dt = now.duration_since(self.last_render_time).as_secs_f32();
         self.last_render_time = now;
         
+        // Update performance metrics
+        self.performance.update(dt);
+        
         // Update camera and scene
         self.scene_manager.active_scene_mut().camera_mut().update(dt);
         self.scene_manager.update(dt);
@@ -220,17 +255,16 @@ impl App {
         // Use persistent editor state and create scene request
         let mut scene_request = crate::ui::panel_context::SceneModeRequest::None;
         
-        // For now, use a simpler approach that avoids the borrowing issue
-        // We'll provide dummy data for non-Preview modes and real data for Preview mode
+        // Sync working genome from preview scene if in Preview mode
+        // This keeps the genome available for GPU scene cell insertion
         let egui_output = {
-            let mut working_genome = crate::genome::Genome::default();
             let mut dummy_camera = crate::ui::camera::CameraController::new();
             
             // Get real data if in Preview mode
             if current_mode == crate::ui::types::SimulationMode::Preview {
                 if let Some(preview_scene) = self.scene_manager.get_preview_scene() {
                     // Copy the genome data for editing
-                    working_genome = preview_scene.genome.clone();
+                    self.working_genome = preview_scene.genome.clone();
                     
                     // Sync simulation time to UI slider (when not dragging)
                     if !self.editor_state.time_slider_dragging {
@@ -245,17 +279,18 @@ impl App {
             
             let output = self.ui.end_frame(
                 &mut self.dock_manager,
-                &mut working_genome,
+                &mut self.working_genome,
                 &mut self.editor_state,
                 &self.scene_manager,
                 &mut dummy_camera,
                 &mut scene_request,
+                &self.performance,
             );
             
             // Sync genome changes and time slider back to the scene if in Preview mode
             if current_mode == crate::ui::types::SimulationMode::Preview {
                 if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut() {
-                    preview_scene.update_genome(&working_genome);
+                    preview_scene.update_genome(&self.working_genome);
                     
                     // Sync time slider to simulation (when dragging or changed)
                     preview_scene.sync_time_from_ui(
@@ -285,6 +320,14 @@ impl App {
         // Check if mode switch was requested via UI
         if let Some(requested_mode) = self.ui.state.take_mode_request() {
             if requested_mode != current_mode {
+                // Sync genome from preview scene before switching to GPU mode
+                if requested_mode == crate::ui::types::SimulationMode::Gpu {
+                    if let Some(preview_scene) = self.scene_manager.get_preview_scene() {
+                        self.working_genome = preview_scene.genome.clone();
+                        log::info!("Synced genome to GPU scene: {} modes", self.working_genome.modes.len());
+                    }
+                }
+                
                 self.scene_manager.switch_mode(requested_mode, &self.device, &self.queue, &self.config);
                 self.dock_manager.switch_mode(requested_mode);
                 // Reset cursor visibility and radial menu state when switching modes
@@ -298,6 +341,12 @@ impl App {
         // Check if mode switch was requested via dock manager (for layout persistence)
         let dock_mode = self.dock_manager.current_mode();
         if dock_mode != current_mode {
+            // Sync genome from preview scene before switching to GPU mode
+            if dock_mode == crate::ui::types::SimulationMode::Gpu {
+                if let Some(preview_scene) = self.scene_manager.get_preview_scene() {
+                    self.working_genome = preview_scene.genome.clone();
+                }
+            }
             self.scene_manager.switch_mode(dock_mode, &self.device, &self.queue, &self.config);
         }
         
