@@ -107,22 +107,49 @@ impl DeterministicSpatialGrid {
         self.active_cell_map.get(&grid_coord).copied()
     }
 
-    /// Rebuild the spatial grid using prefix sum algorithm
+    /// Rebuild the spatial grid using prefix sum algorithm (parallel for large cell counts)
     pub fn rebuild(&mut self, positions: &[Vec3], cell_count: usize) {
+        use rayon::prelude::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        
         // Clear only previously used counts
         for &idx in &self.used_grid_cells {
             self.cell_counts[idx] = 0;
         }
         self.used_grid_cells.clear();
 
-        // Count cells per grid cell
-        for i in 0..cell_count {
-            let grid_coord = self.world_to_grid(positions[i]);
-            if let Some(idx) = self.active_cell_index(grid_coord) {
-                if self.cell_counts[idx] == 0 {
+        // Use parallel counting for large cell counts (>500 cells)
+        if cell_count > 500 {
+            // Parallel counting with atomic operations
+            let atomic_counts: Vec<AtomicUsize> = (0..self.active_cells.len())
+                .map(|_| AtomicUsize::new(0))
+                .collect();
+            
+            (0..cell_count).into_par_iter().for_each(|i| {
+                let grid_coord = self.world_to_grid(positions[i]);
+                if let Some(idx) = self.active_cell_index(grid_coord) {
+                    atomic_counts[idx].fetch_add(1, Ordering::Relaxed);
+                }
+            });
+            
+            // Convert atomic counts and track used cells
+            for (idx, atomic_count) in atomic_counts.iter().enumerate() {
+                let count = atomic_count.load(Ordering::Relaxed);
+                if count > 0 {
+                    self.cell_counts[idx] = count;
                     self.used_grid_cells.push(idx);
                 }
-                self.cell_counts[idx] += 1;
+            }
+        } else {
+            // Sequential counting for small cell counts
+            for i in 0..cell_count {
+                let grid_coord = self.world_to_grid(positions[i]);
+                if let Some(idx) = self.active_cell_index(grid_coord) {
+                    if self.cell_counts[idx] == 0 {
+                        self.used_grid_cells.push(idx);
+                    }
+                    self.cell_counts[idx] += 1;
+                }
             }
         }
 
@@ -138,13 +165,39 @@ impl DeterministicSpatialGrid {
             self.cell_counts[idx] = 0;
         }
 
-        // Insert cell indices into flat array
-        for i in 0..cell_count {
-            let grid_coord = self.world_to_grid(positions[i]);
-            if let Some(idx) = self.active_cell_index(grid_coord) {
-                let insert_pos = self.cell_offsets[idx] + self.cell_counts[idx];
-                self.cell_contents[insert_pos] = i;
-                self.cell_counts[idx] += 1;
+        // Parallel insertion for large cell counts
+        if cell_count > 500 {
+            let atomic_offsets: Vec<AtomicUsize> = self.cell_offsets
+                .iter()
+                .map(|&offset| AtomicUsize::new(offset))
+                .collect();
+            
+            (0..cell_count).into_par_iter().for_each(|i| {
+                let grid_coord = self.world_to_grid(positions[i]);
+                if let Some(idx) = self.active_cell_index(grid_coord) {
+                    let insert_pos = atomic_offsets[idx].fetch_add(1, Ordering::Relaxed);
+                    unsafe {
+                        // Safe because each thread writes to a unique position
+                        let ptr = self.cell_contents.as_ptr() as *mut usize;
+                        *ptr.add(insert_pos) = i;
+                    }
+                }
+            });
+            
+            // Update counts from atomic offsets
+            for (idx, atomic_offset) in atomic_offsets.iter().enumerate() {
+                let final_offset = atomic_offset.load(Ordering::Relaxed);
+                self.cell_counts[idx] = final_offset - self.cell_offsets[idx];
+            }
+        } else {
+            // Sequential insertion for small cell counts
+            for i in 0..cell_count {
+                let grid_coord = self.world_to_grid(positions[i]);
+                if let Some(idx) = self.active_cell_index(grid_coord) {
+                    let insert_pos = self.cell_offsets[idx] + self.cell_counts[idx];
+                    self.cell_contents[insert_pos] = i;
+                    self.cell_counts[idx] += 1;
+                }
             }
         }
     }
@@ -179,7 +232,7 @@ const FORWARD_NEIGHBORS: [IVec3; 13] = [
     IVec3::new(-1, 1, 1), IVec3::new(0, 1, 1), IVec3::new(1, 1, 1),
 ];
 
-/// Detect collisions using the deterministic spatial grid
+/// Detect collisions using the deterministic spatial grid - Single-threaded version
 pub fn detect_collisions_st(
     state: &CanonicalState,
 ) -> Vec<CollisionPair> {
@@ -201,6 +254,12 @@ pub fn detect_collisions_st(
                 let combined_radius = state.radii[idx_a] + state.radii[idx_b];
 
                 if distance < combined_radius {
+                    // Skip collision if cells are in the same organism
+                    // (adhesion forces handle their interaction instead)
+                    if are_cells_in_same_organism(state, idx_a, idx_b) {
+                        continue;
+                    }
+                    
                     let overlap = combined_radius - distance;
                     let normal = if distance > 0.0001 {
                         delta / distance
@@ -235,6 +294,12 @@ pub fn detect_collisions_st(
                     let combined_radius = state.radii[idx_a] + state.radii[idx_b];
 
                     if distance < combined_radius {
+                        // Skip collision if cells are in the same organism
+                        // (adhesion forces handle their interaction instead)
+                        if are_cells_in_same_organism(state, idx_a, idx_b) {
+                            continue;
+                        }
+                        
                         let overlap = combined_radius - distance;
                         let normal = if distance > 0.0001 {
                             delta / distance
@@ -258,6 +323,110 @@ pub fn detect_collisions_st(
     collision_pairs.sort_unstable_by_key(|pair| (pair.index_a, pair.index_b));
 
     collision_pairs
+}
+
+/// Detect collisions using the deterministic spatial grid - Multithreaded version
+/// Uses parallel iteration over grid cells for improved performance with large cell counts.
+pub fn detect_collisions_parallel(
+    state: &CanonicalState,
+) -> Vec<CollisionPair> {
+    use rayon::prelude::*;
+    
+    // Process each grid cell in parallel
+    let mut collision_pairs: Vec<CollisionPair> = state.spatial_grid.used_grid_cells
+        .par_iter()
+        .flat_map(|&grid_idx| {
+            let mut local_pairs = Vec::new();
+            let grid_coord = state.spatial_grid.active_cells[grid_idx];
+            let cells_in_grid = state.spatial_grid.get_cell_contents(grid_idx);
+
+            // Check collisions within the same grid cell
+            for i in 0..cells_in_grid.len() {
+                let idx_a = cells_in_grid[i];
+                for j in (i + 1)..cells_in_grid.len() {
+                    let idx_b = cells_in_grid[j];
+
+                    let delta = state.positions[idx_b] - state.positions[idx_a];
+                    let distance = delta.length();
+                    let combined_radius = state.radii[idx_a] + state.radii[idx_b];
+
+                    if distance < combined_radius {
+                        // Skip collision if cells are in the same organism
+                        if are_cells_in_same_organism(state, idx_a, idx_b) {
+                            continue;
+                        }
+                        
+                        let overlap = combined_radius - distance;
+                        let normal = if distance > 0.0001 {
+                            delta / distance
+                        } else {
+                            Vec3::X
+                        };
+
+                        local_pairs.push(CollisionPair {
+                            index_a: idx_a,
+                            index_b: idx_b,
+                            overlap,
+                            normal,
+                        });
+                    }
+                }
+            }
+
+            // Check forward neighbors
+            for &offset in &FORWARD_NEIGHBORS {
+                let neighbor_coord = grid_coord + offset;
+
+                let Some(neighbor_idx) = state.spatial_grid.active_cell_index(neighbor_coord) else {
+                    continue;
+                };
+
+                let neighbor_cells = state.spatial_grid.get_cell_contents(neighbor_idx);
+
+                for &idx_a in cells_in_grid {
+                    for &idx_b in neighbor_cells {
+                        let delta = state.positions[idx_b] - state.positions[idx_a];
+                        let distance = delta.length();
+                        let combined_radius = state.radii[idx_a] + state.radii[idx_b];
+
+                        if distance < combined_radius {
+                            if are_cells_in_same_organism(state, idx_a, idx_b) {
+                                continue;
+                            }
+                            
+                            let overlap = combined_radius - distance;
+                            let normal = if distance > 0.0001 {
+                                delta / distance
+                            } else {
+                                Vec3::X
+                            };
+
+                            local_pairs.push(CollisionPair {
+                                index_a: idx_a,
+                                index_b: idx_b,
+                                overlap,
+                                normal,
+                            });
+                        }
+                    }
+                }
+            }
+            
+            local_pairs
+        })
+        .collect();
+
+    // Sort for deterministic ordering
+    collision_pairs.sort_unstable_by_key(|pair| (pair.index_a, pair.index_b));
+
+    collision_pairs
+}
+
+/// Check if two cells are in the same organism (connected via adhesions)
+/// Cells in the same organism rely on adhesion forces for their interactions
+#[inline]
+fn are_cells_in_same_organism(state: &CanonicalState, cell_a: usize, cell_b: usize) -> bool {
+    state.adhesion_manager.are_cells_in_same_organism(&state.adhesion_connections, cell_a, cell_b)
 }
 
 // ============================================================================
@@ -634,11 +803,30 @@ pub fn physics_step_with_genome(
     // 3. Update spatial partitioning
     state.spatial_grid.rebuild(&state.positions, state.cell_count);
 
-    // 4. Detect collisions
-    let collisions = detect_collisions_st(state);
+    // 4. Detect collisions (use parallel version for better performance)
+    let collisions = detect_collisions_parallel(state);
 
     // 5. Compute forces and torques
     compute_collision_forces(state, &collisions, config);
+
+    // 5.5. Compute adhesion forces
+    // Update adhesion settings cache if genome changed
+    state.update_adhesion_settings_cache(genome);
+    
+    // Apply adhesion forces using parallel version for better performance
+    if state.adhesion_connections.active_count > 0 && !state.cached_adhesion_settings.is_empty() {
+        crate::cell::compute_adhesion_forces_parallel(
+            &state.adhesion_connections,
+            &state.positions[..state.cell_count],
+            &state.velocities[..state.cell_count],
+            &state.rotations[..state.cell_count],
+            &state.angular_velocities[..state.cell_count],
+            &state.masses[..state.cell_count],
+            &state.cached_adhesion_settings,
+            &mut state.forces[..state.cell_count],
+            &mut state.torques[..state.cell_count],
+        );
+    }
 
     // 6. Apply boundary conditions
     apply_boundary_forces(state, config);

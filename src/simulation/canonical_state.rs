@@ -1,5 +1,7 @@
 use glam::{Vec3, Quat};
 use crate::simulation::cpu_physics::DeterministicSpatialGrid;
+use crate::cell::{AdhesionConnections, AdhesionConnectionManager, MAX_ADHESIONS_PER_CELL};
+use crate::genome::AdhesionSettings;
 
 /// Event describing a cell division that occurred
 #[derive(Debug, Clone)]
@@ -51,6 +53,16 @@ pub struct CanonicalState {
     pub split_masses: Vec<f32>,
     pub split_counts: Vec<i32>,
     
+    // === Adhesion System ===
+    /// Adhesion connections between cells
+    pub adhesion_connections: AdhesionConnections,
+    /// Adhesion connection manager
+    pub adhesion_manager: AdhesionConnectionManager,
+    /// Cached adhesion settings from genome (rebuilt when genome changes)
+    pub cached_adhesion_settings: Vec<AdhesionSettings>,
+    /// Hash of genome modes to detect changes
+    pub genome_modes_hash: u64,
+    
     /// Spatial partitioning for collision detection
     pub spatial_grid: DeterministicSpatialGrid,
     
@@ -72,6 +84,9 @@ impl CanonicalState {
     
     /// Create a new canonical state with specified capacity and grid density
     pub fn with_grid_density(capacity: usize, grid_density: u32) -> Self {
+        // Calculate adhesion connection capacity (20 connections per cell)
+        let adhesion_capacity = capacity * MAX_ADHESIONS_PER_CELL;
+        
         Self {
             cell_count: 0,
             capacity,
@@ -95,6 +110,10 @@ impl CanonicalState {
             split_intervals: vec![10.0; capacity],
             split_masses: vec![1.5; capacity],
             split_counts: vec![0; capacity],
+            adhesion_connections: AdhesionConnections::new(adhesion_capacity),
+            adhesion_manager: AdhesionConnectionManager::new(capacity),
+            cached_adhesion_settings: Vec::with_capacity(32), // Typical genome has <32 modes
+            genome_modes_hash: 0,
             spatial_grid: DeterministicSpatialGrid::new(grid_density, 200.0, 100.0),
             next_cell_id: 0,
             division_events_buffer: Vec::with_capacity(256),
@@ -150,6 +169,40 @@ impl CanonicalState {
         self.cell_count += 1;
         self.next_cell_id += 1;
         
+        // Initialize adhesion indices for new cell
+        self.adhesion_manager.init_cell_adhesion_indices(index);
+        
         Some(index)
+    }
+    
+    /// Update cached adhesion settings from genome if needed
+    /// Returns true if cache was updated
+    pub fn update_adhesion_settings_cache(&mut self, genome: &crate::genome::Genome) -> bool {
+        // Simple hash based on mode count and first mode's stiffness
+        // This catches most genome changes without expensive full comparison
+        let new_hash = (genome.modes.len() as u64) << 32 
+            | (genome.modes.first().map(|m| (m.adhesion_settings.linear_spring_stiffness * 1000.0) as u64).unwrap_or(0));
+        
+        if new_hash != self.genome_modes_hash || self.cached_adhesion_settings.len() != genome.modes.len() {
+            self.cached_adhesion_settings.clear();
+            for mode in &genome.modes {
+                self.cached_adhesion_settings.push(AdhesionSettings {
+                    can_break: mode.adhesion_settings.can_break,
+                    break_force: mode.adhesion_settings.break_force,
+                    rest_length: mode.adhesion_settings.rest_length,
+                    linear_spring_stiffness: mode.adhesion_settings.linear_spring_stiffness,
+                    linear_spring_damping: mode.adhesion_settings.linear_spring_damping,
+                    orientation_spring_stiffness: mode.adhesion_settings.orientation_spring_stiffness,
+                    orientation_spring_damping: mode.adhesion_settings.orientation_spring_damping,
+                    max_angular_deviation: mode.adhesion_settings.max_angular_deviation,
+                    twist_constraint_stiffness: mode.adhesion_settings.twist_constraint_stiffness,
+                    twist_constraint_damping: mode.adhesion_settings.twist_constraint_damping,
+                    enable_twist_constraint: mode.adhesion_settings.enable_twist_constraint,
+                });
+            }
+            self.genome_modes_hash = new_hash;
+            return true;
+        }
+        false
     }
 }

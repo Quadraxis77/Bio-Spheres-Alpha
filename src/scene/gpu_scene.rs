@@ -41,8 +41,8 @@ impl GpuScene {
         surface_config: &wgpu::SurfaceConfiguration,
     ) -> Self {
         let capacity = 200_000; // GPU can handle many more cells
-        // Use 128x128x128 grid for better spatial partitioning with large cell counts
-        let canonical_state = CanonicalState::with_grid_density(capacity, 128);
+        // Use 64x64x64 grid for spatial partitioning
+        let canonical_state = CanonicalState::with_grid_density(capacity, 64);
         let config = PhysicsConfig::default();
 
         let renderer = CellRenderer::new(device, queue, surface_config, capacity);
@@ -57,6 +57,18 @@ impl GpuScene {
             genome: Genome::default(),
             time_accumulator: 0.0,
         }
+    }
+
+    /// Reset the simulation to initial state.
+    pub fn reset(&mut self) {
+        self.canonical_state.cell_count = 0;
+        self.canonical_state.next_cell_id = 0;
+        self.current_time = 0.0;
+        self.time_accumulator = 0.0;
+        self.paused = false;
+        // Clear adhesion connections
+        self.canonical_state.adhesion_connections.active_count = 0;
+        self.canonical_state.adhesion_manager.reset();
     }
 
     /// Run physics step using CPU physics with genome-based features.

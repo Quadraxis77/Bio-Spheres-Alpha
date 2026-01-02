@@ -2,6 +2,7 @@
 
 use glam::{Vec3, Quat, EulerRot};
 use crate::simulation::canonical_state::{CanonicalState, DivisionEvent};
+use crate::simulation::adhesion_inheritance::inherit_adhesions_on_division;
 use crate::genome::Genome;
 
 /// Deterministic pseudo-random rotation for cell division
@@ -103,6 +104,7 @@ pub fn division_step(
         // Collect division data before modifying state
         struct DivisionData {
             parent_idx: usize,
+            parent_mode_idx: usize,
             child_a_slot: usize,
             child_b_slot: usize,
             parent_velocity: Vec3,
@@ -110,7 +112,6 @@ pub fn division_step(
             parent_stiffness: f32,
             #[allow(dead_code)]
             parent_split_count: i32,
-            #[allow(dead_code)]
             parent_genome_orientation: Quat,
             child_a_pos: Vec3,
             child_b_pos: Vec3,
@@ -130,6 +131,7 @@ pub fn division_step(
             child_b_split_mass_threshold: f32,
             child_a_split_count: i32,
             child_b_split_count: i32,
+            split_direction_local: Vec3,
         }
         
         let mut division_data_list = Vec::new();
@@ -277,6 +279,7 @@ pub fn division_step(
                 
                 division_data_list.push(DivisionData {
                     parent_idx,
+                    parent_mode_idx: mode_index,
                     child_a_slot,
                     child_b_slot,
                     parent_velocity,
@@ -302,6 +305,7 @@ pub fn division_step(
                     child_b_split_mass_threshold,
                     child_a_split_count,
                     child_b_split_count,
+                    split_direction_local: Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z,
                 });
             }
         }
@@ -377,6 +381,76 @@ pub fn division_step(
                 child_a_idx: data.child_a_slot,
                 child_b_idx: data.child_b_slot,
             });
+            
+            // Handle adhesion inheritance from parent to children
+            // This must happen AFTER children are written but BEFORE new adhesions are created
+            inherit_adhesions_on_division(
+                state,
+                genome,
+                data.parent_mode_idx,
+                data.child_a_slot,
+                data.child_b_slot,
+                data.parent_genome_orientation,
+            );
+            
+            // Create adhesion between children if parent_make_adhesion is enabled
+            // keep_adhesion only affects inheritance from parent, NOT child-to-child adhesion
+            let parent_mode = genome.modes.get(data.parent_mode_idx);
+            
+            if let Some(mode) = parent_mode {
+                // Only parent_make_adhesion controls child-to-child adhesion creation
+                if mode.parent_make_adhesion {
+                        // CRITICAL: Use split direction from parent's GENOME orientation (not world positions!)
+                        // This ensures anchors stay aligned with the genome's intended split direction
+                        // even if physics has moved the cells slightly
+                        
+                        // CRITICAL: Match C++ implementation exactly
+                        // Direction vectors in parent's local frame:
+                        // Child A is at +offset, child B is at -offset
+                        // Child A points toward B (at -offset): -splitDirLocal
+                        // Child B points toward A (at +offset): +splitDirLocal
+                        // Transform to each child's local space using genome-derived orientation deltas
+                        let direction_a_to_b_parent_local = -data.split_direction_local;
+                        let direction_b_to_a_parent_local = data.split_direction_local;
+                        
+                        let anchor_direction_a = (mode.child_a.orientation.inverse() * direction_a_to_b_parent_local).normalize();
+                        let anchor_direction_b = (mode.child_b.orientation.inverse() * direction_b_to_a_parent_local).normalize();
+                        
+                        // Get split directions for zone classification
+                        let child_a_mode = genome.modes.get(data.child_a_mode_idx);
+                        let child_b_mode = genome.modes.get(data.child_b_mode_idx);
+                        
+                        let child_a_split_dir = if let Some(m) = child_a_mode {
+                            let pitch = m.parent_split_direction.x.to_radians();
+                            let yaw = m.parent_split_direction.y.to_radians();
+                            Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z
+                        } else {
+                            Vec3::Z
+                        };
+                        
+                        let child_b_split_dir = if let Some(m) = child_b_mode {
+                            let pitch = m.parent_split_direction.x.to_radians();
+                            let yaw = m.parent_split_direction.y.to_radians();
+                            Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z
+                        } else {
+                            Vec3::Z
+                        };
+                        
+                        // Create child-to-child connection with parent's mode index
+                        let _ = state.adhesion_manager.add_adhesion_with_directions(
+                            &mut state.adhesion_connections,
+                            data.child_a_slot,
+                            data.child_b_slot,
+                            data.parent_mode_idx,  // Use parent's mode index (matches reference)
+                            anchor_direction_a,
+                            anchor_direction_b,
+                            child_a_split_dir,
+                            child_b_split_dir,
+                            data.child_a_genome_orientation,
+                            data.child_b_genome_orientation,
+                        );
+                }
+            }
         }
         
         // Update cell count (child B cells are already written)

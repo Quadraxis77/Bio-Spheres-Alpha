@@ -23,15 +23,19 @@ pub enum SceneModeRequest {
     SwitchToPreview,
     /// Request to switch to GPU mode
     SwitchToGpu,
+    /// Request to toggle pause state
+    TogglePause,
+    /// Request to reset the simulation
+    Reset,
 }
 
 impl SceneModeRequest {
     /// Get the target mode if a switch is requested.
     pub fn target_mode(&self) -> Option<SimulationMode> {
         match self {
-            SceneModeRequest::None => None,
             SceneModeRequest::SwitchToPreview => Some(SimulationMode::Preview),
             SceneModeRequest::SwitchToGpu => Some(SimulationMode::Gpu),
+            _ => None,
         }
     }
 
@@ -233,6 +237,16 @@ impl<'a> PanelContext<'a> {
     /// Request a switch to GPU mode.
     pub fn request_gpu_mode(&mut self) {
         *self.scene_request = SceneModeRequest::SwitchToGpu;
+    }
+
+    /// Request to toggle pause state.
+    pub fn request_toggle_pause(&mut self) {
+        *self.scene_request = SceneModeRequest::TogglePause;
+    }
+
+    /// Request to reset the simulation.
+    pub fn request_reset(&mut self) {
+        *self.scene_request = SceneModeRequest::Reset;
     }
 
     /// Get the current cell count from the active scene.

@@ -185,10 +185,25 @@ impl PreviewState {
             mode.child_a.orientation.y.to_bits().hash(&mut hasher);
             mode.child_a.orientation.z.to_bits().hash(&mut hasher);
             mode.child_a.orientation.w.to_bits().hash(&mut hasher);
+            mode.child_a.keep_adhesion.hash(&mut hasher);
             mode.child_b.orientation.x.to_bits().hash(&mut hasher);
             mode.child_b.orientation.y.to_bits().hash(&mut hasher);
             mode.child_b.orientation.z.to_bits().hash(&mut hasher);
             mode.child_b.orientation.w.to_bits().hash(&mut hasher);
+            mode.child_b.keep_adhesion.hash(&mut hasher);
+            
+            // Hash adhesion settings
+            mode.adhesion_settings.can_break.hash(&mut hasher);
+            mode.adhesion_settings.break_force.to_bits().hash(&mut hasher);
+            mode.adhesion_settings.rest_length.to_bits().hash(&mut hasher);
+            mode.adhesion_settings.linear_spring_stiffness.to_bits().hash(&mut hasher);
+            mode.adhesion_settings.linear_spring_damping.to_bits().hash(&mut hasher);
+            mode.adhesion_settings.orientation_spring_stiffness.to_bits().hash(&mut hasher);
+            mode.adhesion_settings.orientation_spring_damping.to_bits().hash(&mut hasher);
+            mode.adhesion_settings.max_angular_deviation.to_bits().hash(&mut hasher);
+            mode.adhesion_settings.twist_constraint_stiffness.to_bits().hash(&mut hasher);
+            mode.adhesion_settings.twist_constraint_damping.to_bits().hash(&mut hasher);
+            mode.adhesion_settings.enable_twist_constraint.hash(&mut hasher);
         }
         
         hasher.finish()
@@ -242,17 +257,45 @@ impl PreviewState {
         
         self.is_resimulating = true;
         
-        // Determine best starting point using checkpoints
-        let (start_time, mut canonical_state) = if target_time > self.current_time && !genome_changed {
-            // Moving forward: simulate from current state
-            (self.current_time, self.canonical_state.clone())
-        } else if let Some((checkpoint_time, checkpoint_state)) = self.find_best_checkpoint(target_time) {
-            // Moving backward or genome changed: use nearest checkpoint
+        // Moving forward: simulate directly from current state (no clone needed)
+        if target_time > self.current_time && !genome_changed {
+            let start_step = (self.current_time / config.fixed_timestep).ceil() as u32;
+            let end_step = (target_time / config.fixed_timestep).ceil() as u32;
+            let steps = end_step.saturating_sub(start_step);
+            
+            let mut last_checkpoint_index = (self.current_time / self.checkpoint_interval).floor() as usize;
+            
+            // Run physics steps directly on current state
+            for step in 0..steps {
+                let current_time = (start_step + step) as f32 * config.fixed_timestep;
+                
+                let _ = crate::simulation::cpu_physics::physics_step_with_genome(
+                    &mut self.canonical_state,
+                    genome,
+                    config,
+                    current_time,
+                );
+                
+                // Check if we should create a checkpoint
+                let current_checkpoint_index = (current_time / self.checkpoint_interval).floor() as usize;
+                if current_checkpoint_index > last_checkpoint_index {
+                    self.checkpoints.push((current_time, self.canonical_state.clone()));
+                    last_checkpoint_index = current_checkpoint_index;
+                }
+            }
+            
+            self.current_time = target_time;
+            self.target_time = None;
+            self.is_resimulating = false;
+            return true;
+        }
+        
+        // Moving backward or genome changed: need to resimulate from checkpoint
+        let (start_time, mut canonical_state) = if let Some((checkpoint_time, checkpoint_state)) = self.find_best_checkpoint(target_time) {
             (checkpoint_time, checkpoint_state)
         } else {
             // No suitable checkpoint: start from initial state
-            let initial_canonical = self.initial_state.to_canonical_state();
-            (0.0, initial_canonical)
+            (0.0, self.initial_state.to_canonical_state())
         };
         
         let start_step = (start_time / config.fixed_timestep).ceil() as u32;
@@ -265,23 +308,11 @@ impl PreviewState {
         for step in 0..steps {
             let current_time = (start_step + step) as f32 * config.fixed_timestep;
             
-            // Run CPU physics step
-            crate::simulation::cpu_physics::physics_step_st(&mut canonical_state, config);
-            
-            // Run division step
-            let _ = crate::cell::division::division_step(
+            let _ = crate::simulation::cpu_physics::physics_step_with_genome(
                 &mut canonical_state,
                 genome,
+                config,
                 current_time,
-                self.initial_state.max_cells,
-                self.initial_state.rng_seed,
-            );
-            
-            // Update nutrient growth
-            crate::simulation::cpu_physics::update_nutrient_growth(
-                &mut canonical_state,
-                genome,
-                config.fixed_timestep,
             );
             
             // Check if we should create a checkpoint

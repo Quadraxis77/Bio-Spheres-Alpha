@@ -4,7 +4,7 @@
 //! editing and debugging genomes with small cell counts.
 
 use crate::genome::Genome;
-use crate::rendering::{CellRenderer, OrientationGizmoRenderer, SplitRingRenderer};
+use crate::rendering::{AdhesionLineRenderer, CellRenderer, OrientationGizmoRenderer, SplitRingRenderer};
 use crate::scene::{PreviewState, Scene};
 use crate::simulation::PhysicsConfig;
 use crate::ui::camera::CameraController;
@@ -18,6 +18,8 @@ pub struct PreviewScene {
     pub state: PreviewState,
     /// Renderer for visualization
     pub renderer: CellRenderer,
+    /// Adhesion line renderer
+    pub adhesion_renderer: AdhesionLineRenderer,
     /// Orientation gizmo renderer
     pub gizmo_renderer: OrientationGizmoRenderer,
     /// Split ring renderer
@@ -32,6 +34,8 @@ pub struct PreviewScene {
     pub camera: CameraController,
     /// Last time value from UI (for detecting slider changes)
     last_ui_time_value: f32,
+    /// Whether to show adhesion lines
+    pub show_adhesion_lines: bool,
 }
 
 impl PreviewScene {
@@ -50,12 +54,14 @@ impl PreviewScene {
         state.update_initial_state(&genome);
 
         let renderer = CellRenderer::new(device, queue, surface_config, capacity);
+        let adhesion_renderer = AdhesionLineRenderer::new(device, queue, surface_config, capacity * 20); // 20 adhesions per cell max
         let gizmo_renderer = OrientationGizmoRenderer::new(device, queue, surface_config);
         let split_ring_renderer = SplitRingRenderer::new(device, queue, surface_config);
 
         Self {
             state,
             renderer,
+            adhesion_renderer,
             gizmo_renderer,
             split_ring_renderer,
             genome,
@@ -63,6 +69,7 @@ impl PreviewScene {
             paused: false,
             camera: CameraController::new(),
             last_ui_time_value: 0.0,
+            show_adhesion_lines: true,
         }
     }
 
@@ -191,6 +198,17 @@ impl Scene for PreviewScene {
                 self.camera.rotation,
             );
 
+            // Render adhesion lines if enabled
+            if self.show_adhesion_lines {
+                self.adhesion_renderer.render_in_pass(
+                    &mut render_pass,
+                    queue,
+                    &self.state.canonical_state,
+                    self.camera.position(),
+                    self.camera.rotation,
+                );
+            }
+
             // Begin frame for instanced renderers
             self.gizmo_renderer.begin_frame();
             self.split_ring_renderer.begin_frame();
@@ -235,6 +253,7 @@ impl Scene for PreviewScene {
 
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         self.renderer.resize(device, width, height);
+        self.adhesion_renderer.resize(width, height);
         self.gizmo_renderer.resize(device, width, height);
         self.split_ring_renderer.resize(device, width, height);
     }

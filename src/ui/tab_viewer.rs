@@ -263,6 +263,44 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, _state: &Global
             context.request_preview_mode();
         }
     }
+    
+    // Show play/pause and reset controls only in GPU mode
+    if context.is_gpu_mode() {
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(5.0);
+        
+        ui.horizontal(|ui| {
+            // Play/Pause toggle button with symbol
+            let is_paused = context.is_paused();
+            let play_pause_symbol = if is_paused { "▶" } else { "⏸" };
+            let play_pause_tooltip = if is_paused { "Play" } else { "Pause" };
+            
+            if ui.add_sized(
+                [40.0, 40.0],
+                egui::Button::new(egui::RichText::new(play_pause_symbol).size(20.0))
+            ).on_hover_text(play_pause_tooltip).clicked() {
+                context.request_toggle_pause();
+            }
+            
+            // Reset button with symbol
+            if ui.add_sized(
+                [40.0, 40.0],
+                egui::Button::new(egui::RichText::new("⟲").size(20.0))
+            ).on_hover_text("Reset").clicked() {
+                context.request_reset();
+            }
+        });
+        
+        ui.add_space(5.0);
+        
+        // Show simulation info
+        ui.label(format!("Cells: {}", context.cell_count()));
+        ui.label(format!("Time: {:.1}s", context.current_time()));
+        if context.is_paused() {
+            ui.colored_label(egui::Color32::YELLOW, "⏸ Paused");
+        }
+    }
 }
 
 /// Render the CellInspector panel (placeholder).
@@ -741,6 +779,14 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         } else {
             // Normal mode selection
             context.editor_state.selected_mode_index = selected_index;
+            
+            // Initialize editor state orientations from the selected mode's genome data
+            // This ensures the quaternion balls show the correct orientation when switching modes
+            if selected_index < context.genome.modes.len() {
+                context.editor_state.child_a_orientation = context.genome.modes[selected_index].child_a.orientation;
+                context.editor_state.child_b_orientation = context.genome.modes[selected_index].child_b.orientation;
+            }
+            
             log::info!("Mode selection changed to: {}", selected_index + 1);
         }
     }
@@ -1165,6 +1211,10 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
         ui.checkbox(&mut context.editor_state.qball_snapping, "Enable Snapping (11.25°)");
         ui.add_space(4.0); // Reduced spacing
 
+        // Get selected mode for keep_adhesion checkboxes
+        let selected_idx = context.editor_state.selected_mode_index;
+        let has_valid_mode = selected_idx < context.genome.modes.len();
+
         // Calculate responsive ball size - use more of the available width
         let available_width = ui.available_width();
         // Reserve minimal space for padding and two balls side by side
@@ -1205,12 +1255,20 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                     if response.changed() {
                         // Store the updated orientation back to editor state
                         context.editor_state.child_a_orientation = child_a_orientation;
+                        // CRITICAL: Also update the actual genome mode's child orientation
+                        if has_valid_mode {
+                            context.genome.modes[selected_idx].child_a.orientation = child_a_orientation;
+                        }
                     }
 
                     ui.add_space(2.0); // Reduced spacing
 
-                    // Keep Adhesion checkbox for Child A
-                    ui.checkbox(&mut context.editor_state.child_a_keep_adhesion, "Keep Adhesion");
+                    // Keep Adhesion checkbox for Child A - modify genome directly
+                    if has_valid_mode {
+                        ui.checkbox(&mut context.genome.modes[selected_idx].child_a.keep_adhesion, "Keep Adhesion");
+                    } else {
+                        ui.add_enabled(false, egui::Checkbox::new(&mut false, "Keep Adhesion"));
+                    }
 
                     // Mode dropdown for Child A (placeholder)
                     ui.label("Mode:");
@@ -1251,12 +1309,20 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                     if response.changed() {
                         // Store the updated orientation back to editor state
                         context.editor_state.child_b_orientation = child_b_orientation;
+                        // CRITICAL: Also update the actual genome mode's child orientation
+                        if has_valid_mode {
+                            context.genome.modes[selected_idx].child_b.orientation = child_b_orientation;
+                        }
                     }
 
                     ui.add_space(2.0); // Reduced spacing
 
-                    // Keep Adhesion checkbox for Child B
-                    ui.checkbox(&mut context.editor_state.child_b_keep_adhesion, "Keep Adhesion");
+                    // Keep Adhesion checkbox for Child B - modify genome directly
+                    if has_valid_mode {
+                        ui.checkbox(&mut context.genome.modes[selected_idx].child_b.keep_adhesion, "Keep Adhesion");
+                    } else {
+                        ui.add_enabled(false, egui::Checkbox::new(&mut false, "Keep Adhesion"));
+                    }
 
                     // Mode dropdown for Child B (placeholder)
                     ui.label("Mode:");

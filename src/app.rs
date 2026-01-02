@@ -312,8 +312,23 @@ impl App {
         
         // Handle scene mode requests from UI panels
         if scene_request.is_requested() {
-            if let Some(target_mode) = scene_request.target_mode() {
-                self.ui.state.request_mode_switch(target_mode);
+            match scene_request {
+                crate::ui::panel_context::SceneModeRequest::TogglePause => {
+                    let scene = self.scene_manager.active_scene_mut();
+                    let current_paused = scene.is_paused();
+                    scene.set_paused(!current_paused);
+                }
+                crate::ui::panel_context::SceneModeRequest::Reset => {
+                    // Reset the GPU scene
+                    if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                        gpu_scene.reset();
+                    }
+                }
+                _ => {
+                    if let Some(target_mode) = scene_request.target_mode() {
+                        self.ui.state.request_mode_switch(target_mode);
+                    }
+                }
             }
         }
         

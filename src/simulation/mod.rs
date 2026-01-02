@@ -9,5 +9,6 @@ pub mod initial_state;
 pub mod nutrient_system;
 pub mod physics_config;
 
+pub use adhesion_inheritance::inherit_adhesions_on_division;
 pub use canonical_state::CanonicalState;
 pub use physics_config::PhysicsConfig;
