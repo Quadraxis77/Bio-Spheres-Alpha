@@ -44,6 +44,8 @@ pub enum Panel {
     LightingSettings,
     /// Orientation gizmo settings panel.
     GizmoSettings,
+    /// Cell type visuals panel for appearance settings.
+    CellTypeVisuals,
 
     // Genome editor sub-panels
     /// Cell modes list panel.
@@ -81,6 +83,7 @@ impl Panel {
             Panel::LightingSettings => true,
             Panel::GizmoSettings => true,
             Panel::RenderingControls => true,
+            Panel::CellTypeVisuals => true,
 
             // Preview mode only (genome editing)
             Panel::GenomeEditor => mode == SimulationMode::Preview,
@@ -145,6 +148,7 @@ impl Panel {
             Panel::CameraSettings,
             Panel::LightingSettings,
             Panel::GizmoSettings,
+            Panel::CellTypeVisuals,
             Panel::Modes,
             Panel::NameTypeEditor,
             Panel::AdhesionSettings,
@@ -172,6 +176,7 @@ impl Panel {
             Panel::CameraSettings => "Camera",
             Panel::LightingSettings => "Lighting",
             Panel::GizmoSettings => "Gizmo Rendering",
+            Panel::CellTypeVisuals => "Cell Visuals",
             Panel::Modes => "Modes",
             Panel::NameTypeEditor => "Name & Type",
             Panel::AdhesionSettings => "Adhesion Settings",

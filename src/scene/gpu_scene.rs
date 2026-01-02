@@ -186,53 +186,59 @@ impl Scene for GpuScene {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         view: &wgpu::TextureView,
+        cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
     ) {
-        // Create command encoder for the entire frame
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("GPU Scene Render Encoder"),
-        });
-
+        // Pass 1: Clear background
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("GPU Scene Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.02,
-                            g: 0.02,
-                            b: 0.05,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.renderer.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("GPU Scene Clear Encoder"),
             });
 
-            // Render cells with genome for proper coloring
-            self.renderer.render_in_pass(
-                &mut render_pass,
-                queue,
-                &self.canonical_state,
-                Some(&self.genome),
-                self.camera.position(),
-                self.camera.rotation,
-            );
+            {
+                let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("GPU Scene Clear Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.02,
+                                g: 0.02,
+                                b: 0.05,
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.renderer.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                // Pass ends here, just clearing
+            }
+
+            queue.submit(std::iter::once(encoder.finish()));
         }
 
-        queue.submit(std::iter::once(encoder.finish()));
+        // Pass 2: Render cells with OIT (handles its own render passes)
+        self.renderer.render_oit(
+            device,
+            queue,
+            view,
+            &self.canonical_state,
+            Some(&self.genome),
+            cell_type_visuals,
+            self.camera.position(),
+            self.camera.rotation,
+        );
     }
 
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {

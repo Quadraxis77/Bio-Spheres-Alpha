@@ -3,6 +3,26 @@
 //! This module defines the different types of cells that can exist in the simulation,
 //! each with their own behaviors and properties.
 
+use serde::{Deserialize, Serialize};
+
+/// Visual settings for a cell type.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct CellTypeVisuals {
+    pub specular_strength: f32,
+    pub specular_power: f32,
+    pub fresnel_strength: f32,
+}
+
+impl Default for CellTypeVisuals {
+    fn default() -> Self {
+        Self {
+            specular_strength: 0.3,
+            specular_power: 32.0,
+            fresnel_strength: 0.2,
+        }
+    }
+}
+
 /// Cell type enumeration.
 ///
 /// Currently only Test cells are implemented.

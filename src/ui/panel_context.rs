@@ -131,6 +131,12 @@ pub struct GenomeEditorState {
     // Radial menu state (GPU scene only)
     /// Radial menu state for tool selection
     pub radial_menu: crate::ui::radial_menu::RadialMenuState,
+    
+    // Cell type visuals state
+    /// Visual settings per cell type (indexed by CellType)
+    pub cell_type_visuals: Vec<crate::cell::types::CellTypeVisuals>,
+    /// Currently selected cell type index for the visuals panel
+    pub selected_cell_type: usize,
 }
 
 impl GenomeEditorState {
@@ -171,6 +177,11 @@ impl GenomeEditorState {
             gizmo_visible: true,
             split_rings_visible: true,
             radial_menu: crate::ui::radial_menu::RadialMenuState::new(),
+            cell_type_visuals: crate::cell::types::CellType::all()
+                .iter()
+                .map(|_| crate::cell::types::CellTypeVisuals::default())
+                .collect(),
+            selected_cell_type: 0,
         }
     }
 }

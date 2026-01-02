@@ -27,6 +27,7 @@ struct InstanceInput {
     @location(1) position: vec3<f32>,   // Cell world position
     @location(2) radius: f32,           // Cell radius
     @location(3) color: vec4<f32>,      // Cell color (RGBA)
+    @location(4) visual_params: vec4<f32>, // x: specular_strength, y: specular_power, z: fresnel_strength, w: emissive
 }
 
 struct VertexOutput {
@@ -38,6 +39,7 @@ struct VertexOutput {
     @location(4) billboard_forward: vec3<f32>,       // Billboard forward vector (to camera)
     @location(5) cell_center: vec3<f32>,             // Cell center world position
     @location(6) @interpolate(flat) cell_radius: f32, // Cell radius (flat interpolation)
+    @location(7) @interpolate(flat) visual_params: vec4<f32>, // Visual parameters (flat interpolation)
 }
 
 @vertex
@@ -77,6 +79,9 @@ fn vs_main(
     out.cell_center = instance.position;
     out.cell_radius = instance.radius;
     
+    // Pass visual parameters
+    out.visual_params = instance.visual_params;
+    
     return out;
 }
 
@@ -88,6 +93,12 @@ struct FragmentOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> FragmentOutput {
     var out: FragmentOutput;
+    
+    // Unpack visual parameters
+    let specular_strength = in.visual_params.x;
+    let specular_power = in.visual_params.y;
+    let fresnel_strength = in.visual_params.z;
+    let emissive = in.visual_params.w;
     
     // Convert UV to centered coordinates (-1 to 1)
     let centered_uv = (in.uv - 0.5) * 2.0;
@@ -131,11 +142,20 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // Apply lighting to cell color
     let lit_color = in.color.rgb * lighting_factor;
     
-    // Add specular highlight in billboard space
+    // Add specular highlight in billboard space (using per-cell parameters)
     let view_billboard = vec3<f32>(0.0, 0.0, 1.0); // View direction in billboard space is always +Z
     let reflect_dir = reflect(-light_billboard_normalized, normal_billboard);
-    let spec = pow(max(dot(view_billboard, reflect_dir), 0.0), 32.0) * 0.3;
-    let final_color = lit_color + spec;
+    let spec = pow(max(dot(view_billboard, reflect_dir), 0.0), specular_power) * specular_strength;
+    
+    // Calculate fresnel (rim lighting) effect
+    let fresnel = pow(1.0 - z, 3.0) * fresnel_strength;
+    let rim_color = in.color.rgb * fresnel;
+    
+    // Add emissive glow
+    let emissive_color = in.color.rgb * emissive;
+    
+    // Combine all lighting components
+    let final_color = lit_color + spec + rim_color + emissive_color;
     
     out.color = vec4<f32>(final_color, in.color.a);
     return out;

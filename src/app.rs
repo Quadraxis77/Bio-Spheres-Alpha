@@ -237,8 +237,9 @@ impl App {
         };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         
-        // Render 3D scene first
-        self.scene_manager.render(&self.device, &self.queue, &view);
+        // Render 3D scene first (pass cell type visuals from editor state)
+        let cell_type_visuals = &self.editor_state.cell_type_visuals;
+        self.scene_manager.render(&self.device, &self.queue, &view, Some(cell_type_visuals));
         
         // Begin egui frame
         self.ui.begin_frame(&self.window);

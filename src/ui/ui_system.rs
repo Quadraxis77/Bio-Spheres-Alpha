@@ -561,6 +561,26 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
         }
     });
 
+    // Cell Type Visuals
+    let visuals_open = is_panel_open(dock_manager.current_tree(), &Panel::CellTypeVisuals);
+    let visuals_name = format!("{:?}", Panel::CellTypeVisuals);
+    let visuals_locked = state.is_panel_locked(&visuals_name);
+    
+    ui.horizontal(|ui| {
+        if ui.selectable_label(visuals_open, "  Cell Visuals").clicked() {
+            if visuals_open {
+                close_panel(dock_manager.current_tree_mut(), &Panel::CellTypeVisuals);
+            } else {
+                open_panel(dock_manager.current_tree_mut(), &Panel::CellTypeVisuals);
+            }
+        }
+        
+        let lock_icon = if visuals_locked { "🔒" } else { "🔓" };
+        if ui.small_button(lock_icon).clicked() {
+            state.set_panel_locked(&visuals_name, !visuals_locked);
+        }
+    });
+
     ui.separator();
 
     // Reset to Default Layout button

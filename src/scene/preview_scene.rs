@@ -143,7 +143,7 @@ impl Scene for PreviewScene {
         // No automatic time advancement - time is controlled entirely by the slider
     }
 
-    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView) {
+    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView, cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>) {
         // Calculate view-projection matrix (same as used by cell renderer)
         let view_matrix = glam::Mat4::look_at_rh(
             self.camera.position(),
@@ -154,101 +154,140 @@ impl Scene for PreviewScene {
         let proj_matrix = glam::Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
         let view_proj = proj_matrix * view_matrix;
 
-        // Create command encoder for the entire frame
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Preview Scene Render Encoder"),
-        });
-
+        // Pass 1: Clear background
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Preview Scene Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.02,
-                            g: 0.02,
-                            b: 0.05,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.renderer.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Preview Scene Clear Encoder"),
             });
 
-            // Render cells first
-            self.renderer.render_in_pass(
-                &mut render_pass,
-                queue,
-                &self.state.canonical_state,
-                Some(&self.genome),
-                self.camera.position(),
-                self.camera.rotation,
-            );
-
-            // Render adhesion lines if enabled
-            if self.show_adhesion_lines {
-                self.adhesion_renderer.render_in_pass(
-                    &mut render_pass,
-                    queue,
-                    &self.state.canonical_state,
-                    self.camera.position(),
-                    self.camera.rotation,
-                );
+            {
+                let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Preview Scene Clear Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.02,
+                                g: 0.02,
+                                b: 0.05,
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.renderer.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                // Pass ends here, just clearing
             }
 
-            // Begin frame for instanced renderers
-            self.gizmo_renderer.begin_frame();
-            self.split_ring_renderer.begin_frame();
-
-            // Queue gizmos and split rings for ALL cells
-            for i in 0..self.state.canonical_state.cell_count {
-                let cell_position = self.state.canonical_state.positions[i];
-                let cell_rotation = self.state.canonical_state.rotations[i];
-                let cell_radius = self.state.canonical_state.radii[i];
-                let mode_index = self.state.canonical_state.mode_indices[i];
-
-                // Queue orientation gizmo for this cell
-                self.gizmo_renderer.queue_gizmo(cell_position, cell_rotation, cell_radius);
-
-                // Queue split rings if the mode has split direction settings
-                if mode_index < self.genome.modes.len() {
-                    let mode = &self.genome.modes[mode_index];
-                    
-                    // Calculate split direction from pitch and yaw (same as BioSpheres-Q reference)
-                    let pitch = mode.parent_split_direction.x.to_radians();
-                    let yaw = mode.parent_split_direction.y.to_radians();
-                    
-                    // Use Euler rotation to match the division code
-                    let split_direction_local = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z;
-                    
-                    self.split_ring_renderer.queue_rings(
-                        cell_position,
-                        cell_rotation,
-                        cell_radius,
-                        split_direction_local,
-                    );
-                }
-            }
-
-            // Render all queued gizmos and rings in batches
-            self.gizmo_renderer.render_queued(&mut render_pass, queue, view_proj, self.camera.position());
-            self.split_ring_renderer.render_queued(&mut render_pass, queue, view_proj, self.camera.position());
+            queue.submit(std::iter::once(encoder.finish()));
         }
 
-        queue.submit(std::iter::once(encoder.finish()));
+        // Pass 2: Render cells with OIT (handles its own render passes)
+        self.renderer.render_oit(
+            device,
+            queue,
+            view,
+            &self.state.canonical_state,
+            Some(&self.genome),
+            cell_type_visuals,
+            self.camera.position(),
+            self.camera.rotation,
+        );
+
+        // Pass 3: Render overlays (adhesion lines, gizmos, split rings)
+        {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Preview Scene Overlay Encoder"),
+            });
+
+            {
+                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Preview Scene Overlay Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load, // Preserve cells
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.renderer.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load, // Preserve depth from OIT
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+                // Render adhesion lines if enabled
+                if self.show_adhesion_lines {
+                    self.adhesion_renderer.render_in_pass(
+                        &mut render_pass,
+                        queue,
+                        &self.state.canonical_state,
+                        self.camera.position(),
+                        self.camera.rotation,
+                    );
+                }
+
+                // Begin frame for instanced renderers
+                self.gizmo_renderer.begin_frame();
+                self.split_ring_renderer.begin_frame();
+
+                // Queue gizmos and split rings for ALL cells
+                for i in 0..self.state.canonical_state.cell_count {
+                    let cell_position = self.state.canonical_state.positions[i];
+                    let cell_rotation = self.state.canonical_state.rotations[i];
+                    let cell_radius = self.state.canonical_state.radii[i];
+                    let mode_index = self.state.canonical_state.mode_indices[i];
+
+                    // Queue orientation gizmo for this cell
+                    self.gizmo_renderer.queue_gizmo(cell_position, cell_rotation, cell_radius);
+
+                    // Queue split rings if the mode has split direction settings
+                    if mode_index < self.genome.modes.len() {
+                        let mode = &self.genome.modes[mode_index];
+                        
+                        // Calculate split direction from pitch and yaw (same as BioSpheres-Q reference)
+                        let pitch = mode.parent_split_direction.x.to_radians();
+                        let yaw = mode.parent_split_direction.y.to_radians();
+                        
+                        // Use Euler rotation to match the division code
+                        let split_direction_local = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z;
+                        
+                        self.split_ring_renderer.queue_rings(
+                            cell_position,
+                            cell_rotation,
+                            cell_radius,
+                            split_direction_local,
+                        );
+                    }
+                }
+
+                // Render all queued gizmos and rings in batches
+                self.gizmo_renderer.render_queued(&mut render_pass, queue, view_proj, self.camera.position());
+                self.split_ring_renderer.render_queued(&mut render_pass, queue, view_proj, self.camera.position());
+            }
+
+            queue.submit(std::iter::once(encoder.finish()));
+        }
     }
 
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {

@@ -19,6 +19,7 @@ pub trait Scene {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         view: &wgpu::TextureView,
+        cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
     );
 
     /// Handle window resize.

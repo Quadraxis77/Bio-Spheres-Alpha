@@ -64,6 +64,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::CameraSettings => render_camera_settings(ui, self.context),
             Panel::LightingSettings => render_lighting_settings(ui),
             Panel::GizmoSettings => render_gizmo_settings(ui, self.context),
+            Panel::CellTypeVisuals => render_cell_type_visuals(ui, self.context),
             Panel::Modes => render_modes(ui, self.context),
             Panel::NameTypeEditor => render_name_type_editor(ui, self.context),
             Panel::AdhesionSettings => render_adhesion_settings(ui, self.context),
@@ -1148,6 +1149,27 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(drag_value);
                 });
             });
+
+            // Appearance Settings Group (Purple)
+            group_container(ui, "Appearance", egui::Color32::from_rgb(160, 120, 200), |ui| {
+                ui.label("Opacity:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.opacity, 0.0..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.opacity).speed(0.01).range(0.0..=1.0));
+                });
+
+                ui.label("Emissive Glow:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.emissive, 0.0..=2.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.emissive).speed(0.01).range(0.0..=2.0));
+                });
+            });
         });
 }
 
@@ -1270,15 +1292,33 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add_enabled(false, egui::Checkbox::new(&mut false, "Keep Adhesion"));
                     }
 
-                    // Mode dropdown for Child A (placeholder)
+                    // Mode dropdown for Child A
                     ui.label("Mode:");
-                    egui::ComboBox::from_id_salt("qball1_mode")
-                        .selected_text("Mode 0")
-                        .width(ball_container_width - 8.0) // Reduced margin
-                        .show_ui(ui, |ui| {
-                            // TODO: Populate with actual modes when genome structure is complete
-                            let _ = ui.selectable_label(true, "Mode 0");
-                        });
+                    if has_valid_mode {
+                        let current_mode = context.genome.modes[selected_idx].child_a.mode_number;
+                        let mode_count = context.genome.modes.len();
+                        let selected_text = if current_mode >= 0 && (current_mode as usize) < mode_count {
+                            format!("Mode {}", current_mode)
+                        } else {
+                            "Mode 0".to_string()
+                        };
+                        egui::ComboBox::from_id_salt("qball1_mode")
+                            .selected_text(selected_text)
+                            .width(ball_container_width - 8.0)
+                            .show_ui(ui, |ui| {
+                                for i in 0..mode_count {
+                                    let is_selected = current_mode == i as i32;
+                                    if ui.selectable_label(is_selected, format!("Mode {}", i)).clicked() {
+                                        context.genome.modes[selected_idx].child_a.mode_number = i as i32;
+                                    }
+                                }
+                            });
+                    } else {
+                        egui::ComboBox::from_id_salt("qball1_mode")
+                            .selected_text("Mode 0")
+                            .width(ball_container_width - 8.0)
+                            .show_ui(ui, |_ui| {});
+                    }
                 }
             );
 
@@ -1324,15 +1364,33 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add_enabled(false, egui::Checkbox::new(&mut false, "Keep Adhesion"));
                     }
 
-                    // Mode dropdown for Child B (placeholder)
+                    // Mode dropdown for Child B
                     ui.label("Mode:");
-                    egui::ComboBox::from_id_salt("qball2_mode")
-                        .selected_text("Mode 0")
-                        .width(ball_container_width - 8.0) // Reduced margin
-                        .show_ui(ui, |ui| {
-                            // TODO: Populate with actual modes when genome structure is complete
-                            let _ = ui.selectable_label(true, "Mode 0");
-                        });
+                    if has_valid_mode {
+                        let current_mode = context.genome.modes[selected_idx].child_b.mode_number;
+                        let mode_count = context.genome.modes.len();
+                        let selected_text = if current_mode >= 0 && (current_mode as usize) < mode_count {
+                            format!("Mode {}", current_mode)
+                        } else {
+                            "Mode 0".to_string()
+                        };
+                        egui::ComboBox::from_id_salt("qball2_mode")
+                            .selected_text(selected_text)
+                            .width(ball_container_width - 8.0)
+                            .show_ui(ui, |ui| {
+                                for i in 0..mode_count {
+                                    let is_selected = current_mode == i as i32;
+                                    if ui.selectable_label(is_selected, format!("Mode {}", i)).clicked() {
+                                        context.genome.modes[selected_idx].child_b.mode_number = i as i32;
+                                    }
+                                }
+                            });
+                    } else {
+                        egui::ComboBox::from_id_salt("qball2_mode")
+                            .selected_text("Mode 0")
+                            .width(ball_container_width - 8.0)
+                            .show_ui(ui, |_ui| {});
+                    }
                 }
             );
         });
@@ -1397,6 +1455,113 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
 fn render_gizmo_settings(ui: &mut Ui, context: &mut PanelContext) {
     ui.checkbox(&mut context.editor_state.gizmo_visible, "Show Orientation Lines");
     ui.checkbox(&mut context.editor_state.split_rings_visible, "Show Split Rings");
+}
+
+/// Render the Cell Type Visuals panel for appearance settings.
+fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
+    use crate::cell::types::CellType;
+    
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+
+            // Ensure we have visuals for all cell types
+            let cell_types = CellType::all();
+            while context.editor_state.cell_type_visuals.len() < cell_types.len() {
+                context.editor_state.cell_type_visuals.push(crate::cell::types::CellTypeVisuals::default());
+            }
+
+            // Cell type selector dropdown
+            ui.horizontal(|ui| {
+                ui.label("Cell Type:");
+                let selected = context.editor_state.selected_cell_type;
+                let selected_name = cell_types.get(selected)
+                    .map(|t| t.name())
+                    .unwrap_or("Unknown");
+                egui::ComboBox::from_id_salt("cell_type_visuals_selector")
+                    .selected_text(selected_name)
+                    .show_ui(ui, |ui| {
+                        for (i, cell_type) in cell_types.iter().enumerate() {
+                            ui.selectable_value(
+                                &mut context.editor_state.selected_cell_type,
+                                i,
+                                cell_type.name()
+                            );
+                        }
+                    });
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            let selected_idx = context.editor_state.selected_cell_type;
+            if selected_idx >= context.editor_state.cell_type_visuals.len() {
+                ui.label("Invalid cell type");
+                return;
+            }
+
+            let visuals = &mut context.editor_state.cell_type_visuals[selected_idx];
+
+            // Lighting section
+            ui.label(egui::RichText::new("Lighting").strong());
+            ui.add_space(4.0);
+
+            // Specular Strength
+            ui.label("Specular Strength:");
+            ui.horizontal(|ui| {
+                let available = ui.available_width();
+                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                ui.style_mut().spacing.slider_width = slider_width;
+                ui.add(egui::Slider::new(&mut visuals.specular_strength, 0.0..=1.0).show_value(false));
+                ui.add(egui::DragValue::new(&mut visuals.specular_strength).speed(0.01).range(0.0..=1.0));
+            });
+
+            // Specular Power (shininess)
+            ui.label("Specular Sharpness:");
+            ui.horizontal(|ui| {
+                let available = ui.available_width();
+                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                ui.style_mut().spacing.slider_width = slider_width;
+                ui.add(egui::Slider::new(&mut visuals.specular_power, 1.0..=128.0).logarithmic(true).show_value(false));
+                ui.add(egui::DragValue::new(&mut visuals.specular_power).speed(0.5).range(1.0..=128.0));
+            });
+
+            // Fresnel (rim lighting)
+            ui.label("Rim Lighting:");
+            ui.horizontal(|ui| {
+                let available = ui.available_width();
+                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                ui.style_mut().spacing.slider_width = slider_width;
+                ui.add(egui::Slider::new(&mut visuals.fresnel_strength, 0.0..=1.0).show_value(false));
+                ui.add(egui::DragValue::new(&mut visuals.fresnel_strength).speed(0.01).range(0.0..=1.0));
+            });
+
+            ui.add_space(12.0);
+
+            // Preset buttons
+            ui.separator();
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("Presets").strong());
+            ui.horizontal_wrapped(|ui| {
+                if ui.small_button("Matte").clicked() {
+                    visuals.specular_strength = 0.0;
+                    visuals.specular_power = 32.0;
+                    visuals.fresnel_strength = 0.0;
+                }
+                if ui.small_button("Glossy").clicked() {
+                    visuals.specular_strength = 0.5;
+                    visuals.specular_power = 64.0;
+                    visuals.fresnel_strength = 0.3;
+                }
+                if ui.small_button("Shiny").clicked() {
+                    visuals.specular_strength = 0.8;
+                    visuals.specular_power = 128.0;
+                    visuals.fresnel_strength = 0.5;
+                }
+            });
+        });
 }
 
 #[cfg(test)]
