@@ -478,6 +478,7 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
         Panel::RightPanel,
         Panel::BottomPanel,
         Panel::Viewport,
+        Panel::GizmoSettings,
     ];
     
     for panel in &layout_panels {

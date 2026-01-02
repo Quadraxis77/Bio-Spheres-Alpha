@@ -198,6 +198,12 @@ impl App {
             output
         };
         
+        // Update gizmo configuration for all scenes
+        self.scene_manager.update_gizmo_config(&self.editor_state);
+        
+        // Update split ring configuration for all scenes
+        self.scene_manager.update_split_ring_config(&self.editor_state);
+        
         // Handle scene mode requests from UI panels
         if scene_request.is_requested() {
             if let Some(target_mode) = scene_request.target_mode() {

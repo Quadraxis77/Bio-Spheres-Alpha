@@ -63,6 +63,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::ThemeEditor => render_theme_editor(ui),
             Panel::CameraSettings => render_camera_settings(ui, self.context),
             Panel::LightingSettings => render_lighting_settings(ui),
+            Panel::GizmoSettings => render_gizmo_settings(ui, self.context),
             Panel::Modes => render_modes(ui, self.context),
             Panel::NameTypeEditor => render_name_type_editor(ui, self.context),
             Panel::AdhesionSettings => render_adhesion_settings(ui, self.context),
@@ -1109,6 +1110,12 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
                 );
             });
         });
+}
+
+/// Render the gizmo settings panel.
+fn render_gizmo_settings(ui: &mut Ui, context: &mut PanelContext) {
+    ui.checkbox(&mut context.editor_state.gizmo_visible, "Show Gizmo");
+    ui.checkbox(&mut context.editor_state.split_rings_visible, "Show Split Rings");
 }
 
 #[cfg(test)]

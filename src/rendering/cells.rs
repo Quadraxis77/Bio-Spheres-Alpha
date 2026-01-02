@@ -18,9 +18,9 @@ pub struct CellRenderer {
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     depth_texture: wgpu::Texture,
-    depth_view: wgpu::TextureView,
-    width: u32,
-    height: u32,
+    pub depth_view: wgpu::TextureView,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[repr(C)]
@@ -307,6 +307,87 @@ impl CellRenderer {
         self.depth_view = depth_view;
         self.width = width;
         self.height = height;
+    }
+
+    /// Render cells within an existing render pass
+    pub fn render_in_pass(
+        &self,
+        render_pass: &mut wgpu::RenderPass,
+        queue: &wgpu::Queue,
+        state: &CanonicalState,
+        genome: Option<&crate::genome::Genome>,
+        camera_pos: Vec3,
+        camera_rotation: glam::Quat,
+    ) {
+        // Update camera
+        let forward = camera_rotation * Vec3::NEG_Z;
+        let look_target = camera_pos + forward;
+        let up = camera_rotation * Vec3::Y;
+
+        let view_matrix = Mat4::look_at_rh(camera_pos, look_target, up);
+
+        let aspect = self.width as f32 / self.height as f32;
+        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
+        let view_proj = proj_matrix * view_matrix;
+
+        let camera_uniform = CameraUniform {
+            view_proj: view_proj.to_cols_array_2d(),
+            camera_pos: camera_pos.to_array(),
+            _padding: 0.0,
+        };
+
+        queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[camera_uniform]),
+        );
+
+        // Prepare instance data
+        let render_count = state.cell_count.min(self.instance_capacity);
+        let mut instances = Vec::with_capacity(render_count);
+
+        for i in 0..render_count {
+            let position = state.positions[i];
+            let radius = state.radii[i];
+            let mode_index = state.mode_indices[i];
+
+            // Get color from genome mode if available
+            let color = if let Some(genome) = genome {
+                if mode_index < genome.modes.len() {
+                    let mode = &genome.modes[mode_index];
+                    let color = Vec4::new(mode.color.x, mode.color.y, mode.color.z, mode.opacity);
+                    color
+                } else {
+                    // Fallback color if mode index is invalid
+                    Vec4::new(0.4, 0.7, 1.0, 0.9)
+                }
+            } else {
+                // Default color when no genome is provided (GPU scene)
+                Vec4::new(0.4, 0.7, 1.0, 0.9)
+            };
+
+            instances.push(CellInstance {
+                position: position.to_array(),
+                radius,
+                color: color.to_array(),
+            });
+        }
+
+        // Update instance buffer
+        if !instances.is_empty() {
+            queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
+        }
+
+        // Render within the provided render pass
+        render_pass.set_pipeline(&self.render_pipeline);
+        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+
+        // Draw instanced quads
+        if !instances.is_empty() {
+            render_pass.draw(0..6, 0..instances.len() as u32);
+        }
     }
 
     /// Render cells to the given texture view.

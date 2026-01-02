@@ -114,6 +114,14 @@ pub struct GenomeEditorState {
     pub max_preview_duration: f32,
     /// Whether the time slider is being dragged
     pub time_slider_dragging: bool,
+    
+    // Orientation gizmo state
+    /// Whether the orientation gizmo is visible
+    pub gizmo_visible: bool,
+    
+    // Split ring state
+    /// Whether the split rings are visible
+    pub split_rings_visible: bool,
 }
 
 impl GenomeEditorState {
@@ -151,6 +159,8 @@ impl GenomeEditorState {
             time_value: 0.0,
             max_preview_duration: 10.0,
             time_slider_dragging: false,
+            gizmo_visible: true,
+            split_rings_visible: true,
         }
     }
 }

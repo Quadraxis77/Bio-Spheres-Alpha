@@ -64,6 +64,9 @@ impl PreviewState {
             mode.parent_make_adhesion.hash(&mut hasher);
             mode.split_mass.to_bits().hash(&mut hasher);
             mode.split_interval.to_bits().hash(&mut hasher);
+            // Hash split direction (pitch and yaw)
+            mode.parent_split_direction.x.to_bits().hash(&mut hasher);
+            mode.parent_split_direction.y.to_bits().hash(&mut hasher);
             // Hash other important fields for change detection
             mode.max_splits.hash(&mut hasher);
             mode.max_adhesions.hash(&mut hasher);
