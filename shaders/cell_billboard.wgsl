@@ -42,20 +42,26 @@ fn quat_rotate_inverse(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
 // Fast Value Noise Implementation (much faster than Perlin)
 // ============================================================================
 
-// Fast hash function for 3D coordinates
+// Fast hash function for 3D coordinates - improved version
 fn hash31(p: vec3<f32>) -> f32 {
-    var p3 = fract(p * 0.1031);
-    p3 += dot(p3, p3.zyx + 31.32);
+    var p3 = fract(p * vec3<f32>(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yxz + 33.33);
     return fract((p3.x + p3.y) * p3.z);
 }
 
-// 3D Value noise - much faster than Perlin, similar organic look
+// Quintic interpolation curve (smoother than cubic, reduces banding)
+fn quintic(t: vec3<f32>) -> vec3<f32> {
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+}
+
+// 3D Value noise with quintic interpolation for smoother results
 fn value_noise_3d(p: vec3<f32>) -> f32 {
     let i = floor(p);
     let f = fract(p);
     
-    // Smooth interpolation curve
-    let u = f * f * (3.0 - 2.0 * f);
+    // Quintic interpolation curve (same as Perlin's improved noise)
+    // This significantly reduces banding artifacts
+    let u = quintic(f);
     
     // Hash the 8 corners of the cube
     let n000 = hash31(i + vec3<f32>(0.0, 0.0, 0.0));
