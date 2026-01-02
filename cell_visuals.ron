@@ -1,11 +1,11 @@
 (
     visuals: [
         (
-            specular_strength: 0.3,
-            specular_power: 32.0,
-            fresnel_strength: 0.2,
-            membrane_noise_scale: 6.7,
-            membrane_noise_strength: 0.5,
+            specular_strength: 1.0,
+            specular_power: 90.0,
+            fresnel_strength: 0.35,
+            membrane_noise_scale: 5.0,
+            membrane_noise_strength: 2.0,
             membrane_noise_speed: 0.4,
         ),
     ],

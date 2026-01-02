@@ -1731,8 +1731,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 let available = ui.available_width();
                 let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                 ui.style_mut().spacing.slider_width = slider_width;
-                ui.add(egui::Slider::new(&mut visuals.membrane_noise_strength, 0.0..=0.5).show_value(false));
-                ui.add(egui::DragValue::new(&mut visuals.membrane_noise_strength).speed(0.01).range(0.0..=0.5));
+                ui.add(egui::Slider::new(&mut visuals.membrane_noise_strength, 0.0..=2.0).show_value(false));
+                ui.add(egui::DragValue::new(&mut visuals.membrane_noise_strength).speed(0.01).range(0.0..=2.0));
             });
 
             // Membrane noise animation speed
