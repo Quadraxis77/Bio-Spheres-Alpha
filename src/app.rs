@@ -70,10 +70,13 @@ impl App {
                 return false;
             }
             WindowEvent::Resized(physical_size) => {
-                self.config.width = physical_size.width;
-                self.config.height = physical_size.height;
-                self.surface.configure(&self.device, &self.config);
-                self.scene_manager.resize(&self.device, physical_size.width, physical_size.height);
+                // Only configure surface if both dimensions are non-zero
+                if physical_size.width > 0 && physical_size.height > 0 {
+                    self.config.width = physical_size.width;
+                    self.config.height = physical_size.height;
+                    self.surface.configure(&self.device, &self.config);
+                    self.scene_manager.resize(&self.device, physical_size.width, physical_size.height);
+                }
             }
             WindowEvent::MouseInput { button, state, .. } => {
                 // Only pass to camera if egui doesn't want the input
@@ -114,6 +117,11 @@ impl App {
     }
     
     fn render(&mut self) {
+        // Don't render if surface has zero dimensions
+        if self.config.width == 0 || self.config.height == 0 {
+            return;
+        }
+        
         let now = std::time::Instant::now();
         let dt = now.duration_since(self.last_render_time).as_secs_f32();
         self.last_render_time = now;
@@ -125,7 +133,18 @@ impl App {
         // Auto-save dock layouts periodically
         self.dock_manager.auto_save();
         
-        let output = self.surface.get_current_texture().unwrap();
+        let output = match self.surface.get_current_texture() {
+            Ok(output) => output,
+            Err(wgpu::SurfaceError::Outdated) => {
+                // Surface is outdated, reconfigure it
+                self.surface.configure(&self.device, &self.config);
+                self.surface.get_current_texture().unwrap()
+            }
+            Err(e) => {
+                log::error!("Failed to get surface texture: {:?}", e);
+                return;
+            }
+        };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         
         // Render 3D scene first
@@ -296,11 +315,15 @@ impl ApplicationHandler for AppState {
             .copied()
             .unwrap_or(surface_caps.formats[0]);
         
+        // Ensure we have non-zero dimensions before configuring
+        let width = size.width.max(1);
+        let height = size.height.max(1);
+        
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
-            width: size.width,
-            height: size.height,
+            width,
+            height,
             present_mode: wgpu::PresentMode::Immediate,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],

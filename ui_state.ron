@@ -19,11 +19,11 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
+                "LeftPanel",
+                "RightPanel",
                 "SceneManager",
                 "BottomPanel",
-                "LeftPanel",
                 "Viewport",
-                "RightPanel",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -44,8 +44,8 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "Viewport",
                 "RightPanel",
+                "Viewport",
                 "SceneManager",
             ],
             lock_settings: (

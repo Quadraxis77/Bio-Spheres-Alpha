@@ -170,7 +170,7 @@ impl Panel {
             Panel::AdhesionSettings => "Adhesion",
             Panel::ParentSettings => "Parent Settings",
             Panel::CircleSliders => "Circle Sliders",
-            Panel::QuaternionBall => "Rotation",
+            Panel::QuaternionBall => "Child Rotation",
             Panel::TimeSlider => "Time Slider",
         }
     }

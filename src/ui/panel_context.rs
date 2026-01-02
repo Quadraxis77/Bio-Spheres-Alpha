@@ -56,6 +56,8 @@ pub struct GenomeEditorState {
     pub renaming_mode: Option<usize>,
     /// Buffer for rename text input
     pub rename_buffer: String,
+    /// Currently selected mode index
+    pub selected_mode_index: usize,
     /// Whether the "copy into" dialog is open
     pub copy_into_dialog_open: bool,
     /// Source mode index for copy operation
@@ -120,6 +122,7 @@ impl GenomeEditorState {
         Self {
             renaming_mode: None,
             rename_buffer: String::new(),
+            selected_mode_index: 0,
             copy_into_dialog_open: false,
             copy_into_source: 0,
             color_picker_state: None,

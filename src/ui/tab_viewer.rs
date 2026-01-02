@@ -10,7 +10,7 @@ use egui_dock::tab_viewer::OnCloseResponse;
 use crate::ui::panel::Panel;
 use crate::ui::panel_context::PanelContext;
 use crate::ui::types::GlobalUiState;
-use crate::ui::widgets::quaternion_ball;
+use crate::ui::widgets::{quaternion_ball, modes_buttons, modes_list_items};
 
 /// TabViewer implementation for Bio-Spheres panels.
 ///
@@ -209,45 +209,57 @@ fn render_viewport(ui: &mut Ui, viewport_rect: &mut Option<egui::Rect>) {
 }
 
 /// Render the SceneManager panel.
-fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiState) {
-    ui.heading("Scene Manager");
-    ui.separator();
-
-    ui.label("Simulation Mode:");
-    ui.horizontal(|ui| {
-        let is_preview = context.is_preview_mode();
-        let is_gpu = context.is_gpu_mode();
-
-        if ui
-            .selectable_label(is_preview, "Preview")
-            .on_hover_text("Genome editor with CPU simulation")
-            .clicked()
-            && !is_preview
-        {
+fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, _state: &GlobalUiState) {
+    // Single button that switches between scenes
+    let (button_text, button_color) = if context.is_preview_mode() {
+        ("Live Simulation", egui::Color32::from_rgb(200, 100, 100)) // Red for live simulation
+    } else {
+        ("Genome Editor", egui::Color32::from_rgb(100, 200, 100)) // Green for genome editor
+    };
+    
+    let available_width = ui.available_width();
+    
+    // Create a large, full-width button with custom styling
+    let button_response = ui.allocate_response(
+        egui::Vec2::new(available_width, 40.0), // Full width, 40px height
+        egui::Sense::click()
+    );
+    
+    // Draw button background
+    let button_rect = button_response.rect;
+    let fill_color = if button_response.hovered() {
+        // Slightly brighter when hovered
+        egui::Color32::from_rgb(
+            ((button_color.r() as f32 * 1.1).min(255.0)) as u8,
+            ((button_color.g() as f32 * 1.1).min(255.0)) as u8,
+            ((button_color.b() as f32 * 1.1).min(255.0)) as u8,
+        )
+    } else {
+        button_color
+    };
+    
+    ui.painter().rect_filled(
+        button_rect,
+        4.0,
+        fill_color
+    );
+    
+    // Draw centered text in bold, large font
+    ui.painter().text(
+        button_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        button_text,
+        egui::FontId::proportional(18.0), // Large text
+        egui::Color32::WHITE, // White text for good contrast
+    );
+    
+    // Handle button click
+    if button_response.clicked() {
+        if context.is_preview_mode() {
+            context.request_gpu_mode();
+        } else {
             context.request_preview_mode();
         }
-
-        if ui
-            .selectable_label(is_gpu, "GPU")
-            .on_hover_text("Full GPU simulation")
-            .clicked()
-            && !is_gpu
-        {
-            context.request_gpu_mode();
-        }
-    });
-
-    ui.separator();
-
-    // Show current scene info
-    ui.label(format!("Current Mode: {}", state.current_mode.display_name()));
-    ui.label(format!("Cell Count: {}", context.cell_count()));
-    ui.label(format!("Time: {:.2}s", context.current_time()));
-
-    if context.is_paused() {
-        ui.colored_label(egui::Color32::YELLOW, "⏸ Paused");
-    } else {
-        ui.colored_label(egui::Color32::GREEN, "▶ Running");
     }
 }
 
@@ -344,13 +356,203 @@ fn render_lighting_settings(ui: &mut Ui) {
     // TODO: Implement lighting settings
 }
 
-/// Render the Modes panel (placeholder).
+/// Render the Modes panel with full functionality.
 fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
-    ui.heading("Modes");
-    ui.separator();
-    ui.label(format!("Initial Mode: {}", context.genome.initial_mode));
-    ui.label("Cell mode configuration and editing.");
-    // TODO: Implement modes list widget
+    // The genome should always have 40 modes by default
+    if context.genome.modes.is_empty() {
+        log::warn!("Genome has no modes, this should not happen with default genome");
+        return;
+    }
+    
+    // Get current selected mode index from editor state
+    let mut selected_index = context.editor_state.selected_mode_index;
+    let mut initial_mode = context.genome.initial_mode as usize;
+    
+    // Clamp selected index to valid range
+    if selected_index >= context.genome.modes.len() {
+        selected_index = 0;
+        context.editor_state.selected_mode_index = 0;
+    }
+    
+    // Clamp initial mode to valid range
+    if initial_mode >= context.genome.modes.len() {
+        initial_mode = 0;
+        context.genome.initial_mode = 0;
+    }
+    
+    // Control buttons (Copy Into and Reset) - more compact layout
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0; // Reduce button spacing
+        let (copy_into_clicked, reset_clicked) = modes_buttons(
+            ui,
+            context.genome.modes.len(),
+            selected_index,
+            initial_mode,
+        );
+        
+        if copy_into_clicked {
+            let selected_idx = selected_index;
+            if selected_idx < context.genome.modes.len() {
+                // Enter copy into mode - user will click on target mode directly
+                context.editor_state.copy_into_dialog_open = true;
+                context.editor_state.copy_into_source = selected_idx;
+                log::info!("Entered copy into mode for mode {}", selected_idx);
+            }
+        }
+        
+        if reset_clicked {
+            // Reset the selected mode to its original default values
+            if selected_index < context.genome.modes.len() {
+                // Regenerate the original default color for this mode index
+                let i = selected_index;
+                let hue = (i as f32 * 360.0 / 40.0) % 360.0; // Distribute hues evenly
+                let saturation = 0.7 + (i % 3) as f32 * 0.1; // Vary saturation slightly
+                let value = 0.8 + (i % 2) as f32 * 0.1; // Vary brightness slightly
+                
+                // Convert HSV to RGB (same logic as in Default implementation)
+                let c = value * saturation;
+                let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
+                let m = value - c;
+                
+                let (r_prime, g_prime, b_prime) = if hue < 60.0 {
+                    (c, x, 0.0)
+                } else if hue < 120.0 {
+                    (x, c, 0.0)
+                } else if hue < 180.0 {
+                    (0.0, c, x)
+                } else if hue < 240.0 {
+                    (0.0, x, c)
+                } else if hue < 300.0 {
+                    (x, 0.0, c)
+                } else {
+                    (c, 0.0, x)
+                };
+                
+                let r = ((r_prime + m) * 255.0) as u8;
+                let g = ((g_prime + m) * 255.0) as u8;
+                let b = ((b_prime + m) * 255.0) as u8;
+                
+                // Reset to original default values
+                context.genome.modes[selected_index] = crate::genome::ModeSettings {
+                    name: format!("M{}", selected_index + 1), // M1, M2, M3, etc.
+                    color: (r, g, b), // Original default color
+                    parent_split_direction: glam::Vec2::ZERO, // Reset to zero
+                };
+                log::info!("Reset mode M{} to original defaults", selected_index + 1);
+            }
+        }
+    });
+    
+    ui.add_space(4.0); // Reduced spacing instead of separator
+    
+    // Show copy into mode indicator just above the modes list
+    if context.editor_state.copy_into_dialog_open {
+        ui.colored_label(egui::Color32::YELLOW, "Select target mode to copy into:");
+        if ui.small_button("Cancel").clicked() {
+            context.editor_state.copy_into_dialog_open = false;
+            log::info!("Cancelled copy into mode");
+        }
+        ui.add_space(5.0);
+    }
+    
+    // Prepare modes data for the widget (name, color tuples)
+    let modes_data: Vec<(String, (u8, u8, u8))> = context.genome.modes
+        .iter()
+        .map(|mode| (mode.name.clone(), mode.color))
+        .collect();
+    
+    // Modes list with compact spacing
+    ui.spacing_mut().item_spacing.y = 2.0; // Reduce vertical spacing between mode items
+    let available_width = ui.available_width();
+    let copy_into_mode = context.editor_state.copy_into_dialog_open;
+    
+    let (selection_changed, initial_changed, rename_index, color_change) = modes_list_items(
+        ui,
+        &modes_data,
+        &mut selected_index,
+        &mut initial_mode,
+        available_width,
+        copy_into_mode,
+        &mut context.editor_state.color_picker_state,
+    );
+    
+    // Handle mode selection change
+    if selection_changed {
+        // If in copy into mode, this is the target selection
+        if copy_into_mode {
+            let source_idx = context.editor_state.copy_into_source;
+            let target_idx = selected_index;
+
+            if source_idx != target_idx && source_idx < context.genome.modes.len()
+                && target_idx < context.genome.modes.len() {
+                // Copy all settings from source to target (including color, except name)
+                let source_mode = context.genome.modes[source_idx].clone();
+                let target_name = context.genome.modes[target_idx].name.clone();
+                context.genome.modes[target_idx] = source_mode;
+                context.genome.modes[target_idx].name = target_name;
+                log::info!("Copied mode {} into mode {}", source_idx, target_idx);
+            }
+
+            // Exit copy into mode
+            context.editor_state.copy_into_dialog_open = false;
+        } else {
+            // Normal mode selection
+            context.editor_state.selected_mode_index = selected_index;
+            log::info!("Mode selection changed to: {}", selected_index + 1);
+        }
+    }
+    
+    // Handle initial mode change
+    if initial_changed {
+        context.genome.initial_mode = initial_mode as i32;
+    }
+    
+    // Handle rename request
+    if let Some(mode_index) = rename_index {
+        context.editor_state.renaming_mode = Some(mode_index);
+        context.editor_state.rename_buffer = context.genome.modes[mode_index].name.clone();
+    }
+    
+    // Handle color change
+    if let Some((mode_index, new_color)) = color_change {
+        if mode_index < context.genome.modes.len() {
+            context.genome.modes[mode_index].color = new_color;
+        }
+    }
+    
+    // Handle rename dialog - more compact
+    if let Some(rename_index) = context.editor_state.renaming_mode {
+        if rename_index < context.genome.modes.len() {
+            ui.add_space(4.0); // Reduced spacing
+            ui.label("Rename Mode:");
+            
+            let mut buffer = context.editor_state.rename_buffer.clone();
+            let response = ui.text_edit_singleline(&mut buffer);
+            context.editor_state.rename_buffer = buffer;
+            
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0; // Compact button spacing
+                if ui.small_button("OK").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                    context.genome.modes[rename_index].name = context.editor_state.rename_buffer.clone();
+                    context.editor_state.renaming_mode = None;
+                    context.editor_state.rename_buffer.clear();
+                }
+                
+                if ui.small_button("Cancel").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
+                    context.editor_state.renaming_mode = None;
+                    context.editor_state.rename_buffer.clear();
+                }
+            });
+        }
+    }
+    
+    // Show current mode info (for debugging/feedback) - more compact
+    if selected_index < context.genome.modes.len() {
+        ui.add_space(4.0); // Reduced spacing
+        ui.small(format!("Selected: {}", context.genome.modes[selected_index].name));
+        ui.small(format!("Initial: {}", context.genome.modes[initial_mode].name));
+        ui.small(format!("Total: {}", context.genome.modes.len()));
+    }
 }
 
 /// Render the NameTypeEditor panel (placeholder).
@@ -386,7 +588,7 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
     use crate::ui::widgets::circular_slider_float;
     
     ui.checkbox(&mut context.editor_state.enable_snapping, "Enable Snapping (11.25°)");
-    ui.add_space(10.0);
+    ui.add_space(4.0); // Reduced spacing
     
     // Ensure we have at least one mode
     if context.genome.modes.is_empty() {
@@ -395,14 +597,14 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
     
     // Get the current mode (default to first mode if available)
     if let Some(mode) = context.genome.modes.get_mut(0) {
-        // Calculate responsive slider size
+        // Calculate responsive slider size - use more of the available width
         let available_width = ui.available_width();
-        let max_radius = ((available_width - 40.0) / 2.0 - 20.0) / 2.0;
-        let radius = max_radius.clamp(20.0, 60.0);
+        let max_radius = ((available_width - 20.0) / 2.0 - 10.0) / 2.0; // Reduced margins
+        let radius = max_radius.clamp(20.0, 80.0); // Allow larger radius
         
-        // Side by side layout
+        // Side by side layout with minimal spacing
         ui.horizontal(|ui| {
-            ui.add_space(10.0);
+            ui.add_space(4.0); // Reduced left margin
             
             ui.vertical(|ui| {
                 ui.label("Pitch:");
@@ -415,6 +617,8 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
                     context.editor_state.enable_snapping,
                 );
             });
+            
+            ui.add_space(4.0); // Minimal spacing between sliders
             
             ui.vertical(|ui| {
                 ui.label("Yaw:");
@@ -437,14 +641,14 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
         ui.checkbox(&mut context.editor_state.qball_snapping, "Enable Snapping (11.25°)");
-        ui.add_space(10.0);
+        ui.add_space(4.0); // Reduced spacing
 
-        // Calculate responsive ball size - match reference implementation
+        // Calculate responsive ball size - use more of the available width
         let available_width = ui.available_width();
-        // Reserve space for padding and two balls side by side
-        let max_radius = ((available_width - 40.0) / 2.0 - 20.0) / 2.0;
-        let ball_radius = max_radius.clamp(20.0, 60.0);
-        let ball_container_width = ball_radius * 2.0 + 20.0;
+        // Reserve minimal space for padding and two balls side by side
+        let max_radius = ((available_width - 20.0) / 2.0 - 8.0) / 2.0; // Reduced margins
+        let ball_radius = max_radius.clamp(20.0, 80.0); // Allow larger radius
+        let ball_container_width = ball_radius * 2.0 + 8.0; // Minimal container padding
 
         // Use persistent orientations from editor state
         let mut child_a_orientation = context.editor_state.child_a_orientation;
@@ -452,7 +656,7 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
 
         // Display balls horizontally with controls directly below each ball
         ui.horizontal_top(|ui| {
-            ui.add_space(10.0);
+            ui.add_space(4.0); // Reduced left margin
 
             // Ball 1 (Child A) with controls below
             ui.allocate_ui_with_layout(
@@ -481,7 +685,7 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                         context.editor_state.child_a_orientation = child_a_orientation;
                     }
 
-                    ui.add_space(5.0);
+                    ui.add_space(2.0); // Reduced spacing
 
                     // Keep Adhesion checkbox for Child A
                     ui.checkbox(&mut context.editor_state.child_a_keep_adhesion, "Keep Adhesion");
@@ -490,13 +694,15 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Mode:");
                     egui::ComboBox::from_id_salt("qball1_mode")
                         .selected_text("Mode 0")
-                        .width(ball_container_width - 20.0)
+                        .width(ball_container_width - 8.0) // Reduced margin
                         .show_ui(ui, |ui| {
                             // TODO: Populate with actual modes when genome structure is complete
                             let _ = ui.selectable_label(true, "Mode 0");
                         });
                 }
             );
+
+            ui.add_space(4.0); // Minimal spacing between balls
 
             // Ball 2 (Child B) with controls below
             ui.allocate_ui_with_layout(
@@ -525,7 +731,7 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                         context.editor_state.child_b_orientation = child_b_orientation;
                     }
 
-                    ui.add_space(5.0);
+                    ui.add_space(2.0); // Reduced spacing
 
                     // Keep Adhesion checkbox for Child B
                     ui.checkbox(&mut context.editor_state.child_b_keep_adhesion, "Keep Adhesion");
@@ -534,7 +740,7 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Mode:");
                     egui::ComboBox::from_id_salt("qball2_mode")
                         .selected_text("Mode 0")
-                        .width(ball_container_width - 20.0)
+                        .width(ball_container_width - 8.0) // Reduced margin
                         .show_ui(ui, |ui| {
                             // TODO: Populate with actual modes when genome structure is complete
                             let _ = ui.selectable_label(true, "Mode 0");
