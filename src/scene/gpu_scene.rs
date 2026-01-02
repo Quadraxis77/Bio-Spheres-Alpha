@@ -40,7 +40,7 @@ impl GpuScene {
         queue: &wgpu::Queue,
         surface_config: &wgpu::SurfaceConfiguration,
     ) -> Self {
-        let capacity = 200_000; // GPU can handle many more cells
+        let capacity = 10_000; // 10k cell cap for GPU scene
         // Use 64x64x64 grid for spatial partitioning
         let canonical_state = CanonicalState::with_grid_density(capacity, 64);
         let config = PhysicsConfig::default();

@@ -426,7 +426,7 @@ pub fn detect_collisions_parallel(
 /// Cells in the same organism rely on adhesion forces for their interactions
 #[inline]
 fn are_cells_in_same_organism(state: &CanonicalState, cell_a: usize, cell_b: usize) -> bool {
-    state.adhesion_manager.are_cells_in_same_organism(&state.adhesion_connections, cell_a, cell_b)
+    state.adhesion_manager.are_cells_connected(&state.adhesion_connections, cell_a, cell_b)
 }
 
 // ============================================================================
