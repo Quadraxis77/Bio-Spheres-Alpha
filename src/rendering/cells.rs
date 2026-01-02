@@ -438,7 +438,13 @@ impl CellRenderer {
                 cull_mode: None,
                 ..Default::default()
             },
-            depth_stencil: None, // No depth testing for OIT - it handles ordering via weights
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false, // Read-only - don't write to depth buffer
+                depth_compare: wgpu::CompareFunction::Less, // Discard fragments behind opaque geometry
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -839,7 +845,14 @@ impl CellRenderer {
                             depth_slice: None,
                         }),
                     ],
-                    depth_stencil_attachment: None,
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load, // Keep depth from opaque pass
+                            store: wgpu::StoreOp::Store, // Don't need to store since we don't write
+                        }),
+                        stencil_ops: None,
+                    }),
                     timestamp_writes: None,
                     occlusion_query_set: None,
                 });

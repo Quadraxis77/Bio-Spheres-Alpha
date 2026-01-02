@@ -1298,24 +1298,73 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                         let current_mode = context.genome.modes[selected_idx].child_a.mode_number;
                         let mode_count = context.genome.modes.len();
                         let selected_text = if current_mode >= 0 && (current_mode as usize) < mode_count {
-                            format!("Mode {}", current_mode)
+                            context.genome.modes[current_mode as usize].name.clone()
                         } else {
-                            "Mode 0".to_string()
+                            "Invalid".to_string()
                         };
+                        // Collect mode info to avoid borrow issues
+                        let mode_info: Vec<_> = context.genome.modes.iter()
+                            .map(|m| (m.name.clone(), m.color))
+                            .collect();
+                        let mut new_mode: Option<i32> = None;
                         egui::ComboBox::from_id_salt("qball1_mode")
                             .selected_text(selected_text)
                             .width(ball_container_width - 8.0)
                             .show_ui(ui, |ui| {
-                                for i in 0..mode_count {
+                                let item_width = ui.available_width();
+                                for (i, (name, color)) in mode_info.iter().enumerate() {
                                     let is_selected = current_mode == i as i32;
-                                    if ui.selectable_label(is_selected, format!("Mode {}", i)).clicked() {
-                                        context.genome.modes[selected_idx].child_a.mode_number = i as i32;
+                                    let bg_color = egui::Color32::from_rgb(
+                                        (color.x * 255.0) as u8,
+                                        (color.y * 255.0) as u8,
+                                        (color.z * 255.0) as u8,
+                                    );
+                                    // Calculate luminance for text contrast
+                                    let luminance = 0.299 * color.x + 0.587 * color.y + 0.114 * color.z;
+                                    let text_color = if luminance > 0.5 {
+                                        egui::Color32::BLACK
+                                    } else {
+                                        egui::Color32::WHITE
+                                    };
+                                    
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(item_width, 18.0),
+                                        egui::Sense::click(),
+                                    );
+                                    
+                                    // Draw background
+                                    let bg = if response.hovered() {
+                                        bg_color.gamma_multiply(1.2)
+                                    } else {
+                                        bg_color
+                                    };
+                                    ui.painter().rect_filled(rect, 2.0, bg);
+                                    
+                                    // Draw selection indicator
+                                    if is_selected {
+                                        ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
+                                    }
+                                    
+                                    // Draw text centered
+                                    ui.painter().text(
+                                        rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        name,
+                                        egui::FontId::default(),
+                                        text_color,
+                                    );
+                                    
+                                    if response.clicked() {
+                                        new_mode = Some(i as i32);
                                     }
                                 }
                             });
+                        if let Some(mode_num) = new_mode {
+                            context.genome.modes[selected_idx].child_a.mode_number = mode_num;
+                        }
                     } else {
                         egui::ComboBox::from_id_salt("qball1_mode")
-                            .selected_text("Mode 0")
+                            .selected_text("--")
                             .width(ball_container_width - 8.0)
                             .show_ui(ui, |_ui| {});
                     }
@@ -1370,24 +1419,73 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                         let current_mode = context.genome.modes[selected_idx].child_b.mode_number;
                         let mode_count = context.genome.modes.len();
                         let selected_text = if current_mode >= 0 && (current_mode as usize) < mode_count {
-                            format!("Mode {}", current_mode)
+                            context.genome.modes[current_mode as usize].name.clone()
                         } else {
-                            "Mode 0".to_string()
+                            "Invalid".to_string()
                         };
+                        // Collect mode info to avoid borrow issues
+                        let mode_info: Vec<_> = context.genome.modes.iter()
+                            .map(|m| (m.name.clone(), m.color))
+                            .collect();
+                        let mut new_mode: Option<i32> = None;
                         egui::ComboBox::from_id_salt("qball2_mode")
                             .selected_text(selected_text)
                             .width(ball_container_width - 8.0)
                             .show_ui(ui, |ui| {
-                                for i in 0..mode_count {
+                                let item_width = ui.available_width();
+                                for (i, (name, color)) in mode_info.iter().enumerate() {
                                     let is_selected = current_mode == i as i32;
-                                    if ui.selectable_label(is_selected, format!("Mode {}", i)).clicked() {
-                                        context.genome.modes[selected_idx].child_b.mode_number = i as i32;
+                                    let bg_color = egui::Color32::from_rgb(
+                                        (color.x * 255.0) as u8,
+                                        (color.y * 255.0) as u8,
+                                        (color.z * 255.0) as u8,
+                                    );
+                                    // Calculate luminance for text contrast
+                                    let luminance = 0.299 * color.x + 0.587 * color.y + 0.114 * color.z;
+                                    let text_color = if luminance > 0.5 {
+                                        egui::Color32::BLACK
+                                    } else {
+                                        egui::Color32::WHITE
+                                    };
+                                    
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(item_width, 18.0),
+                                        egui::Sense::click(),
+                                    );
+                                    
+                                    // Draw background
+                                    let bg = if response.hovered() {
+                                        bg_color.gamma_multiply(1.2)
+                                    } else {
+                                        bg_color
+                                    };
+                                    ui.painter().rect_filled(rect, 2.0, bg);
+                                    
+                                    // Draw selection indicator
+                                    if is_selected {
+                                        ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
+                                    }
+                                    
+                                    // Draw text centered
+                                    ui.painter().text(
+                                        rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        name,
+                                        egui::FontId::default(),
+                                        text_color,
+                                    );
+                                    
+                                    if response.clicked() {
+                                        new_mode = Some(i as i32);
                                     }
                                 }
                             });
+                        if let Some(mode_num) = new_mode {
+                            context.genome.modes[selected_idx].child_b.mode_number = mode_num;
+                        }
                     } else {
                         egui::ComboBox::from_id_salt("qball2_mode")
-                            .selected_text("Mode 0")
+                            .selected_text("--")
                             .width(ball_container_width - 8.0)
                             .show_ui(ui, |_ui| {});
                     }
