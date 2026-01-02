@@ -1094,7 +1094,7 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
                 // Track dragging state
                 let slider_response = ui.add_enabled(
                     is_preview_mode,
-                    egui::Slider::new(&mut context.editor_state.time_value, 0.0..=100.0)
+                    egui::Slider::new(&mut context.editor_state.time_value, 0.0..=60.0)
                         .show_value(false)
                 );
                 context.editor_state.time_slider_dragging = slider_response.dragged();
@@ -1104,11 +1104,8 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
                     is_preview_mode,
                     egui::DragValue::new(&mut context.editor_state.time_value)
                         .speed(0.1)
-                        .range(0.0..=100.0)
-                        .custom_formatter(|n, _| {
-                            let time_sec = (n as f32 / 100.0) * context.editor_state.max_preview_duration;
-                            format!("{:.1}s", time_sec)
-                        })
+                        .range(0.0..=60.0)
+                        .suffix("s")
                 );
             });
         });

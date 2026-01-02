@@ -40,8 +40,36 @@ impl PreviewState {
     /// Compute a comprehensive hash of the genome for change detection
     pub fn compute_genome_hash(genome: &Genome) -> u64 {
         let mut hasher = DefaultHasher::new();
-        // TODO: Hash genome fields
-        genome.hash(&mut hasher);
+        
+        // Hash genome fields manually since Genome doesn't implement Hash
+        genome.name.hash(&mut hasher);
+        genome.initial_mode.hash(&mut hasher);
+        
+        // Hash quaternion components
+        genome.initial_orientation.x.to_bits().hash(&mut hasher);
+        genome.initial_orientation.y.to_bits().hash(&mut hasher);
+        genome.initial_orientation.z.to_bits().hash(&mut hasher);
+        genome.initial_orientation.w.to_bits().hash(&mut hasher);
+        
+        // Hash each mode
+        for mode in &genome.modes {
+            mode.name.hash(&mut hasher);
+            mode.default_name.hash(&mut hasher);
+            mode.color.x.to_bits().hash(&mut hasher);
+            mode.color.y.to_bits().hash(&mut hasher);
+            mode.color.z.to_bits().hash(&mut hasher);
+            mode.opacity.to_bits().hash(&mut hasher);
+            mode.emissive.to_bits().hash(&mut hasher);
+            mode.cell_type.hash(&mut hasher);
+            mode.parent_make_adhesion.hash(&mut hasher);
+            mode.split_mass.to_bits().hash(&mut hasher);
+            mode.split_interval.to_bits().hash(&mut hasher);
+            // Hash other important fields for change detection
+            mode.max_splits.hash(&mut hasher);
+            mode.max_adhesions.hash(&mut hasher);
+            mode.min_adhesions.hash(&mut hasher);
+        }
+        
         hasher.finish()
     }
 
