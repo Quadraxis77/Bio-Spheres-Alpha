@@ -114,7 +114,7 @@ impl CanonicalState {
             adhesion_manager: AdhesionConnectionManager::new(capacity),
             cached_adhesion_settings: Vec::with_capacity(32), // Typical genome has <32 modes
             genome_modes_hash: 0,
-            spatial_grid: DeterministicSpatialGrid::new(grid_density, 200.0, 100.0),
+            spatial_grid: DeterministicSpatialGrid::with_capacity(grid_density, 200.0, 100.0, capacity),
             next_cell_id: 0,
             division_events_buffer: Vec::with_capacity(256),
             already_split_buffer: vec![false; capacity],

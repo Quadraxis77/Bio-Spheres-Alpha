@@ -43,6 +43,11 @@ pub struct DeterministicSpatialGrid {
 impl DeterministicSpatialGrid {
     /// Create a new deterministic spatial grid
     pub fn new(grid_dim: u32, world_size: f32, sphere_radius: f32) -> Self {
+        Self::with_capacity(grid_dim, world_size, sphere_radius, 10_000)
+    }
+    
+    /// Create a new deterministic spatial grid with specified cell capacity
+    pub fn with_capacity(grid_dim: u32, world_size: f32, sphere_radius: f32, max_cells: usize) -> Self {
         let grid_dimensions = UVec3::splat(grid_dim);
         let cell_size = world_size / grid_dim as f32;
 
@@ -55,9 +60,6 @@ impl DeterministicSpatialGrid {
         for (idx, &coord) in active_cells.iter().enumerate() {
             active_cell_map.insert(coord, idx);
         }
-
-        // Allocate buffers for max cells
-        let max_cells = 10_000;
 
         Self {
             grid_dimensions,
