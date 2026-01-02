@@ -122,6 +122,10 @@ pub struct GenomeEditorState {
     // Split ring state
     /// Whether the split rings are visible
     pub split_rings_visible: bool,
+    
+    // Radial menu state (GPU scene only)
+    /// Radial menu state for tool selection
+    pub radial_menu: crate::ui::radial_menu::RadialMenuState,
 }
 
 impl GenomeEditorState {
@@ -161,6 +165,7 @@ impl GenomeEditorState {
             time_slider_dragging: false,
             gizmo_visible: true,
             split_rings_visible: true,
+            radial_menu: crate::ui::radial_menu::RadialMenuState::new(),
         }
     }
 }

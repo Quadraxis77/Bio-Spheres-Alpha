@@ -108,7 +108,9 @@ pub fn division_step(
             parent_velocity: Vec3,
             parent_genome_id: usize,
             parent_stiffness: f32,
+            #[allow(dead_code)]
             parent_split_count: i32,
+            #[allow(dead_code)]
             parent_genome_orientation: Quat,
             child_a_pos: Vec3,
             child_b_pos: Vec3,

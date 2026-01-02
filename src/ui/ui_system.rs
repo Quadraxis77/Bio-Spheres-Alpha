@@ -257,42 +257,52 @@ impl UiSystem {
             style.tab_bar.height = 0.0;
         }
 
-        let mut dock_area = egui_dock::DockArea::new(dock_manager.current_tree_mut())
-            .style(style)
-            .show_leaf_collapse_buttons(false)
-            .show_leaf_close_all_buttons(false)
-            .draggable_tabs(true) // Explicitly enable tab dragging for docking
-            .window_bounds(self.ctx.content_rect()); // Set window bounds for floating windows
-
-        // Apply lock settings for tabs and close buttons
-        if ui_state_copy.lock_tabs {
-            dock_area = dock_area
-                .show_tab_name_on_hover(false)
-                .draggable_tabs(false); // Disable dragging when tabs are locked
-        }
-
-        if ui_state_copy.lock_close_buttons {
-            dock_area = dock_area.show_close_buttons(false);
-        }
-
         // Create panel context for PanelTabViewer
-        let mut panel_context = crate::ui::panel_context::PanelContext::new(
-            genome,
-            editor_state,
-            scene_manager,
-            camera,
-            scene_request,
-            ui_state_copy.current_mode,
-        );
+        let current_mode = ui_state_copy.current_mode;
+        
+        // Show dock area (scoped to release borrows after)
+        {
+            let mut panel_context = crate::ui::panel_context::PanelContext::new(
+                genome,
+                editor_state,
+                scene_manager,
+                camera,
+                scene_request,
+                current_mode,
+            );
+            
+            let mut dock_area = egui_dock::DockArea::new(dock_manager.current_tree_mut())
+                .style(style)
+                .show_leaf_collapse_buttons(false)
+                .show_leaf_close_all_buttons(false)
+                .draggable_tabs(true)
+                .window_bounds(self.ctx.content_rect());
 
-        // Use PanelTabViewer for full functionality
-        let mut tab_viewer = crate::ui::tab_viewer::PanelTabViewer::new(
-            &mut ui_state_copy,
-            &mut panel_context,
-            &mut self.viewport_rect,
-        );
+            // Apply lock settings for tabs and close buttons
+            if ui_state_copy.lock_tabs {
+                dock_area = dock_area
+                    .show_tab_name_on_hover(false)
+                    .draggable_tabs(false);
+            }
 
-        dock_area.show(&self.ctx, &mut tab_viewer);
+            if ui_state_copy.lock_close_buttons {
+                dock_area = dock_area.show_close_buttons(false);
+            }
+
+            let mut tab_viewer = crate::ui::tab_viewer::PanelTabViewer::new(
+                &mut ui_state_copy,
+                &mut panel_context,
+                &mut self.viewport_rect,
+            );
+            dock_area.show(&self.ctx, &mut tab_viewer);
+        }
+        
+        // Render radial menu overlay (GPU mode only)
+        // Now editor_state is no longer borrowed by panel_context
+        if current_mode == crate::ui::types::SimulationMode::Gpu {
+            crate::ui::radial_menu::show_radial_menu(&self.ctx, &mut editor_state.radial_menu);
+            crate::ui::radial_menu::show_tool_cursor(&self.ctx, &editor_state.radial_menu);
+        }
         
         // Apply any changes back to the original state
         let state_changed = self.state != ui_state_copy;

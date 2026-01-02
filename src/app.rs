@@ -79,12 +79,35 @@ impl App {
                 }
             }
             WindowEvent::MouseInput { button, state, .. } => {
+                // Handle radial menu click (GPU mode only)
+                if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
+                    let menu = &mut self.editor_state.radial_menu;
+                    if menu.visible && *button == MouseButton::Left && *state == ElementState::Pressed {
+                        // Click while menu is open selects the hovered tool
+                        menu.close(true);
+                        // Hide cursor if a tool is now active
+                        let hide_cursor = self.editor_state.radial_menu.active_tool != crate::ui::radial_menu::RadialTool::None;
+                        self.window.set_cursor_visible(!hide_cursor);
+                        self.window.request_redraw();
+                        return true;
+                    }
+                }
+                
                 // Only pass to camera if egui doesn't want the input
                 if !self.ui.wants_pointer_input() {
                     self.scene_manager.active_scene_mut().camera_mut().handle_mouse_button(*button, *state);
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                // Update radial menu hover state (GPU mode only)
+                if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
+                    let menu = &mut self.editor_state.radial_menu;
+                    if menu.visible {
+                        menu.update_hover(egui::Pos2::new(position.x as f32, position.y as f32));
+                        self.window.request_redraw();
+                    }
+                }
+                
                 // Only pass to camera if egui doesn't want the input
                 if !self.ui.wants_pointer_input() {
                     self.scene_manager.active_scene_mut().camera_mut().handle_mouse_move(*position);
@@ -97,6 +120,38 @@ impl App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // Handle radial menu Alt key (GPU mode only)
+                if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
+                    use winit::keyboard::{KeyCode, PhysicalKey};
+                    
+                    if let PhysicalKey::Code(KeyCode::AltLeft) | PhysicalKey::Code(KeyCode::AltRight) = event.physical_key {
+                        let menu = &mut self.editor_state.radial_menu;
+                        
+                        if event.state == ElementState::Pressed && !menu.alt_held {
+                            // Alt pressed - open menu at current cursor position
+                            if let Some(pos) = self.ui.ctx.pointer_hover_pos() {
+                                menu.open(pos);
+                            } else {
+                                // Fallback to center of window
+                                let size = self.window.inner_size();
+                                menu.open(egui::Pos2::new(size.width as f32 / 2.0, size.height as f32 / 2.0));
+                            }
+                            // Show cursor while menu is open
+                            self.window.set_cursor_visible(true);
+                            self.window.request_redraw();
+                            return true;
+                        } else if event.state == ElementState::Released && menu.alt_held {
+                            // Alt released - close menu and select hovered tool
+                            menu.close(true);
+                            // Hide cursor if a tool is now active
+                            let hide_cursor = self.editor_state.radial_menu.active_tool != crate::ui::radial_menu::RadialTool::None;
+                            self.window.set_cursor_visible(!hide_cursor);
+                            self.window.request_redraw();
+                            return true;
+                        }
+                    }
+                }
+                
                 // Only pass to camera if egui doesn't want the input
                 if !self.ui.wants_keyboard_input() {
                     self.scene_manager.active_scene_mut().camera_mut().handle_keyboard(event);

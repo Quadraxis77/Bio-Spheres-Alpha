@@ -13,6 +13,7 @@ pub struct CellRenderer {
     render_pipeline: wgpu::RenderPipeline,
     camera_bind_group: wgpu::BindGroup,
     camera_buffer: wgpu::Buffer,
+    #[allow(dead_code)]
     lighting_buffer: wgpu::Buffer,
     quad_vertex_buffer: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
