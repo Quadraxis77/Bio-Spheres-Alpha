@@ -862,3 +862,95 @@ pub fn physics_step_with_genome(
     let rng_seed = 12345;
     division::division_step(state, genome, current_time, max_cells, rng_seed)
 }
+
+
+/// Physics step with multiple genomes support
+/// Each cell uses its genome_id to look up the correct genome for division/adhesion
+pub fn physics_step_with_genomes(
+    state: &mut CanonicalState,
+    genomes: &[Genome],
+    config: &PhysicsConfig,
+    current_time: f32,
+) -> Vec<DivisionEvent> {
+    if genomes.is_empty() {
+        return Vec::new();
+    }
+    
+    let dt = config.fixed_timestep;
+
+    // 1. Verlet integration (position update)
+    verlet_integrate_positions(
+        &mut state.positions[..state.cell_count],
+        &state.velocities[..state.cell_count],
+        &state.accelerations[..state.cell_count],
+        dt,
+    );
+
+    // 2. Update rotations from angular velocities
+    integrate_rotations(
+        &mut state.rotations[..state.cell_count],
+        &state.angular_velocities[..state.cell_count],
+        dt,
+    );
+
+    // 3. Update spatial partitioning
+    state.spatial_grid.rebuild(&state.positions, state.cell_count);
+
+    // 4. Detect collisions (use parallel version for better performance)
+    let collisions = detect_collisions_parallel(state);
+
+    // 5. Compute forces and torques
+    compute_collision_forces(state, &collisions, config);
+
+    // 5.5. Compute adhesion forces
+    // Update adhesion settings cache from all genomes (combined mode indices)
+    state.update_adhesion_settings_cache_multi(genomes);
+    
+    // Apply adhesion forces using parallel version for better performance
+    if state.adhesion_connections.active_count > 0 && !state.cached_adhesion_settings.is_empty() {
+        crate::cell::compute_adhesion_forces_parallel(
+            &state.adhesion_connections,
+            &state.positions[..state.cell_count],
+            &state.velocities[..state.cell_count],
+            &state.rotations[..state.cell_count],
+            &state.angular_velocities[..state.cell_count],
+            &state.masses[..state.cell_count],
+            &state.cached_adhesion_settings,
+            &mut state.forces[..state.cell_count],
+            &mut state.torques[..state.cell_count],
+        );
+    }
+
+    // 6. Apply boundary conditions
+    apply_boundary_forces(state, config);
+
+    // 7. Verlet integration (velocity update)
+    verlet_integrate_velocities(
+        &mut state.velocities[..state.cell_count],
+        &mut state.accelerations[..state.cell_count],
+        &mut state.prev_accelerations[..state.cell_count],
+        &state.forces[..state.cell_count],
+        &state.masses[..state.cell_count],
+        dt,
+        config.velocity_damping,
+    );
+
+    // 8. Update angular velocities from torques
+    integrate_angular_velocities(
+        &mut state.angular_velocities[..state.cell_count],
+        &state.torques[..state.cell_count],
+        &state.radii[..state.cell_count],
+        &state.masses[..state.cell_count],
+        dt,
+        config.angular_damping,
+    );
+
+    // 9. Update nutrient growth (use first genome for now - TODO: per-cell genome)
+    let first_genome = &genomes[0];
+    update_nutrient_growth(state, first_genome, dt);
+
+    // 10. Run division step with multiple genomes
+    let max_cells = state.capacity;
+    let rng_seed = 12345;
+    division::division_step_multi(state, genomes, current_time, max_cells, rng_seed)
+}

@@ -32,8 +32,8 @@ pub struct GpuScene {
     pub camera: CameraController,
     /// Current simulation time
     pub current_time: f32,
-    /// Genome for cell behavior (growth, division)
-    pub genome: Genome,
+    /// Genomes for cell behavior (growth, division) - supports multiple genomes
+    pub genomes: Vec<Genome>,
     /// Accumulated time for fixed timestep physics
     time_accumulator: f32,
     /// Whether this is the first frame (no Hi-Z data yet)
@@ -70,7 +70,7 @@ impl GpuScene {
             paused: false,
             camera: CameraController::new(),
             current_time: 0.0,
-            genome: Genome::default(),
+            genomes: Vec::new(),
             time_accumulator: 0.0,
             first_frame: true,
         }
@@ -144,29 +144,64 @@ impl GpuScene {
             return;
         }
         
-        // Use CPU physics with genome for nutrient growth and division
-        // TODO: Replace with GPU compute shaders for better performance
-        let _division_events = cpu_physics::physics_step_with_genome(
+        // Use CPU physics with all genomes for division and adhesion
+        let _division_events = cpu_physics::physics_step_with_genomes(
             &mut self.canonical_state,
-            &self.genome,
+            &self.genomes,
             &self.config,
             self.current_time,
         );
     }
     
+    /// Find an existing genome by name, or return None.
+    pub fn find_genome_id(&self, name: &str) -> Option<usize> {
+        self.genomes.iter().position(|g| g.name == name)
+    }
+    
+    /// Check if two genomes have the same visual properties (modes).
+    fn genomes_visually_equal(a: &Genome, b: &Genome) -> bool {
+        if a.modes.len() != b.modes.len() {
+            return false;
+        }
+        for (ma, mb) in a.modes.iter().zip(b.modes.iter()) {
+            if (ma.color - mb.color).length() > 0.001 
+                || (ma.opacity - mb.opacity).abs() > 0.001
+                || (ma.emissive - mb.emissive).abs() > 0.001 {
+                return false;
+            }
+        }
+        true
+    }
+    
+    /// Add a genome to the scene and return its ID.
+    /// If the last genome is visually identical, reuses it.
+    /// Otherwise creates a new genome entry to preserve existing cells' visuals.
+    pub fn add_genome(&mut self, genome: Genome) -> usize {
+        // Check if the last genome is visually identical - if so, reuse it
+        if let Some(last) = self.genomes.last() {
+            if Self::genomes_visually_equal(last, &genome) {
+                return self.genomes.len() - 1;
+            }
+        }
+        
+        let id = self.genomes.len();
+        self.genomes.push(genome);
+        id
+    }
+    
     /// Insert a cell at the given world position using genome settings.
-    /// Also updates the stored genome for physics simulation.
+    /// Adds the genome to the scene if not already present (does not overwrite existing genomes).
     /// Returns the index of the inserted cell, or None if at capacity.
     pub fn insert_cell_from_genome(
         &mut self,
         world_position: glam::Vec3,
         genome: &Genome,
     ) -> Option<usize> {
-        // Update stored genome for physics (growth/division)
-        self.genome = genome.clone();
+        // Find or add the genome
+        let genome_id = self.add_genome(genome.clone());
         
         let mode_idx = genome.initial_mode.max(0) as usize;
-        let mode = genome.modes.get(mode_idx)?;
+        let mode = &genome.modes[mode_idx];
         
         // Calculate initial radius from mass (mass = 4/3 * pi * r^3 for unit density)
         let initial_mass = 1.0_f32;
@@ -180,8 +215,8 @@ impl GpuScene {
             glam::Vec3::ZERO,                    // angular_velocity
             initial_mass,                        // mass
             radius,                              // radius
-            0,                                   // genome_id (single genome for now)
-            mode_idx,                            // mode_index
+            genome_id,                           // genome_id
+            mode_idx,                            // mode_index (local to this genome)
             self.current_time,                   // birth_time
             mode.split_interval,                 // split_interval
             mode.split_mass,                     // split_mass
@@ -271,7 +306,7 @@ impl Scene for GpuScene {
             device,
             queue,
             &self.canonical_state,
-            Some(&self.genome),
+            &self.genomes,
             cell_type_visuals,
         );
 
@@ -294,11 +329,13 @@ impl Scene for GpuScene {
         });
 
         // Build instances with GPU culling (compute pass)
+        // Calculate total mode count across all genomes
+        let total_mode_count: usize = self.genomes.iter().map(|g| g.modes.len()).sum();
         self.instance_builder.build_instances_with_encoder(
             &mut encoder,
             queue,
             self.canonical_state.cell_count,
-            self.genome.modes.len(),
+            total_mode_count,
             cell_type_visuals.map(|v| v.len()).unwrap_or(1),
             view_proj,
             self.camera.position(),

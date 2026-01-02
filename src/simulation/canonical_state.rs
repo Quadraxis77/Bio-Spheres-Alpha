@@ -175,30 +175,43 @@ impl CanonicalState {
         Some(index)
     }
     
-    /// Update cached adhesion settings from genome if needed
+    /// Update cached adhesion settings from genome if needed (single genome version)
     /// Returns true if cache was updated
     pub fn update_adhesion_settings_cache(&mut self, genome: &crate::genome::Genome) -> bool {
-        // Simple hash based on mode count and first mode's stiffness
-        // This catches most genome changes without expensive full comparison
-        let new_hash = (genome.modes.len() as u64) << 32 
-            | (genome.modes.first().map(|m| (m.adhesion_settings.linear_spring_stiffness * 1000.0) as u64).unwrap_or(0));
+        self.update_adhesion_settings_cache_multi(&[genome.clone()])
+    }
+    
+    /// Update cached adhesion settings from multiple genomes
+    /// Mode indices are global: genome 0 modes 0-39, genome 1 modes 40-79, etc.
+    /// Returns true if cache was updated
+    pub fn update_adhesion_settings_cache_multi(&mut self, genomes: &[crate::genome::Genome]) -> bool {
+        // Calculate total mode count and hash
+        let total_modes: usize = genomes.iter().map(|g| g.modes.len()).sum();
+        let mut new_hash = (genomes.len() as u64) << 48 | (total_modes as u64) << 32;
+        for genome in genomes {
+            if let Some(m) = genome.modes.first() {
+                new_hash ^= (m.adhesion_settings.linear_spring_stiffness * 1000.0) as u64;
+            }
+        }
         
-        if new_hash != self.genome_modes_hash || self.cached_adhesion_settings.len() != genome.modes.len() {
+        if new_hash != self.genome_modes_hash || self.cached_adhesion_settings.len() != total_modes {
             self.cached_adhesion_settings.clear();
-            for mode in &genome.modes {
-                self.cached_adhesion_settings.push(AdhesionSettings {
-                    can_break: mode.adhesion_settings.can_break,
-                    break_force: mode.adhesion_settings.break_force,
-                    rest_length: mode.adhesion_settings.rest_length,
-                    linear_spring_stiffness: mode.adhesion_settings.linear_spring_stiffness,
-                    linear_spring_damping: mode.adhesion_settings.linear_spring_damping,
-                    orientation_spring_stiffness: mode.adhesion_settings.orientation_spring_stiffness,
-                    orientation_spring_damping: mode.adhesion_settings.orientation_spring_damping,
-                    max_angular_deviation: mode.adhesion_settings.max_angular_deviation,
-                    twist_constraint_stiffness: mode.adhesion_settings.twist_constraint_stiffness,
-                    twist_constraint_damping: mode.adhesion_settings.twist_constraint_damping,
-                    enable_twist_constraint: mode.adhesion_settings.enable_twist_constraint,
-                });
+            for genome in genomes {
+                for mode in &genome.modes {
+                    self.cached_adhesion_settings.push(AdhesionSettings {
+                        can_break: mode.adhesion_settings.can_break,
+                        break_force: mode.adhesion_settings.break_force,
+                        rest_length: mode.adhesion_settings.rest_length,
+                        linear_spring_stiffness: mode.adhesion_settings.linear_spring_stiffness,
+                        linear_spring_damping: mode.adhesion_settings.linear_spring_damping,
+                        orientation_spring_stiffness: mode.adhesion_settings.orientation_spring_stiffness,
+                        orientation_spring_damping: mode.adhesion_settings.orientation_spring_damping,
+                        max_angular_deviation: mode.adhesion_settings.max_angular_deviation,
+                        twist_constraint_stiffness: mode.adhesion_settings.twist_constraint_stiffness,
+                        twist_constraint_damping: mode.adhesion_settings.twist_constraint_damping,
+                        enable_twist_constraint: mode.adhesion_settings.enable_twist_constraint,
+                    });
+                }
             }
             self.genome_modes_hash = new_hash;
             return true;

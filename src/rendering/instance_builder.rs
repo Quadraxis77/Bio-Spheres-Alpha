@@ -101,6 +101,7 @@ pub struct InstanceBuilder {
     
     // Hash for change detection
     last_cell_count: usize,
+    last_genome_count: usize,
     last_mode_hash: u64,
     last_visuals_hash: u64,
     
@@ -157,10 +158,8 @@ struct BuildParams {
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct ModeVisuals {
-    color: [f32; 3],
-    opacity: f32,
-    emissive: f32,
-    _pad: [f32; 3],
+    color: [f32; 4],      // xyz = color, w = opacity
+    emissive_pad: [f32; 4], // x = emissive, yzw = padding
 }
 
 #[repr(C)]
@@ -191,7 +190,8 @@ pub struct CellInstance {
 impl InstanceBuilder {
     /// Create a new instance builder with the given capacity.
     pub fn new(device: &wgpu::Device, cell_capacity: usize) -> Self {
-        let mode_capacity = 64;
+        // Support up to 100 genomes with 40 modes each = 4000 modes
+        let mode_capacity = 4096;
         let cell_type_capacity = 16;
         
         // Create compute shader
@@ -436,6 +436,7 @@ impl InstanceBuilder {
             mode_visuals_dirty: true,
             cell_type_visuals_dirty: true,
             last_cell_count: 0,
+            last_genome_count: 0,
             last_mode_hash: 0,
             last_visuals_hash: 0,
             culling_mode: CullingMode::FrustumOnly,
@@ -649,7 +650,7 @@ impl InstanceBuilder {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         state: &CanonicalState,
-        genome: Option<&Genome>,
+        genomes: &[Genome],
         cell_type_visuals: Option<&[CellTypeVisuals]>,
     ) {
         let cell_count = state.cell_count;
@@ -686,11 +687,27 @@ impl InstanceBuilder {
         // Update radii
         queue.write_buffer(&self.radii_buffer, 0, bytemuck::cast_slice(&state.radii[..cell_count]));
         
-        // Update mode indices
+        // Update mode indices - now includes genome offset
+        // Each cell's mode_index is offset by its genome's mode_offset
+        let genome_mode_offsets: Vec<usize> = {
+            let mut offsets = Vec::with_capacity(genomes.len());
+            let mut offset = 0usize;
+            for genome in genomes {
+                offsets.push(offset);
+                offset += genome.modes.len();
+            }
+            offsets
+        };
+        
         let mode_indices: Vec<u32> = state.mode_indices[..cell_count]
             .iter()
-            .map(|&i| i as u32)
+            .zip(state.genome_ids[..cell_count].iter())
+            .map(|(&mode_idx, &genome_id)| {
+                let offset = genome_mode_offsets.get(genome_id).copied().unwrap_or(0);
+                (offset + mode_idx) as u32
+            })
             .collect();
+        
         queue.write_buffer(&self.mode_indices_buffer, 0, bytemuck::cast_slice(&mode_indices));
         
         // Update cell IDs
@@ -703,11 +720,18 @@ impl InstanceBuilder {
             .collect();
         queue.write_buffer(&self.genome_ids_buffer, 0, bytemuck::cast_slice(&genome_ids));
 
-        // Update mode visuals from genome
-        if let Some(genome) = genome {
-            let mode_hash = Self::hash_genome_modes(genome);
-            if mode_hash != self.last_mode_hash {
-                self.update_mode_visuals(device, queue, genome);
+        // Update mode visuals from all genomes (combined into single buffer)
+        // Force update if genome count changed (new genome added)
+        let genome_count = genomes.len();
+        let genome_count_changed = genome_count != self.last_genome_count;
+        if genome_count_changed {
+            self.last_genome_count = genome_count;
+        }
+        
+        if !genomes.is_empty() {
+            let mode_hash = Self::hash_all_genome_modes(genomes);
+            if mode_hash != self.last_mode_hash || genome_count_changed {
+                self.update_mode_visuals_from_genomes(device, queue, genomes);
                 self.last_mode_hash = mode_hash;
             }
         }
@@ -727,11 +751,21 @@ impl InstanceBuilder {
         }
     }
     
-    fn hash_genome_modes(genome: &Genome) -> u64 {
-        let mut hash = genome.modes.len() as u64;
-        for mode in &genome.modes {
-            hash = hash.wrapping_mul(31).wrapping_add((mode.color.x * 1000.0) as u64);
-            hash = hash.wrapping_mul(31).wrapping_add((mode.opacity * 1000.0) as u64);
+    fn hash_all_genome_modes(genomes: &[Genome]) -> u64 {
+        let mut hash = genomes.len() as u64;
+        for (genome_idx, genome) in genomes.iter().enumerate() {
+            // Include genome index to differentiate order
+            hash = hash.wrapping_mul(31).wrapping_add(genome_idx as u64);
+            hash = hash.wrapping_mul(31).wrapping_add(genome.modes.len() as u64);
+            for (mode_idx, mode) in genome.modes.iter().enumerate() {
+                // Include mode index for uniqueness
+                hash = hash.wrapping_mul(31).wrapping_add(mode_idx as u64);
+                hash = hash.wrapping_mul(31).wrapping_add((mode.color.x * 1000.0) as u64);
+                hash = hash.wrapping_mul(31).wrapping_add((mode.color.y * 1000.0) as u64);
+                hash = hash.wrapping_mul(31).wrapping_add((mode.color.z * 1000.0) as u64);
+                hash = hash.wrapping_mul(31).wrapping_add((mode.opacity * 1000.0) as u64);
+                hash = hash.wrapping_mul(31).wrapping_add((mode.emissive * 1000.0) as u64);
+            }
         }
         hash
     }
@@ -745,26 +779,31 @@ impl InstanceBuilder {
         hash
     }
 
-    fn update_mode_visuals(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, genome: &Genome) {
-        let mode_count = genome.modes.len();
+    fn update_mode_visuals_from_genomes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, genomes: &[Genome]) {
+        // Calculate total mode count across all genomes
+        let total_mode_count: usize = genomes.iter().map(|g| g.modes.len()).sum();
         
-        if mode_count > self.mode_capacity {
-            self.mode_capacity = mode_count * 2;
+        if total_mode_count > self.mode_capacity {
+            self.mode_capacity = total_mode_count * 2;
             self.mode_visuals_buffer = Self::create_storage_buffer(
                 device,
                 "Mode Visuals",
                 self.mode_capacity * std::mem::size_of::<ModeVisuals>(),
             );
-            self.bind_group = None;
         }
         
-        let mode_visuals: Vec<ModeVisuals> = genome.modes
+        // Always invalidate bind group when mode visuals change
+        // This ensures the shader sees the updated buffer data
+        self.bind_group = None;
+        
+        // Build combined mode visuals from all genomes
+        let mode_visuals: Vec<ModeVisuals> = genomes
             .iter()
-            .map(|mode| ModeVisuals {
-                color: mode.color.to_array(),
-                opacity: mode.opacity,
-                emissive: mode.emissive,
-                _pad: [0.0; 3],
+            .flat_map(|genome| {
+                genome.modes.iter().map(|mode| ModeVisuals {
+                    color: [mode.color.x, mode.color.y, mode.color.z, mode.opacity],
+                    emissive_pad: [mode.emissive, 0.0, 0.0, 0.0],
+                })
             })
             .collect();
         

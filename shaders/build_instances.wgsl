@@ -20,11 +20,11 @@ struct CellInstance {
 }
 
 // Mode visual data (from genome)
+// Note: Using vec4 for color to ensure consistent 32-byte struct size
+// that matches Rust layout (avoids vec3 alignment issues)
 struct ModeVisuals {
-    color: vec3<f32>,
-    opacity: f32,
-    emissive: f32,
-    _pad: vec3<f32>,
+    color: vec4<f32>,      // xyz = color, w = opacity
+    emissive_pad: vec4<f32>, // x = emissive, yzw = padding
 }
 
 // Cell type visual settings
@@ -278,9 +278,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var emissive = 0.0;
     if (mode_index < params.mode_count) {
         let mode = mode_visuals[mode_index];
-        color = mode.color;
-        opacity = mode.opacity;
-        emissive = mode.emissive;
+        color = mode.color.xyz;
+        opacity = mode.color.w;
+        emissive = mode.emissive_pad.x;
     }
     
     // Look up cell type visuals (with bounds check)

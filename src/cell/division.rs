@@ -469,3 +469,386 @@ pub fn division_step(
     // Return a clone of the events
     state.division_events_buffer.clone()
 }
+
+
+/// Cell division step with multiple genomes support
+/// Each cell looks up its genome via genome_id
+pub fn division_step_multi(
+    state: &mut CanonicalState,
+    genomes: &[Genome],
+    current_time: f32,
+    max_cells: usize,
+    rng_seed: u64,
+) -> Vec<DivisionEvent> {
+    if genomes.is_empty() {
+        return Vec::new();
+    }
+    
+    // Early exit if at capacity
+    if state.cell_count >= max_cells {
+        return Vec::new();
+    }
+    
+    // Pre-compute genome mode offsets for global mode index calculation
+    let genome_mode_offsets: Vec<usize> = {
+        let mut offsets = Vec::with_capacity(genomes.len());
+        let mut offset = 0usize;
+        for genome in genomes {
+            offsets.push(offset);
+            offset += genome.modes.len();
+        }
+        offsets
+    };
+    
+    // Use pre-allocated buffers to avoid per-frame allocations
+    state.division_events_buffer.clear();
+    for i in 0..state.cell_count {
+        state.already_split_buffer[i] = false;
+    }
+    
+    const MAX_PASSES: usize = 10;
+    
+    for _pass in 0..MAX_PASSES {
+        // Find cells ready to divide in this pass
+        state.divisions_to_process_buffer.clear();
+        for i in 0..state.cell_count {
+            if state.already_split_buffer[i] {
+                continue;
+            }
+            
+            // Get the genome for this cell
+            let genome_id = state.genome_ids[i];
+            let genome = match genomes.get(genome_id) {
+                Some(g) => g,
+                None => continue, // Skip cells with invalid genome_id
+            };
+            
+            let cell_age = current_time - state.birth_times[i];
+            let mode_index = state.mode_indices[i];
+            let mode = genome.modes.get(mode_index);
+            
+            let can_split_by_count = if let Some(m) = mode {
+                m.max_splits < 0 || state.split_counts[i] < m.max_splits
+            } else {
+                true
+            };
+            
+            let can_split_by_adhesions = true;
+            let can_split_by_mass = state.masses[i] >= state.split_masses[i];
+            let can_split_by_time = cell_age >= state.split_intervals[i];
+            
+            if can_split_by_count && can_split_by_adhesions && can_split_by_mass && can_split_by_time && state.split_intervals[i] <= 59.0 {
+                state.divisions_to_process_buffer.push(i);
+            }
+        }
+        
+        if state.divisions_to_process_buffer.is_empty() {
+            break;
+        }
+        
+        state.filtered_divisions_buffer.clear();
+        state.filtered_divisions_buffer.extend_from_slice(&state.divisions_to_process_buffer);
+        
+        if state.filtered_divisions_buffer.is_empty() {
+            break;
+        }
+
+        struct DivisionData {
+            parent_idx: usize,
+            parent_mode_idx: usize,
+            parent_genome_id: usize,
+            child_a_slot: usize,
+            child_b_slot: usize,
+            parent_velocity: Vec3,
+            parent_stiffness: f32,
+            #[allow(dead_code)]
+            parent_split_count: i32,
+            parent_genome_orientation: Quat,
+            child_a_pos: Vec3,
+            child_b_pos: Vec3,
+            child_a_orientation: Quat,
+            child_b_orientation: Quat,
+            child_a_genome_orientation: Quat,
+            child_b_genome_orientation: Quat,
+            child_a_mode_idx: usize,
+            child_b_mode_idx: usize,
+            child_a_mass: f32,
+            child_b_mass: f32,
+            child_a_radius: f32,
+            child_b_radius: f32,
+            child_a_split_interval: f32,
+            child_b_split_interval: f32,
+            child_a_split_mass_threshold: f32,
+            child_b_split_mass_threshold: f32,
+            child_a_split_count: i32,
+            child_b_split_count: i32,
+            split_direction_local: Vec3,
+        }
+        
+        let mut division_data_list = Vec::new();
+        let mut pass_division_events = Vec::new();
+        let mut next_available_slot = state.cell_count;
+
+        for i in 0..state.filtered_divisions_buffer.len() {
+            let parent_idx = state.filtered_divisions_buffer[i];
+            if next_available_slot >= state.capacity {
+                break;
+            }
+
+            state.already_split_buffer[parent_idx] = true;
+
+            let child_a_slot = parent_idx;
+            let child_b_slot = next_available_slot;
+            next_available_slot += 1;
+            
+            let genome_id = state.genome_ids[parent_idx];
+            let genome = match genomes.get(genome_id) {
+                Some(g) => g,
+                None => continue,
+            };
+            
+            let mode_index = state.mode_indices[parent_idx];
+            let mode = match genome.modes.get(mode_index) {
+                Some(m) => m,
+                None => continue,
+            };
+            
+            let parent_position = state.positions[parent_idx];
+            let parent_velocity = state.velocities[parent_idx];
+            let parent_rotation = state.rotations[parent_idx];
+            let parent_genome_orientation = state.genome_orientations[parent_idx];
+            let parent_radius = state.radii[parent_idx];
+            let parent_mass = state.masses[parent_idx];
+            let parent_stiffness = state.stiffnesses[parent_idx];
+            let parent_split_count = state.split_counts[parent_idx];
+            
+            let pitch = mode.parent_split_direction.x.to_radians();
+            let yaw = mode.parent_split_direction.y.to_radians();
+            let split_direction = parent_rotation
+                * Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0)
+                * Vec3::Z;
+            
+            let offset_distance = parent_radius * 0.25;
+            let child_a_pos = parent_position + split_direction * offset_distance;
+            let child_b_pos = parent_position - split_direction * offset_distance;
+            
+            let will_reach_max_splits = mode.max_splits >= 0 && (parent_split_count + 1) >= mode.max_splits;
+            
+            let child_a_mode_idx = if will_reach_max_splits && mode.mode_a_after_splits >= 0 {
+                mode.mode_a_after_splits.max(0) as usize
+            } else {
+                mode.child_a.mode_number.max(0) as usize
+            };
+            let child_b_mode_idx = if will_reach_max_splits && mode.mode_b_after_splits >= 0 {
+                mode.mode_b_after_splits.max(0) as usize
+            } else {
+                mode.child_b.mode_number.max(0) as usize
+            };
+            
+            let child_a_split_count = if child_a_mode_idx != mode_index { 0 } else { parent_split_count + 1 };
+            let child_b_split_count = if child_b_mode_idx != mode_index { 0 } else { parent_split_count + 1 };
+            
+            let child_a_mode = genome.modes.get(child_a_mode_idx);
+            let child_b_mode = genome.modes.get(child_b_mode_idx);
+            
+            let split_ratio = mode.split_ratio.clamp(0.0, 1.0);
+            let child_a_mass = parent_mass * split_ratio;
+            let child_b_mass = parent_mass * (1.0 - split_ratio);
+            
+            let child_a_radius = if let Some(m) = child_a_mode {
+                child_a_mass.min(m.max_cell_size).clamp(0.5, 2.0)
+            } else {
+                child_a_mass.clamp(0.5, 2.0)
+            };
+            
+            let child_b_radius = if let Some(m) = child_b_mode {
+                child_b_mass.min(m.max_cell_size).clamp(0.5, 2.0)
+            } else {
+                child_b_mass.clamp(0.5, 2.0)
+            };
+            
+            let parent_cell_id = state.cell_ids[parent_idx];
+            let tick = (current_time * 60.0) as u64;
+            
+            let child_a_split_interval = if let Some(m) = child_a_mode {
+                m.get_split_interval(parent_cell_id, tick, rng_seed)
+            } else { 5.0 };
+            
+            let child_b_split_interval = if let Some(m) = child_b_mode {
+                m.get_split_interval(parent_cell_id + 1, tick, rng_seed)
+            } else { 5.0 };
+            
+            let child_a_split_mass_threshold = if let Some(m) = child_a_mode {
+                m.get_split_mass(parent_cell_id, tick, rng_seed)
+            } else { 1.5 };
+            
+            let child_b_split_mass_threshold = if let Some(m) = child_b_mode {
+                m.get_split_mass(parent_cell_id + 1, tick, rng_seed)
+            } else { 1.5 };
+            
+            let child_a_genome_orientation = parent_genome_orientation * mode.child_a.orientation;
+            let child_b_genome_orientation = parent_genome_orientation * mode.child_b.orientation;
+            let child_a_orientation = parent_rotation * mode.child_a.orientation;
+            let child_b_orientation = parent_rotation * mode.child_b.orientation;
+            
+            division_data_list.push(DivisionData {
+                parent_idx,
+                parent_mode_idx: mode_index,
+                parent_genome_id: genome_id,
+                child_a_slot,
+                child_b_slot,
+                parent_velocity,
+                parent_stiffness,
+                parent_split_count,
+                parent_genome_orientation,
+                child_a_pos,
+                child_b_pos,
+                child_a_orientation,
+                child_b_orientation,
+                child_a_genome_orientation,
+                child_b_genome_orientation,
+                child_a_mode_idx,
+                child_b_mode_idx,
+                child_a_mass,
+                child_b_mass,
+                child_a_radius,
+                child_b_radius,
+                child_a_split_interval,
+                child_b_split_interval,
+                child_a_split_mass_threshold,
+                child_b_split_mass_threshold,
+                child_a_split_count,
+                child_b_split_count,
+                split_direction_local: Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z,
+            });
+        }
+        
+        // Write children to slots
+        for data in &division_data_list {
+            let child_birth_time = current_time;
+            let genome = &genomes[data.parent_genome_id];
+
+            if data.child_a_slot < state.capacity {
+                let child_a_id = state.next_cell_id;
+                state.cell_ids[data.child_a_slot] = child_a_id;
+                state.next_cell_id += 1;
+                state.positions[data.child_a_slot] = data.child_a_pos;
+                state.prev_positions[data.child_a_slot] = data.child_a_pos;
+                state.velocities[data.child_a_slot] = data.parent_velocity;
+                state.masses[data.child_a_slot] = data.child_a_mass;
+                state.radii[data.child_a_slot] = data.child_a_radius;
+                state.genome_ids[data.child_a_slot] = data.parent_genome_id;
+                state.mode_indices[data.child_a_slot] = data.child_a_mode_idx;
+                let random_rotation_a = pseudo_random_rotation(child_a_id, rng_seed);
+                state.rotations[data.child_a_slot] = data.child_a_orientation * random_rotation_a;
+                state.genome_orientations[data.child_a_slot] = data.child_a_genome_orientation;
+                state.angular_velocities[data.child_a_slot] = Vec3::ZERO;
+                state.forces[data.child_a_slot] = Vec3::ZERO;
+                state.torques[data.child_a_slot] = Vec3::ZERO;
+                state.accelerations[data.child_a_slot] = Vec3::ZERO;
+                state.prev_accelerations[data.child_a_slot] = Vec3::ZERO;
+                state.stiffnesses[data.child_a_slot] = data.parent_stiffness;
+                state.birth_times[data.child_a_slot] = child_birth_time;
+                state.split_intervals[data.child_a_slot] = data.child_a_split_interval;
+                state.split_masses[data.child_a_slot] = data.child_a_split_mass_threshold;
+                state.split_counts[data.child_a_slot] = data.child_a_split_count;
+            }
+
+            if data.child_b_slot < state.capacity {
+                let child_b_id = state.next_cell_id;
+                state.cell_ids[data.child_b_slot] = child_b_id;
+                state.next_cell_id += 1;
+                state.positions[data.child_b_slot] = data.child_b_pos;
+                state.prev_positions[data.child_b_slot] = data.child_b_pos;
+                state.velocities[data.child_b_slot] = data.parent_velocity;
+                state.masses[data.child_b_slot] = data.child_b_mass;
+                state.radii[data.child_b_slot] = data.child_b_radius;
+                state.genome_ids[data.child_b_slot] = data.parent_genome_id;
+                state.mode_indices[data.child_b_slot] = data.child_b_mode_idx;
+                let random_rotation_b = pseudo_random_rotation(child_b_id, rng_seed);
+                state.rotations[data.child_b_slot] = data.child_b_orientation * random_rotation_b;
+                state.genome_orientations[data.child_b_slot] = data.child_b_genome_orientation;
+                state.angular_velocities[data.child_b_slot] = Vec3::ZERO;
+                state.forces[data.child_b_slot] = Vec3::ZERO;
+                state.torques[data.child_b_slot] = Vec3::ZERO;
+                state.accelerations[data.child_b_slot] = Vec3::ZERO;
+                state.prev_accelerations[data.child_b_slot] = Vec3::ZERO;
+                state.stiffnesses[data.child_b_slot] = data.parent_stiffness;
+                state.birth_times[data.child_b_slot] = child_birth_time;
+                state.split_intervals[data.child_b_slot] = data.child_b_split_interval;
+                state.split_masses[data.child_b_slot] = data.child_b_split_mass_threshold;
+                state.split_counts[data.child_b_slot] = data.child_b_split_count;
+            }
+            
+            pass_division_events.push(DivisionEvent {
+                parent_idx: data.parent_idx,
+                child_a_idx: data.child_a_slot,
+                child_b_idx: data.child_b_slot,
+            });
+            
+            // Handle adhesion inheritance
+            inherit_adhesions_on_division(
+                state,
+                genome,
+                data.parent_mode_idx,
+                data.child_a_slot,
+                data.child_b_slot,
+                data.parent_genome_orientation,
+            );
+            
+            // Create adhesion between children if parent_make_adhesion is enabled
+            let parent_mode = genome.modes.get(data.parent_mode_idx);
+            
+            if let Some(mode) = parent_mode {
+                if mode.parent_make_adhesion {
+                    let direction_a_to_b_parent_local = -data.split_direction_local;
+                    let direction_b_to_a_parent_local = data.split_direction_local;
+                    
+                    let anchor_direction_a = (mode.child_a.orientation.inverse() * direction_a_to_b_parent_local).normalize();
+                    let anchor_direction_b = (mode.child_b.orientation.inverse() * direction_b_to_a_parent_local).normalize();
+                    
+                    let child_a_mode = genome.modes.get(data.child_a_mode_idx);
+                    let child_b_mode = genome.modes.get(data.child_b_mode_idx);
+                    
+                    let child_a_split_dir = if let Some(m) = child_a_mode {
+                        let pitch = m.parent_split_direction.x.to_radians();
+                        let yaw = m.parent_split_direction.y.to_radians();
+                        Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z
+                    } else { Vec3::Z };
+                    
+                    let child_b_split_dir = if let Some(m) = child_b_mode {
+                        let pitch = m.parent_split_direction.x.to_radians();
+                        let yaw = m.parent_split_direction.y.to_radians();
+                        Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z
+                    } else { Vec3::Z };
+                    
+                    // Calculate global mode index for adhesion settings lookup
+                    let global_mode_idx = genome_mode_offsets.get(data.parent_genome_id).copied().unwrap_or(0) + data.parent_mode_idx;
+                    
+                    let _ = state.adhesion_manager.add_adhesion_with_directions(
+                        &mut state.adhesion_connections,
+                        data.child_a_slot,
+                        data.child_b_slot,
+                        global_mode_idx,  // Use global mode index for multi-genome support
+                        anchor_direction_a,
+                        anchor_direction_b,
+                        child_a_split_dir,
+                        child_b_split_dir,
+                        data.child_a_genome_orientation,
+                        data.child_b_genome_orientation,
+                    );
+                }
+            }
+        }
+        
+        let new_cell_count = state.cell_count + division_data_list.len();
+        state.cell_count = new_cell_count;
+        state.division_events_buffer.extend(pass_division_events);
+        
+        if state.cell_count >= max_cells {
+            break;
+        }
+    }
+    
+    state.division_events_buffer.clone()
+}
