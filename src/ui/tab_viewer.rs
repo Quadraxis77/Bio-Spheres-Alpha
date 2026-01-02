@@ -304,13 +304,112 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, _state: &Global
     }
 }
 
-/// Render the CellInspector panel (placeholder).
-fn render_cell_inspector(ui: &mut Ui, context: &PanelContext) {
+/// Render the CellInspector panel.
+fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
     ui.heading("Cell Inspector");
     ui.separator();
     ui.label(format!("Total Cells: {}", context.cell_count()));
-    ui.label("Select a cell to inspect its properties.");
-    // TODO: Implement cell selection and property display
+    
+    // Get the inspected cell index from radial menu state
+    let inspected_cell = context.editor_state.radial_menu.inspected_cell;
+    
+    if let Some(cell_idx) = inspected_cell {
+        // Check if we can access the GPU scene
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
+            let state = &gpu_scene.canonical_state;
+            
+            // Validate cell index is still valid
+            if cell_idx >= state.cell_count {
+                ui.colored_label(egui::Color32::RED, "Cell no longer exists");
+                if ui.button("Clear Selection").clicked() {
+                    context.editor_state.radial_menu.inspected_cell = None;
+                }
+                return;
+            }
+            
+            ui.add_space(8.0);
+            ui.label(format!("Cell #{}", cell_idx));
+            ui.separator();
+            
+            // Position
+            let pos = state.positions[cell_idx];
+            ui.label(format!("Position: ({:.2}, {:.2}, {:.2})", pos.x, pos.y, pos.z));
+            
+            // Velocity
+            let vel = state.velocities[cell_idx];
+            let speed = vel.length();
+            ui.label(format!("Velocity: ({:.2}, {:.2}, {:.2})", vel.x, vel.y, vel.z));
+            ui.label(format!("Speed: {:.2}", speed));
+            
+            // Mass and radius
+            let mass = state.masses[cell_idx];
+            let radius = state.radii[cell_idx];
+            ui.label(format!("Mass: {:.2}", mass));
+            ui.label(format!("Radius: {:.2}", radius));
+            
+            // Division info
+            let split_mass = state.split_masses[cell_idx];
+            let split_interval = state.split_intervals[cell_idx];
+            let split_count = state.split_counts[cell_idx];
+            ui.add_space(4.0);
+            ui.label("Division:");
+            ui.label(format!("  Mass threshold: {:.2}", split_mass));
+            ui.label(format!("  Progress: {:.0}%", (mass / split_mass * 100.0).min(100.0)));
+            ui.label(format!("  Interval: {:.1}s", split_interval));
+            ui.label(format!("  Split count: {}", split_count));
+            
+            // Mode info
+            let mode_idx = state.mode_indices[cell_idx];
+            let genome_id = state.genome_ids[cell_idx];
+            ui.add_space(4.0);
+            ui.label(format!("Mode index: {}", mode_idx));
+            ui.label(format!("Genome ID: {}", genome_id));
+            
+            // Get mode name from genome if available
+            if genome_id < gpu_scene.genomes.len() {
+                let genome = &gpu_scene.genomes[genome_id];
+                if mode_idx < genome.modes.len() {
+                    let mode_name = &genome.modes[mode_idx].name;
+                    ui.label(format!("Mode name: {}", mode_name));
+                }
+            }
+            
+            // Birth time and age
+            let birth_time = state.birth_times[cell_idx];
+            let current_time = gpu_scene.current_time;
+            let age = current_time - birth_time;
+            ui.add_space(4.0);
+            ui.label(format!("Birth time: {:.1}s", birth_time));
+            ui.label(format!("Age: {:.1}s", age));
+            
+            ui.add_space(12.0);
+            ui.separator();
+            
+            // Load Genome button
+            if genome_id < gpu_scene.genomes.len() {
+                if ui.button("📋 Load Genome in Editor").clicked() {
+                    // Clone the genome to load it into the editor
+                    let genome_to_load = gpu_scene.genomes[genome_id].clone();
+                    *context.genome = genome_to_load;
+                    // Switch to preview mode (genome editor)
+                    context.request_preview_mode();
+                    println!("Loaded genome {} into editor", genome_id);
+                }
+                ui.label("Opens genome editor with this cell's genome");
+            }
+            
+            ui.add_space(8.0);
+            if ui.button("Clear Selection").clicked() {
+                context.editor_state.radial_menu.inspected_cell = None;
+            }
+        } else {
+            ui.label("GPU scene not available");
+        }
+    } else {
+        ui.add_space(8.0);
+        ui.label("Use the Inspect tool (🔍) to select a cell.");
+        ui.label("Hold Alt to open the radial menu.");
+    }
 }
 
 /// Render the GenomeEditor panel (placeholder).

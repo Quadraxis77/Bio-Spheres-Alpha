@@ -73,6 +73,10 @@ pub struct RadialMenuState {
     pub active_tool: RadialTool,
     /// Whether Alt key is currently held
     pub alt_held: bool,
+    /// Cell index being dragged (for Drag tool)
+    pub dragging_cell: Option<usize>,
+    /// Cell index being inspected (for Inspect tool)
+    pub inspected_cell: Option<usize>,
 }
 
 impl RadialMenuState {
@@ -318,13 +322,20 @@ pub fn show_tool_cursor(ctx: &egui::Context, state: &RadialMenuState) {
     }
 
     if let Some(pos) = ctx.pointer_hover_pos() {
+        // Use closed hand icon when actively dragging a cell
+        let icon = if state.active_tool == RadialTool::Drag && state.dragging_cell.is_some() {
+            "✊" // Closed hand when dragging
+        } else {
+            state.active_tool.icon()
+        };
+        
         egui::Area::new(egui::Id::new("tool_cursor"))
             .fixed_pos(pos + Vec2::new(12.0, 12.0)) // Offset from actual cursor
             .order(egui::Order::Tooltip)
             .interactable(false)
             .show(ctx, |ui| {
                 ui.label(
-                    egui::RichText::new(state.active_tool.icon())
+                    egui::RichText::new(icon)
                         .size(24.0)
                         .color(Color32::WHITE),
                 );

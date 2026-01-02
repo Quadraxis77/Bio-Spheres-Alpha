@@ -132,6 +132,9 @@ pub struct GenomeEditorState {
     /// Radial menu state for tool selection
     pub radial_menu: crate::ui::radial_menu::RadialMenuState,
     
+    /// Distance from camera to dragged cell (for maintaining depth during drag)
+    pub drag_distance: f32,
+    
     // Cell type visuals state
     /// Visual settings per cell type (indexed by CellType)
     pub cell_type_visuals: Vec<crate::cell::types::CellTypeVisuals>,
@@ -177,6 +180,7 @@ impl GenomeEditorState {
             gizmo_visible: true,
             split_rings_visible: true,
             radial_menu: crate::ui::radial_menu::RadialMenuState::new(),
+            drag_distance: 0.0,
             cell_type_visuals: crate::cell::types::CellTypeVisualsStore::load(),
             selected_cell_type: 0,
         }

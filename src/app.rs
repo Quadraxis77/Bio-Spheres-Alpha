@@ -92,20 +92,24 @@ impl App {
             WindowEvent::MouseInput { button, state, .. } => {
                 // Handle radial menu click (GPU mode only)
                 if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
-                    let menu = &mut self.editor_state.radial_menu;
-                    if menu.visible && *button == MouseButton::Left && *state == ElementState::Pressed {
+                    // Read menu state before mutable borrow
+                    let menu_visible = self.editor_state.radial_menu.visible;
+                    let active_tool = self.editor_state.radial_menu.active_tool;
+                    
+                    if menu_visible && *button == MouseButton::Left && *state == ElementState::Pressed {
                         // Click while menu is open selects the hovered tool
-                        menu.close(true);
+                        self.editor_state.radial_menu.close(true);
                         // Hide cursor if a tool is now active
-                        let hide_cursor = self.editor_state.radial_menu.active_tool != crate::ui::radial_menu::RadialTool::None;
+                        let new_active_tool = self.editor_state.radial_menu.active_tool;
+                        let hide_cursor = new_active_tool != crate::ui::radial_menu::RadialTool::None;
                         self.window.set_cursor_visible(!hide_cursor);
                         self.window.request_redraw();
                         return true;
                     }
                     
                     // Handle Insert tool click
-                    if !menu.visible 
-                        && self.editor_state.radial_menu.active_tool == crate::ui::radial_menu::RadialTool::Insert
+                    if !menu_visible 
+                        && active_tool == crate::ui::radial_menu::RadialTool::Insert
                         && *button == MouseButton::Left 
                         && *state == ElementState::Pressed
                         && !self.ui.wants_pointer_input()
@@ -122,10 +126,110 @@ impl App {
                         self.window.request_redraw();
                         return true;
                     }
+                    
+                    // Handle Remove tool click
+                    if !menu_visible 
+                        && active_tool == crate::ui::radial_menu::RadialTool::Remove
+                        && *button == MouseButton::Left 
+                        && *state == ElementState::Pressed
+                        && !self.ui.wants_pointer_input()
+                    {
+                        if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                            // Use raycast to find cell under cursor
+                            if let Some((cell_idx, _)) = gpu_scene.raycast_cell(
+                                self.mouse_position.0,
+                                self.mouse_position.1,
+                            ) {
+                                gpu_scene.remove_cell(cell_idx);
+                                println!("Removed cell {}, remaining: {}", cell_idx, gpu_scene.canonical_state.cell_count);
+                            }
+                        }
+                        self.window.request_redraw();
+                        return true;
+                    }
+                    
+                    // Handle Boost tool click - give cell maximum nutrients (mass = split_mass)
+                    if !menu_visible 
+                        && active_tool == crate::ui::radial_menu::RadialTool::Boost
+                        && *button == MouseButton::Left 
+                        && *state == ElementState::Pressed
+                        && !self.ui.wants_pointer_input()
+                    {
+                        if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                            // Use raycast to find cell under cursor
+                            if let Some((cell_idx, _)) = gpu_scene.raycast_cell(
+                                self.mouse_position.0,
+                                self.mouse_position.1,
+                            ) {
+                                // Set mass to split_mass threshold so cell can divide
+                                let split_mass = gpu_scene.canonical_state.split_masses[cell_idx];
+                                gpu_scene.canonical_state.masses[cell_idx] = split_mass;
+                                println!("Boosted cell {} to mass {}", cell_idx, split_mass);
+                            }
+                        }
+                        self.window.request_redraw();
+                        return true;
+                    }
+                    
+                    // Handle Inspect tool click - select cell for inspection
+                    if !menu_visible 
+                        && active_tool == crate::ui::radial_menu::RadialTool::Inspect
+                        && *button == MouseButton::Left 
+                        && *state == ElementState::Pressed
+                        && !self.ui.wants_pointer_input()
+                    {
+                        if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                            // Use raycast to find cell under cursor
+                            if let Some((cell_idx, _)) = gpu_scene.raycast_cell(
+                                self.mouse_position.0,
+                                self.mouse_position.1,
+                            ) {
+                                self.editor_state.radial_menu.inspected_cell = Some(cell_idx);
+                                println!("Inspecting cell {}", cell_idx);
+                            }
+                        }
+                        self.window.request_redraw();
+                        return true;
+                    }
+                    
+                    // Handle Drag tool - mouse press starts drag
+                    if !menu_visible 
+                        && active_tool == crate::ui::radial_menu::RadialTool::Drag
+                        && *button == MouseButton::Left 
+                        && *state == ElementState::Pressed
+                        && !self.ui.wants_pointer_input()
+                    {
+                        if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                            // Use raycast to find cell under cursor
+                            if let Some((cell_idx, hit_distance)) = gpu_scene.raycast_cell(
+                                self.mouse_position.0,
+                                self.mouse_position.1,
+                            ) {
+                                // Store the cell index and hit distance for dragging
+                                self.editor_state.radial_menu.dragging_cell = Some(cell_idx);
+                                self.editor_state.drag_distance = hit_distance;
+                                log::info!("Started dragging cell {}", cell_idx);
+                            }
+                        }
+                        self.window.request_redraw();
+                        return true;
+                    }
+                    
+                    // Handle Drag tool - mouse release ends drag
+                    if active_tool == crate::ui::radial_menu::RadialTool::Drag
+                        && *button == MouseButton::Left 
+                        && *state == ElementState::Released
+                        && self.editor_state.radial_menu.dragging_cell.is_some()
+                    {
+                        log::info!("Stopped dragging cell {:?}", self.editor_state.radial_menu.dragging_cell);
+                        self.editor_state.radial_menu.dragging_cell = None;
+                        self.window.request_redraw();
+                        return true;
+                    }
                 }
                 
-                // Only pass to camera if egui doesn't want the input
-                if !self.ui.wants_pointer_input() {
+                // Only pass to camera if egui doesn't want the input and not dragging
+                if !self.ui.wants_pointer_input() && self.editor_state.radial_menu.dragging_cell.is_none() {
                     self.scene_manager.active_scene_mut().camera_mut().handle_mouse_button(*button, *state);
                 }
             }
@@ -140,10 +244,28 @@ impl App {
                         menu.update_hover(egui::Pos2::new(position.x as f32, position.y as f32));
                         self.window.request_redraw();
                     }
+                    
+                    // Handle Drag tool - update cell position while dragging
+                    if let Some(cell_idx) = self.editor_state.radial_menu.dragging_cell {
+                        if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                            // Move cell to new position at the same distance from camera
+                            let new_pos = gpu_scene.screen_to_world_at_distance(
+                                position.x as f32,
+                                position.y as f32,
+                                self.editor_state.drag_distance,
+                            );
+                            if cell_idx < gpu_scene.canonical_state.cell_count {
+                                gpu_scene.canonical_state.positions[cell_idx] = new_pos;
+                                gpu_scene.canonical_state.prev_positions[cell_idx] = new_pos;
+                                gpu_scene.canonical_state.velocities[cell_idx] = glam::Vec3::ZERO;
+                            }
+                        }
+                        self.window.request_redraw();
+                    }
                 }
                 
-                // Only pass to camera if egui doesn't want the input
-                if !self.ui.wants_pointer_input() {
+                // Only pass to camera if egui doesn't want the input and not dragging
+                if !self.ui.wants_pointer_input() && self.editor_state.radial_menu.dragging_cell.is_none() {
                     self.scene_manager.active_scene_mut().camera_mut().handle_mouse_move(*position);
                 }
             }

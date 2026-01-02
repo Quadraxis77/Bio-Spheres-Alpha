@@ -44,7 +44,7 @@ impl Default for ChildSettings {
 }
 
 /// Adhesion configuration for cell connections
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AdhesionSettings {
     pub can_break: bool,
     pub break_force: f32,

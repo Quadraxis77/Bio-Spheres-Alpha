@@ -87,8 +87,31 @@ impl GpuScene {
         // Clear adhesion connections
         self.canonical_state.adhesion_connections.active_count = 0;
         self.canonical_state.adhesion_manager.reset();
+        // Clear all genomes since no cells reference them
+        self.genomes.clear();
         // Mark instance builder dirty
         self.instance_builder.mark_all_dirty();
+    }
+    
+    /// Remove unused genomes from the end of the genomes list.
+    /// Called when cells are removed to free up genome slots for reuse.
+    pub fn compact_genomes(&mut self) {
+        if self.genomes.is_empty() || self.canonical_state.cell_count == 0 {
+            self.genomes.clear();
+            return;
+        }
+        
+        // Find the highest genome_id still in use
+        let max_used_genome_id = self.canonical_state.genome_ids[..self.canonical_state.cell_count]
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0);
+        
+        // Truncate genomes to only keep those still referenced
+        if max_used_genome_id + 1 < self.genomes.len() {
+            self.genomes.truncate(max_used_genome_id + 1);
+        }
     }
     
     /// Set the culling mode for the instance builder.
@@ -158,15 +181,36 @@ impl GpuScene {
         self.genomes.iter().position(|g| g.name == name)
     }
     
-    /// Check if two genomes have the same visual properties (modes).
-    fn genomes_visually_equal(a: &Genome, b: &Genome) -> bool {
-        if a.modes.len() != b.modes.len() {
+    /// Check if two genomes are fully equal (all properties, not just visual).
+    fn genomes_equal(a: &Genome, b: &Genome) -> bool {
+        // Compare all relevant properties, not just visual ones
+        if a.modes.len() != b.modes.len() || a.initial_mode != b.initial_mode {
             return false;
         }
         for (ma, mb) in a.modes.iter().zip(b.modes.iter()) {
+            // Visual properties
             if (ma.color - mb.color).length() > 0.001 
                 || (ma.opacity - mb.opacity).abs() > 0.001
                 || (ma.emissive - mb.emissive).abs() > 0.001 {
+                return false;
+            }
+            // Division properties
+            if ma.parent_make_adhesion != mb.parent_make_adhesion
+                || (ma.split_mass - mb.split_mass).abs() > 0.001
+                || (ma.split_interval - mb.split_interval).abs() > 0.001
+                || (ma.split_ratio - mb.split_ratio).abs() > 0.001
+                || ma.max_splits != mb.max_splits {
+                return false;
+            }
+            // Child properties
+            if ma.child_a.mode_number != mb.child_a.mode_number
+                || ma.child_b.mode_number != mb.child_b.mode_number
+                || ma.child_a.keep_adhesion != mb.child_a.keep_adhesion
+                || ma.child_b.keep_adhesion != mb.child_b.keep_adhesion {
+                return false;
+            }
+            // Adhesion settings
+            if ma.adhesion_settings != mb.adhesion_settings {
                 return false;
             }
         }
@@ -174,12 +218,12 @@ impl GpuScene {
     }
     
     /// Add a genome to the scene and return its ID.
-    /// If the last genome is visually identical, reuses it.
-    /// Otherwise creates a new genome entry to preserve existing cells' visuals.
+    /// If the last genome is fully identical, reuses it.
+    /// Otherwise creates a new genome entry to preserve existing cells' settings.
     pub fn add_genome(&mut self, genome: Genome) -> usize {
-        // Check if the last genome is visually identical - if so, reuse it
+        // Check if the last genome is fully identical - if so, reuse it
         if let Some(last) = self.genomes.last() {
-            if Self::genomes_visually_equal(last, &genome) {
+            if Self::genomes_equal(last, &genome) {
                 return self.genomes.len() - 1;
             }
         }
@@ -224,8 +268,92 @@ impl GpuScene {
         )
     }
     
-    /// Convert screen coordinates to world position on a plane at the camera's focal point.
-    pub fn screen_to_world(&self, screen_x: f32, screen_y: f32) -> glam::Vec3 {
+    /// Find the cell closest to a world position within a given radius.
+    /// Returns the cell index if found.
+    pub fn find_cell_at_position(&self, world_pos: glam::Vec3, max_distance: f32) -> Option<usize> {
+        let mut closest_idx = None;
+        let mut closest_dist_sq = max_distance * max_distance;
+        
+        for i in 0..self.canonical_state.cell_count {
+            let cell_pos = self.canonical_state.positions[i];
+            let cell_radius = self.canonical_state.radii[i];
+            let dist_sq = (cell_pos - world_pos).length_squared();
+            
+            // Check if click is within cell radius or within max_distance
+            let effective_dist_sq = (dist_sq.sqrt() - cell_radius).max(0.0).powi(2);
+            
+            if effective_dist_sq < closest_dist_sq {
+                closest_dist_sq = effective_dist_sq;
+                closest_idx = Some(i);
+            }
+        }
+        
+        closest_idx
+    }
+    
+    /// Remove a cell at the given index.
+    /// Uses swap-remove for O(1) removal - the last cell is moved to fill the gap.
+    /// Also removes all adhesion connections involving this cell.
+    pub fn remove_cell(&mut self, cell_idx: usize) -> bool {
+        if cell_idx >= self.canonical_state.cell_count {
+            return false;
+        }
+        
+        let state = &mut self.canonical_state;
+        
+        // Remove all adhesion connections for this cell
+        state.adhesion_manager.remove_all_connections_for_cell(
+            &mut state.adhesion_connections,
+            cell_idx,
+        );
+        
+        let last_idx = state.cell_count - 1;
+        
+        if cell_idx != last_idx {
+            // Swap with last cell - copy all properties
+            state.cell_ids[cell_idx] = state.cell_ids[last_idx];
+            state.positions[cell_idx] = state.positions[last_idx];
+            state.prev_positions[cell_idx] = state.prev_positions[last_idx];
+            state.velocities[cell_idx] = state.velocities[last_idx];
+            state.masses[cell_idx] = state.masses[last_idx];
+            state.radii[cell_idx] = state.radii[last_idx];
+            state.genome_ids[cell_idx] = state.genome_ids[last_idx];
+            state.mode_indices[cell_idx] = state.mode_indices[last_idx];
+            state.rotations[cell_idx] = state.rotations[last_idx];
+            state.genome_orientations[cell_idx] = state.genome_orientations[last_idx];
+            state.angular_velocities[cell_idx] = state.angular_velocities[last_idx];
+            state.forces[cell_idx] = state.forces[last_idx];
+            state.torques[cell_idx] = state.torques[last_idx];
+            state.accelerations[cell_idx] = state.accelerations[last_idx];
+            state.prev_accelerations[cell_idx] = state.prev_accelerations[last_idx];
+            state.stiffnesses[cell_idx] = state.stiffnesses[last_idx];
+            state.birth_times[cell_idx] = state.birth_times[last_idx];
+            state.split_intervals[cell_idx] = state.split_intervals[last_idx];
+            state.split_masses[cell_idx] = state.split_masses[last_idx];
+            state.split_counts[cell_idx] = state.split_counts[last_idx];
+            
+            // Update adhesion connections that referenced the moved cell
+            state.adhesion_manager.update_cell_index_after_swap(
+                &mut state.adhesion_connections,
+                last_idx,
+                cell_idx,
+            );
+        }
+        
+        state.cell_count -= 1;
+        
+        // Compact genomes to free unused slots
+        self.compact_genomes();
+        
+        // Mark instance builder dirty
+        self.instance_builder.mark_all_dirty();
+        
+        true
+    }
+    
+    /// Cast a ray from screen coordinates and find the closest cell that intersects.
+    /// Returns (cell_index, hit_distance) if a cell is hit.
+    pub fn raycast_cell(&self, screen_x: f32, screen_y: f32) -> Option<(usize, f32)> {
         let width = self.renderer.width as f32;
         let height = self.renderer.height as f32;
         
@@ -246,12 +374,84 @@ impl GpuScene {
         ).normalize();
         
         // Transform ray to world space
+        let ray_origin = self.camera.position();
+        let ray_dir = self.camera.rotation * ray_view;
+        
+        // Find closest cell that intersects the ray
+        let mut closest_hit: Option<(usize, f32)> = None;
+        
+        for i in 0..self.canonical_state.cell_count {
+            let cell_pos = self.canonical_state.positions[i];
+            let cell_radius = self.canonical_state.radii[i];
+            
+            // Ray-sphere intersection
+            if let Some(t) = ray_sphere_intersect(ray_origin, ray_dir, cell_pos, cell_radius) {
+                if t > 0.0 {
+                    match closest_hit {
+                        None => closest_hit = Some((i, t)),
+                        Some((_, closest_t)) if t < closest_t => closest_hit = Some((i, t)),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        
+        closest_hit
+    }
+    
+    /// Get the world position on a ray at a given distance from camera.
+    pub fn screen_to_world_at_distance(&self, screen_x: f32, screen_y: f32, distance: f32) -> glam::Vec3 {
+        let width = self.renderer.width as f32;
+        let height = self.renderer.height as f32;
+        
+        let ndc_x = (2.0 * screen_x / width) - 1.0;
+        let ndc_y = 1.0 - (2.0 * screen_y / height);
+        
+        let aspect = width / height;
+        let fov = 45.0_f32.to_radians();
+        let tan_half_fov = (fov / 2.0).tan();
+        
+        let ray_view = glam::Vec3::new(
+            ndc_x * aspect * tan_half_fov,
+            ndc_y * tan_half_fov,
+            -1.0,
+        ).normalize();
+        
         let ray_world = self.camera.rotation * ray_view;
-        
-        // Place cell at a fixed distance from camera (use camera distance or default)
-        let distance = self.camera.distance.max(10.0);
-        
         self.camera.position() + ray_world * distance
+    }
+    
+    /// Convert screen coordinates to world position on a plane at the camera's focal point.
+    pub fn screen_to_world(&self, screen_x: f32, screen_y: f32) -> glam::Vec3 {
+        let distance = self.camera.distance.max(10.0);
+        self.screen_to_world_at_distance(screen_x, screen_y, distance)
+    }
+}
+
+/// Ray-sphere intersection test.
+/// Returns the distance along the ray to the closest intersection point, or None if no hit.
+fn ray_sphere_intersect(ray_origin: glam::Vec3, ray_dir: glam::Vec3, sphere_center: glam::Vec3, sphere_radius: f32) -> Option<f32> {
+    let oc = ray_origin - sphere_center;
+    let a = ray_dir.dot(ray_dir);
+    let b = 2.0 * oc.dot(ray_dir);
+    let c = oc.dot(oc) - sphere_radius * sphere_radius;
+    let discriminant = b * b - 4.0 * a * c;
+    
+    if discriminant < 0.0 {
+        return None;
+    }
+    
+    let sqrt_d = discriminant.sqrt();
+    let t1 = (-b - sqrt_d) / (2.0 * a);
+    let t2 = (-b + sqrt_d) / (2.0 * a);
+    
+    // Return the closest positive intersection
+    if t1 > 0.0 {
+        Some(t1)
+    } else if t2 > 0.0 {
+        Some(t2)
+    } else {
+        None
     }
 }
 

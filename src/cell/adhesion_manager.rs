@@ -271,6 +271,41 @@ impl AdhesionConnectionManager {
         }
         count
     }
+    
+    /// Update all references to a cell after it was moved via swap-remove.
+    /// Called when a cell at `old_index` is removed and the cell at `new_index` 
+    /// (previously the last cell) takes its place.
+    pub fn update_cell_index_after_swap(
+        &mut self,
+        connections: &mut AdhesionConnections,
+        old_index: usize,
+        new_index: usize,
+    ) {
+        if old_index == new_index {
+            return;
+        }
+        
+        // Update all connections that reference the moved cell
+        for i in 0..connections.active_count {
+            if connections.is_active[i] == 0 {
+                continue;
+            }
+            
+            if connections.cell_a_index[i] == old_index {
+                connections.cell_a_index[i] = new_index;
+            }
+            if connections.cell_b_index[i] == old_index {
+                connections.cell_b_index[i] = new_index;
+            }
+        }
+        
+        // Move the adhesion indices from old_index to new_index
+        if old_index < self.cell_adhesion_indices.len() && new_index < self.cell_adhesion_indices.len() {
+            self.cell_adhesion_indices[new_index] = self.cell_adhesion_indices[old_index].clone();
+            // Clear the old slot
+            self.cell_adhesion_indices[old_index] = [-1; MAX_ADHESIONS_PER_CELL];
+        }
+    }
 
     /// Get all active connections efficiently (returns iterator over connection indices)
     /// This is more cache-friendly than repeated lookups
