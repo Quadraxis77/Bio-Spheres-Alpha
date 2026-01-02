@@ -1,4 +1,13 @@
 use glam::{Vec3, Quat};
+use crate::simulation::cpu_physics::DeterministicSpatialGrid;
+
+/// Event describing a cell division that occurred
+#[derive(Debug, Clone)]
+pub struct DivisionEvent {
+    pub parent_idx: usize,
+    pub child_a_idx: usize,
+    pub child_b_idx: usize,
+}
 
 /// Canonical simulation state using Structure-of-Arrays (SoA) layout
 /// Pure data structure with no ECS dependencies
@@ -26,6 +35,7 @@ pub struct CanonicalState {
     
     // Orientation (SoA)
     pub rotations: Vec<Quat>,
+    pub genome_orientations: Vec<Quat>, // Genome-space orientations (separate from physics)
     pub angular_velocities: Vec<Vec3>,
     
     // Physics State (SoA)
@@ -41,12 +51,27 @@ pub struct CanonicalState {
     pub split_masses: Vec<f32>,
     pub split_counts: Vec<i32>,
     
+    /// Spatial partitioning for collision detection
+    pub spatial_grid: DeterministicSpatialGrid,
+    
     /// Next cell ID to assign
     pub next_cell_id: u32,
+    
+    // Division processing buffers (pre-allocated to avoid per-frame allocations)
+    pub division_events_buffer: Vec<DivisionEvent>,
+    pub already_split_buffer: Vec<bool>,
+    pub divisions_to_process_buffer: Vec<usize>,
+    pub filtered_divisions_buffer: Vec<usize>,
 }
 
 impl CanonicalState {
+    /// Create a new canonical state with the specified capacity
     pub fn new(capacity: usize) -> Self {
+        Self::with_grid_density(capacity, 64) // Default 64x64x64 grid
+    }
+    
+    /// Create a new canonical state with specified capacity and grid density
+    pub fn with_grid_density(capacity: usize, grid_density: u32) -> Self {
         Self {
             cell_count: 0,
             capacity,
@@ -59,6 +84,7 @@ impl CanonicalState {
             genome_ids: vec![0; capacity],
             mode_indices: vec![0; capacity],
             rotations: vec![Quat::IDENTITY; capacity],
+            genome_orientations: vec![Quat::IDENTITY; capacity],
             angular_velocities: vec![Vec3::ZERO; capacity],
             forces: vec![Vec3::ZERO; capacity],
             torques: vec![Vec3::ZERO; capacity],
@@ -69,7 +95,12 @@ impl CanonicalState {
             split_intervals: vec![10.0; capacity],
             split_masses: vec![1.5; capacity],
             split_counts: vec![0; capacity],
+            spatial_grid: DeterministicSpatialGrid::new(grid_density, 200.0, 100.0),
             next_cell_id: 0,
+            division_events_buffer: Vec::with_capacity(256),
+            already_split_buffer: vec![false; capacity],
+            divisions_to_process_buffer: Vec::with_capacity(256),
+            filtered_divisions_buffer: Vec::with_capacity(256),
         }
     }
     
@@ -79,6 +110,7 @@ impl CanonicalState {
         position: Vec3,
         velocity: Vec3,
         rotation: Quat,
+        genome_orientation: Quat,
         angular_velocity: Vec3,
         mass: f32,
         radius: f32,
@@ -103,6 +135,7 @@ impl CanonicalState {
         self.genome_ids[index] = genome_id;
         self.mode_indices[index] = mode_index;
         self.rotations[index] = rotation;
+        self.genome_orientations[index] = genome_orientation;
         self.angular_velocities[index] = angular_velocity;
         self.forces[index] = Vec3::ZERO;
         self.torques[index] = Vec3::ZERO;

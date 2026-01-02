@@ -1093,9 +1093,10 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
                 ui.style_mut().spacing.slider_width = slider_width;
 
                 // Track dragging state
+                // Slider range is 0 to max_preview_duration (in seconds)
                 let slider_response = ui.add_enabled(
                     is_preview_mode,
-                    egui::Slider::new(&mut context.editor_state.time_value, 0.0..=60.0)
+                    egui::Slider::new(&mut context.editor_state.time_value, 0.0..=context.editor_state.max_preview_duration)
                         .show_value(false)
                 );
                 context.editor_state.time_slider_dragging = slider_response.dragged();
@@ -1105,10 +1106,17 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
                     is_preview_mode,
                     egui::DragValue::new(&mut context.editor_state.time_value)
                         .speed(0.1)
-                        .range(0.0..=60.0)
+                        .range(0.0..=context.editor_state.max_preview_duration)
                         .suffix("s")
                 );
             });
+            
+            // Show cell count and resimulation status
+            if is_preview_mode {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Cells: {}", context.cell_count()));
+                });
+            }
         });
 }
 

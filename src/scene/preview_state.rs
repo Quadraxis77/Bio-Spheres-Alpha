@@ -5,8 +5,97 @@
 
 use crate::genome::Genome;
 use crate::simulation::CanonicalState;
+use crate::simulation::PhysicsConfig;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+
+/// Initial state for preview simulation
+/// Used to reset simulation when genome changes or seeking to time 0
+#[derive(Clone)]
+pub struct InitialState {
+    /// Initial cell data
+    pub initial_cells: Vec<InitialCell>,
+    /// Maximum cell capacity
+    pub max_cells: usize,
+    /// Random seed for deterministic simulation
+    pub rng_seed: u64,
+}
+
+/// Initial cell data for preview simulation
+#[derive(Clone)]
+pub struct InitialCell {
+    pub position: glam::Vec3,
+    pub velocity: glam::Vec3,
+    pub rotation: glam::Quat,
+    pub genome_orientation: glam::Quat,
+    pub angular_velocity: glam::Vec3,
+    pub mass: f32,
+    pub radius: f32,
+    pub genome_id: usize,
+    pub mode_index: usize,
+    pub split_interval: f32,
+    pub split_mass: f32,
+    pub stiffness: f32,
+}
+
+impl InitialState {
+    /// Create initial state from genome
+    pub fn from_genome(genome: &Genome, capacity: usize) -> Self {
+        let initial_mode_index = genome.initial_mode.max(0) as usize;
+        let mode = genome.modes.get(initial_mode_index)
+            .or_else(|| genome.modes.first());
+        
+        let (split_interval, split_mass) = if let Some(m) = mode {
+            (m.split_interval, m.split_mass)
+        } else {
+            (5.0, 1.5)
+        };
+        
+        Self {
+            initial_cells: vec![InitialCell {
+                position: glam::Vec3::ZERO,
+                velocity: glam::Vec3::ZERO,
+                rotation: genome.initial_orientation,
+                genome_orientation: genome.initial_orientation,
+                angular_velocity: glam::Vec3::ZERO,
+                mass: 1.0,
+                radius: 1.0,
+                genome_id: 0,
+                mode_index: initial_mode_index,
+                split_interval,
+                split_mass,
+                stiffness: 500.0, // Match reference: increased from 10.0 to prevent pass-through
+            }],
+            max_cells: capacity,
+            rng_seed: 12345,
+        }
+    }
+    
+    /// Convert to canonical state
+    pub fn to_canonical_state(&self) -> CanonicalState {
+        let mut state = CanonicalState::new(self.max_cells);
+        
+        for cell in &self.initial_cells {
+            let _ = state.add_cell(
+                cell.position,
+                cell.velocity,
+                cell.rotation,
+                cell.genome_orientation,
+                cell.angular_velocity,
+                cell.mass,
+                cell.radius,
+                cell.genome_id,
+                cell.mode_index,
+                0.0, // birth_time
+                cell.split_interval,
+                cell.split_mass,
+                cell.stiffness,
+            );
+        }
+        
+        state
+    }
+}
 
 /// Preview simulation state with checkpoint support.
 pub struct PreviewState {
@@ -24,16 +113,31 @@ pub struct PreviewState {
 
     /// Hash of genome to detect changes
     pub genome_hash: u64,
+    
+    /// Initial state for resetting simulation
+    pub initial_state: InitialState,
+    
+    /// Target time for seeking (None = no seek requested)
+    pub target_time: Option<f32>,
+    
+    /// Whether currently resimulating
+    pub is_resimulating: bool,
 }
 
 impl PreviewState {
     pub fn new(capacity: usize) -> Self {
+        let genome = Genome::default();
+        let initial_state = InitialState::from_genome(&genome, capacity);
+        
         Self {
-            canonical_state: CanonicalState::new(capacity),
+            canonical_state: initial_state.to_canonical_state(),
             current_time: 0.0,
             checkpoints: Vec::new(),
-            checkpoint_interval: 5.0,
+            checkpoint_interval: 1.0, // Checkpoint every 1 second for responsive scrubbing
             genome_hash: 0,
+            initial_state,
+            target_time: None,
+            is_resimulating: false,
         }
     }
 
@@ -71,6 +175,20 @@ impl PreviewState {
             mode.max_splits.hash(&mut hasher);
             mode.max_adhesions.hash(&mut hasher);
             mode.min_adhesions.hash(&mut hasher);
+            mode.split_ratio.to_bits().hash(&mut hasher);
+            mode.nutrient_gain_rate.to_bits().hash(&mut hasher);
+            mode.max_cell_size.to_bits().hash(&mut hasher);
+            // Hash child settings
+            mode.child_a.mode_number.hash(&mut hasher);
+            mode.child_b.mode_number.hash(&mut hasher);
+            mode.child_a.orientation.x.to_bits().hash(&mut hasher);
+            mode.child_a.orientation.y.to_bits().hash(&mut hasher);
+            mode.child_a.orientation.z.to_bits().hash(&mut hasher);
+            mode.child_a.orientation.w.to_bits().hash(&mut hasher);
+            mode.child_b.orientation.x.to_bits().hash(&mut hasher);
+            mode.child_b.orientation.y.to_bits().hash(&mut hasher);
+            mode.child_b.orientation.z.to_bits().hash(&mut hasher);
+            mode.child_b.orientation.w.to_bits().hash(&mut hasher);
         }
         
         hasher.finish()
@@ -97,5 +215,89 @@ impl PreviewState {
         if self.checkpoints.len() <= checkpoint_index {
             self.checkpoints.push((time, state.clone()));
         }
+    }
+    
+    /// Request seeking to a specific time
+    pub fn seek_to_time(&mut self, target_time: f32) {
+        self.target_time = Some(target_time);
+    }
+    
+    /// Update initial state when genome changes
+    pub fn update_initial_state(&mut self, genome: &Genome) {
+        self.initial_state = InitialState::from_genome(genome, self.canonical_state.capacity);
+    }
+    
+    /// Run resimulation to target time
+    /// Returns true if resimulation is complete
+    pub fn run_resimulation(
+        &mut self,
+        genome: &Genome,
+        config: &PhysicsConfig,
+        genome_changed: bool,
+    ) -> bool {
+        let Some(target_time) = self.target_time else {
+            self.is_resimulating = false;
+            return true;
+        };
+        
+        self.is_resimulating = true;
+        
+        // Determine best starting point using checkpoints
+        let (start_time, mut canonical_state) = if target_time > self.current_time && !genome_changed {
+            // Moving forward: simulate from current state
+            (self.current_time, self.canonical_state.clone())
+        } else if let Some((checkpoint_time, checkpoint_state)) = self.find_best_checkpoint(target_time) {
+            // Moving backward or genome changed: use nearest checkpoint
+            (checkpoint_time, checkpoint_state)
+        } else {
+            // No suitable checkpoint: start from initial state
+            let initial_canonical = self.initial_state.to_canonical_state();
+            (0.0, initial_canonical)
+        };
+        
+        let start_step = (start_time / config.fixed_timestep).ceil() as u32;
+        let end_step = (target_time / config.fixed_timestep).ceil() as u32;
+        let steps = end_step.saturating_sub(start_step);
+        
+        let mut last_checkpoint_index = (start_time / self.checkpoint_interval).floor() as usize;
+        
+        // Run physics steps
+        for step in 0..steps {
+            let current_time = (start_step + step) as f32 * config.fixed_timestep;
+            
+            // Run CPU physics step
+            crate::simulation::cpu_physics::physics_step_st(&mut canonical_state, config);
+            
+            // Run division step
+            let _ = crate::cell::division::division_step(
+                &mut canonical_state,
+                genome,
+                current_time,
+                self.initial_state.max_cells,
+                self.initial_state.rng_seed,
+            );
+            
+            // Update nutrient growth
+            crate::simulation::cpu_physics::update_nutrient_growth(
+                &mut canonical_state,
+                genome,
+                config.fixed_timestep,
+            );
+            
+            // Check if we should create a checkpoint
+            let current_checkpoint_index = (current_time / self.checkpoint_interval).floor() as usize;
+            if current_checkpoint_index > last_checkpoint_index {
+                self.checkpoints.push((current_time, canonical_state.clone()));
+                last_checkpoint_index = current_checkpoint_index;
+            }
+        }
+        
+        // Apply results
+        self.canonical_state = canonical_state;
+        self.current_time = target_time;
+        self.target_time = None;
+        self.is_resimulating = false;
+        
+        true
     }
 }

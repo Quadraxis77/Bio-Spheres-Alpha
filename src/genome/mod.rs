@@ -116,6 +116,20 @@ pub struct ModeSettings {
     pub adhesion_settings: AdhesionSettings,
 }
 
+impl ModeSettings {
+    /// Get split interval (potentially randomized from range)
+    pub fn get_split_interval(&self, _cell_id: u32, _tick: u64, _rng_seed: u64) -> f32 {
+        // For now, return the fixed value. In the future, this could be randomized
+        self.split_interval
+    }
+    
+    /// Get split mass threshold (potentially randomized from range)
+    pub fn get_split_mass(&self, _cell_id: u32, _tick: u64, _rng_seed: u64) -> f32 {
+        // For now, return the fixed value. In the future, this could be randomized
+        self.split_mass
+    }
+}
+
 impl Default for ModeSettings {
     fn default() -> Self {
         Self {

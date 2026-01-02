@@ -108,9 +108,9 @@ pub struct GenomeEditorState {
     pub enable_snapping: bool,
 
     // Time slider state
-    /// Current time value for preview
+    /// Current time value for preview (0-60 seconds)
     pub time_value: f32,
-    /// Maximum preview duration
+    /// Maximum preview duration (60 seconds)
     pub max_preview_duration: f32,
     /// Whether the time slider is being dragged
     pub time_slider_dragging: bool,
@@ -157,7 +157,7 @@ impl GenomeEditorState {
             child_b_keep_adhesion: false,
             enable_snapping: true,
             time_value: 0.0,
-            max_preview_duration: 10.0,
+            max_preview_duration: 60.0, // 60 second preview range
             time_slider_dragging: false,
             gizmo_visible: true,
             split_rings_visible: true,

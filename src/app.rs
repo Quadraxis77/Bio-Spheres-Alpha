@@ -176,6 +176,15 @@ impl App {
                 if let Some(preview_scene) = self.scene_manager.get_preview_scene() {
                     // Copy the genome data for editing
                     working_genome = preview_scene.genome.clone();
+                    
+                    // Sync simulation time to UI slider (when not dragging)
+                    if !self.editor_state.time_slider_dragging {
+                        let sim_time = preview_scene.get_time_for_ui();
+                        // Only update if significantly different (avoid jitter)
+                        if (self.editor_state.time_value - sim_time).abs() > 0.1 {
+                            self.editor_state.time_value = sim_time.clamp(0.0, self.editor_state.max_preview_duration);
+                        }
+                    }
                 }
             }
             
@@ -188,10 +197,17 @@ impl App {
                 &mut scene_request,
             );
             
-            // Sync genome changes back to the scene if in Preview mode
+            // Sync genome changes and time slider back to the scene if in Preview mode
             if current_mode == crate::ui::types::SimulationMode::Preview {
                 if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut() {
                     preview_scene.update_genome(&working_genome);
+                    
+                    // Sync time slider to simulation (when dragging or changed)
+                    preview_scene.sync_time_from_ui(
+                        self.editor_state.time_value,
+                        self.editor_state.max_preview_duration,
+                        self.editor_state.time_slider_dragging,
+                    );
                 }
             }
             

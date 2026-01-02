@@ -30,6 +30,8 @@ pub struct PreviewScene {
     pub paused: bool,
     /// Camera controller
     pub camera: CameraController,
+    /// Last time value from UI (for detecting slider changes)
+    last_ui_time_value: f32,
 }
 
 impl PreviewScene {
@@ -40,38 +42,12 @@ impl PreviewScene {
         surface_config: &wgpu::SurfaceConfiguration,
     ) -> Self {
         let capacity = 256; // Preview capacity limit
-        let mut state = PreviewState::new(capacity);
         let genome = Genome::default();
         let config = PhysicsConfig::default();
-
+        
+        let mut state = PreviewState::new(capacity);
         state.genome_hash = PreviewState::compute_genome_hash(&genome);
-
-        // Add initial test cell at origin
-        let initial_mode_index = genome.initial_mode as usize;
-        log::info!("Creating initial test cell with mode index: {}", initial_mode_index);
-        
-        if initial_mode_index < genome.modes.len() {
-            let mode = &genome.modes[initial_mode_index];
-            log::info!("Initial mode color: {:?}, opacity: {}", mode.color, mode.opacity);
-            log::info!("Mode name: {}, cell_type: {}", mode.name, mode.cell_type);
-        } else {
-            log::error!("Invalid initial mode index: {} (genome has {} modes)", initial_mode_index, genome.modes.len());
-        }
-        
-        let _ = state.canonical_state.add_cell(
-            glam::Vec3::ZERO,           // position at origin
-            glam::Vec3::ZERO,           // no initial velocity
-            genome.initial_orientation, // use genome's initial orientation
-            glam::Vec3::ZERO,           // no angular velocity
-            1.0,                        // mass
-            1.0,                        // radius (1 unit wide)
-            0,                          // genome_id (first genome)
-            initial_mode_index,         // mode_index (use genome's initial_mode)
-            0.0,                        // birth_time
-            10.0,                       // split_interval
-            1.5,                        // split_mass
-            10.0,                       // stiffness
-        );
+        state.update_initial_state(&genome);
 
         let renderer = CellRenderer::new(device, queue, surface_config, capacity);
         let gizmo_renderer = OrientationGizmoRenderer::new(device, queue, surface_config);
@@ -86,6 +62,7 @@ impl PreviewScene {
             config,
             paused: false,
             camera: CameraController::new(),
+            last_ui_time_value: 0.0,
         }
     }
 
@@ -95,33 +72,68 @@ impl PreviewScene {
         
         // Check if genome has changed
         if new_hash != self.state.genome_hash {
-            log::info!("Genome changed, updating test cell");
+            log::info!("Genome changed, clearing checkpoints and triggering resimulation");
             
             // Update the genome
             self.genome = new_genome.clone();
             self.state.genome_hash = new_hash;
             
-            // Update the test cell's mode if it exists
-            if self.state.canonical_state.cell_count > 0 {
-                let initial_mode_index = self.genome.initial_mode as usize;
-                if initial_mode_index < self.genome.modes.len() {
-                    self.state.canonical_state.mode_indices[0] = initial_mode_index;
-                    self.state.canonical_state.rotations[0] = self.genome.initial_orientation;
-                    log::info!("Updated test cell to mode index: {}", initial_mode_index);
-                }
-            }
+            // Clear checkpoints since genome changed
+            self.state.clear_checkpoints();
+            
+            // Update initial state with new genome
+            self.state.update_initial_state(&self.genome);
+            
+            // Trigger resimulation from current time with new genome
+            self.state.seek_to_time(self.state.current_time);
         }
+    }
+    
+    /// Sync time slider value from UI
+    /// Called each frame to check if user moved the slider
+    /// Time slider range is 0-60 seconds
+    pub fn sync_time_from_ui(&mut self, ui_time_value: f32, _max_duration: f32, _is_dragging: bool) {
+        // Slider value is directly in seconds (0-60 range)
+        let target_sim_time = ui_time_value;
+        
+        // Only update if time value actually changed significantly
+        if (ui_time_value - self.last_ui_time_value).abs() > 0.01 {
+            // Only seek if different from current time (avoid redundant resimulations)
+            let needs_update = (self.state.current_time - target_sim_time).abs() > 0.01;
+            
+            if needs_update {
+                self.state.seek_to_time(target_sim_time);
+            }
+            
+            self.last_ui_time_value = ui_time_value;
+        }
+    }
+    
+    /// Get current simulation time for syncing back to UI
+    pub fn get_time_for_ui(&self) -> f32 {
+        self.state.current_time
+    }
+    
+    /// Check if currently resimulating (for UI feedback)
+    pub fn is_resimulating(&self) -> bool {
+        self.state.is_resimulating
     }
 }
 
 impl Scene for PreviewScene {
-    fn update(&mut self, dt: f32) {
-        if self.paused {
-            return;
+    fn update(&mut self, _dt: f32) {
+        // Preview mode is entirely slider-driven
+        // Simulation only runs when seeking to a new time via the slider
+        // No automatic time advancement
+        
+        // Check if there's a pending time seek (from slider or genome change)
+        if self.state.target_time.is_some() {
+            // Run resimulation to target time
+            let genome_changed = false; // Already handled in update_genome
+            self.state.run_resimulation(&self.genome, &self.config, genome_changed);
         }
-
-        // TODO: Run CPU physics simulation
-        self.state.current_time += dt;
+        
+        // No automatic time advancement - time is controlled entirely by the slider
     }
 
     fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView) {
@@ -179,13 +191,14 @@ impl Scene for PreviewScene {
                 self.camera.rotation,
             );
 
-            // Render orientation gizmo on the first cell if it exists
-            if self.state.canonical_state.cell_count > 0 {
-                let cell_position = self.state.canonical_state.positions[0];
-                let cell_rotation = self.state.canonical_state.rotations[0];
-                let cell_radius = self.state.canonical_state.radii[0];
-                let mode_index = self.state.canonical_state.mode_indices[0];
+            // Render orientation gizmos and split rings for ALL cells
+            for i in 0..self.state.canonical_state.cell_count {
+                let cell_position = self.state.canonical_state.positions[i];
+                let cell_rotation = self.state.canonical_state.rotations[i];
+                let cell_radius = self.state.canonical_state.radii[i];
+                let mode_index = self.state.canonical_state.mode_indices[i];
 
+                // Render orientation gizmo for this cell
                 self.gizmo_renderer.render_in_pass(
                     &mut render_pass,
                     queue,
@@ -206,10 +219,6 @@ impl Scene for PreviewScene {
                     
                     // Use Euler rotation to match the division code
                     let split_direction_local = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z;
-                    
-                    // Debug: Log the split direction when it changes
-                    log::debug!("Split direction - pitch: {:.1}°, yaw: {:.1}°, direction: {:?}", 
-                        mode.parent_split_direction.x, mode.parent_split_direction.y, split_direction_local);
                     
                     self.split_ring_renderer.render_cell_rings(
                         &mut render_pass,
