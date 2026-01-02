@@ -218,11 +218,15 @@ impl CameraController {
             let delta = self.accumulated_mouse_delta.truncate() * self.mouse_sensitivity;
             
             if self.mode == CameraMode::Orbit {
-                // Orbit mode: rotate around world origin
+                // Orbit mode: rotate around world origin (matches BioSpheres-Q reference)
+                // Horizontal rotation (yaw) around world Y axis
                 let yaw = Quat::from_axis_angle(Vec3::Y, -delta.x);
+                
+                // Vertical rotation (pitch) around camera's local right axis
                 let right = self.target_rotation * Vec3::X;
                 let pitch = Quat::from_axis_angle(right, -delta.y);
                 
+                // Apply rotations to target (yaw * pitch * current_rotation)
                 self.target_rotation = yaw * pitch * self.target_rotation;
                 self.target_rotation = self.target_rotation.normalize();
             } else {
@@ -239,14 +243,8 @@ impl CameraController {
         
         // Apply spring interpolation to rotation in free fly mode
         if self.mode == CameraMode::FreeFly {
-            if self.enable_spring {
-                self.rotation = self.rotation.slerp(
-                    self.target_rotation,
-                    self.spring_stiffness * dt * (1.0 - self.spring_damping)
-                );
-            } else {
-                self.rotation = self.target_rotation;
-            }
+            // Direct rotation - no spring damping for free fly
+            self.rotation = self.target_rotation;
         }
         
         // 3. ROLL (Q/E) - Only in FreeFly mode

@@ -13,6 +13,7 @@ pub struct CellRenderer {
     render_pipeline: wgpu::RenderPipeline,
     camera_bind_group: wgpu::BindGroup,
     camera_buffer: wgpu::Buffer,
+    lighting_buffer: wgpu::Buffer,
     quad_vertex_buffer: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
@@ -28,6 +29,17 @@ struct CameraUniform {
     view_proj: [[f32; 4]; 4],
     camera_pos: [f32; 3],
     _padding: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct LightingUniform {
+    light_direction: [f32; 3],    // Direction TO the light (normalized)
+    _padding1: f32,               // Alignment padding
+    light_color: [f32; 3],        // Light color and intensity
+    _padding2: f32,               // Alignment padding
+    ambient_color: [f32; 3],      // Ambient light color
+    _padding3: f32,               // Alignment padding
 }
 
 #[repr(C)]
@@ -59,29 +71,65 @@ impl CellRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
+        // Create lighting buffer
+        let lighting_uniform = LightingUniform {
+            light_direction: [0.5, 0.7, 0.3],      // Upper-right direction
+            _padding1: 0.0,
+            light_color: [0.8, 0.8, 0.7],          // Warm white light
+            _padding2: 0.0,
+            ambient_color: [0.2, 0.2, 0.25],       // Cool ambient
+            _padding3: 0.0,
+        };
+
+        let lighting_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Cell Renderer Lighting Buffer"),
+            contents: bytemuck::cast_slice(&[lighting_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
         // Create bind group layout
         let camera_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Cell Renderer Camera Bind Group Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                entries: &[
+                    // Camera uniform
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    // Lighting uniform
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
             });
 
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cell Renderer Camera Bind Group"),
             layout: &camera_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: lighting_buffer.as_entire_binding(),
+                },
+            ],
         });
 
         // Create instance buffer
@@ -214,6 +262,7 @@ impl CellRenderer {
             render_pipeline,
             camera_bind_group,
             camera_buffer,
+            lighting_buffer,
             quad_vertex_buffer,
             instance_buffer,
             instance_capacity,
@@ -267,6 +316,7 @@ impl CellRenderer {
         queue: &wgpu::Queue,
         view: &wgpu::TextureView,
         state: &CanonicalState,
+        genome: Option<&crate::genome::Genome>,
         camera_pos: Vec3,
         camera_rotation: glam::Quat,
     ) {
@@ -300,9 +350,24 @@ impl CellRenderer {
         for i in 0..render_count {
             let position = state.positions[i];
             let radius = state.radii[i];
+            let mode_index = state.mode_indices[i];
 
-            // Default color - could be based on mode_index in the future
-            let color = Vec4::new(0.4, 0.7, 1.0, 0.9);
+            // Get color from genome mode if available
+            let color = if let Some(genome) = genome {
+                if mode_index < genome.modes.len() {
+                    let mode = &genome.modes[mode_index];
+                    let color = Vec4::new(mode.color.x, mode.color.y, mode.color.z, mode.opacity);
+                    log::debug!("Cell {} mode {} color: {:?}", i, mode_index, color);
+                    color
+                } else {
+                    // Fallback color if mode index is invalid
+                    log::warn!("Invalid mode index {} for cell {}", mode_index, i);
+                    Vec4::new(0.4, 0.7, 1.0, 0.9)
+                }
+            } else {
+                // Default color when no genome is provided (GPU scene)
+                Vec4::new(0.4, 0.7, 1.0, 0.9)
+            };
 
             instances.push(CellInstance {
                 position: position.to_array(),

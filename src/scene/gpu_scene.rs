@@ -84,6 +84,7 @@ impl Scene for GpuScene {
             queue,
             view,
             &self.canonical_state,
+            None,
             self.camera.position(),
             self.camera.rotation,
         );

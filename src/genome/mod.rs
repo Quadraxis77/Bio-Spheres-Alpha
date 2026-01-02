@@ -152,7 +152,7 @@ impl Default for Genome {
     fn default() -> Self {
         let mut genome = Self {
             name: "Untitled Genome".to_string(),
-            initial_mode: 0,
+            initial_mode: 0, // Default to first mode
             initial_orientation: Quat::IDENTITY,
             modes: Vec::new(),
         };

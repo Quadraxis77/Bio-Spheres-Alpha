@@ -191,7 +191,7 @@ impl App {
             // Sync genome changes back to the scene if in Preview mode
             if current_mode == crate::ui::types::SimulationMode::Preview {
                 if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut() {
-                    preview_scene.genome = working_genome;
+                    preview_scene.update_genome(&working_genome);
                 }
             }
             

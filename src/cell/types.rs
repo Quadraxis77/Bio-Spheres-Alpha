@@ -6,6 +6,7 @@
 /// Cell type enumeration matching the reference implementation.
 ///
 /// Each cell type has different behaviors:
+/// - Test: Simple test cell for development and debugging
 /// - Photocyte: Absorbs light to gain biomass
 /// - Phagocyte: Eats food to gain biomass  
 /// - Flagellocyte: Propels itself forward
@@ -13,17 +14,19 @@
 /// - Lipocyte: Fat storage cell
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CellType {
-    Photocyte = 0,
-    Phagocyte = 1,
-    Flagellocyte = 2,
-    Devorocyte = 3,
-    Lipocyte = 4,
+    Test = 0,
+    Photocyte = 1,
+    Phagocyte = 2,
+    Flagellocyte = 3,
+    Devorocyte = 4,
+    Lipocyte = 5,
 }
 
 impl CellType {
     /// Get all available cell types as a slice.
     pub const fn all() -> &'static [CellType] {
         &[
+            CellType::Test,
             CellType::Photocyte,
             CellType::Phagocyte,
             CellType::Flagellocyte,
@@ -35,6 +38,7 @@ impl CellType {
     /// Get the display name for this cell type.
     pub const fn name(&self) -> &'static str {
         match self {
+            CellType::Test => "Test",
             CellType::Photocyte => "Photocyte",
             CellType::Phagocyte => "Phagocyte",
             CellType::Flagellocyte => "Flagellocyte",
@@ -45,17 +49,18 @@ impl CellType {
 
     /// Get all cell type names as a slice.
     pub const fn names() -> &'static [&'static str] {
-        &["Photocyte", "Phagocyte", "Flagellocyte", "Devorocyte", "Lipocyte"]
+        &["Test", "Photocyte", "Phagocyte", "Flagellocyte", "Devorocyte", "Lipocyte"]
     }
 
     /// Convert from integer index to cell type.
     pub fn from_index(index: i32) -> Option<Self> {
         match index {
-            0 => Some(CellType::Photocyte),
-            1 => Some(CellType::Phagocyte),
-            2 => Some(CellType::Flagellocyte),
-            3 => Some(CellType::Devorocyte),
-            4 => Some(CellType::Lipocyte),
+            0 => Some(CellType::Test),
+            1 => Some(CellType::Photocyte),
+            2 => Some(CellType::Phagocyte),
+            3 => Some(CellType::Flagellocyte),
+            4 => Some(CellType::Devorocyte),
+            5 => Some(CellType::Lipocyte),
             _ => None,
         }
     }
@@ -68,6 +73,6 @@ impl CellType {
 
 impl Default for CellType {
     fn default() -> Self {
-        CellType::Photocyte
+        CellType::Test
     }
 }

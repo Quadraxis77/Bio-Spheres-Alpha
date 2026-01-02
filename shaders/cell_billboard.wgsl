@@ -1,12 +1,22 @@
-// Cell billboard shader - renders cells as camera-facing quads
+// Cell billboard shader - renders cells as camera-facing quads with sphere lighting
 
 struct CameraUniform {
     view_proj: mat4x4<f32>,
     camera_pos: vec3<f32>,
 }
 
+struct LightingUniform {
+    light_direction: vec3<f32>,    // Direction TO the light (normalized)
+    light_color: vec3<f32>,        // Light color and intensity
+    ambient_color: vec3<f32>,      // Ambient light color
+    _padding: f32,                 // Alignment padding
+}
+
 @group(0) @binding(0)
 var<uniform> camera: CameraUniform;
+
+@group(0) @binding(1)
+var<uniform> lighting: LightingUniform;
 
 struct VertexInput {
     @location(0) quad_pos: vec2<f32>,  // Quad corner position (-1 to 1)
@@ -77,33 +87,33 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     
     // Calculate sphere normal in billboard space
+    // For a sphere: x² + y² + z² = 1, so z = sqrt(1 - x² - y²)
     let z = sqrt(1.0 - dist * dist);
     let normal_billboard = vec3<f32>(centered_uv.x, centered_uv.y, z);
     
-    // Transform normal to world space using billboard basis vectors
-    let world_normal = normalize(
-        in.billboard_right * normal_billboard.x + 
-        in.billboard_up * normal_billboard.y + 
-        in.billboard_forward * normal_billboard.z
+    // Transform light direction from world space to billboard space
+    // This is the inverse of transforming normals to world space
+    let light_billboard = vec3<f32>(
+        dot(lighting.light_direction, in.billboard_right),
+        dot(lighting.light_direction, in.billboard_up),
+        dot(lighting.light_direction, in.billboard_forward)
     );
+    let light_billboard_normalized = normalize(light_billboard);
     
-    // Single directional light from upper-right (fixed in world space)
-    let light_dir = normalize(vec3<f32>(0.5, 0.7, 0.3));
-    let diffuse = max(dot(world_normal, light_dir), 0.0);
+    // Calculate lighting in billboard space
+    let diffuse = max(dot(normal_billboard, light_billboard_normalized), 0.0);
     
-    // Ambient + diffuse lighting only
-    let ambient = 0.3;
-    let lighting = ambient + diffuse * 0.7;
+    // Combine ambient and diffuse lighting
+    let lighting_factor = lighting.ambient_color + lighting.light_color * diffuse;
     
-    // Apply lighting to color
-    var final_color = in.color;
-    final_color = vec4<f32>(final_color.rgb * lighting, final_color.a);
+    // Apply lighting to cell color
+    let lit_color = in.color.rgb * lighting_factor;
     
-    // Add specular highlight
-    let view_dir = normalize(camera.camera_pos - in.world_pos);
-    let reflect_dir = reflect(-light_dir, world_normal);
-    let spec = pow(max(dot(view_dir, reflect_dir), 0.0), 32.0) * 0.3;
-    final_color = vec4<f32>(final_color.rgb + spec, final_color.a);
+    // Add specular highlight in billboard space
+    let view_billboard = vec3<f32>(0.0, 0.0, 1.0); // View direction in billboard space is always +Z
+    let reflect_dir = reflect(-light_billboard_normalized, normal_billboard);
+    let spec = pow(max(dot(view_billboard, reflect_dir), 0.0), 32.0) * 0.3;
+    let final_color = lit_color + spec;
     
-    return final_color;
+    return vec4<f32>(final_color, in.color.a);
 }
