@@ -1,6 +1,7 @@
 // Orientation gizmo shader for Bio-Spheres
 // Renders 3D axis lines at cell position showing cell orientation
 // Lines are occluded by an imaginary sphere at the cell center
+// Uses instancing to render gizmos for multiple cells in one draw call
 
 struct CameraUniform {
     view_proj: mat4x4<f32>,
@@ -8,20 +9,19 @@ struct CameraUniform {
     _padding: f32,
 }
 
-struct GizmoUniform {
-    transform: mat4x4<f32>,      // Cell position + rotation + scale
-    params: vec4<f32>,           // size, opacity, _padding, _padding
-}
-
 @group(0) @binding(0)
 var<uniform> camera: CameraUniform;
 
-@group(0) @binding(1)
-var<uniform> gizmo: GizmoUniform;
-
 struct VertexInput {
+    // Per-vertex attributes
     @location(0) position: vec3<f32>,
     @location(1) color: vec4<f32>,
+    // Per-instance attributes (transform matrix as 4 vec4s + params)
+    @location(2) transform_col0: vec4<f32>,
+    @location(3) transform_col1: vec4<f32>,
+    @location(4) transform_col2: vec4<f32>,
+    @location(5) transform_col3: vec4<f32>,
+    @location(6) params: vec4<f32>,  // cell_radius, opacity, _padding, _padding
 }
 
 struct VertexOutput {
@@ -29,30 +29,38 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
     @location(1) world_pos: vec3<f32>,
     @location(2) cell_center: vec3<f32>,
-    @location(3) cell_radius: f32,
+    @location(3) @interpolate(flat) cell_radius: f32,
 }
 
 @vertex
 fn vs_main(vertex: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     
+    // Reconstruct transform matrix from instance attributes
+    let transform = mat4x4<f32>(
+        vertex.transform_col0,
+        vertex.transform_col1,
+        vertex.transform_col2,
+        vertex.transform_col3
+    );
+    
     // Transform vertex position by gizmo transform (position + rotation + scale)
-    let world_pos = gizmo.transform * vec4<f32>(vertex.position, 1.0);
+    let world_pos = transform * vec4<f32>(vertex.position, 1.0);
     
     // Project to clip space using camera view-projection matrix
     out.clip_position = camera.view_proj * world_pos;
     
     // Apply opacity to color
-    out.color = vec4<f32>(vertex.color.rgb, vertex.color.a * gizmo.params.y);
+    out.color = vec4<f32>(vertex.color.rgb, vertex.color.a * vertex.params.y);
     
     // Pass world position for sphere occlusion test
     out.world_pos = world_pos.xyz;
     
-    // Extract cell center from transform matrix (translation component)
-    out.cell_center = vec3<f32>(gizmo.transform[3][0], gizmo.transform[3][1], gizmo.transform[3][2]);
+    // Extract cell center from transform matrix (translation component = column 3)
+    out.cell_center = vertex.transform_col3.xyz;
     
-    // Cell radius is the scale factor
-    out.cell_radius = gizmo.params.x;
+    // Cell radius is the first param
+    out.cell_radius = vertex.params.x;
     
     return out;
 }

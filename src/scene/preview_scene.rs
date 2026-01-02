@@ -191,25 +191,21 @@ impl Scene for PreviewScene {
                 self.camera.rotation,
             );
 
-            // Render orientation gizmos and split rings for ALL cells
+            // Begin frame for instanced renderers
+            self.gizmo_renderer.begin_frame();
+            self.split_ring_renderer.begin_frame();
+
+            // Queue gizmos and split rings for ALL cells
             for i in 0..self.state.canonical_state.cell_count {
                 let cell_position = self.state.canonical_state.positions[i];
                 let cell_rotation = self.state.canonical_state.rotations[i];
                 let cell_radius = self.state.canonical_state.radii[i];
                 let mode_index = self.state.canonical_state.mode_indices[i];
 
-                // Render orientation gizmo for this cell
-                self.gizmo_renderer.render_in_pass(
-                    &mut render_pass,
-                    queue,
-                    view_proj,
-                    self.camera.position(),
-                    cell_position,
-                    cell_rotation,
-                    cell_radius,
-                );
+                // Queue orientation gizmo for this cell
+                self.gizmo_renderer.queue_gizmo(cell_position, cell_rotation, cell_radius);
 
-                // Render split rings if the mode has split direction settings
+                // Queue split rings if the mode has split direction settings
                 if mode_index < self.genome.modes.len() {
                     let mode = &self.genome.modes[mode_index];
                     
@@ -220,11 +216,7 @@ impl Scene for PreviewScene {
                     // Use Euler rotation to match the division code
                     let split_direction_local = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z;
                     
-                    self.split_ring_renderer.render_cell_rings(
-                        &mut render_pass,
-                        queue,
-                        view_proj,
-                        self.camera.position(),
+                    self.split_ring_renderer.queue_rings(
                         cell_position,
                         cell_rotation,
                         cell_radius,
@@ -232,6 +224,10 @@ impl Scene for PreviewScene {
                     );
                 }
             }
+
+            // Render all queued gizmos and rings in batches
+            self.gizmo_renderer.render_queued(&mut render_pass, queue, view_proj, self.camera.position());
+            self.split_ring_renderer.render_queued(&mut render_pass, queue, view_proj, self.camera.position());
         }
 
         queue.submit(std::iter::once(encoder.finish()));

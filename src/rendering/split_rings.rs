@@ -2,9 +2,13 @@
 //!
 //! Renders colored rings around cells to show their split plane direction.
 //! The rings are positioned perpendicular to the split direction and scale with cell radius.
+//! Uses instancing to render rings for multiple cells in one draw call.
 
 use glam::{Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
+
+/// Maximum number of rings that can be rendered in a single frame (per color)
+const MAX_RINGS: usize = 256;
 
 /// Renderer for split plane rings.
 ///
@@ -14,14 +18,18 @@ pub struct SplitRingRenderer {
     render_pipeline_blue: wgpu::RenderPipeline,  // Culls back faces
     render_pipeline_green: wgpu::RenderPipeline, // Culls front faces
     camera_buffer: wgpu::Buffer,
-    ring_buffer_blue: wgpu::Buffer,
-    ring_buffer_green: wgpu::Buffer,
-    bind_group_blue: wgpu::BindGroup,
-    bind_group_green: wgpu::BindGroup,
+    camera_bind_group: wgpu::BindGroup,
+    instance_buffer_blue: wgpu::Buffer,
+    instance_buffer_green: wgpu::Buffer,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
+    index_count: u32,
     /// Split ring configuration
     pub config: SplitRingConfig,
+    /// Pending blue ring instances for this frame
+    pending_blue_instances: Vec<RingInstance>,
+    /// Pending green ring instances for this frame
+    pending_green_instances: Vec<RingInstance>,
 }
 
 /// Configuration for split ring appearance and behavior
@@ -74,11 +82,9 @@ struct CameraUniform {
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct RingUniform {
+struct RingInstance {
     /// Transform matrix for the ring (position + rotation + scale)
     transform: [[f32; 4]; 4],
-    /// Ring parameters (inner_radius, outer_radius, offset, _padding)
-    params: [f32; 4],
     /// Ring color
     color: [f32; 4],
 }
@@ -110,49 +116,27 @@ impl SplitRingRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Create ring uniform buffers (separate for blue and green rings)
-        let ring_uniform_blue = RingUniform {
-            transform: Mat4::IDENTITY.to_cols_array_2d(),
-            params: [1.2, 1.4, 0.001, 0.0], // inner_radius, outer_radius, offset, padding
-            color: [0.0, 0.0, 1.0, 1.0], // Blue
-        };
-
-        let ring_buffer_blue = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Split Ring Blue Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[ring_uniform_blue]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        // Create instance buffers for blue and green rings
+        let instance_buffer_blue = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Split Ring Blue Instance Buffer"),
+            size: (MAX_RINGS * std::mem::size_of::<RingInstance>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
-        let ring_uniform_green = RingUniform {
-            transform: Mat4::IDENTITY.to_cols_array_2d(),
-            params: [1.2, 1.4, 0.001, 0.0], // inner_radius, outer_radius, offset, padding
-            color: [0.0, 1.0, 0.0, 1.0], // Green
-        };
-
-        let ring_buffer_green = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Split Ring Green Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[ring_uniform_green]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        let instance_buffer_green = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Split Ring Green Instance Buffer"),
+            size: (MAX_RINGS * std::mem::size_of::<RingInstance>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
-        // Create bind group layout
+        // Create bind group layout (camera only)
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Split Ring Bind Group Layout"),
             entries: &[
-                // Camera uniform
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Ring uniform
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
@@ -164,39 +148,22 @@ impl SplitRingRenderer {
             ],
         });
 
-        // Create bind groups for both rings
-        let bind_group_blue = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Split Ring Blue Bind Group"),
+        // Create bind group
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Split Ring Camera Bind Group"),
             layout: &bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: camera_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: ring_buffer_blue.as_entire_binding(),
-                },
-            ],
-        });
-
-        let bind_group_green = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Split Ring Green Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: ring_buffer_green.as_entire_binding(),
                 },
             ],
         });
 
         // Create ring geometry
-        let (vertices, indices) = Self::create_ring_geometry(32);
+        let segments = 32u32;
+        let (vertices, indices) = Self::create_ring_geometry(segments);
+        let index_count = indices.len() as u32;
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Split Ring Vertex Buffer"),
@@ -243,6 +210,41 @@ impl SplitRingRenderer {
             ],
         };
 
+        // Define instance buffer layout
+        let instance_buffer_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<RingInstance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                // Transform matrix (4 vec4s)
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 16,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // Color
+                wgpu::VertexAttribute {
+                    offset: 64,
+                    shader_location: 6,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        };
+
         // Create render pipelines with opposite face culling
         let render_pipeline_blue = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Split Ring Blue Pipeline"),
@@ -250,7 +252,7 @@ impl SplitRingRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[vertex_buffer_layout.clone()],
+                buffers: &[vertex_buffer_layout.clone(), instance_buffer_layout.clone()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -294,7 +296,7 @@ impl SplitRingRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[vertex_buffer_layout],
+                buffers: &[vertex_buffer_layout, instance_buffer_layout],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -336,13 +338,15 @@ impl SplitRingRenderer {
             render_pipeline_blue,
             render_pipeline_green,
             camera_buffer,
-            ring_buffer_blue,
-            ring_buffer_green,
-            bind_group_blue,
-            bind_group_green,
+            camera_bind_group,
+            instance_buffer_blue,
+            instance_buffer_green,
             vertex_buffer,
             index_buffer,
+            index_count,
             config: SplitRingConfig::default(),
+            pending_blue_instances: Vec::with_capacity(MAX_RINGS),
+            pending_green_instances: Vec::with_capacity(MAX_RINGS),
         }
     }
 
@@ -352,7 +356,6 @@ impl SplitRingRenderer {
         let mut indices = Vec::new();
 
         // Create ring vertices in local space (XY plane, centered at origin)
-        // Inner radius = 1.2, outer radius = 1.4 (will be scaled by cell radius in transform)
         let inner_radius = 1.2;
         let outer_radius = 1.4;
 
@@ -365,17 +368,15 @@ impl SplitRingRenderer {
             let cos2 = angle2.cos();
             let sin2 = angle2.sin();
 
-            // Inner and outer vertices for this segment
             let inner1 = Vec3::new(cos1 * inner_radius, sin1 * inner_radius, 0.0);
             let outer1 = Vec3::new(cos1 * outer_radius, sin1 * outer_radius, 0.0);
             let inner2 = Vec3::new(cos2 * inner_radius, sin2 * inner_radius, 0.0);
             let outer2 = Vec3::new(cos2 * outer_radius, sin2 * outer_radius, 0.0);
 
-            let normal = Vec3::Z; // Ring faces up in local space
+            let normal = Vec3::Z;
 
             let base_idx = vertices.len() as u16;
 
-            // Add vertices (inner1, outer1, inner2, outer2)
             vertices.push(RingVertex {
                 position: inner1.to_array(),
                 normal: normal.to_array(),
@@ -393,12 +394,10 @@ impl SplitRingRenderer {
                 normal: normal.to_array(),
             });
 
-            // Triangle 1: inner1, outer1, inner2
             indices.push(base_idx);
             indices.push(base_idx + 1);
             indices.push(base_idx + 2);
 
-            // Triangle 2: outer1, outer2, inner2
             indices.push(base_idx + 1);
             indices.push(base_idx + 3);
             indices.push(base_idx + 2);
@@ -407,41 +406,36 @@ impl SplitRingRenderer {
         (vertices, indices)
     }
 
-    /// Update camera and ring uniforms
-    fn update_uniforms(
+    /// Update split ring configuration
+    pub fn update_config(&mut self, config: &SplitRingConfig) {
+        self.config = config.clone();
+    }
+
+    /// Clear pending instances (call at start of frame)
+    pub fn begin_frame(&mut self) {
+        self.pending_blue_instances.clear();
+        self.pending_green_instances.clear();
+    }
+
+    /// Queue split rings for a cell
+    pub fn queue_rings(
         &mut self,
-        queue: &wgpu::Queue,
-        view_proj_matrix: Mat4,
-        camera_position: Vec3,
         cell_position: Vec3,
         cell_rotation: Quat,
         cell_radius: f32,
         split_direction: Vec3,
-        ring_color: [f32; 4],
-        offset_sign: f32, // +1.0 or -1.0 for the two rings
-        is_blue_ring: bool,
     ) {
-        // Update camera uniform (shared between both rings)
-        let camera_uniform = CameraUniform {
-            view_proj: view_proj_matrix.to_cols_array_2d(),
-            camera_pos: camera_position.to_array(),
-            _padding: 0.0,
-        };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
-
-        // Calculate ring transform
-        // The ring is positioned perpendicular to the split direction
-        let offset_distance = cell_radius * self.config.offset_factor * offset_sign;
-        let ring_position = cell_position + split_direction * offset_distance;
+        if !self.config.visible {
+            return;
+        }
+        if self.pending_blue_instances.len() >= MAX_RINGS {
+            return;
+        }
 
         // Create rotation to align ring perpendicular to split direction
-        // The ring is created in XY plane (normal = Z), we want it perpendicular to split_direction
-        // So we need to rotate Z to be perpendicular to split_direction
-        // This means we want the ring's normal to be the split_direction
         let ring_rotation = if split_direction.dot(Vec3::Z).abs() < 0.99 {
             Quat::from_rotation_arc(Vec3::Z, split_direction)
         } else {
-            // If split direction is very close to Z, use a different approach
             if split_direction.z > 0.0 {
                 Quat::IDENTITY
             } else {
@@ -449,39 +443,75 @@ impl SplitRingRenderer {
             }
         };
 
-        // Apply cell's rotation to the split direction
         let world_ring_rotation = cell_rotation * ring_rotation;
 
-        let transform = Mat4::from_translation(ring_position) 
+        // Blue ring (positive offset)
+        let offset_distance = cell_radius * self.config.offset_factor;
+        let blue_position = cell_position + (cell_rotation * split_direction) * offset_distance;
+        let blue_transform = Mat4::from_translation(blue_position)
             * Mat4::from_quat(world_ring_rotation)
             * Mat4::from_scale(Vec3::splat(cell_radius));
 
-        let ring_uniform = RingUniform {
-            transform: transform.to_cols_array_2d(),
-            params: [
-                self.config.inner_radius_factor,
-                self.config.outer_radius_factor,
-                self.config.offset_factor,
-                0.0,
-            ],
-            color: ring_color,
-        };
+        self.pending_blue_instances.push(RingInstance {
+            transform: blue_transform.to_cols_array_2d(),
+            color: [0.0, 0.0, 1.0, 1.0],
+        });
 
-        // Update the appropriate ring buffer
-        let buffer = if is_blue_ring {
-            &self.ring_buffer_blue
-        } else {
-            &self.ring_buffer_green
-        };
-        queue.write_buffer(buffer, 0, bytemuck::cast_slice(&[ring_uniform]));
+        // Green ring (negative offset)
+        let green_position = cell_position - (cell_rotation * split_direction) * offset_distance;
+        let green_transform = Mat4::from_translation(green_position)
+            * Mat4::from_quat(world_ring_rotation)
+            * Mat4::from_scale(Vec3::splat(cell_radius));
+
+        self.pending_green_instances.push(RingInstance {
+            transform: green_transform.to_cols_array_2d(),
+            color: [0.0, 1.0, 0.0, 1.0],
+        });
     }
 
-    /// Update split ring configuration
-    pub fn update_config(&mut self, config: &SplitRingConfig) {
-        self.config = config.clone();
+    /// Render all queued rings
+    pub fn render_queued(
+        &self,
+        render_pass: &mut wgpu::RenderPass,
+        queue: &wgpu::Queue,
+        view_proj_matrix: Mat4,
+        camera_position: Vec3,
+    ) {
+        if self.pending_blue_instances.is_empty() && self.pending_green_instances.is_empty() {
+            return;
+        }
+
+        // Update camera uniform
+        let camera_uniform = CameraUniform {
+            view_proj: view_proj_matrix.to_cols_array_2d(),
+            camera_pos: camera_position.to_array(),
+            _padding: 0.0,
+        };
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
+
+        // Set shared state
+        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+
+        // Render blue rings
+        if !self.pending_blue_instances.is_empty() {
+            queue.write_buffer(&self.instance_buffer_blue, 0, bytemuck::cast_slice(&self.pending_blue_instances));
+            render_pass.set_pipeline(&self.render_pipeline_blue);
+            render_pass.set_vertex_buffer(1, self.instance_buffer_blue.slice(..));
+            render_pass.draw_indexed(0..self.index_count, 0, 0..self.pending_blue_instances.len() as u32);
+        }
+
+        // Render green rings
+        if !self.pending_green_instances.is_empty() {
+            queue.write_buffer(&self.instance_buffer_green, 0, bytemuck::cast_slice(&self.pending_green_instances));
+            render_pass.set_pipeline(&self.render_pipeline_green);
+            render_pass.set_vertex_buffer(1, self.instance_buffer_green.slice(..));
+            render_pass.draw_indexed(0..self.index_count, 0, 0..self.pending_green_instances.len() as u32);
+        }
     }
 
-    /// Render split rings for a cell within an existing render pass
+    /// Legacy single-cell render (for compatibility)
     pub fn render_cell_rings(
         &mut self,
         render_pass: &mut wgpu::RenderPass,
@@ -497,47 +527,10 @@ impl SplitRingRenderer {
             return;
         }
 
-        let index_count = (self.config.segments * 6) as u32; // 2 triangles per segment
-
-        // Set vertex/index buffers once
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-
-        // Render blue ring (positive offset) with back face culling
-        self.update_uniforms(
-            queue,
-            view_proj_matrix,
-            camera_position,
-            cell_position,
-            cell_rotation,
-            cell_radius,
-            split_direction,
-            [0.0, 0.0, 1.0, 1.0], // Blue
-            1.0,
-            true, // is_blue_ring
-        );
-
-        render_pass.set_pipeline(&self.render_pipeline_blue);
-        render_pass.set_bind_group(0, &self.bind_group_blue, &[]);
-        render_pass.draw_indexed(0..index_count, 0, 0..1);
-
-        // Render green ring (negative offset) with front face culling
-        self.update_uniforms(
-            queue,
-            view_proj_matrix,
-            camera_position,
-            cell_position,
-            cell_rotation,
-            cell_radius,
-            split_direction,
-            [0.0, 1.0, 0.0, 1.0], // Green
-            -1.0,
-            false, // is_blue_ring
-        );
-
-        render_pass.set_pipeline(&self.render_pipeline_green);
-        render_pass.set_bind_group(0, &self.bind_group_green, &[]);
-        render_pass.draw_indexed(0..index_count, 0, 0..1);
+        self.pending_blue_instances.clear();
+        self.pending_green_instances.clear();
+        self.queue_rings(cell_position, cell_rotation, cell_radius, split_direction);
+        self.render_queued(render_pass, queue, view_proj_matrix, camera_position);
     }
 
     /// Handle window resize

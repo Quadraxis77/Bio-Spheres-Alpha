@@ -1,9 +1,13 @@
 //! Orientation gizmo rendering with wgpu.
 //!
 //! Provides 3D orientation gizmos showing X, Y, Z axes with interactive visual feedback.
+//! Supports rendering gizmos for multiple cells using instancing.
 
 use glam::{Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
+
+/// Maximum number of gizmos that can be rendered in a single frame
+const MAX_GIZMOS: usize = 256;
 
 /// Renderer for 3D orientation gizmos.
 ///
@@ -13,11 +17,13 @@ pub struct OrientationGizmoRenderer {
     render_pipeline: wgpu::RenderPipeline,
     camera_bind_group: wgpu::BindGroup,
     camera_buffer: wgpu::Buffer,
-    gizmo_buffer: wgpu::Buffer,
+    instance_buffer: wgpu::Buffer,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     /// Gizmo configuration
     pub config: GizmoConfig,
+    /// Pending gizmo instances for this frame
+    pending_instances: Vec<GizmoInstance>,
 }
 
 /// Configuration for orientation gizmo appearance and behavior
@@ -40,8 +46,8 @@ impl GizmoConfig {
     pub fn from_editor_state(editor_state: &crate::ui::panel_context::GenomeEditorState) -> Self {
         Self {
             visible: editor_state.gizmo_visible,
-            size: 0.8, // Fixed size in world units
-            opacity: 1.0, // Fixed opacity
+            size: 0.8,
+            opacity: 1.0,
             axis_length: 1.0,
             line_thickness: 3.0,
         }
@@ -52,7 +58,7 @@ impl Default for GizmoConfig {
     fn default() -> Self {
         Self {
             visible: true,
-            size: 1.0, // 100% of cell radius
+            size: 1.0,
             opacity: 0.8,
             axis_length: 1.0,
             line_thickness: 3.0,
@@ -70,8 +76,8 @@ struct CameraUniform {
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct GizmoUniform {
-    /// Transform matrix for the gizmo (position + rotation)
+struct GizmoInstance {
+    /// Transform matrix for the gizmo (position + rotation + scale)
     transform: [[f32; 4]; 4],
     /// Gizmo parameters (size, opacity, _padding, _padding)
     params: [f32; 4],
@@ -104,16 +110,12 @@ impl OrientationGizmoRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Create gizmo uniform buffer
-        let gizmo_uniform = GizmoUniform {
-            transform: Mat4::IDENTITY.to_cols_array_2d(),
-            params: [0.8, 0.8, 0.0, 0.0], // size, opacity, padding, padding
-        };
-
-        let gizmo_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Gizmo Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[gizmo_uniform]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        // Create instance buffer for multiple gizmos
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Gizmo Instance Buffer"),
+            size: (MAX_GIZMOS * std::mem::size_of::<GizmoInstance>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
         // Create bind group layout
@@ -123,17 +125,6 @@ impl OrientationGizmoRenderer {
                 // Camera uniform
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Gizmo uniform
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
@@ -153,10 +144,6 @@ impl OrientationGizmoRenderer {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: camera_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: gizmo_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -194,16 +181,49 @@ impl OrientationGizmoRenderer {
             array_stride: std::mem::size_of::<GizmoVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
-                // Position
                 wgpu::VertexAttribute {
                     offset: 0,
                     shader_location: 0,
                     format: wgpu::VertexFormat::Float32x3,
                 },
-                // Color
                 wgpu::VertexAttribute {
                     offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        };
+
+        // Define instance buffer layout
+        let instance_buffer_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<GizmoInstance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                // Transform matrix (4 vec4s)
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 16,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // Params
+                wgpu::VertexAttribute {
+                    offset: 64,
+                    shader_location: 6,
                     format: wgpu::VertexFormat::Float32x4,
                 },
             ],
@@ -216,7 +236,7 @@ impl OrientationGizmoRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[vertex_buffer_layout],
+                buffers: &[vertex_buffer_layout, instance_buffer_layout],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -240,8 +260,8 @@ impl OrientationGizmoRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true, // Write depth so gizmo can occlude itself
-                depth_compare: wgpu::CompareFunction::Less, // Standard depth testing
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -254,95 +274,54 @@ impl OrientationGizmoRenderer {
             cache: None,
         });
 
-        // No longer need depth texture since we render in shared render pass
-
         Self {
             render_pipeline,
             camera_bind_group,
             camera_buffer,
-            gizmo_buffer,
+            instance_buffer,
             vertex_buffer,
             index_buffer,
             config: GizmoConfig::default(),
+            pending_instances: Vec::with_capacity(MAX_GIZMOS),
         }
     }
 
     /// Create gizmo geometry (3 colored axis lines protruding from sphere surface)
     fn create_gizmo_geometry() -> (Vec<GizmoVertex>, Vec<u16>) {
         let mut vertices = Vec::new();
-        let mut indices = Vec::new();
 
-        // Lines start from sphere surface (radius 1.0) and extend outward
-        // The shader will scale these by the actual cell radius
-        
-        // X axis (blue) - from sphere surface outward
+        // X axis (blue)
         vertices.push(GizmoVertex {
-            position: [1.0, 0.0, 0.0], // Start at sphere surface
-            color: [0.0, 0.0, 1.0, 1.0], // Blue
+            position: [1.0, 0.0, 0.0],
+            color: [0.0, 0.0, 1.0, 1.0],
         });
         vertices.push(GizmoVertex {
-            position: [2.0, 0.0, 0.0], // Extend to 2x radius
-            color: [0.0, 0.0, 1.0, 1.0], // Blue
+            position: [2.0, 0.0, 0.0],
+            color: [0.0, 0.0, 1.0, 1.0],
         });
 
-        // Y axis (green) - from sphere surface outward
+        // Y axis (green)
         vertices.push(GizmoVertex {
-            position: [0.0, 1.0, 0.0], // Start at sphere surface
-            color: [0.0, 1.0, 0.0, 1.0], // Green
+            position: [0.0, 1.0, 0.0],
+            color: [0.0, 1.0, 0.0, 1.0],
         });
         vertices.push(GizmoVertex {
-            position: [0.0, 2.0, 0.0], // Extend to 2x radius
-            color: [0.0, 1.0, 0.0, 1.0], // Green
-        });
-
-        // Z axis (red) - from sphere surface outward
-        vertices.push(GizmoVertex {
-            position: [0.0, 0.0, 1.0], // Start at sphere surface
-            color: [1.0, 0.0, 0.0, 1.0], // Red
-        });
-        vertices.push(GizmoVertex {
-            position: [0.0, 0.0, 2.0], // Extend to 2x radius
-            color: [1.0, 0.0, 0.0, 1.0], // Red
+            position: [0.0, 2.0, 0.0],
+            color: [0.0, 1.0, 0.0, 1.0],
         });
 
-        // Line indices (3 lines, 2 vertices each)
-        indices.extend_from_slice(&[0, 1, 2, 3, 4, 5]);
+        // Z axis (red)
+        vertices.push(GizmoVertex {
+            position: [0.0, 0.0, 1.0],
+            color: [1.0, 0.0, 0.0, 1.0],
+        });
+        vertices.push(GizmoVertex {
+            position: [0.0, 0.0, 2.0],
+            color: [1.0, 0.0, 0.0, 1.0],
+        });
 
+        let indices = vec![0, 1, 2, 3, 4, 5];
         (vertices, indices)
-    }
-
-    /// Update camera and gizmo uniforms
-    fn update_uniforms(
-        &mut self,
-        queue: &wgpu::Queue,
-        view_proj_matrix: Mat4,
-        camera_position: Vec3,
-        cell_position: Vec3,
-        cell_rotation: Quat,
-        cell_radius: f32,
-    ) {
-        // Update camera uniform with actual view-projection matrix and camera position
-        let camera_uniform = CameraUniform {
-            view_proj: view_proj_matrix.to_cols_array_2d(),
-            camera_pos: camera_position.to_array(),
-            _padding: 0.0,
-        };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
-
-        // Scale gizmo based on cell radius
-        // The geometry extends to 2.0, so this will make the gizmo extend 2x the cell radius
-        let gizmo_scale = cell_radius;
-        
-        // Create transform matrix: translate to cell position, rotate by cell orientation, scale by cell radius
-        let transform = Mat4::from_translation(cell_position) 
-            * Mat4::from_quat(cell_rotation) 
-            * Mat4::from_scale(Vec3::splat(gizmo_scale));
-
-        let gizmo_uniform = GizmoUniform {
-            transform: transform.to_cols_array_2d(),
-            params: [gizmo_scale, self.config.opacity, 0.0, 0.0],
-        };
-        queue.write_buffer(&self.gizmo_buffer, 0, bytemuck::cast_slice(&[gizmo_uniform]));
     }
 
     /// Update gizmo configuration
@@ -350,7 +329,64 @@ impl OrientationGizmoRenderer {
         self.config = config.clone();
     }
 
-    /// Render the orientation gizmo within an existing render pass
+    /// Clear pending instances (call at start of frame)
+    pub fn begin_frame(&mut self) {
+        self.pending_instances.clear();
+    }
+
+    /// Queue a gizmo for rendering
+    pub fn queue_gizmo(
+        &mut self,
+        cell_position: Vec3,
+        cell_rotation: Quat,
+        cell_radius: f32,
+    ) {
+        if !self.config.visible || self.pending_instances.len() >= MAX_GIZMOS {
+            return;
+        }
+
+        let transform = Mat4::from_translation(cell_position) 
+            * Mat4::from_quat(cell_rotation) 
+            * Mat4::from_scale(Vec3::splat(cell_radius));
+
+        self.pending_instances.push(GizmoInstance {
+            transform: transform.to_cols_array_2d(),
+            params: [cell_radius, self.config.opacity, 0.0, 0.0],
+        });
+    }
+
+    /// Render all queued gizmos
+    pub fn render_queued(
+        &self,
+        render_pass: &mut wgpu::RenderPass,
+        queue: &wgpu::Queue,
+        view_proj_matrix: Mat4,
+        camera_position: Vec3,
+    ) {
+        if self.pending_instances.is_empty() {
+            return;
+        }
+
+        // Update camera uniform
+        let camera_uniform = CameraUniform {
+            view_proj: view_proj_matrix.to_cols_array_2d(),
+            camera_pos: camera_position.to_array(),
+            _padding: 0.0,
+        };
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
+
+        // Update instance buffer
+        queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.pending_instances));
+
+        render_pass.set_pipeline(&self.render_pipeline);
+        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.draw_indexed(0..6, 0, 0..self.pending_instances.len() as u32);
+    }
+
+    /// Legacy single-gizmo render (for compatibility)
     pub fn render_in_pass(
         &mut self,
         render_pass: &mut wgpu::RenderPass,
@@ -365,18 +401,14 @@ impl OrientationGizmoRenderer {
             return;
         }
 
-        // Update uniforms
-        self.update_uniforms(queue, view_proj_matrix, camera_position, cell_position, cell_rotation, cell_radius);
-
-        render_pass.set_pipeline(&self.render_pipeline);
-        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-        render_pass.draw_indexed(0..6, 0, 0..1); // 6 indices for 3 lines
+        // Queue this single gizmo
+        self.pending_instances.clear();
+        self.queue_gizmo(cell_position, cell_rotation, cell_radius);
+        self.render_queued(render_pass, queue, view_proj_matrix, camera_position);
     }
 
     /// Handle window resize
     pub fn resize(&mut self, _device: &wgpu::Device, _width: u32, _height: u32) {
-        // No longer need to manage depth texture since we use shared depth buffer
+        // No resize-dependent resources
     }
 }
