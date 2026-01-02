@@ -106,6 +106,8 @@ impl UiSystem {
                     return false;
                 }
             }
+        } else {
+            println!("WARNING: viewport_rect is None!");
         }
         
         // Otherwise, check if egui wants the pointer
@@ -126,8 +128,9 @@ impl UiSystem {
         let raw_input = self.winit_state.take_egui_input(window);
         self.ctx.begin_pass(raw_input);
         
-        // Clear viewport rect at the start of each frame
-        self.viewport_rect = None;
+        // NOTE: Don't clear viewport_rect here - it needs to persist for event handling
+        // which happens before render(). The viewport rect from the previous frame
+        // is still valid for determining if clicks are in the viewport area.
     }
 
     /// Apply UI scale to the egui context style.
@@ -451,6 +454,7 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
         Panel::CircleSliders,
         Panel::QuaternionBall,
         Panel::TimeSlider,
+        Panel::CellTypeVisuals,
     ];
 
     // Only show genome editor windows in Preview mode
@@ -561,23 +565,23 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
         }
     });
 
-    // Cell Type Visuals
-    let visuals_open = is_panel_open(dock_manager.current_tree(), &Panel::CellTypeVisuals);
-    let visuals_name = format!("{:?}", Panel::CellTypeVisuals);
-    let visuals_locked = state.is_panel_locked(&visuals_name);
+    // Cell Inspector
+    let inspector_open = is_panel_open(dock_manager.current_tree(), &Panel::CellInspector);
+    let inspector_name = format!("{:?}", Panel::CellInspector);
+    let inspector_locked = state.is_panel_locked(&inspector_name);
     
     ui.horizontal(|ui| {
-        if ui.selectable_label(visuals_open, "  Cell Visuals").clicked() {
-            if visuals_open {
-                close_panel(dock_manager.current_tree_mut(), &Panel::CellTypeVisuals);
+        if ui.selectable_label(inspector_open, "  Cell Inspector").clicked() {
+            if inspector_open {
+                close_panel(dock_manager.current_tree_mut(), &Panel::CellInspector);
             } else {
-                open_panel(dock_manager.current_tree_mut(), &Panel::CellTypeVisuals);
+                open_panel(dock_manager.current_tree_mut(), &Panel::CellInspector);
             }
         }
         
-        let lock_icon = if visuals_locked { "🔒" } else { "🔓" };
+        let lock_icon = if inspector_locked { "🔒" } else { "🔓" };
         if ui.small_button(lock_icon).clicked() {
-            state.set_panel_locked(&visuals_name, !visuals_locked);
+            state.set_panel_locked(&inspector_name, !inspector_locked);
         }
     });
 

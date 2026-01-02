@@ -44,7 +44,7 @@ impl RadialTool {
             RadialTool::Inspect => "🔍",
             RadialTool::Drag => "✋",
             RadialTool::Boost => "⚡",
-            RadialTool::Remove => "✖",
+            RadialTool::Remove => "➖",
         }
     }
 

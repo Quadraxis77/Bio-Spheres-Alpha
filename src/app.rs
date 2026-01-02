@@ -96,6 +96,9 @@ impl App {
                     let menu_visible = self.editor_state.radial_menu.visible;
                     let active_tool = self.editor_state.radial_menu.active_tool;
                     
+                    println!("MouseInput: button={:?}, state={:?}, menu_visible={}, active_tool={:?}", 
+                        button, state, menu_visible, active_tool);
+                    
                     if menu_visible && *button == MouseButton::Left && *state == ElementState::Pressed {
                         // Click while menu is open selects the hovered tool
                         self.editor_state.radial_menu.close(true);
@@ -112,19 +115,27 @@ impl App {
                         && active_tool == crate::ui::radial_menu::RadialTool::Insert
                         && *button == MouseButton::Left 
                         && *state == ElementState::Pressed
-                        && !self.ui.wants_pointer_input()
                     {
-                        if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
-                            let world_pos = gpu_scene.screen_to_world(
-                                self.mouse_position.0,
-                                self.mouse_position.1,
-                            );
-                            if let Some(_idx) = gpu_scene.insert_cell_from_genome(world_pos, &self.working_genome) {
-                                log::info!("Inserted cell at {:?}, total: {}", world_pos, gpu_scene.canonical_state.cell_count);
+                        println!("Insert conditions met, wants_pointer_input={}", self.ui.wants_pointer_input());
+                        if !self.ui.wants_pointer_input() {
+                            println!("Insert tool click at ({}, {})", self.mouse_position.0, self.mouse_position.1);
+                            if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                                let world_pos = gpu_scene.screen_to_world(
+                                    self.mouse_position.0,
+                                    self.mouse_position.1,
+                                );
+                                println!("World position: {:?}", world_pos);
+                                if let Some(idx) = gpu_scene.insert_cell_from_genome(world_pos, &self.working_genome) {
+                                    println!("Inserted cell {} at {:?}, total: {}", idx, world_pos, gpu_scene.canonical_state.cell_count);
+                                } else {
+                                    println!("Failed to insert cell - at capacity?");
+                                }
+                            } else {
+                                println!("No GPU scene available");
                             }
+                            self.window.request_redraw();
+                            return true;
                         }
-                        self.window.request_redraw();
-                        return true;
                     }
                     
                     // Handle Remove tool click

@@ -83,7 +83,6 @@ impl Panel {
             Panel::LightingSettings => true,
             Panel::GizmoSettings => true,
             Panel::RenderingControls => true,
-            Panel::CellTypeVisuals => true,
 
             // Preview mode only (genome editing)
             Panel::GenomeEditor => mode == SimulationMode::Preview,
@@ -95,6 +94,7 @@ impl Panel {
             Panel::QuaternionBall => mode == SimulationMode::Preview,
             Panel::TimeSlider => mode == SimulationMode::Preview,
             Panel::TimeScrubber => mode == SimulationMode::Preview,
+            Panel::CellTypeVisuals => mode == SimulationMode::Preview,
 
             // GPU mode primarily (but can be shown in preview)
             Panel::CellInspector => true,
