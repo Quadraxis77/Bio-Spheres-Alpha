@@ -1395,7 +1395,7 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the gizmo settings panel.
 fn render_gizmo_settings(ui: &mut Ui, context: &mut PanelContext) {
-    ui.checkbox(&mut context.editor_state.gizmo_visible, "Show Gizmo");
+    ui.checkbox(&mut context.editor_state.gizmo_visible, "Show Orientation Lines");
     ui.checkbox(&mut context.editor_state.split_rings_visible, "Show Split Rings");
 }
 

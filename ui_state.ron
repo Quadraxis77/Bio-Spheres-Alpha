@@ -1,34 +1,11 @@
 (
-    current_mode: Preview,
+    current_mode: Gpu,
     ui_scale: 1.0,
     windows_locked: false,
     lock_tab_bar: false,
     lock_tabs: false,
     lock_close_buttons: false,
     scene_configs: {
-        Gpu: (
-            visibility: (
-                show_cell_inspector: true,
-                show_genome_editor: false,
-                show_scene_manager: true,
-                show_performance_monitor: true,
-                show_rendering_controls: true,
-                show_time_scrubber: false,
-                show_theme_editor: false,
-                show_camera_settings: true,
-                show_lighting_settings: false,
-            ),
-            locked_windows: [
-                "SceneManager",
-                "Viewport",
-                "RightPanel",
-            ],
-            lock_settings: (
-                lock_tab_bar: false,
-                lock_tabs: false,
-                lock_close_buttons: false,
-            ),
-        ),
         Preview: (
             visibility: (
                 show_cell_inspector: false,
@@ -43,13 +20,36 @@
             ),
             locked_windows: [
                 "Modes",
-                "RightPanel",
-                "Viewport",
-                "LeftPanel",
-                "CircleSliders",
-                "BottomPanel",
                 "QuaternionBall",
+                "BottomPanel",
+                "RightPanel",
+                "LeftPanel",
                 "NameTypeEditor",
+                "SceneManager",
+                "CircleSliders",
+                "Viewport",
+            ],
+            lock_settings: (
+                lock_tab_bar: false,
+                lock_tabs: false,
+                lock_close_buttons: false,
+            ),
+        ),
+        Gpu: (
+            visibility: (
+                show_cell_inspector: true,
+                show_genome_editor: false,
+                show_scene_manager: true,
+                show_performance_monitor: true,
+                show_rendering_controls: true,
+                show_time_scrubber: false,
+                show_theme_editor: false,
+                show_camera_settings: true,
+                show_lighting_settings: false,
+            ),
+            locked_windows: [
+                "Viewport",
+                "RightPanel",
                 "SceneManager",
             ],
             lock_settings: (
