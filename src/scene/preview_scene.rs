@@ -204,6 +204,7 @@ impl Scene for PreviewScene {
             cell_type_visuals,
             self.camera.position(),
             self.camera.rotation,
+            self.state.current_time,  // Use simulation time for noise animation
         );
 
         // Pass 3: Render overlays (adhesion lines, gizmos, split rings)

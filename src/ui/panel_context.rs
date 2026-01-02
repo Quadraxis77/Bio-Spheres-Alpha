@@ -177,11 +177,15 @@ impl GenomeEditorState {
             gizmo_visible: true,
             split_rings_visible: true,
             radial_menu: crate::ui::radial_menu::RadialMenuState::new(),
-            cell_type_visuals: crate::cell::types::CellType::all()
-                .iter()
-                .map(|_| crate::cell::types::CellTypeVisuals::default())
-                .collect(),
+            cell_type_visuals: crate::cell::types::CellTypeVisualsStore::load(),
             selected_cell_type: 0,
+        }
+    }
+
+    /// Save cell type visuals to disk.
+    pub fn save_cell_type_visuals(&self) {
+        if let Err(e) = crate::cell::types::CellTypeVisualsStore::save(&self.cell_type_visuals) {
+            log::error!("Failed to save cell type visuals: {}", e);
         }
     }
 }

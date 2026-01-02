@@ -1637,6 +1637,44 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
             });
 
             ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            // Membrane texture section
+            ui.label(egui::RichText::new("Membrane Texture").strong());
+            ui.add_space(4.0);
+
+            // Membrane noise scale
+            ui.label("Noise Scale:");
+            ui.horizontal(|ui| {
+                let available = ui.available_width();
+                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                ui.style_mut().spacing.slider_width = slider_width;
+                ui.add(egui::Slider::new(&mut visuals.membrane_noise_scale, 0.0..=32.0).show_value(false));
+                ui.add(egui::DragValue::new(&mut visuals.membrane_noise_scale).speed(0.1).range(0.0..=32.0));
+            });
+
+            // Membrane noise strength
+            ui.label("Noise Strength:");
+            ui.horizontal(|ui| {
+                let available = ui.available_width();
+                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                ui.style_mut().spacing.slider_width = slider_width;
+                ui.add(egui::Slider::new(&mut visuals.membrane_noise_strength, 0.0..=0.5).show_value(false));
+                ui.add(egui::DragValue::new(&mut visuals.membrane_noise_strength).speed(0.01).range(0.0..=0.5));
+            });
+
+            // Membrane noise animation speed
+            ui.label("Animation Speed:");
+            ui.horizontal(|ui| {
+                let available = ui.available_width();
+                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                ui.style_mut().spacing.slider_width = slider_width;
+                ui.add(egui::Slider::new(&mut visuals.membrane_noise_speed, 0.0..=2.0).show_value(false));
+                ui.add(egui::DragValue::new(&mut visuals.membrane_noise_speed).speed(0.01).range(0.0..=2.0));
+            });
+
+            ui.add_space(12.0);
 
             // Preset buttons
             ui.separator();
@@ -1647,16 +1685,41 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                     visuals.specular_strength = 0.0;
                     visuals.specular_power = 32.0;
                     visuals.fresnel_strength = 0.0;
+                    visuals.membrane_noise_scale = 0.0;
+                    visuals.membrane_noise_strength = 0.0;
+                    visuals.membrane_noise_speed = 0.0;
                 }
                 if ui.small_button("Glossy").clicked() {
                     visuals.specular_strength = 0.5;
                     visuals.specular_power = 64.0;
                     visuals.fresnel_strength = 0.3;
+                    visuals.membrane_noise_scale = 6.0;
+                    visuals.membrane_noise_strength = 0.1;
+                    visuals.membrane_noise_speed = 0.0;
                 }
                 if ui.small_button("Shiny").clicked() {
                     visuals.specular_strength = 0.8;
                     visuals.specular_power = 128.0;
                     visuals.fresnel_strength = 0.5;
+                    visuals.membrane_noise_scale = 4.0;
+                    visuals.membrane_noise_strength = 0.05;
+                    visuals.membrane_noise_speed = 0.0;
+                }
+                if ui.small_button("Organic").clicked() {
+                    visuals.specular_strength = 0.3;
+                    visuals.specular_power = 32.0;
+                    visuals.fresnel_strength = 0.2;
+                    visuals.membrane_noise_scale = 8.0;
+                    visuals.membrane_noise_strength = 0.15;
+                    visuals.membrane_noise_speed = 0.3;
+                }
+                if ui.small_button("Bumpy").clicked() {
+                    visuals.specular_strength = 0.4;
+                    visuals.specular_power = 48.0;
+                    visuals.fresnel_strength = 0.25;
+                    visuals.membrane_noise_scale = 12.0;
+                    visuals.membrane_noise_strength = 0.25;
+                    visuals.membrane_noise_speed = 0.1;
                 }
             });
         });

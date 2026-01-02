@@ -20,6 +20,13 @@ struct LightingUniform {
 @group(0) @binding(1)
 var<uniform> lighting: LightingUniform;
 
+// Noise texture declarations for bind group compatibility (not used in depth pass)
+@group(0) @binding(2)
+var noise_texture: texture_cube_array<f32>;
+
+@group(0) @binding(3)
+var noise_sampler: sampler;
+
 struct VertexInput {
     @location(0) quad_pos: vec2<f32>,
 }
@@ -29,6 +36,8 @@ struct InstanceInput {
     @location(2) radius: f32,
     @location(3) color: vec4<f32>,
     @location(4) visual_params: vec4<f32>,
+    @location(5) membrane_params: vec4<f32>,
+    @location(6) rotation: vec4<f32>,
 }
 
 struct VertexOutput {

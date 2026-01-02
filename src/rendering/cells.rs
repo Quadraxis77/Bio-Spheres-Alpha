@@ -71,7 +71,7 @@ struct LightingUniform {
     light_color: [f32; 3],
     _padding2: f32,
     ambient_color: [f32; 3],
-    _padding3: f32,
+    time: f32,  // Elapsed time for animations
 }
 
 #[repr(C)]
@@ -80,7 +80,9 @@ struct CellInstance {
     position: [f32; 3],
     radius: f32,
     color: [f32; 4],
-    visual_params: [f32; 4],
+    visual_params: [f32; 4],      // x: specular_strength, y: specular_power, z: fresnel_strength, w: emissive
+    membrane_params: [f32; 4],    // x: noise_scale, y: noise_strength, z: noise_anim_speed, w: unused
+    rotation: [f32; 4],           // Quaternion (x, y, z, w) for cell orientation
 }
 
 
@@ -285,6 +287,16 @@ impl CellRenderer {
                     offset: 32,
                     shader_location: 4,
                     format: wgpu::VertexFormat::Float32x4, // visual_params
+                },
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4, // membrane_params
+                },
+                wgpu::VertexAttribute {
+                    offset: 64,
+                    shader_location: 6,
+                    format: wgpu::VertexFormat::Float32x4, // rotation (quaternion)
                 },
             ],
         };
@@ -662,6 +674,7 @@ impl CellRenderer {
         cell_type_visuals: Option<&[CellTypeVisuals]>,
         camera_pos: Vec3,
         camera_rotation: Quat,
+        time: f32,
     ) {
         if state.cell_count == 0 {
             return;
@@ -692,7 +705,7 @@ impl CellRenderer {
             light_color: [0.8, 0.8, 0.8],
             _padding2: 0.0,
             ambient_color: [0.3, 0.3, 0.35],
-            _padding3: 0.0,
+            time,
         };
         queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
 
@@ -734,6 +747,7 @@ impl CellRenderer {
         cell_type_visuals: Option<&[CellTypeVisuals]>,
         camera_pos: Vec3,
         camera_rotation: Quat,
+        time: f32,
     ) {
         if state.cell_count == 0 {
             return;
@@ -764,7 +778,7 @@ impl CellRenderer {
             light_color: [0.8, 0.8, 0.8],
             _padding2: 0.0,
             ambient_color: [0.3, 0.3, 0.35],
-            _padding3: 0.0,
+            time,
         };
         queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
 
@@ -905,6 +919,7 @@ impl CellRenderer {
             let position = state.positions[i];
             let radius = state.radii[i];
             let mode_index = state.mode_indices[i];
+            let rotation = state.rotations[i];
             // Use genome_id as cell type for now (cell type 0 = default)
             let cell_type = state.genome_ids[i];
 
@@ -921,23 +936,28 @@ impl CellRenderer {
             };
 
             // Get visual params from cell type visuals
-            let (specular_strength, specular_power, fresnel_strength) =
+            let (specular_strength, specular_power, fresnel_strength, membrane_noise_scale, membrane_noise_strength, membrane_noise_speed) =
                 if let Some(visuals) = cell_type_visuals {
                     if cell_type < visuals.len() {
                         let v = &visuals[cell_type];
-                        (v.specular_strength, v.specular_power, v.fresnel_strength)
+                        (v.specular_strength, v.specular_power, v.fresnel_strength, v.membrane_noise_scale, v.membrane_noise_strength, v.membrane_noise_speed)
                     } else {
-                        (0.5, 32.0, 0.3)
+                        (0.5, 32.0, 0.3, 8.0, 0.15, 0.0)
                     }
                 } else {
-                    (0.5, 32.0, 0.3)
+                    (0.5, 32.0, 0.3, 8.0, 0.15, 0.0)
                 };
+
+            // Create stable animation offset from cell ID (doesn't change on split)
+            let anim_offset = (state.cell_ids[i] as f32 * 0.1) % 100.0;
 
             let instance = CellInstance {
                 position: position.to_array(),
                 radius,
                 color: [color[0], color[1], color[2], opacity],
                 visual_params: [specular_strength, specular_power, fresnel_strength, emissive],
+                membrane_params: [membrane_noise_scale, membrane_noise_strength, membrane_noise_speed, anim_offset],
+                rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
             };
 
             // Separate opaque (alpha >= 0.99) from transparent

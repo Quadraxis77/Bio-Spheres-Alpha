@@ -238,6 +238,7 @@ impl Scene for GpuScene {
             cell_type_visuals,
             self.camera.position(),
             self.camera.rotation,
+            self.current_time,  // Use simulation time for noise animation
         );
     }
 

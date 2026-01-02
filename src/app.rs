@@ -76,6 +76,8 @@ impl App {
                 self.dock_manager.save_all();
                 // Save UI state before exit
                 self.ui.save_ui_state();
+                // Save cell type visuals before exit
+                self.editor_state.save_cell_type_visuals();
                 return false;
             }
             WindowEvent::Resized(physical_size) => {
