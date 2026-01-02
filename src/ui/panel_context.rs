@@ -140,6 +140,12 @@ pub struct GenomeEditorState {
     pub cell_type_visuals: Vec<crate::cell::types::CellTypeVisuals>,
     /// Currently selected cell type index for the visuals panel
     pub selected_cell_type: usize,
+    /// Mode graph state for node visualization
+    pub mode_graph_state: crate::genome::node_graph::ModeGraphState,
+    /// Request to toggle the mode graph panel
+    pub toggle_mode_graph_panel: bool,
+    /// Stored location of mode graph panel when hidden (surface, node, tab indices)
+    pub mode_graph_panel_location: Option<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, egui_dock::TabIndex)>,
 }
 
 impl GenomeEditorState {
@@ -183,6 +189,9 @@ impl GenomeEditorState {
             drag_distance: 0.0,
             cell_type_visuals: crate::cell::types::CellTypeVisualsStore::load(),
             selected_cell_type: 0,
+            mode_graph_state: crate::genome::node_graph::ModeGraphState::new(),
+            toggle_mode_graph_panel: false,
+            mode_graph_panel_location: None,
         }
     }
 

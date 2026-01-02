@@ -62,6 +62,8 @@ pub enum Panel {
     QuaternionBall,
     /// Time slider panel for preview duration control.
     TimeSlider,
+    /// Mode graph panel for visualizing mode connections.
+    ModeGraph,
 }
 
 impl Panel {
@@ -93,6 +95,7 @@ impl Panel {
             Panel::CircleSliders => mode == SimulationMode::Preview,
             Panel::QuaternionBall => mode == SimulationMode::Preview,
             Panel::TimeSlider => mode == SimulationMode::Preview,
+            Panel::ModeGraph => mode == SimulationMode::Preview,
             Panel::TimeScrubber => mode == SimulationMode::Preview,
             Panel::CellTypeVisuals => mode == SimulationMode::Preview,
 
@@ -156,6 +159,7 @@ impl Panel {
             Panel::CircleSliders,
             Panel::QuaternionBall,
             Panel::TimeSlider,
+            Panel::ModeGraph,
         ]
     }
 
@@ -184,6 +188,7 @@ impl Panel {
             Panel::CircleSliders => "Circle Sliders",
             Panel::QuaternionBall => "Child Rotation",
             Panel::TimeSlider => "Time Slider",
+            Panel::ModeGraph => "Mode Graph",
         }
     }
 

@@ -302,6 +302,32 @@ impl UiSystem {
             dock_area.show(&self.ctx, &mut tab_viewer);
         }
         
+        // Handle mode graph panel toggle request
+        if editor_state.toggle_mode_graph_panel {
+            editor_state.toggle_mode_graph_panel = false;
+            let panel = crate::ui::panel::Panel::ModeGraph;
+            if let Some(location) = dock_manager.current_tree().find_tab(&panel) {
+                // Panel is open - store its location and close it
+                editor_state.mode_graph_panel_location = Some(location);
+                dock_manager.current_tree_mut().remove_tab(location);
+            } else {
+                // Panel is closed - restore to previous location or add to focused leaf
+                if let Some((surface, node, tab)) = editor_state.mode_graph_panel_location {
+                    // Try to restore to previous location - check if node still exists and is a leaf
+                    let tree = &dock_manager.current_tree()[surface];
+                    if node.0 < tree.len() && tree[node].is_leaf() {
+                        dock_manager.current_tree_mut()[surface][node].insert_tab(tab, panel);
+                    } else {
+                        // Node no longer exists or isn't a leaf, add to focused leaf
+                        dock_manager.current_tree_mut().push_to_focused_leaf(panel);
+                    }
+                } else {
+                    // No stored location, add to focused leaf
+                    dock_manager.current_tree_mut().push_to_focused_leaf(panel);
+                }
+            }
+        }
+        
         // Render radial menu overlay (GPU mode only)
         // Now editor_state is no longer borrowed by panel_context
         if current_mode == crate::ui::types::SimulationMode::Gpu {
@@ -448,6 +474,7 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
     // List of genome editor panels that can be toggled (only show in Preview mode)
     let genome_editor_panels = [
         Panel::Modes,
+        Panel::ModeGraph,
         Panel::NameTypeEditor,
         Panel::AdhesionSettings,
         Panel::ParentSettings,

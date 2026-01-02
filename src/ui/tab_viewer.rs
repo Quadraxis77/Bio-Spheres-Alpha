@@ -72,6 +72,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::CircleSliders => render_circle_sliders(ui, self.context),
             Panel::QuaternionBall => render_quaternion_ball(ui, self.context),
             Panel::TimeSlider => render_time_slider(ui, self.context),
+            Panel::ModeGraph => render_mode_graph(ui, self.context),
         }
     }
 
@@ -1073,8 +1074,7 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
                     }
                 }
                 if ui.button("Genome Graph").clicked() {
-                    // TODO: Implement genome graph
-                    log::info!("Genome Graph clicked - not yet implemented");
+                    context.editor_state.toggle_mode_graph_panel = true;
                 }
             });
 
@@ -1911,6 +1911,119 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 }
             });
         });
+}
+
+/// Render the Mode Graph panel for visualizing mode connections.
+fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
+    use crate::genome::node_graph::{ModeGraphViewer, ModeNode};
+    use egui_snarl::ui::{SnarlStyle, SnarlWidget};
+
+    // Collect mode data for the viewer
+    let mode_names: Vec<String> = context.genome.modes.iter().map(|m| m.name.clone()).collect();
+    let mode_colors: Vec<glam::Vec3> = context.genome.modes.iter().map(|m| m.color).collect();
+    
+    // Collect child mode numbers (we need mutable access)
+    let mut child_a_modes: Vec<i32> = context.genome.modes.iter().map(|m| m.child_a.mode_number).collect();
+    let mut child_b_modes: Vec<i32> = context.genome.modes.iter().map(|m| m.child_b.mode_number).collect();
+
+    // Helper for contrasting text
+    fn contrasting_text(bg: glam::Vec3) -> egui::Color32 {
+        let luminance = 0.299 * bg.x + 0.587 * bg.y + 0.114 * bg.z;
+        if luminance > 0.5 {
+            egui::Color32::BLACK
+        } else {
+            egui::Color32::WHITE
+        }
+    }
+
+    // Top toolbar with add mode dropdown
+    ui.horizontal(|ui| {
+        ui.label("Add:");
+        let selected = &mut context.editor_state.mode_graph_state.selected_add_mode;
+        
+        // Get selected mode color for the combo box display
+        let selected_color = mode_colors.get(*selected).copied().unwrap_or(glam::Vec3::ONE);
+        let bg_color = egui::Color32::from_rgb(
+            (selected_color.x * 255.0) as u8,
+            (selected_color.y * 255.0) as u8,
+            (selected_color.z * 255.0) as u8,
+        );
+        let text_color = contrasting_text(selected_color);
+        
+        egui::ComboBox::from_id_salt("add_mode_combo")
+            .selected_text(egui::RichText::new(format!("M{}", *selected + 1)).color(text_color).background_color(bg_color))
+            .width(60.0)
+            .show_ui(ui, |ui| {
+                for i in 0..mode_names.len() {
+                    let color = mode_colors.get(i).copied().unwrap_or(glam::Vec3::ONE);
+                    let item_bg = egui::Color32::from_rgb(
+                        (color.x * 255.0) as u8,
+                        (color.y * 255.0) as u8,
+                        (color.z * 255.0) as u8,
+                    );
+                    let item_text = contrasting_text(color);
+                    
+                    ui.selectable_value(
+                        selected, 
+                        i, 
+                        egui::RichText::new(format!("M{}", i + 1)).color(item_text).background_color(item_bg)
+                    );
+                }
+            });
+        
+        if ui.button("Add Node").clicked() {
+            let idx = *selected;
+            let name = mode_names.get(idx).cloned().unwrap_or_default();
+            let color = mode_colors.get(idx).copied().unwrap_or(glam::Vec3::ONE);
+            // Add node at next position in column
+            let pos = context.editor_state.mode_graph_state.next_node_position();
+            context.editor_state.mode_graph_state.snarl.insert_node(pos, ModeNode::new(idx, name, color));
+        }
+        
+        ui.separator();
+        ui.label("Scroll to zoom, drag to pan");
+    });
+
+    ui.separator();
+
+    // Create the viewer with references to mode data
+    let mut viewer = ModeGraphViewer {
+        mode_names: &mode_names,
+        mode_colors: &mode_colors,
+        child_a_modes: &mut child_a_modes,
+        child_b_modes: &mut child_b_modes,
+        mode_settings: &context.genome.modes,
+    };
+
+    // Configure style with zoom limits, grid background, and better pin placement
+    use egui_snarl::ui::{BackgroundPattern, PinPlacement};
+    let style = SnarlStyle {
+        collapsible: Some(false),
+        min_scale: Some(0.25),
+        max_scale: Some(4.0),
+        pin_placement: Some(PinPlacement::Edge),
+        header_drag_space: Some(egui::vec2(8.0, 0.0)),
+        bg_pattern: Some(BackgroundPattern::grid(egui::vec2(50.0, 50.0), 0.0)),
+        bg_pattern_stroke: Some(egui::Stroke::new(1.0, egui::Color32::from_gray(60))),
+        ..Default::default()
+    };
+
+    // Render the snarl graph
+    let snarl = &mut context.editor_state.mode_graph_state.snarl;
+    
+    SnarlWidget::new()
+        .style(style)
+        .show(snarl, &mut viewer, ui);
+
+    // Write back any changes to child modes
+    for (i, mode) in context.genome.modes.iter_mut().enumerate() {
+        if i < child_a_modes.len() {
+            mode.child_a.mode_number = child_a_modes[i];
+        }
+        if i < child_b_modes.len() {
+            mode.child_b.mode_number = child_b_modes[i];
+        }
+    }
 }
 
 #[cfg(test)]

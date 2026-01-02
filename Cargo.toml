@@ -44,6 +44,10 @@ winres = "0.1"
 [dev-dependencies]
 proptest = "1.4"
 
+[dependencies.egui-snarl]
+version = "0.9"
+features = ["serde"]
+
 [profile.dev]
 opt-level = 1
 
@@ -59,3 +63,4 @@ codegen-units = 1
 emath = { path = "./egui_local/crates/emath" }
 epaint = { path = "./egui_local/crates/epaint" }
 ecolor = { path = "./egui_local/crates/ecolor" }
+egui = { path = "./egui_local/crates/egui" }
