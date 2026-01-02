@@ -287,6 +287,10 @@ impl App {
             if requested_mode != current_mode {
                 self.scene_manager.switch_mode(requested_mode, &self.device, &self.queue, &self.config);
                 self.dock_manager.switch_mode(requested_mode);
+                // Reset cursor visibility and radial menu state when switching modes
+                self.window.set_cursor_visible(true);
+                self.editor_state.radial_menu.active_tool = crate::ui::radial_menu::RadialTool::None;
+                self.editor_state.radial_menu.visible = false;
                 log::info!("Switched to {} mode", requested_mode.display_name());
             }
         }
