@@ -167,7 +167,7 @@ impl Panel {
             Panel::LightingSettings => "Lighting",
             Panel::Modes => "Modes",
             Panel::NameTypeEditor => "Name & Type",
-            Panel::AdhesionSettings => "Adhesion",
+            Panel::AdhesionSettings => "Adhesion Settings",
             Panel::ParentSettings => "Parent Settings",
             Panel::CircleSliders => "Circle Sliders",
             Panel::QuaternionBall => "Child Rotation",

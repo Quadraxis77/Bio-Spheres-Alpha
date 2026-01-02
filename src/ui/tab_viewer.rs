@@ -8,6 +8,7 @@ use egui_dock::{NodeIndex, SurfaceIndex, TabViewer};
 use egui_dock::tab_viewer::OnCloseResponse;
 
 use crate::ui::panel::Panel;
+use crate::ui::types::SimulationMode;
 use crate::ui::panel_context::PanelContext;
 use crate::ui::types::GlobalUiState;
 use crate::ui::widgets::{quaternion_ball, modes_buttons, modes_list_items};
@@ -435,8 +436,36 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                 // Reset to original default values
                 context.genome.modes[selected_index] = crate::genome::ModeSettings {
                     name: format!("M{}", selected_index + 1), // M1, M2, M3, etc.
-                    color: (r, g, b), // Original default color
-                    parent_split_direction: glam::Vec2::ZERO, // Reset to zero
+                    default_name: format!("M{}", selected_index + 1), // Same as name
+                    color: glam::Vec3::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0), // Convert to Vec3
+                    opacity: 1.0,
+                    emissive: 0.0,
+                    cell_type: 0, // Default to Photocyte
+                    parent_make_adhesion: false, // Default to no adhesion
+                    split_mass: 1.5,
+                    split_interval: 5.0,
+                    nutrient_gain_rate: 0.2,
+                    max_cell_size: 2.0,
+                    split_ratio: 0.5,
+                    nutrient_priority: 1.0,
+                    prioritize_when_low: true,
+                    parent_split_direction: glam::Vec2::ZERO,
+                    max_adhesions: 20,
+                    min_adhesions: 0,
+                    enable_parent_angle_snapping: true,
+                    max_splits: -1, // -1 means infinite
+                    mode_a_after_splits: -1,
+                    mode_b_after_splits: -1,
+                    swim_force: 0.5,
+                    child_a: crate::genome::ChildSettings {
+                        mode_number: selected_index as i32,
+                        ..Default::default()
+                    },
+                    child_b: crate::genome::ChildSettings {
+                        mode_number: selected_index as i32,
+                        ..Default::default()
+                    },
+                    adhesion_settings: crate::genome::AdhesionSettings::default(),
                 };
                 log::info!("Reset mode M{} to original defaults", selected_index + 1);
             }
@@ -458,7 +487,13 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
     // Prepare modes data for the widget (name, color tuples)
     let modes_data: Vec<(String, (u8, u8, u8))> = context.genome.modes
         .iter()
-        .map(|mode| (mode.name.clone(), mode.color))
+        .map(|mode| {
+            let color_vec3 = mode.color;
+            let r = (color_vec3.x * 255.0) as u8;
+            let g = (color_vec3.y * 255.0) as u8;
+            let b = (color_vec3.z * 255.0) as u8;
+            (mode.name.clone(), (r, g, b))
+        })
         .collect();
     
     // Modes list with compact spacing
@@ -516,7 +551,12 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
     // Handle color change
     if let Some((mode_index, new_color)) = color_change {
         if mode_index < context.genome.modes.len() {
-            context.genome.modes[mode_index].color = new_color;
+            let (r, g, b) = new_color;
+            context.genome.modes[mode_index].color = glam::Vec3::new(
+                r as f32 / 255.0,
+                g as f32 / 255.0,
+                b as f32 / 255.0
+            );
         }
     }
     
@@ -555,32 +595,306 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
     }
 }
 
-/// Render the NameTypeEditor panel (placeholder).
-fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
-    ui.heading("Name & Type");
-    ui.separator();
+/// Helper function to create a color-coded group container
+fn group_container(ui: &mut Ui, title: &str, color: egui::Color32, content: impl FnOnce(&mut Ui)) {
+    let frame = egui::Frame::default()
+        .fill(egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 30u8))
+        .stroke(egui::Stroke::new(1.5, color))
+        .corner_radius(egui::CornerRadius::same(4u8))
+        .inner_margin(egui::Margin::same(8i8));
 
-    let mut name = context.genome.name.clone();
-    if ui.text_edit_singleline(&mut name).changed() {
-        context.genome.name = name;
-    }
-    // TODO: Implement type selection
+    frame.show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(egui::RichText::new(title).strong().color(color));
+        ui.add_space(4.0);
+        content(ui);
+    });
+    ui.add_space(6.0);
+}
+
+/// Render the NameTypeEditor panel.
+fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+
+            // Three buttons at the top
+            ui.horizontal(|ui| {
+                if ui.button("Save Genome").clicked() {
+                    // TODO: Implement save dialog
+                    log::info!("Save Genome clicked - not yet implemented");
+                }
+                if ui.button("Load Genome").clicked() {
+                    // TODO: Implement load dialog
+                    log::info!("Load Genome clicked - not yet implemented");
+                }
+                if ui.button("Genome Graph").clicked() {
+                    // TODO: Implement genome graph
+                    log::info!("Genome Graph clicked - not yet implemented");
+                }
+            });
+
+            ui.add_space(4.0);
+
+            // Genome Name label and field on same line
+            ui.horizontal(|ui| {
+                ui.label("Genome Name:");
+                ui.text_edit_singleline(&mut context.genome.name);
+            });
+
+            ui.add_space(4.0);
+
+            // Get current mode
+            let selected_idx = context.editor_state.selected_mode_index;
+            if selected_idx >= context.genome.modes.len() {
+                ui.label("No mode selected");
+                return;
+            }
+            let mode = &mut context.genome.modes[selected_idx];
+
+            // Type dropdown and checkbox on the same line
+            ui.horizontal(|ui| {
+                ui.label("Type:");
+                let cell_types = crate::cell::types::CellType::names();
+                egui::ComboBox::from_id_salt("cell_type")
+                    .selected_text(cell_types[mode.cell_type as usize])
+                    .show_ui(ui, |ui| {
+                        for (i, type_name) in cell_types.iter().enumerate() {
+                            ui.selectable_value(&mut mode.cell_type, i as i32, *type_name);
+                        }
+                    });
+
+                ui.checkbox(&mut mode.parent_make_adhesion, "Make Adhesion");
+            });
+        });
 }
 
 /// Render the AdhesionSettings panel (placeholder).
-fn render_adhesion_settings(ui: &mut Ui, _context: &mut PanelContext) {
-    ui.heading("Adhesion");
-    ui.separator();
-    ui.label("Cell adhesion configuration.");
-    // TODO: Implement adhesion settings
+fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            // Force content to fill available width
+            ui.set_width(ui.available_width());
+            ui.add_space(10.0);
+
+            // Get current mode
+            let selected_idx = context.editor_state.selected_mode_index;
+            if selected_idx >= context.genome.modes.len() {
+                ui.label("No mode selected");
+                return;
+            }
+            let mode = &mut context.genome.modes[selected_idx];
+
+            // Breaking Properties Group (Red)
+            group_container(ui, "Breaking Properties", egui::Color32::from_rgb(200, 100, 100), |ui| {
+                ui.checkbox(&mut mode.adhesion_settings.can_break, "Adhesion Can Break");
+
+                ui.label("Adhesion Break Force:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.break_force, 0.1..=100.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.break_force).speed(0.1).range(0.1..=100.0));
+                });
+            });
+
+            // Physical Properties Group (Orange)
+            group_container(ui, "Physical Properties", egui::Color32::from_rgb(200, 150, 80), |ui| {
+                ui.label("Adhesion Rest Length:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.rest_length, 0.5..=5.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.rest_length).speed(0.01).range(0.5..=5.0));
+                });
+            });
+
+            // Linear Spring Group (Blue)
+            group_container(ui, "Linear Spring", egui::Color32::from_rgb(100, 150, 200), |ui| {
+                ui.label("Linear Spring Stiffness:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.linear_spring_stiffness, 0.1..=500.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.linear_spring_stiffness).speed(0.1).range(0.1..=500.0));
+                });
+
+                ui.label("Linear Spring Damping:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.linear_spring_damping, 0.0..=10.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.linear_spring_damping).speed(0.01).range(0.0..=10.0));
+                });
+            });
+
+            // Orientation Spring Group (Green)
+            group_container(ui, "Orientation Spring", egui::Color32::from_rgb(100, 180, 120), |ui| {
+                ui.label("Orientation Spring Stiffness:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.orientation_spring_stiffness, 0.1..=100.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.orientation_spring_stiffness).speed(0.1).range(0.1..=100.0));
+                });
+
+                ui.label("Orientation Spring Damping:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.orientation_spring_damping, 0.0..=10.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.orientation_spring_damping).speed(0.01).range(0.0..=10.0));
+                });
+
+                ui.label("Max Angular Deviation:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.max_angular_deviation, 0.0..=180.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.max_angular_deviation).speed(0.1).range(0.0..=180.0));
+                });
+            });
+
+            // Twist Constraint Group (Purple)
+            group_container(ui, "Twist Constraint", egui::Color32::from_rgb(160, 120, 180), |ui| {
+                ui.checkbox(&mut mode.adhesion_settings.enable_twist_constraint, "Enable Twist Constraint");
+
+                ui.label("Twist Constraint Stiffness:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.twist_constraint_stiffness, 0.0..=2.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.twist_constraint_stiffness).speed(0.01).range(0.0..=2.0));
+                });
+
+                ui.label("Twist Constraint Damping:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.twist_constraint_damping, 0.0..=10.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.twist_constraint_damping).speed(0.01).range(0.0..=10.0));
+                });
+            });
+        });
 }
 
 /// Render the ParentSettings panel (placeholder).
-fn render_parent_settings(ui: &mut Ui, _context: &mut PanelContext) {
-    ui.heading("Parent Settings");
-    ui.separator();
-    ui.label("Parent cell configuration with rotation controls.");
-    // TODO: Implement parent settings with quaternion ball
+fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            // Force content to fill available width
+            ui.set_width(ui.available_width());
+            ui.add_space(10.0);
+
+            // Get current mode
+            let selected_idx = context.editor_state.selected_mode_index;
+            if selected_idx >= context.genome.modes.len() {
+                ui.label("No mode selected");
+                return;
+            }
+            let mode = &mut context.genome.modes[selected_idx];
+
+            // Division Settings Group (Yellow)
+            group_container(ui, "Division Settings", egui::Color32::from_rgb(200, 180, 80), |ui| {
+                ui.label("Split Mass:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.split_mass, 1.0..=3.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.split_mass).speed(0.01).range(1.0..=3.0));
+                });
+
+                ui.label("Split Interval:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.split_interval, 1.0..=60.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.split_interval).speed(0.1).range(1.0..=60.0).suffix("s"));
+                });
+            });
+
+            // Nutrient Settings Group (Green)
+            group_container(ui, "Nutrient Settings", egui::Color32::from_rgb(100, 180, 120), |ui| {
+                ui.label("Nutrient Priority:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.nutrient_priority, 0.1..=10.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.nutrient_priority).speed(0.01).range(0.1..=10.0));
+                });
+
+                ui.checkbox(&mut mode.prioritize_when_low, "Prioritize When Low");
+            });
+
+            // Connection Settings Group (Cyan)
+            group_container(ui, "Connection Settings", egui::Color32::from_rgb(100, 180, 200), |ui| {
+                ui.label("Max Connections:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.max_adhesions, 0..=20).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.max_adhesions).speed(1).range(0..=20));
+                });
+
+                ui.label("Min Connections:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.min_adhesions, 0..=20).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.min_adhesions).speed(1).range(0..=20));
+                });
+
+                ui.label("Max Splits:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.max_splits, -1..=20).show_value(false));
+                    
+                    // Custom DragValue that shows infinity symbol for -1
+                    let mut drag_value = egui::DragValue::new(&mut mode.max_splits)
+                        .speed(0.1)
+                        .range(-1.0..=20.0);
+                    
+                    // Custom formatter to show ∞ for -1
+                    drag_value = drag_value.custom_formatter(|n, _| {
+                        if n == -1.0 {
+                            "∞".to_owned()
+                        } else {
+                            format!("{}", n as i32)
+                        }
+                    });
+                    
+                    // Custom parser to handle ∞ input
+                    drag_value = drag_value.custom_parser(|s| {
+                        if s == "∞" || s == "inf" || s == "infinity" {
+                            Some(-1.0)
+                        } else {
+                            s.parse::<f64>().ok()
+                        }
+                    });
+                    
+                    ui.add(drag_value);
+                });
+            });
+        });
 }
 
 /// Render the CircleSliders panel with pitch and yaw controls for parent split direction.
@@ -753,19 +1067,51 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the TimeSlider panel (placeholder).
 fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
-    ui.heading("Time Slider");
-    ui.separator();
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            // Show status text with fixed height to prevent layout shifting
+            let is_preview_mode = context.current_mode == SimulationMode::Preview;
 
-    let max_duration = context.editor_state.max_preview_duration;
-    ui.add(
-        egui::Slider::new(&mut context.editor_state.time_value, 0.0..=max_duration)
-            .text("Preview Time"),
-    );
+            // Always allocate space for status text to prevent shifting
+            if !is_preview_mode {
+                ui.colored_label(
+                    egui::Color32::GRAY,
+                    "Time scrubbing only available in Preview mode"
+                );
+            } else {
+                // Reserve space even when no status message to prevent layout shift
+                ui.label("");
+            }
 
-    ui.add(
-        egui::Slider::new(&mut context.editor_state.max_preview_duration, 1.0..=60.0)
-            .text("Max Duration"),
-    );
+            ui.horizontal(|ui| {
+                ui.label("Time:");
+
+                let available = ui.available_width();
+                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                ui.style_mut().spacing.slider_width = slider_width;
+
+                // Track dragging state
+                let slider_response = ui.add_enabled(
+                    is_preview_mode,
+                    egui::Slider::new(&mut context.editor_state.time_value, 0.0..=100.0)
+                        .show_value(false)
+                );
+                context.editor_state.time_slider_dragging = slider_response.dragged();
+
+                // Show actual time value in drag value widget
+                ui.add_enabled(
+                    is_preview_mode,
+                    egui::DragValue::new(&mut context.editor_state.time_value)
+                        .speed(0.1)
+                        .range(0.0..=100.0)
+                        .custom_formatter(|n, _| {
+                            let time_sec = (n as f32 / 100.0) * context.editor_state.max_preview_duration;
+                            format!("{:.1}s", time_sec)
+                        })
+                );
+            });
+        });
 }
 
 #[cfg(test)]
