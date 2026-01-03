@@ -156,24 +156,17 @@ pub struct CellRenderer {
     /// and writing without any transparency complications.
     opaque_pipeline: wgpu::RenderPipeline,
     
+    /// Render pipeline for opaque cells after depth pre-pass (no depth writing)
+    /// 
+    /// Used when depth pre-pass has already populated the depth buffer.
+    /// Uses Equal depth comparison for maximum early rejection.
+    opaque_no_depth_write_pipeline: wgpu::RenderPipeline,
+    
     /// Render pipeline for depth-only pre-pass
     /// 
     /// Used to populate the depth buffer before transparent rendering,
     /// which can improve performance by enabling early depth testing.
-    #[allow(dead_code)]
     depth_only_pipeline: wgpu::RenderPipeline,
-    
-    /// Render pipeline for transparent cells using WBOIT accumulation
-    /// 
-    /// Renders transparent cells to accumulation and revealage textures
-    /// using weighted blending. No depth writing to avoid sorting issues.
-    oit_pipeline: wgpu::RenderPipeline,
-    
-    /// Render pipeline for final OIT composition
-    /// 
-    /// Combines the accumulated transparent colors with the background
-    /// to produce the final composited image.
-    composite_pipeline: wgpu::RenderPipeline,
     
     // === Shared Resources ===
     
@@ -205,11 +198,6 @@ pub struct CellRenderer {
     /// Updated each frame with visible opaque cells.
     instance_buffer: wgpu::Buffer,
     
-    /// Instance buffer for transparent cells
-    /// 
-    /// Separate buffer for transparent cells to enable different rendering paths.
-    transparent_instance_buffer: wgpu::Buffer,
-    
     /// Maximum number of instances that can be stored in buffers
     instance_capacity: usize,
     
@@ -223,29 +211,6 @@ pub struct CellRenderer {
     pub depth_view: wgpu::TextureView,
     
     // === Order-Independent Transparency Resources ===
-    
-    /// Accumulation texture for WBOIT (stores weighted colors)
-    #[allow(dead_code)]
-    accum_texture: wgpu::Texture,
-    
-    /// Accumulation texture view for OIT render pass
-    accum_view: wgpu::TextureView,
-    
-    /// Revealage texture for WBOIT (stores transparency coverage)
-    #[allow(dead_code)]
-    revealage_texture: wgpu::Texture,
-    
-    /// Revealage texture view for OIT render pass
-    revealage_view: wgpu::TextureView,
-    
-    /// Bind group for composite pass (contains OIT textures)
-    composite_bind_group: wgpu::BindGroup,
-    
-    /// Bind group layout for composite pass
-    composite_bind_group_layout: wgpu::BindGroupLayout,
-    
-    /// Sampler for OIT texture sampling in composite pass
-    composite_sampler: wgpu::Sampler,
     
     // === Configuration ===
     
@@ -436,75 +401,8 @@ impl CellRenderer {
             mapped_at_creation: false,
         });
 
-        // Create instance buffer for transparent cells
-        let transparent_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Transparent Cell Instance Buffer"),
-            size: (capacity * std::mem::size_of::<CellInstance>()) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         // Create depth texture
         let (depth_texture, depth_view) = Self::create_depth_texture(device, width, height);
-
-        // Create OIT textures
-        let (accum_texture, accum_view) = Self::create_accum_texture(device, width, height);
-        let (revealage_texture, revealage_view) =
-            Self::create_revealage_texture(device, width, height);
-
-        // Create composite sampler
-        let composite_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("OIT Composite Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        // Create composite bind group layout
-        let composite_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("OIT Composite Bind Group Layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-            });
-
-        // Create composite bind group
-        let composite_bind_group = Self::create_composite_bind_group(
-            device,
-            &composite_bind_group_layout,
-            &accum_view,
-            &revealage_view,
-            &composite_sampler,
-        );
 
         // Vertex buffer layouts
         let vertex_layout = wgpu::VertexBufferLayout {
@@ -568,7 +466,7 @@ impl CellRenderer {
             source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cell_billboard.wgsl").into()),
         });
 
-        // Create opaque pipeline
+        // Create opaque pipeline (with depth writing for single-pass rendering)
         let opaque_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Cell Opaque Pipeline"),
             layout: Some(&cell_pipeline_layout),
@@ -605,26 +503,57 @@ impl CellRenderer {
             cache: None,
         });
 
-        // Load depth-only shader
-        let depth_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Cell Billboard Depth Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cell_billboard_depth.wgsl").into()),
-        });
-
-        // Create depth-only pipeline for pre-pass (no color output)
-        let depth_only_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Cell Depth-Only Pipeline"),
+        // Create opaque pipeline for post-depth-prepass (no depth writing)
+        let opaque_no_depth_write_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Cell Opaque No Depth Write Pipeline"),
             layout: Some(&cell_pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &depth_shader,
+                module: &opaque_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[vertex_layout.clone(), instance_layout.clone()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &depth_shader,
+                module: &opaque_shader,
                 entry_point: Some("fs_main"),
-                targets: &[], // No color targets
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false, // No depth writing - depth prepass handles this
+                depth_compare: wgpu::CompareFunction::Equal, // Only render pixels at exact depth
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // Create depth-only pipeline for pre-pass (uses same shader as opaque for consistent depth)
+        let depth_only_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Cell Depth-Only Pipeline"),
+            layout: Some(&cell_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &opaque_shader, // Use same shader as opaque for consistent depth calculation
+                entry_point: Some("vs_main"),
+                buffers: &[vertex_layout.clone(), instance_layout.clone()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &opaque_shader, // Use same shader as opaque for consistent depth calculation
+                entry_point: Some("fs_main"),
+                targets: &[], // No color targets - depth only
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
@@ -644,144 +573,19 @@ impl CellRenderer {
             cache: None,
         });
 
-        // Load OIT shader
-        let oit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Cell Billboard OIT Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cell_billboard_oit.wgsl").into()),
-        });
-
-        // Create OIT accumulation pipeline
-        // Outputs to two render targets: accum (RGBA16Float) and revealage (R8)
-        let oit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Cell OIT Pipeline"),
-            layout: Some(&cell_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &oit_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[vertex_layout.clone(), instance_layout.clone()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &oit_shader,
-                entry_point: Some("fs_main"),
-                targets: &[
-                    // Accumulation texture - additive blending
-                    Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba16Float,
-                        blend: Some(wgpu::BlendState {
-                            color: wgpu::BlendComponent {
-                                src_factor: wgpu::BlendFactor::One,
-                                dst_factor: wgpu::BlendFactor::One,
-                                operation: wgpu::BlendOperation::Add,
-                            },
-                            alpha: wgpu::BlendComponent {
-                                src_factor: wgpu::BlendFactor::One,
-                                dst_factor: wgpu::BlendFactor::One,
-                                operation: wgpu::BlendOperation::Add,
-                            },
-                        }),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                    // Revealage texture - multiplicative blending (1 - alpha)
-                    Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::R8Unorm,
-                        blend: Some(wgpu::BlendState {
-                            color: wgpu::BlendComponent {
-                                src_factor: wgpu::BlendFactor::Zero,
-                                dst_factor: wgpu::BlendFactor::OneMinusSrc,
-                                operation: wgpu::BlendOperation::Add,
-                            },
-                            alpha: wgpu::BlendComponent::OVER,
-                        }),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                ],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false, // Read-only - don't write to depth buffer
-                depth_compare: wgpu::CompareFunction::Less, // Discard fragments behind opaque geometry
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
-        // Load composite shader
-        let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("OIT Composite Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/oit_composite.wgsl").into()),
-        });
-
-        // Create composite pipeline layout
-        let composite_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("OIT Composite Pipeline Layout"),
-                bind_group_layouts: &[&composite_bind_group_layout],
-                push_constant_ranges: &[],
-            });
-
-        // Create composite pipeline
-        let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("OIT Composite Pipeline"),
-            layout: Some(&composite_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &composite_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &composite_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
         Self {
             opaque_pipeline,
+            opaque_no_depth_write_pipeline,
             depth_only_pipeline,
-            oit_pipeline,
-            composite_pipeline,
             camera_bind_group_layout,
             camera_bind_group,
             camera_buffer,
             lighting_buffer,
             quad_vertex_buffer,
             instance_buffer,
-            transparent_instance_buffer,
             instance_capacity: capacity,
             depth_texture,
             depth_view,
-            accum_texture,
-            accum_view,
-            revealage_texture,
-            revealage_view,
-            composite_bind_group,
-            composite_bind_group_layout,
-            composite_sampler,
             surface_format,
             width,
             height,
@@ -811,79 +615,6 @@ impl CellRenderer {
         (texture, view)
     }
 
-    fn create_accum_texture(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-    ) -> (wgpu::Texture, wgpu::TextureView) {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("OIT Accumulation Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        (texture, view)
-    }
-
-    fn create_revealage_texture(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-    ) -> (wgpu::Texture, wgpu::TextureView) {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("OIT Revealage Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        (texture, view)
-    }
-
-    fn create_composite_bind_group(
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        accum_view: &wgpu::TextureView,
-        revealage_view: &wgpu::TextureView,
-        sampler: &wgpu::Sampler,
-    ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("OIT Composite Bind Group"),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(accum_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(revealage_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        })
-    }
-
     /// Resize the renderer textures.
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         if width == 0 || height == 0 {
@@ -896,24 +627,6 @@ impl CellRenderer {
         let (depth_texture, depth_view) = Self::create_depth_texture(device, width, height);
         self.depth_texture = depth_texture;
         self.depth_view = depth_view;
-
-        // Recreate OIT textures
-        let (accum_texture, accum_view) = Self::create_accum_texture(device, width, height);
-        let (revealage_texture, revealage_view) =
-            Self::create_revealage_texture(device, width, height);
-        self.accum_texture = accum_texture;
-        self.accum_view = accum_view;
-        self.revealage_texture = revealage_texture;
-        self.revealage_view = revealage_view;
-
-        // Recreate composite bind group with new texture views
-        self.composite_bind_group = Self::create_composite_bind_group(
-            device,
-            &self.composite_bind_group_layout,
-            &self.accum_view,
-            &self.revealage_view,
-            &self.composite_sampler,
-        );
     }
 
     /// Render cells within an existing render pass.
@@ -962,35 +675,181 @@ impl CellRenderer {
         };
         queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
 
-        // Build instance data - combine opaque and transparent for simple in-pass rendering
-        let (opaque_instances, transparent_instances) = self.build_instances(state, genome, cell_type_visuals);
+        // Build instance data - all cells are opaque (transparency handled in shader)
+        let instances = self.build_instances(state, genome, cell_type_visuals);
         
-        // Combine all instances for simple rendering (OIT not available in render_in_pass)
-        let mut all_instances = opaque_instances;
-        all_instances.extend(transparent_instances);
-        
-        if all_instances.is_empty() {
+        if instances.is_empty() {
             return;
         }
 
         // Update instance buffer
-        if all_instances.len() <= self.instance_capacity {
-            queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&all_instances));
+        if instances.len() <= self.instance_capacity {
+            queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
         }
 
-        // Render using opaque pipeline (OIT requires separate passes which we handle in render_oit())
-        // For render_in_pass, we use the simpler opaque pipeline with alpha blending
+        // Render all cells as opaque (no transparency separation needed)
         render_pass.set_pipeline(&self.opaque_pipeline);
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-        render_pass.draw(0..6, 0..all_instances.len() as u32);
+        render_pass.draw(0..6, 0..instances.len() as u32);
     }
 
-    /// Full render with OIT support (creates its own render passes).
-    /// Call this instead of render_in_pass for proper transparency.
-    #[allow(dead_code)]
+    /// Full render with optimized depth pre-pass and GPU culling.
+    /// This is the most efficient rendering path with maximum overdraw reduction.
+    pub fn render_optimized(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+        instance_builder: &mut crate::rendering::instance_builder::InstanceBuilder,
+        state: &CanonicalState,
+        genome: Option<&Genome>,
+        cell_type_visuals: Option<&[CellTypeVisuals]>,
+        camera_pos: Vec3,
+        camera_rotation: Quat,
+        time: f32,
+    ) {
+        if state.cell_count == 0 {
+            return;
+        }
+
+        // Update camera uniform
+        let view_matrix = Mat4::look_at_rh(
+            camera_pos,
+            camera_pos + camera_rotation * Vec3::NEG_Z,
+            camera_rotation * Vec3::Y,
+        );
+        let aspect = self.width as f32 / self.height as f32;
+        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
+        let view_proj = proj_matrix * view_matrix;
+
+        let camera_uniform = CameraUniform {
+            view_proj: view_proj.to_cols_array_2d(),
+            camera_pos: camera_pos.to_array(),
+            _padding: 0.0,
+        };
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
+
+        // Update lighting uniform
+        let light_dir = Vec3::new(0.5, 1.0, 0.3).normalize();
+        let lighting_uniform = LightingUniform {
+            light_direction: light_dir.to_array(),
+            _padding1: 0.0,
+            light_color: [0.8, 0.8, 0.8],
+            _padding2: 0.0,
+            ambient_color: [0.3, 0.3, 0.35],
+            time,
+        };
+        queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Cell Optimized Render Encoder"),
+        });
+
+        // Use GPU culling to build instances with frustum and occlusion culling
+        instance_builder.build_instances_with_encoder(
+            &mut encoder,
+            queue,
+            state.cell_count,
+            genome.map_or(1, |g| g.modes.len()),
+            cell_type_visuals.map_or(1, |v| v.len()),
+            view_proj,
+            camera_pos,
+            self.width,
+            self.height,
+        );
+
+        let visible_count = instance_builder.visible_count();
+
+        if visible_count == 0 {
+            queue.submit(std::iter::once(encoder.finish()));
+            return;
+        }
+
+        // Pass 1: Depth pre-pass using GPU-culled instances
+        {
+            let mut depth_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Cell GPU Culled Depth Pre-Pass"),
+                color_attachments: &[], // No color output
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // Preserve existing depth
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            depth_pass.set_pipeline(&self.depth_only_pipeline);
+            depth_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            depth_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+            depth_pass.set_vertex_buffer(1, instance_builder.instance_buffer.slice(..));
+            depth_pass.draw_indirect(&instance_builder.indirect_buffer, 0);
+        }
+
+        // Pass 2: Color pass with GPU-culled instances
+        {
+            let mut color_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Cell GPU Culled Color Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // Preserve background
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            color_pass.set_pipeline(&self.opaque_no_depth_write_pipeline);
+            color_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            color_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+            color_pass.set_vertex_buffer(1, instance_builder.instance_buffer.slice(..));
+            color_pass.draw_indirect(&instance_builder.indirect_buffer, 0);
+        }
+
+        queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Compatibility method - redirects to optimized depth pre-pass rendering.
+    /// Use render_optimized() with InstanceBuilder for best performance.
     pub fn render_oit(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+        state: &CanonicalState,
+        genome: Option<&Genome>,
+        cell_type_visuals: Option<&[CellTypeVisuals]>,
+        camera_pos: Vec3,
+        camera_rotation: Quat,
+        time: f32,
+    ) {
+        // Use the optimized depth pre-pass method
+        self.render_with_depth_prepass(
+            device, queue, view, state, genome, cell_type_visuals,
+            camera_pos, camera_rotation, time
+        );
+    }
+
+    /// Legacy render method with manual depth pre-pass (for compatibility).
+    /// Use render_optimized() for better performance with GPU culling.
+    pub fn render_with_depth_prepass(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -1035,29 +894,51 @@ impl CellRenderer {
         };
         queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
 
-        // Build instance data - separate opaque and transparent
-        let (opaque_instances, transparent_instances) = self.build_instances(state, genome, cell_type_visuals);
+        // Build instance data - all cells are opaque (transparency handled in shader)
+        let instances = self.build_instances(state, genome, cell_type_visuals);
         
-        if opaque_instances.is_empty() && transparent_instances.is_empty() {
+        if instances.is_empty() {
             return;
         }
 
-        // Update instance buffers
-        if !opaque_instances.is_empty() && opaque_instances.len() <= self.instance_capacity {
-            queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&opaque_instances));
-        }
-        if !transparent_instances.is_empty() && transparent_instances.len() <= self.instance_capacity {
-            queue.write_buffer(&self.transparent_instance_buffer, 0, bytemuck::cast_slice(&transparent_instances));
+        // Update instance buffer
+        if instances.len() <= self.instance_capacity {
+            queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
         }
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Cell OIT Render Encoder"),
+            label: Some("Cell Optimized Render Encoder"),
         });
 
-        // Pass 1: Render opaque cells with depth writing
-        if !opaque_instances.is_empty() {
-            let mut opaque_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Cell Opaque Pass"),
+        // Pass 1: Depth pre-pass for all cells - populates depth buffer for early rejection
+        {
+            let mut depth_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Cell Depth Pre-Pass"),
+                color_attachments: &[], // No color output
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // Preserve existing depth (skybox, etc.)
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            depth_pass.set_pipeline(&self.depth_only_pipeline);
+            depth_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            depth_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+            depth_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            depth_pass.draw(0..6, 0..instances.len() as u32);
+        }
+
+        // Pass 2: Color pass with depth testing (no depth writing)
+        // Uses Equal depth comparison for maximum early fragment rejection
+        {
+            let mut color_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Cell Color Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
                     resolve_target: None,
@@ -1079,80 +960,11 @@ impl CellRenderer {
                 occlusion_query_set: None,
             });
 
-            opaque_pass.set_pipeline(&self.opaque_pipeline);
-            opaque_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            opaque_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
-            opaque_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-            opaque_pass.draw(0..6, 0..opaque_instances.len() as u32);
-        }
-
-        // Pass 2: OIT for transparent cells only
-        if !transparent_instances.is_empty() {
-            // OIT accumulation pass
-            {
-                let mut oit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("OIT Accumulation Pass"),
-                    color_attachments: &[
-                        Some(wgpu::RenderPassColorAttachment {
-                            view: &self.accum_view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        }),
-                        Some(wgpu::RenderPassColorAttachment {
-                            view: &self.revealage_view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        }),
-                    ],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.depth_view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Load, // Keep depth from opaque pass
-                            store: wgpu::StoreOp::Store, // Don't need to store since we don't write
-                        }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-
-                oit_pass.set_pipeline(&self.oit_pipeline);
-                oit_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                oit_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
-                oit_pass.set_vertex_buffer(1, self.transparent_instance_buffer.slice(..));
-                oit_pass.draw(0..6, 0..transparent_instances.len() as u32);
-            }
-
-            // OIT composite pass
-            {
-                let mut composite_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("OIT Composite Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-
-                composite_pass.set_pipeline(&self.composite_pipeline);
-                composite_pass.set_bind_group(0, &self.composite_bind_group, &[]);
-                composite_pass.draw(0..3, 0..1);
-            }
+            color_pass.set_pipeline(&self.opaque_no_depth_write_pipeline);
+            color_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            color_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+            color_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            color_pass.draw(0..6, 0..instances.len() as u32);
         }
 
         queue.submit(std::iter::once(encoder.finish()));
@@ -1204,10 +1016,34 @@ impl CellRenderer {
         };
         queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
 
-        // Render all cells as opaque (GPU culling doesn't separate opaque/transparent yet)
+        // Pass 1: Depth pre-pass for all GPU-culled instances
+        {
+            let mut depth_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Cell GPU Culled Depth Pre-Pass"),
+                color_attachments: &[], // No color output
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // Preserve existing depth from clear pass
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            depth_pass.set_pipeline(&self.depth_only_pipeline);
+            depth_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            depth_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+            depth_pass.set_vertex_buffer(1, instance_builder.get_instance_buffer().slice(..));
+            depth_pass.draw_indirect(instance_builder.get_indirect_buffer(), 0);
+        }
+
+        // Pass 2: Color pass with depth testing (no depth writing)
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Cell Culled Render Pass"),
+                label: Some("Cell GPU Culled Color Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
                     resolve_target: None,
@@ -1229,7 +1065,7 @@ impl CellRenderer {
                 occlusion_query_set: None,
             });
 
-            render_pass.set_pipeline(&self.opaque_pipeline);
+            render_pass.set_pipeline(&self.opaque_no_depth_write_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
             render_pass.set_vertex_buffer(1, instance_builder.get_instance_buffer().slice(..));
@@ -1325,15 +1161,15 @@ impl CellRenderer {
         queue.submit(std::iter::once(encoder.finish()));
     }
 
-    /// Build instance data from simulation state, separated into opaque and transparent.
+    /// Build instance data from simulation state. All cells are opaque since transparency
+    /// is handled internally via shader compositing (membrane over nucleus/cytoplasm).
     fn build_instances(
         &self,
         state: &CanonicalState,
         genome: Option<&Genome>,
         cell_type_visuals: Option<&[CellTypeVisuals]>,
-    ) -> (Vec<CellInstance>, Vec<CellInstance>) {
-        let mut opaque_instances = Vec::with_capacity(state.cell_count);
-        let mut transparent_instances = Vec::with_capacity(state.cell_count);
+    ) -> Vec<CellInstance> {
+        let mut instances = Vec::with_capacity(state.cell_count);
 
         for i in 0..state.cell_count {
             let position = state.positions[i];
@@ -1374,20 +1210,15 @@ impl CellRenderer {
             let instance = CellInstance {
                 position: position.to_array(),
                 radius,
-                color: [color[0], color[1], color[2], opacity],
+                color: [color[0], color[1], color[2], opacity], // opacity used for internal membrane blending
                 visual_params: [specular_strength, specular_power, fresnel_strength, emissive],
                 membrane_params: [membrane_noise_scale, membrane_noise_strength, membrane_noise_speed, anim_offset],
                 rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
             };
 
-            // Separate opaque (alpha >= 0.99) from transparent
-            if opacity >= 0.99 {
-                opaque_instances.push(instance);
-            } else {
-                transparent_instances.push(instance);
-            }
+            instances.push(instance);
         }
 
-        (opaque_instances, transparent_instances)
+        instances
     }
 }

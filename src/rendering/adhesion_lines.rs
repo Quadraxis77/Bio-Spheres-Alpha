@@ -155,7 +155,7 @@ impl AdhesionLineRenderer {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: false, // Lines don't write depth
-                depth_compare: wgpu::CompareFunction::Always, // Always pass - show through cells
+                depth_compare: wgpu::CompareFunction::LessEqual, // Respect depth for proper occlusion
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
