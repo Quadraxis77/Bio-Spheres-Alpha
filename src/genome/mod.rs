@@ -110,6 +110,9 @@ pub struct ModeSettings {
     
     // Flagellocyte settings
     pub swim_force: f32, // Forward thrust force (0.0 to 1.0, for Flagellocyte cells)
+    
+    // Membrane settings
+    pub membrane_stiffness: f32, // Cell membrane stiffness for collision response (0.0 = no repulsion, higher = more rigid)
 
     // Child settings
     pub child_a: ChildSettings,
@@ -158,6 +161,7 @@ impl Default for ModeSettings {
             mode_a_after_splits: -1, // Use normal child_a mode by default
             mode_b_after_splits: -1, // Use normal child_b mode by default
             swim_force: 0.5, // Default swim force for flagellocytes
+            membrane_stiffness: 50.0, // Default: moderate membrane stiffness
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),
             adhesion_settings: AdhesionSettings::default(),

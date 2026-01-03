@@ -167,6 +167,9 @@ impl GpuScene {
             return;
         }
         
+        // Clear the masses changed flag before physics
+        self.canonical_state.masses_changed = false;
+        
         // Use CPU physics with all genomes for division and adhesion
         let _division_events = cpu_physics::physics_step_with_genomes(
             &mut self.canonical_state,
@@ -174,6 +177,15 @@ impl GpuScene {
             &self.config,
             self.current_time,
         );
+        
+        // Mark buffers as dirty based on what actually changed
+        // Positions always change during physics
+        self.instance_builder.mark_positions_dirty();
+        
+        // Only mark radii as dirty if masses actually changed
+        if self.canonical_state.masses_changed {
+            self.instance_builder.mark_radii_dirty();
+        }
     }
     
     /// Find an existing genome by name, or return None.
@@ -264,7 +276,7 @@ impl GpuScene {
             self.current_time,                   // birth_time
             mode.split_interval,                 // split_interval
             mode.split_mass,                     // split_mass
-            500.0,                               // stiffness (match preview scene)
+            mode.membrane_stiffness,             // stiffness (use mode-specific membrane stiffness)
         )
     }
     

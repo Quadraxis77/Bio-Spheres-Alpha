@@ -33,7 +33,7 @@ impl Default for PhysicsConfig {
         Self {
             fixed_timestep: 1.0 / 64.0, // 64 Hz
             sphere_radius: 100.0,
-            default_stiffness: 500.0,
+            default_stiffness: 0.0,
             damping: 0.0,
             velocity_damping: 0.98,
             friction_coefficient: 0.3,

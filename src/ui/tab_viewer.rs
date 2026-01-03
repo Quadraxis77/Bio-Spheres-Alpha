@@ -884,6 +884,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     mode_a_after_splits: -1,
                     mode_b_after_splits: -1,
                     swim_force: 0.5,
+                    membrane_stiffness: 50.0, // Default: moderate membrane stiffness
                     child_a: crate::genome::ChildSettings {
                         mode_number: selected_index as i32,
                         ..Default::default()
@@ -1259,6 +1260,15 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.style_mut().spacing.slider_width = slider_width;
                     ui.add(egui::Slider::new(&mut mode.split_interval, 1.0..=60.0).show_value(false));
                     ui.add(egui::DragValue::new(&mut mode.split_interval).speed(0.1).range(1.0..=60.0).suffix("s"));
+                });
+
+                ui.label("Membrane Stiffness:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.membrane_stiffness, 0.0..=100.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.membrane_stiffness).speed(0.1).range(0.0..=100.0));
                 });
             });
 

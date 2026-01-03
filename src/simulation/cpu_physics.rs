@@ -1,3 +1,64 @@
+//! # CPU Physics Engine - Deterministic Spatial Grid and Force Calculations
+//! 
+//! This module implements the CPU-based physics simulation for Bio-Spheres, designed to match
+//! the reference BioSpheres-Q implementation. It uses a deterministic spatial grid for efficient
+//! collision detection and supports both single-threaded and parallel execution.
+//! 
+//! ## Physics Pipeline
+//! 
+//! The physics simulation follows this sequence each frame:
+//! 
+//! 1. **Position Integration**: Update positions using Verlet integration
+//! 2. **Rotation Update**: Integrate angular velocities to update orientations
+//! 3. **Spatial Partitioning**: Rebuild spatial grid for collision detection
+//! 4. **Collision Detection**: Find overlapping cells using spatial grid
+//! 5. **Force Calculation**: Compute collision, adhesion, and boundary forces
+//! 6. **Velocity Integration**: Update velocities from accumulated forces
+//! 7. **Angular Integration**: Update angular velocities from torques
+//! 8. **Division Processing**: Handle cell division events
+//! 
+//! ## Deterministic Spatial Grid
+//! 
+//! The spatial grid divides 3D space into uniform cells to accelerate collision detection.
+//! Instead of checking all O(n²) cell pairs, we only check cells in the same or adjacent
+//! grid cells, reducing complexity to approximately O(n).
+//! 
+//! ### Key Features:
+//! - **Zero Allocations**: Uses pre-allocated arrays and prefix-sum algorithm
+//! - **Deterministic**: Same input always produces same output (important for reproducibility)
+//! - **Cache Friendly**: Contiguous memory access patterns
+//! - **Parallel Safe**: Can be rebuilt and queried from multiple threads
+//! 
+//! ## Integration Schemes
+//! 
+//! ### Verlet Integration
+//! Used for position/velocity updates. Provides better stability than Euler integration
+//! for collision-heavy scenarios:
+//! 
+//! ```
+//! x(t+dt) = x(t) + v(t)*dt + 0.5*a(t)*dt²
+//! v(t+dt) = v(t) + 0.5*(a(t) + a(t+dt))*dt
+//! ```
+//! 
+//! ### Benefits:
+//! - **Stability**: Better energy conservation in collisions
+//! - **Accuracy**: Second-order accurate for smooth forces
+//! - **Reversibility**: Time-reversible integration (important for physics)
+//! 
+//! ## Performance Characteristics
+//! 
+//! - **Single-threaded**: Good for <1000 cells, simple debugging
+//! - **Multi-threaded**: Uses `rayon` for parallel processing of grid cells
+//! - **Memory**: Pre-allocated buffers avoid runtime allocations
+//! - **Cache**: SoA layout provides excellent cache locality
+//! 
+//! ## Force Types
+//! 
+//! 1. **Collision Forces**: Repulsive forces between overlapping cells
+//! 2. **Adhesion Forces**: Spring-damper connections between bonded cells
+//! 3. **Boundary Forces**: Soft spherical boundary to contain simulation
+//! 4. **Gravity**: Optional downward force for realistic settling
+
 // CPU-based physics simulation
 // Matches the BioSpheres-Q reference implementation
 
@@ -9,53 +70,139 @@ use crate::genome::Genome;
 use crate::cell::division;
 
 // ============================================================================
-// Spatial Grid
+// Deterministic Spatial Grid for Collision Detection
 // ============================================================================
 
 /// Deterministic spatial grid using fixed-size arrays and prefix-sum algorithm
-/// This provides O(1) cell lookups with zero allocations per tick
+/// 
+/// This spatial partitioning system divides 3D space into a uniform grid to accelerate
+/// collision detection. Instead of checking all O(n²) possible cell pairs, we only
+/// check cells within the same or adjacent grid cells.
+/// 
+/// ## Algorithm Overview
+/// 
+/// 1. **Grid Division**: 3D space is divided into `grid_dimensions³` uniform cells
+/// 2. **Cell Assignment**: Each simulation cell is assigned to grid cells based on position
+/// 3. **Prefix Sum**: Grid cell contents are stored using prefix-sum for cache efficiency
+/// 4. **Neighbor Search**: Collision detection only checks adjacent grid cells
+/// 
+/// ## Memory Layout
+/// 
+/// The grid uses a flat array with prefix sums instead of nested vectors:
+/// ```
+/// Grid Cell 0: [cell_0, cell_3, cell_7]     -> offset=0, count=3
+/// Grid Cell 1: [cell_1, cell_5]             -> offset=3, count=2  
+/// Grid Cell 2: [cell_2, cell_4, cell_6]     -> offset=5, count=3
+/// ```
+/// 
+/// This provides:
+/// - **Cache Efficiency**: Contiguous memory access
+/// - **Zero Allocations**: No runtime vector resizing
+/// - **Parallel Safety**: Multiple threads can read simultaneously
+/// 
+/// ## Performance Characteristics
+/// 
+/// - **Build Time**: O(n) where n is number of cells
+/// - **Query Time**: O(k) where k is average cells per grid cell
+/// - **Memory**: O(grid_dimensions³ + n) 
+/// - **Cache Misses**: Minimal due to contiguous layout
 #[derive(Clone)]
 pub struct DeterministicSpatialGrid {
+    /// Number of grid cells in each dimension (creates dimensions³ total cells)
     pub grid_dimensions: UVec3,
+    
+    /// Total world size (grid extends from -world_size/2 to +world_size/2)
     pub world_size: f32,
+    
+    /// Size of each individual grid cell
     pub cell_size: f32,
+    
+    /// Radius of spherical boundary (for active cell precomputation)
     pub sphere_radius: f32,
 
-    /// Pre-computed active cells (within sphere)
+    /// Pre-computed list of active grid cell coordinates
+    /// 
+    /// Only grid cells within the spherical boundary are considered "active".
+    /// This avoids processing empty regions of space.
     pub active_cells: Vec<IVec3>,
 
-    /// HashMap for O(1) lookup of active cell index
+    /// HashMap for O(1) lookup of active cell index from coordinates
+    /// 
+    /// Maps grid coordinates (x,y,z) to index in active_cells array.
+    /// Used during grid rebuild to quickly find where to place cells.
     pub active_cell_map: HashMap<IVec3, usize>,
 
-    /// Cell contents (flat array with prefix sums)
+    /// Flat array containing all cell indices, organized by grid cell
+    /// 
+    /// Layout: [grid_0_cells..., grid_1_cells..., grid_2_cells...]
+    /// Use cell_offsets to find where each grid cell's data starts.
     pub cell_contents: Vec<usize>,
 
-    /// Prefix sum offsets for each active grid cell
+    /// Starting offset in cell_contents for each active grid cell
+    /// 
+    /// cell_contents[cell_offsets[i]..cell_offsets[i]+cell_counts[i]]
+    /// contains all simulation cells in active grid cell i.
     pub cell_offsets: Vec<usize>,
 
-    /// Counts per grid cell (used during rebuild)
+    /// Number of simulation cells in each active grid cell
+    /// 
+    /// Used together with cell_offsets to slice cell_contents array.
+    /// Reset to zero at start of each rebuild.
     pub cell_counts: Vec<usize>,
 
-    /// Track which grid cells were used in last rebuild
+    /// Track which grid cells were used in the last rebuild
+    /// 
+    /// Optimization: only clear counts for grid cells that were actually used,
+    /// avoiding O(grid_dimensions³) clear operation each frame.
     pub used_grid_cells: Vec<usize>,
 }
 
 impl DeterministicSpatialGrid {
-    /// Create a new deterministic spatial grid
+    /// Create a new deterministic spatial grid with default capacity
+    /// 
+    /// Uses a default capacity of 10,000 cells, which is suitable for most
+    /// preview-mode simulations. For larger simulations, use `with_capacity()`.
+    /// 
+    /// # Arguments
+    /// * `grid_dim` - Number of grid cells per dimension (creates grid_dim³ total cells)
+    /// * `world_size` - Total world size (grid extends from -world_size/2 to +world_size/2)
+    /// * `sphere_radius` - Radius of spherical boundary for active cell computation
+    /// 
+    /// # Grid Density Guidelines
+    /// - 32: Small simulations (<1000 cells)
+    /// - 64: Medium simulations (1000-10000 cells)
+    /// - 128: Large simulations (>10000 cells)
     pub fn new(grid_dim: u32, world_size: f32, sphere_radius: f32) -> Self {
         Self::with_capacity(grid_dim, world_size, sphere_radius, 10_000)
     }
     
     /// Create a new deterministic spatial grid with specified cell capacity
+    /// 
+    /// The capacity determines the size of pre-allocated arrays. Choose based on
+    /// the maximum expected number of simulation cells, not the initial count.
+    /// 
+    /// # Arguments
+    /// * `grid_dim` - Number of grid cells per dimension
+    /// * `world_size` - Total world size  
+    /// * `sphere_radius` - Radius of spherical boundary
+    /// * `max_cells` - Maximum number of simulation cells to support
+    /// 
+    /// # Memory Usage
+    /// - Grid metadata: ~grid_dim³ * 8 bytes
+    /// - Cell storage: max_cells * 4 bytes
+    /// - Active cell map: ~grid_dim³ * 24 bytes (HashMap overhead)
+    /// 
+    /// Total for 64³ grid with 10k cells: ~8MB
     pub fn with_capacity(grid_dim: u32, world_size: f32, sphere_radius: f32, max_cells: usize) -> Self {
         let grid_dimensions = UVec3::splat(grid_dim);
         let cell_size = world_size / grid_dim as f32;
 
-        // Precompute active grid cells
+        // Precompute which grid cells are within the spherical boundary
+        // This avoids processing empty regions of space during collision detection
         let active_cells = Self::precompute_active_cells(grid_dimensions);
         let active_count = active_cells.len();
 
-        // Build HashMap for O(1) lookups
+        // Build HashMap for O(1) coordinate -> index lookups during rebuild
         let mut active_cell_map = HashMap::new();
         for (idx, &coord) in active_cells.iter().enumerate() {
             active_cell_map.insert(coord, idx);
@@ -68,18 +215,27 @@ impl DeterministicSpatialGrid {
             sphere_radius,
             active_cells,
             active_cell_map,
-            cell_contents: vec![0; max_cells],
-            cell_offsets: vec![0; active_count],
-            cell_counts: vec![0; active_count],
-            used_grid_cells: Vec::with_capacity(max_cells),
+            
+            // Pre-allocate arrays to avoid runtime allocations
+            cell_contents: vec![0; max_cells],           // Flat array of cell indices
+            cell_offsets: vec![0; active_count],         // Starting offset for each grid cell
+            cell_counts: vec![0; active_count],          // Count of cells in each grid cell
+            used_grid_cells: Vec::with_capacity(max_cells), // Track which cells were used
         }
     }
 
-    /// Precompute which grid cells are active
+    /// Precompute which grid cells are active (within simulation bounds)
+    /// 
+    /// Currently includes all grid cells, but could be optimized to only include
+    /// cells within a spherical or other shaped boundary to reduce memory usage
+    /// and processing time for sparse simulations.
+    /// 
+    /// # Returns
+    /// Vector of 3D grid coordinates for all active cells
     fn precompute_active_cells(grid_dimensions: UVec3) -> Vec<IVec3> {
         let mut active_cells = Vec::new();
 
-        // Include all grid cells
+        // Include all grid cells (could be optimized for spherical boundaries)
         for x in 0..grid_dimensions.x as i32 {
             for y in 0..grid_dimensions.y as i32 {
                 for z in 0..grid_dimensions.z as i32 {
@@ -92,10 +248,27 @@ impl DeterministicSpatialGrid {
     }
 
     /// Convert world position to grid coordinates
+    /// 
+    /// Maps a 3D world position to discrete grid cell coordinates.
+    /// Handles boundary clamping to ensure coordinates are always valid.
+    /// 
+    /// # Arguments
+    /// * `position` - World space position
+    /// 
+    /// # Returns
+    /// Grid cell coordinates (clamped to valid range)
+    /// 
+    /// # Coordinate System
+    /// - World space: [-world_size/2, +world_size/2] in each dimension
+    /// - Grid space: [0, grid_dimensions-1] in each dimension
     fn world_to_grid(&self, position: Vec3) -> IVec3 {
+        // Shift position to [0, world_size] range
         let offset_position = position + Vec3::splat(self.world_size / 2.0);
+        
+        // Scale to grid coordinates
         let grid_pos = offset_position / self.cell_size;
         
+        // Clamp to valid grid range to handle boundary cases
         let max_coord = (self.grid_dimensions.x - 1) as i32;
         IVec3::new(
             (grid_pos.x as i32).clamp(0, max_coord),
@@ -463,7 +636,8 @@ pub fn compute_collision_forces(
         } else if stiffness_b > 0.0 {
             stiffness_b
         } else {
-            config.default_stiffness
+            // Both cells have zero stiffness - use zero (no repulsion)
+            0.0
         };
 
         // Calculate spring force
@@ -708,12 +882,70 @@ pub fn update_nutrient_growth(
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
         if let Some(mode) = genome.modes.get(mode_index) {
-            // Cells gain mass over time based on their mode's nutrient_gain_rate
-            let mass_gain = mode.nutrient_gain_rate * dt;
-            state.masses[i] += mass_gain;
+            // Only grow if we haven't reached the maximum size yet
+            let current_mass = state.masses[i];
+            let max_mass = mode.max_cell_size;
             
-            // Update radius based on mass (radius = mass, clamped to max_cell_size)
-            state.radii[i] = state.masses[i].min(mode.max_cell_size).clamp(0.5, 2.0);
+            if current_mass < max_mass {
+                // Cells gain mass over time based on their mode's nutrient_gain_rate
+                let mass_gain = mode.nutrient_gain_rate * dt;
+                if mass_gain > 0.0 {
+                    let new_mass = (current_mass + mass_gain).min(max_mass);
+                    
+                    // Only update if mass actually changed
+                    if new_mass != current_mass {
+                        state.masses[i] = new_mass;
+                        
+                        // Update radius based on mass (clamped to reasonable bounds)
+                        let new_radius = new_mass.clamp(0.5, 2.0);
+                        if new_radius != state.radii[i] {
+                            state.radii[i] = new_radius;
+                            state.masses_changed = true; // Mark that masses/radii have changed
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Update nutrient growth for cells with multiple genomes
+/// Each cell uses its genome_id to look up the correct genome for growth parameters
+pub fn update_nutrient_growth_multi(
+    state: &mut CanonicalState,
+    genomes: &[Genome],
+    dt: f32,
+) {
+    for i in 0..state.cell_count {
+        let genome_id = state.genome_ids[i];
+        let mode_index = state.mode_indices[i];
+        
+        if let Some(genome) = genomes.get(genome_id) {
+            if let Some(mode) = genome.modes.get(mode_index) {
+                // Only grow if we haven't reached the maximum size yet
+                let current_mass = state.masses[i];
+                let max_mass = mode.max_cell_size;
+                
+                if current_mass < max_mass {
+                    // Cells gain mass over time based on their mode's nutrient_gain_rate
+                    let mass_gain = mode.nutrient_gain_rate * dt;
+                    if mass_gain > 0.0 {
+                        let new_mass = (current_mass + mass_gain).min(max_mass);
+                        
+                        // Only update if mass actually changed
+                        if new_mass != current_mass {
+                            state.masses[i] = new_mass;
+                            
+                            // Update radius based on mass (clamped to reasonable bounds)
+                            let new_radius = new_mass.clamp(0.5, 2.0);
+                            if new_radius != state.radii[i] {
+                                state.radii[i] = new_radius;
+                                state.masses_changed = true; // Mark that masses/radii have changed
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -723,6 +955,37 @@ pub fn update_nutrient_growth(
 // ============================================================================
 
 /// Single-threaded physics step function
+/// 
+/// Performs one complete physics simulation step using CPU-based calculations.
+/// This version is simpler and easier to debug than the parallel version, making
+/// it suitable for small simulations and development.
+/// 
+/// ## Physics Pipeline
+/// 
+/// 1. **Verlet Position Integration**: Update positions from velocities and accelerations
+/// 2. **Rotation Integration**: Update orientations from angular velocities  
+/// 3. **Spatial Grid Rebuild**: Update collision detection data structure
+/// 4. **Collision Detection**: Find overlapping cell pairs using spatial grid
+/// 5. **Force Calculation**: Compute repulsive forces between colliding cells
+/// 6. **Boundary Forces**: Apply soft spherical boundary constraints
+/// 7. **Verlet Velocity Integration**: Update velocities from accumulated forces
+/// 8. **Angular Integration**: Update angular velocities from torques
+/// 
+/// ## Performance Characteristics
+/// 
+/// - **Suitable for**: <1000 cells, debugging, deterministic testing
+/// - **Time Complexity**: O(n) for most operations, O(n*k) for collisions where k is average neighbors
+/// - **Memory**: No additional allocations during simulation
+/// 
+/// ## Integration Scheme
+/// 
+/// Uses Verlet integration for better stability in collision-heavy scenarios:
+/// - Position: x(t+dt) = x(t) + v(t)*dt + 0.5*a(t)*dt²
+/// - Velocity: v(t+dt) = v(t) + 0.5*(a(t) + a(t+dt))*dt
+/// 
+/// # Arguments
+/// * `state` - Mutable reference to simulation state (SoA layout)
+/// * `config` - Physics parameters (timestep, damping, forces)
 pub fn physics_step_st(
     state: &mut CanonicalState,
     config: &PhysicsConfig,
@@ -730,6 +993,8 @@ pub fn physics_step_st(
     let dt = config.fixed_timestep;
 
     // 1. Verlet integration (position update)
+    // Update positions based on current velocities and accelerations
+    // This must happen first to maintain Verlet integration stability
     verlet_integrate_positions(
         &mut state.positions[..state.cell_count],
         &state.velocities[..state.cell_count],
@@ -738,6 +1003,7 @@ pub fn physics_step_st(
     );
 
     // 2. Update rotations from angular velocities
+    // Integrate rotational motion independently of linear motion
     integrate_rotations(
         &mut state.rotations[..state.cell_count],
         &state.angular_velocities[..state.cell_count],
@@ -745,18 +1011,28 @@ pub fn physics_step_st(
     );
 
     // 3. Update spatial partitioning
+    // Rebuild the spatial grid with new positions for efficient collision detection
+    // This is O(n) and must be done after position updates
     state.spatial_grid.rebuild(&state.positions, state.cell_count);
 
     // 4. Detect collisions
+    // Find all overlapping cell pairs using the spatial grid
+    // Single-threaded version for simplicity and determinism
     let collisions = detect_collisions_st(state);
 
     // 5. Compute forces and torques
+    // Calculate repulsive forces between colliding cells
+    // Forces are accumulated in state.forces array
     compute_collision_forces(state, &collisions, config);
 
     // 6. Apply boundary conditions
+    // Soft spherical boundary prevents cells from escaping simulation volume
+    // Also applies torques to orient cells toward center
     apply_boundary_forces(state, config);
 
     // 7. Verlet integration (velocity update)
+    // Update velocities based on accumulated forces
+    // This completes the Verlet integration cycle
     verlet_integrate_velocities(
         &mut state.velocities[..state.cell_count],
         &mut state.accelerations[..state.cell_count],
@@ -768,6 +1044,7 @@ pub fn physics_step_st(
     );
 
     // 8. Update angular velocities from torques
+    // Integrate rotational dynamics with damping
     integrate_angular_velocities(
         &mut state.angular_velocities[..state.cell_count],
         &state.torques[..state.cell_count],
@@ -779,6 +1056,39 @@ pub fn physics_step_st(
 }
 
 /// Physics step with genome-based features (nutrient growth, division)
+/// 
+/// Extended physics simulation that includes biological behaviors defined by genomes.
+/// This version adds nutrient accumulation, cell division, and adhesion forces to
+/// the basic physics simulation.
+/// 
+/// ## Additional Features Beyond Basic Physics
+/// 
+/// - **Nutrient Growth**: Cells accumulate mass over time based on genome parameters
+/// - **Cell Division**: Cells divide when reaching mass and time thresholds
+/// - **Adhesion Forces**: Spring-damper forces between connected cells
+/// - **Genome Integration**: Cell behavior driven by genome mode settings
+/// 
+/// ## Division Processing
+/// 
+/// Cell division is handled in multiple passes to avoid conflicts:
+/// 1. Identify cells ready to divide (mass + time thresholds)
+/// 2. Filter out conflicting divisions (prevent cascade effects)
+/// 3. Create new cells and inherit adhesion connections
+/// 4. Return division events for external processing
+/// 
+/// ## Performance Notes
+/// 
+/// Uses parallel versions of collision detection and adhesion force calculation
+/// for better performance with larger cell populations.
+/// 
+/// # Arguments
+/// * `state` - Mutable reference to simulation state
+/// * `genome` - Genome defining cell behaviors
+/// * `config` - Physics parameters
+/// * `current_time` - Current simulation time (for division timing)
+/// 
+/// # Returns
+/// Vector of division events that occurred this step
 pub fn physics_step_with_genome(
     state: &mut CanonicalState,
     genome: &Genome,
@@ -808,12 +1118,15 @@ pub fn physics_step_with_genome(
     // 4. Detect collisions (use parallel version for better performance)
     let collisions = detect_collisions_parallel(state);
 
-    // 5. Compute forces and torques
+    // 5. Compute collision forces and torques
     compute_collision_forces(state, &collisions, config);
 
-    // 5.5. Compute adhesion forces
+    // 5.5. Compute adhesion forces (biological cell-cell connections)
     // Update adhesion settings cache if genome changed
     state.update_adhesion_settings_cache(genome);
+    
+    // Update membrane stiffness from genome mode settings
+    state.update_membrane_stiffness_from_genome(genome);
     
     // Apply adhesion forces using parallel version for better performance
     if state.adhesion_connections.active_count > 0 && !state.cached_adhesion_settings.is_empty() {
@@ -906,6 +1219,9 @@ pub fn physics_step_with_genomes(
     // Update adhesion settings cache from all genomes (combined mode indices)
     state.update_adhesion_settings_cache_multi(genomes);
     
+    // Update membrane stiffness from all genomes
+    state.update_membrane_stiffness_from_genomes(genomes);
+    
     // Apply adhesion forces using parallel version for better performance
     if state.adhesion_connections.active_count > 0 && !state.cached_adhesion_settings.is_empty() {
         crate::cell::compute_adhesion_forces_parallel(
@@ -945,9 +1261,8 @@ pub fn physics_step_with_genomes(
         config.angular_damping,
     );
 
-    // 9. Update nutrient growth (use first genome for now - TODO: per-cell genome)
-    let first_genome = &genomes[0];
-    update_nutrient_growth(state, first_genome, dt);
+    // 9. Update nutrient growth with per-cell genome support
+    update_nutrient_growth_multi(state, genomes, dt);
 
     // 10. Run division step with multiple genomes
     let max_cells = state.capacity;

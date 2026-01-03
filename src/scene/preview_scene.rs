@@ -56,9 +56,9 @@ impl PreviewScene {
         let genome = Genome::default();
         let config = PhysicsConfig::default();
         
-        let mut state = PreviewState::new(capacity);
+        let mut state = PreviewState::new(capacity, &config);
         state.genome_hash = PreviewState::compute_genome_hash(&genome);
-        state.update_initial_state(&genome);
+        state.update_initial_state(&genome, &config);
 
         let renderer = CellRenderer::new(device, queue, surface_config, capacity);
         let adhesion_renderer = AdhesionLineRenderer::new(device, queue, surface_config, capacity * 20); // 20 adhesions per cell max
@@ -103,7 +103,7 @@ impl PreviewScene {
                 self.genome = pending.clone();
                 self.state.genome_hash = PreviewState::compute_genome_hash(&self.genome);
                 self.state.clear_checkpoints();
-                self.state.update_initial_state(&self.genome);
+                self.state.update_initial_state(&self.genome, &self.config);
                 self.state.seek_to_time(self.state.current_time);
                 
                 self.pending_genome = None;

@@ -99,6 +99,12 @@ pub struct InstanceBuilder {
     mode_visuals_dirty: bool,
     cell_type_visuals_dirty: bool,
     
+    // Temporary buffers for data conversion (reused to avoid allocations)
+    temp_positions: Vec<[f32; 4]>,
+    temp_rotations: Vec<[f32; 4]>,
+    temp_mode_indices: Vec<u32>,
+    temp_genome_ids: Vec<u32>,
+    
     // Hash for change detection
     last_cell_count: usize,
     last_genome_count: usize,
@@ -446,6 +452,10 @@ impl InstanceBuilder {
             min_screen_size: 0.0,
             min_distance: 0.0,
             last_visible_count: 0,
+            temp_positions: Vec::new(),
+            temp_rotations: Vec::new(),
+            temp_mode_indices: Vec::new(),
+            temp_genome_ids: Vec::new(),
         }
     }
     
@@ -534,6 +544,26 @@ impl InstanceBuilder {
         self.genome_ids_dirty = true;
         self.mode_visuals_dirty = true;
         self.cell_type_visuals_dirty = true;
+    }
+    
+    /// Mark positions buffer as dirty (call when cell positions change).
+    pub fn mark_positions_dirty(&mut self) {
+        self.positions_dirty = true;
+    }
+    
+    /// Mark rotations buffer as dirty (call when cell rotations change).
+    pub fn mark_rotations_dirty(&mut self) {
+        self.rotations_dirty = true;
+    }
+    
+    /// Mark radii buffer as dirty (call when cell masses/radii change).
+    pub fn mark_radii_dirty(&mut self) {
+        self.radii_dirty = true;
+    }
+    
+    /// Mark mode indices buffer as dirty (call when cell modes change).
+    pub fn mark_mode_indices_dirty(&mut self) {
+        self.mode_indices_dirty = true;
     }
     
     /// Create or resize the Hi-Z texture for occlusion culling.
@@ -670,55 +700,83 @@ impl InstanceBuilder {
             return;
         }
         
-        // Update positions (convert Vec3 to vec4 for GPU alignment)
-        let positions_vec4: Vec<[f32; 4]> = state.positions[..cell_count]
-            .iter()
-            .map(|p| [p.x, p.y, p.z, 0.0])
-            .collect();
-        queue.write_buffer(&self.positions_buffer, 0, bytemuck::cast_slice(&positions_vec4));
-        
-        // Update rotations
-        let rotations: Vec<[f32; 4]> = state.rotations[..cell_count]
-            .iter()
-            .map(|q| [q.x, q.y, q.z, q.w])
-            .collect();
-        queue.write_buffer(&self.rotations_buffer, 0, bytemuck::cast_slice(&rotations));
-        
-        // Update radii
-        queue.write_buffer(&self.radii_buffer, 0, bytemuck::cast_slice(&state.radii[..cell_count]));
-        
-        // Update mode indices - now includes genome offset
-        // Each cell's mode_index is offset by its genome's mode_offset
-        let genome_mode_offsets: Vec<usize> = {
-            let mut offsets = Vec::with_capacity(genomes.len());
-            let mut offset = 0usize;
-            for genome in genomes {
-                offsets.push(offset);
-                offset += genome.modes.len();
+        // Only update buffers that are marked as dirty
+        if self.positions_dirty {
+            // Update positions (convert Vec3 to vec4 for GPU alignment)
+            // Reuse temporary buffer to avoid allocations
+            self.temp_positions.clear();
+            self.temp_positions.reserve(cell_count);
+            for i in 0..cell_count {
+                let p = state.positions[i];
+                self.temp_positions.push([p.x, p.y, p.z, 0.0]);
             }
-            offsets
-        };
+            queue.write_buffer(&self.positions_buffer, 0, bytemuck::cast_slice(&self.temp_positions));
+            self.positions_dirty = false;
+        }
         
-        let mode_indices: Vec<u32> = state.mode_indices[..cell_count]
-            .iter()
-            .zip(state.genome_ids[..cell_count].iter())
-            .map(|(&mode_idx, &genome_id)| {
+        if self.rotations_dirty {
+            // Update rotations
+            // Reuse temporary buffer to avoid allocations
+            self.temp_rotations.clear();
+            self.temp_rotations.reserve(cell_count);
+            for i in 0..cell_count {
+                let q = state.rotations[i];
+                self.temp_rotations.push([q.x, q.y, q.z, q.w]);
+            }
+            queue.write_buffer(&self.rotations_buffer, 0, bytemuck::cast_slice(&self.temp_rotations));
+            self.rotations_dirty = false;
+        }
+        
+        if self.radii_dirty {
+            // Update radii
+            queue.write_buffer(&self.radii_buffer, 0, bytemuck::cast_slice(&state.radii[..cell_count]));
+            self.radii_dirty = false;
+        }
+        
+        if self.mode_indices_dirty {
+            // Update mode indices - now includes genome offset
+            // Each cell's mode_index is offset by its genome's mode_offset
+            let genome_mode_offsets: Vec<usize> = {
+                let mut offsets = Vec::with_capacity(genomes.len());
+                let mut offset = 0usize;
+                for genome in genomes {
+                    offsets.push(offset);
+                    offset += genome.modes.len();
+                }
+                offsets
+            };
+        
+            // Reuse temporary buffer to avoid allocations
+            self.temp_mode_indices.clear();
+            self.temp_mode_indices.reserve(cell_count);
+            for i in 0..cell_count {
+                let mode_idx = state.mode_indices[i];
+                let genome_id = state.genome_ids[i];
                 let offset = genome_mode_offsets.get(genome_id).copied().unwrap_or(0);
-                (offset + mode_idx) as u32
-            })
-            .collect();
+                self.temp_mode_indices.push((offset + mode_idx) as u32);
+            }
+            
+            queue.write_buffer(&self.mode_indices_buffer, 0, bytemuck::cast_slice(&self.temp_mode_indices));
+            self.mode_indices_dirty = false;
+        }
         
-        queue.write_buffer(&self.mode_indices_buffer, 0, bytemuck::cast_slice(&mode_indices));
+        if self.cell_ids_dirty {
+            // Update cell IDs
+            queue.write_buffer(&self.cell_ids_buffer, 0, bytemuck::cast_slice(&state.cell_ids[..cell_count]));
+            self.cell_ids_dirty = false;
+        }
         
-        // Update cell IDs
-        queue.write_buffer(&self.cell_ids_buffer, 0, bytemuck::cast_slice(&state.cell_ids[..cell_count]));
-        
-        // Update genome IDs
-        let genome_ids: Vec<u32> = state.genome_ids[..cell_count]
-            .iter()
-            .map(|&i| i as u32)
-            .collect();
-        queue.write_buffer(&self.genome_ids_buffer, 0, bytemuck::cast_slice(&genome_ids));
+        if self.genome_ids_dirty {
+            // Update genome IDs
+            // Reuse temporary buffer to avoid allocations
+            self.temp_genome_ids.clear();
+            self.temp_genome_ids.reserve(cell_count);
+            for i in 0..cell_count {
+                self.temp_genome_ids.push(state.genome_ids[i] as u32);
+            }
+            queue.write_buffer(&self.genome_ids_buffer, 0, bytemuck::cast_slice(&self.temp_genome_ids));
+            self.genome_ids_dirty = false;
+        }
 
         // Update mode visuals from all genomes (combined into single buffer)
         // Force update if genome count changed (new genome added)

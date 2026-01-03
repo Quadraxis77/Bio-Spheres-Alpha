@@ -1,3 +1,48 @@
+//! # Application Core - wgpu Setup and Event Loop
+//! 
+//! This module contains the main [`App`] struct that coordinates the entire Bio-Spheres application.
+//! It handles wgpu initialization, window events, scene management, and the render loop.
+//! 
+//! ## Architecture Overview
+//! 
+//! The [`App`] struct serves as the central coordinator that:
+//! - Manages wgpu resources (device, queue, surface)
+//! - Handles window events and input routing
+//! - Coordinates between simulation scenes and UI
+//! - Orchestrates the render pipeline (3D scene → egui UI → present)
+//! 
+//! ## Event Flow
+//! 
+//! ```text
+//! Window Event → egui Input Check → Scene Input → Camera Update → Render
+//! ```
+//! 
+//! 1. **Input Routing**: Events are first offered to egui, then to scene/camera if not consumed
+//! 2. **Scene Updates**: Physics simulation and camera movement are updated each frame
+//! 3. **Rendering**: 3D scene renders first, then egui UI is composited on top
+//! 
+//! ## Scene Management
+//! 
+//! The app manages two simulation modes through [`SceneManager`]:
+//! - **Preview Mode**: CPU physics for genome editing and small simulations
+//! - **GPU Mode**: GPU compute for large-scale simulations with interactive tools
+//! 
+//! ## Tool System (GPU Mode)
+//! 
+//! In GPU mode, the app provides interactive tools via a radial menu:
+//! - **Insert**: Add cells from the current genome
+//! - **Remove**: Delete cells by clicking
+//! - **Boost**: Give cells maximum nutrients for immediate division
+//! - **Inspect**: Select cells for detailed information
+//! - **Drag**: Move cells in 3D space
+//! 
+//! ## Performance Monitoring
+//! 
+//! The app tracks:
+//! - Frame rate and render times
+//! - Culling statistics (frustum and occlusion)
+//! - Cell counts and simulation metrics
+
 use crate::scene::SceneManager;
 use crate::ui::{DockManager, PerformanceMetrics, UiSystem};
 use egui_wgpu::ScreenDescriptor;

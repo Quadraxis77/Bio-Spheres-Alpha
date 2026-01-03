@@ -40,15 +40,15 @@ pub struct InitialCell {
 
 impl InitialState {
     /// Create initial state from genome
-    pub fn from_genome(genome: &Genome, capacity: usize) -> Self {
+    pub fn from_genome(genome: &Genome, capacity: usize, physics_config: &crate::simulation::physics_config::PhysicsConfig) -> Self {
         let initial_mode_index = genome.initial_mode.max(0) as usize;
         let mode = genome.modes.get(initial_mode_index)
             .or_else(|| genome.modes.first());
         
-        let (split_interval, split_mass) = if let Some(m) = mode {
-            (m.split_interval, m.split_mass)
+        let (split_interval, split_mass, membrane_stiffness) = if let Some(m) = mode {
+            (m.split_interval, m.split_mass, m.membrane_stiffness)
         } else {
-            (5.0, 1.5)
+            (5.0, 1.5, physics_config.default_stiffness)
         };
         
         Self {
@@ -64,7 +64,7 @@ impl InitialState {
                 mode_index: initial_mode_index,
                 split_interval,
                 split_mass,
-                stiffness: 500.0, // Match reference: increased from 10.0 to prevent pass-through
+                stiffness: membrane_stiffness, // Use mode-specific membrane stiffness
             }],
             max_cells: capacity,
             rng_seed: 12345,
@@ -125,9 +125,9 @@ pub struct PreviewState {
 }
 
 impl PreviewState {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize, physics_config: &crate::simulation::physics_config::PhysicsConfig) -> Self {
         let genome = Genome::default();
-        let initial_state = InitialState::from_genome(&genome, capacity);
+        let initial_state = InitialState::from_genome(&genome, capacity, physics_config);
         
         Self {
             canonical_state: initial_state.to_canonical_state(),
@@ -168,6 +168,7 @@ impl PreviewState {
             mode.parent_make_adhesion.hash(&mut hasher);
             mode.split_mass.to_bits().hash(&mut hasher);
             mode.split_interval.to_bits().hash(&mut hasher);
+            mode.membrane_stiffness.to_bits().hash(&mut hasher);
             // Hash split direction (pitch and yaw)
             mode.parent_split_direction.x.to_bits().hash(&mut hasher);
             mode.parent_split_direction.y.to_bits().hash(&mut hasher);
@@ -238,8 +239,8 @@ impl PreviewState {
     }
     
     /// Update initial state when genome changes
-    pub fn update_initial_state(&mut self, genome: &Genome) {
-        self.initial_state = InitialState::from_genome(genome, self.canonical_state.capacity);
+    pub fn update_initial_state(&mut self, genome: &Genome, physics_config: &crate::simulation::physics_config::PhysicsConfig) {
+        self.initial_state = InitialState::from_genome(genome, self.canonical_state.capacity, physics_config);
     }
     
     /// Run resimulation to target time
