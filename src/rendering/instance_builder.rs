@@ -1085,8 +1085,8 @@ impl InstanceBuilder {
             compute_pass.set_pipeline(&self.pipeline);
             compute_pass.set_bind_group(0, bind_group, &[]);
             
-            // Dispatch with workgroup size of 64
-            let workgroup_count = (cell_count as u32 + 63) / 64;
+            // Dispatch with workgroup size of 128
+            let workgroup_count = (cell_count as u32 + 127) / 128;
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
         

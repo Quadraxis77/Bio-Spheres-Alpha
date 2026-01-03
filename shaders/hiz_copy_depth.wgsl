@@ -11,7 +11,7 @@ struct HizParams {
 @group(0) @binding(1) var depth_texture: texture_depth_2d;
 @group(0) @binding(2) var dst_texture: texture_storage_2d<r32float, write>;
 
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let coord = vec2<i32>(global_id.xy);
     

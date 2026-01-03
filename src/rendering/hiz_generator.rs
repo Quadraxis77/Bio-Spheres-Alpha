@@ -278,8 +278,8 @@ impl HizGenerator {
             compute_pass.set_pipeline(&self.copy_pipeline);
             compute_pass.set_bind_group(0, copy_bind_group, &[]);
 
-            let workgroups_x = (self.width + 7) / 8;
-            let workgroups_y = (self.height + 7) / 8;
+            let workgroups_x = (self.width + 15) / 16;
+            let workgroups_y = (self.height + 15) / 16;
             compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
 
@@ -309,8 +309,8 @@ impl HizGenerator {
             compute_pass.set_pipeline(&self.downsample_pipeline);
             compute_pass.set_bind_group(0, bind_group, &[]);
 
-            let workgroups_x = (dst_width + 7) / 8;
-            let workgroups_y = (dst_height + 7) / 8;
+            let workgroups_x = (dst_width + 15) / 16;
+            let workgroups_y = (dst_height + 15) / 16;
             compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
 
             src_width = dst_width;

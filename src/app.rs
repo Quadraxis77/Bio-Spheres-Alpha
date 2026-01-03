@@ -141,9 +141,6 @@ impl App {
                     let menu_visible = self.editor_state.radial_menu.visible;
                     let active_tool = self.editor_state.radial_menu.active_tool;
                     
-                    println!("MouseInput: button={:?}, state={:?}, menu_visible={}, active_tool={:?}", 
-                        button, state, menu_visible, active_tool);
-                    
                     if menu_visible && *button == MouseButton::Left && *state == ElementState::Pressed {
                         // Click while menu is open selects the hovered tool
                         self.editor_state.radial_menu.close(true);
@@ -161,22 +158,13 @@ impl App {
                         && *button == MouseButton::Left 
                         && *state == ElementState::Pressed
                     {
-                        println!("Insert conditions met, wants_pointer_input={}", self.ui.wants_pointer_input());
                         if !self.ui.wants_pointer_input() {
-                            println!("Insert tool click at ({}, {})", self.mouse_position.0, self.mouse_position.1);
                             if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                                 let world_pos = gpu_scene.screen_to_world(
                                     self.mouse_position.0,
                                     self.mouse_position.1,
                                 );
-                                println!("World position: {:?}", world_pos);
-                                if let Some(idx) = gpu_scene.insert_cell_from_genome(world_pos, &self.working_genome) {
-                                    println!("Inserted cell {} at {:?}, total: {}", idx, world_pos, gpu_scene.canonical_state.cell_count);
-                                } else {
-                                    println!("Failed to insert cell - at capacity?");
-                                }
-                            } else {
-                                println!("No GPU scene available");
+                                gpu_scene.insert_cell_from_genome(world_pos, &self.working_genome);
                             }
                             self.window.request_redraw();
                             return true;
@@ -197,7 +185,6 @@ impl App {
                                 self.mouse_position.1,
                             ) {
                                 gpu_scene.remove_cell(cell_idx);
-                                println!("Removed cell {}, remaining: {}", cell_idx, gpu_scene.canonical_state.cell_count);
                             }
                         }
                         self.window.request_redraw();
@@ -220,7 +207,6 @@ impl App {
                                 // Set mass to split_mass threshold so cell can divide
                                 let split_mass = gpu_scene.canonical_state.split_masses[cell_idx];
                                 gpu_scene.canonical_state.masses[cell_idx] = split_mass;
-                                println!("Boosted cell {} to mass {}", cell_idx, split_mass);
                             }
                         }
                         self.window.request_redraw();
@@ -241,7 +227,6 @@ impl App {
                                 self.mouse_position.1,
                             ) {
                                 self.editor_state.radial_menu.inspected_cell = Some(cell_idx);
-                                println!("Inspecting cell {}", cell_idx);
                             }
                         }
                         self.window.request_redraw();
@@ -364,6 +349,17 @@ impl App {
                     }
                 }
                 
+                // Test performance spike detection with F12 key
+                use winit::keyboard::{KeyCode, PhysicalKey};
+                if let PhysicalKey::Code(KeyCode::F12) = event.physical_key {
+                    if event.state == ElementState::Pressed {
+                        // Trigger a test performance spike log
+                        self.performance.log_test_spike(75.5, "F12 key pressed - testing spike detection system");
+                        log::info!("Performance spike test triggered via F12 key");
+                        return true;
+                    }
+                }
+                
                 // Only pass to camera if egui doesn't want the input
                 if !self.ui.wants_keyboard_input() {
                     self.scene_manager.active_scene_mut().camera_mut().handle_keyboard(event);
@@ -393,7 +389,7 @@ impl App {
         let dt = now.duration_since(self.last_render_time).as_secs_f32();
         self.last_render_time = now;
         
-        // Update performance metrics
+        // Update performance metrics (includes automatic spike detection)
         self.performance.update(dt);
         
         // Update camera and scene

@@ -351,7 +351,6 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                         *context.genome = genome_to_load;
                         // Switch to preview mode (genome editor)
                         context.request_preview_mode();
-                        println!("Loaded genome {} into editor", genome_id);
                     }
                 }
                 

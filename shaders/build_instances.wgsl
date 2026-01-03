@@ -233,7 +233,7 @@ fn sphere_occluded_hiz(center: vec3<f32>, radius: f32) -> bool {
 // Main Compute Shader
 // ============================================================================
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(128)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
     if (idx >= params.cell_count) {
