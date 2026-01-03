@@ -73,6 +73,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::QuaternionBall => render_quaternion_ball(ui, self.context),
             Panel::TimeSlider => render_time_slider(ui, self.context),
             Panel::ModeGraph => render_mode_graph(ui, self.context),
+            Panel::Help => render_help(ui, self.context, self.state),
         }
     }
 
@@ -292,16 +293,23 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, _state: &Global
             ).on_hover_text("Reset").clicked() {
                 context.request_reset();
             }
+            
+            // Add some spacing between buttons and info
+            ui.add_space(20.0);
+            
+            // Show simulation info to the right of buttons
+            ui.vertical(|ui| {
+                ui.label(format!("Time: {:.1}s", context.current_time()));
+                ui.label(format!("Cells: {}", context.cell_count()));
+                
+                // Show genome count
+                if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
+                    ui.label(format!("Genomes: {}", gpu_scene.genomes.len()));
+                }
+            });
         });
         
         ui.add_space(5.0);
-        
-        // Show simulation info
-        ui.label(format!("Cells: {}", context.cell_count()));
-        ui.label(format!("Time: {:.1}s", context.current_time()));
-        if context.is_paused() {
-            ui.colored_label(egui::Color32::YELLOW, "⏸ Paused");
-        }
     }
 }
 
@@ -330,6 +338,29 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             
             ui.add_space(8.0);
             ui.label(format!("Cell #{}", cell_idx));
+            ui.separator();
+            
+            // Action buttons at the top
+            let genome_id = state.genome_ids[cell_idx];
+            ui.horizontal(|ui| {
+                // Load Genome button
+                if genome_id < gpu_scene.genomes.len() {
+                    if ui.button("📋 Load Genome").clicked() {
+                        // Clone the genome to load it into the editor
+                        let genome_to_load = gpu_scene.genomes[genome_id].clone();
+                        *context.genome = genome_to_load;
+                        // Switch to preview mode (genome editor)
+                        context.request_preview_mode();
+                        println!("Loaded genome {} into editor", genome_id);
+                    }
+                }
+                
+                if ui.button("🗑 Clear Selection").clicked() {
+                    context.editor_state.radial_menu.inspected_cell = None;
+                }
+            });
+            
+            ui.add_space(8.0);
             ui.separator();
             
             // Position
@@ -361,7 +392,6 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             
             // Mode info
             let mode_idx = state.mode_indices[cell_idx];
-            let genome_id = state.genome_ids[cell_idx];
             ui.add_space(4.0);
             ui.label(format!("Mode index: {}", mode_idx));
             ui.label(format!("Genome ID: {}", genome_id));
@@ -382,27 +412,6 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             ui.add_space(4.0);
             ui.label(format!("Birth time: {:.1}s", birth_time));
             ui.label(format!("Age: {:.1}s", age));
-            
-            ui.add_space(12.0);
-            ui.separator();
-            
-            // Load Genome button
-            if genome_id < gpu_scene.genomes.len() {
-                if ui.button("📋 Load Genome in Editor").clicked() {
-                    // Clone the genome to load it into the editor
-                    let genome_to_load = gpu_scene.genomes[genome_id].clone();
-                    *context.genome = genome_to_load;
-                    // Switch to preview mode (genome editor)
-                    context.request_preview_mode();
-                    println!("Loaded genome {} into editor", genome_id);
-                }
-                ui.label("Opens genome editor with this cell's genome");
-            }
-            
-            ui.add_space(8.0);
-            if ui.button("Clear Selection").clicked() {
-                context.editor_state.radial_menu.inspected_cell = None;
-            }
         } else {
             ui.label("GPU scene not available");
         }
@@ -919,7 +928,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
     let available_width = ui.available_width();
     let copy_into_mode = context.editor_state.copy_into_dialog_open;
     
-    let (selection_changed, initial_changed, rename_index, color_change) = modes_list_items(
+    let (selection_changed, initial_changed, rename_completed, color_change) = modes_list_items(
         ui,
         &modes_data,
         &mut selected_index,
@@ -927,6 +936,8 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         available_width,
         copy_into_mode,
         &mut context.editor_state.color_picker_state,
+        &mut context.editor_state.renaming_mode,
+        &mut context.editor_state.rename_buffer,
     );
     
     // Handle mode selection change
@@ -968,10 +979,17 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         context.genome.initial_mode = initial_mode as i32;
     }
     
-    // Handle rename request
-    if let Some(mode_index) = rename_index {
-        context.editor_state.renaming_mode = Some(mode_index);
-        context.editor_state.rename_buffer = context.genome.modes[mode_index].name.clone();
+    // Handle rename completion (when user finishes inline editing)
+    if let Some((mode_index, new_name)) = rename_completed {
+        if mode_index < context.genome.modes.len() {
+            let final_name = if new_name.trim().is_empty() {
+                // Use default name if the new name is empty
+                context.genome.modes[mode_index].default_name.clone()
+            } else {
+                new_name
+            };
+            context.genome.modes[mode_index].name = final_name;
+        }
     }
     
     // Handle color change
@@ -983,32 +1001,6 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                 g as f32 / 255.0,
                 b as f32 / 255.0
             );
-        }
-    }
-    
-    // Handle rename dialog - more compact
-    if let Some(rename_index) = context.editor_state.renaming_mode {
-        if rename_index < context.genome.modes.len() {
-            ui.add_space(4.0); // Reduced spacing
-            ui.label("Rename Mode:");
-            
-            let mut buffer = context.editor_state.rename_buffer.clone();
-            let response = ui.text_edit_singleline(&mut buffer);
-            context.editor_state.rename_buffer = buffer;
-            
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0; // Compact button spacing
-                if ui.small_button("OK").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
-                    context.genome.modes[rename_index].name = context.editor_state.rename_buffer.clone();
-                    context.editor_state.renaming_mode = None;
-                    context.editor_state.rename_buffer.clear();
-                }
-                
-                if ui.small_button("Cancel").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
-                    context.editor_state.renaming_mode = None;
-                    context.editor_state.rename_buffer.clear();
-                }
-            });
         }
     }
     
@@ -2024,6 +2016,258 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
             mode.child_b.mode_number = child_b_modes[i];
         }
     }
+}
+
+/// Render the Help panel showing context-specific controls and shortcuts.
+fn render_help(ui: &mut Ui, context: &mut PanelContext, _state: &GlobalUiState) {
+    ui.heading("Help & Controls");
+    ui.separator();
+    
+    // Show current simulation mode
+    ui.horizontal(|ui| {
+        ui.label("Current Mode:");
+        ui.colored_label(
+            egui::Color32::from_rgb(100, 150, 255),
+            format!("{:?}", context.current_mode)
+        );
+    });
+    ui.add_space(8.0);
+    
+    // Show context-specific controls based on simulation mode
+    match context.current_mode {
+        SimulationMode::Preview => render_preview_help(ui, context),
+        SimulationMode::Gpu => render_gpu_help(ui, context),
+    }
+    
+    ui.separator();
+    render_general_help(ui);
+}
+
+/// Render help content specific to Preview mode (genome editing).
+fn render_preview_help(ui: &mut Ui, _context: &mut PanelContext) {
+    ui.heading("🧬 Preview Mode - Genome Editing");
+    ui.add_space(4.0);
+    
+    // Viewport controls
+    egui::CollapsingHeader::new("🎥 Viewport Controls")
+        .default_open(true)
+        .show(ui, |ui| {
+            help_section(ui, &[
+                ("Tab", "Toggle between Orbit and FreeFly camera modes"),
+                ("Middle Mouse + Drag", "Rotate camera (Orbit mode)"),
+                ("Right Mouse + Drag", "Rotate camera (FreeFly mode)"),
+                ("Mouse Wheel", "Zoom in/out (Orbit mode only)"),
+                ("WASD", "Move camera (FreeFly mode only)"),
+                ("Space", "Move up (FreeFly mode only)"),
+                ("C", "Move down (FreeFly mode only)"),
+                ("Q/E", "Roll left/right (FreeFly mode only)"),
+                ("Shift + WASD", "Fast movement (FreeFly mode)"),
+            ]);
+        });
+    
+    // Mode editing controls
+    egui::CollapsingHeader::new("🎛️ Mode Editing")
+        .default_open(true)
+        .show(ui, |ui| {
+            help_section(ui, &[
+                ("Double Click Mode", "Rename mode inline"),
+                ("Enter", "Confirm rename (empty = default name)"),
+                ("Escape", "Cancel rename"),
+                ("Click Away", "Cancel rename without saving"),
+                ("Right Click Mode", "Change mode color"),
+                ("Radio Button", "Set as initial mode"),
+                ("Copy Into", "Copy settings between modes"),
+                ("Reset Button", "Restore mode to defaults"),
+            ]);
+        });
+    
+    // Quaternion ball controls
+    egui::CollapsingHeader::new("🎯 Rotation Controls")
+        .default_open(false)
+        .show(ui, |ui| {
+            help_section(ui, &[
+                ("Drag Center", "Pitch/Yaw rotation"),
+                ("Drag Edge", "Roll rotation"),
+                ("Grid Snapping", "Enable for 11.25° increments"),
+                ("Axis Lock", "Automatic based on drag start"),
+                ("Red Line", "X-axis direction"),
+                ("Green Line", "Y-axis direction"),
+                ("Blue Line", "Z-axis direction"),
+            ]);
+        });
+    
+    // Time controls
+    egui::CollapsingHeader::new("⏱️ Time Controls")
+        .default_open(false)
+        .show(ui, |ui| {
+            help_section(ui, &[
+                ("Time Slider", "Scrub through preview timeline"),
+                ("Play/Pause", "Control simulation playback"),
+                ("Speed Control", "Adjust playback speed"),
+                ("Reset Time", "Return to start of timeline"),
+            ]);
+        });
+    
+    // Mode graph controls
+    egui::CollapsingHeader::new("🕸️ Mode Graph")
+        .default_open(false)
+        .show(ui, |ui| {
+            help_section(ui, &[
+                ("Add Node", "Add mode to graph visualization"),
+                ("Drag Node", "Move node position"),
+                ("Connect Pins", "Drag from output to input pin"),
+                ("Right Click Node", "Remove node from graph"),
+                ("Mouse Wheel", "Zoom graph view"),
+                ("Drag Background", "Pan graph view"),
+                ("Child A/B", "Output pins for mode transitions"),
+            ]);
+        });
+}
+
+/// Render help content specific to GPU mode (large-scale simulation).
+fn render_gpu_help(ui: &mut Ui, _context: &mut PanelContext) {
+    ui.heading("⚡ GPU Mode - Large-Scale Simulation");
+    ui.add_space(4.0);
+    
+    // Viewport controls
+    egui::CollapsingHeader::new("🎥 Viewport Controls")
+        .default_open(true)
+        .show(ui, |ui| {
+            help_section(ui, &[
+                ("Tab", "Toggle between Orbit and FreeFly camera modes"),
+                ("Middle Mouse + Drag", "Rotate camera (Orbit mode)"),
+                ("Right Mouse + Drag", "Rotate camera (FreeFly mode)"),
+                ("Mouse Wheel", "Zoom in/out (Orbit mode only)"),
+                ("WASD", "Move camera (FreeFly mode only)"),
+                ("Space", "Move up (FreeFly mode only)"),
+                ("C", "Move down (FreeFly mode only)"),
+                ("Q/E", "Roll left/right (FreeFly mode only)"),
+                ("Shift + WASD", "Fast movement (FreeFly mode)"),
+            ]);
+        });
+    
+    // Simulation controls
+    egui::CollapsingHeader::new("🧪 Simulation Controls")
+        .default_open(true)
+        .show(ui, |ui| {
+            help_section(ui, &[
+                ("Space", "Play/pause simulation"),
+                ("R", "Reset simulation to initial state"),
+                ("T", "Single step simulation"),
+                ("1-9", "Set simulation speed multiplier"),
+                ("F", "Toggle fullscreen"),
+                ("Tab", "Toggle UI visibility"),
+            ]);
+        });
+    
+    // Tool controls
+    egui::CollapsingHeader::new("🛠️ Tool Controls")
+        .default_open(true)
+        .show(ui, |ui| {
+            help_section(ui, &[
+                ("Hold Alt", "Open radial tool menu"),
+                ("Left Click (Menu Open)", "Select tool"),
+                ("Left Click (Insert Tool)", "Add cell at cursor"),
+                ("Left Click (Remove Tool)", "Delete cell at cursor"),
+                ("Left Click (Boost Tool)", "Give cell maximum nutrients"),
+                ("Left Click (Inspect Tool)", "Select cell for inspection"),
+                ("Left Click + Drag (Drag Tool)", "Move cell in 3D space"),
+            ]);
+        });
+    
+    // Performance monitoring
+    egui::CollapsingHeader::new("📊 Performance Monitoring")
+        .default_open(false)
+        .show(ui, |ui| {
+            help_section(ui, &[
+                ("FPS Counter", "Frames per second display"),
+                ("Cell Count", "Active simulation entities"),
+                ("GPU Memory", "VRAM usage monitoring"),
+                ("Compute Time", "Physics calculation timing"),
+                ("Render Time", "Frame rendering timing"),
+            ]);
+        });
+    
+    // Rendering controls
+    egui::CollapsingHeader::new("🎨 Rendering Controls")
+        .default_open(false)
+        .show(ui, |ui| {
+            help_section(ui, &[
+                ("Fog Toggle", "Enable/disable volumetric fog"),
+                ("Bloom", "Post-processing glow effect"),
+                ("Skybox", "Background environment"),
+                ("Cell Opacity", "Transparency settings"),
+                ("Adhesion Lines", "Connection visualization"),
+                ("Debug Overlays", "Development information"),
+            ]);
+        });
+}
+
+/// Render general help content available in all modes.
+fn render_general_help(ui: &mut Ui) {
+    ui.heading("⚙️ General Controls");
+    ui.add_space(4.0);
+    
+    // Panel management
+    egui::CollapsingHeader::new("📋 Panel Management")
+        .default_open(true)
+        .show(ui, |ui| {
+            help_section(ui, &[
+                ("Drag Tab", "Move panel to different location"),
+                ("Right Click Tab", "Panel context menu"),
+                ("X Button", "Close panel (if not locked)"),
+                ("Double Click Tab", "Maximize/restore panel"),
+                ("Drag to Edge", "Dock panel to window edge"),
+                ("Drag to Center", "Create tabbed panel group"),
+            ]);
+        });
+    
+    // Application controls
+    egui::CollapsingHeader::new("🖥️ Application")
+        .default_open(false)
+        .show(ui, |ui| {
+            help_section(ui, &[
+                ("Ctrl + S", "Save current genome/scene"),
+                ("Ctrl + O", "Open genome/scene file"),
+                ("Ctrl + N", "New genome/scene"),
+                ("Ctrl + Z", "Undo last action"),
+                ("Ctrl + Y", "Redo last action"),
+                ("F11", "Toggle fullscreen"),
+                ("Alt + F4", "Exit application"),
+                ("Ctrl + ,", "Open preferences"),
+            ]);
+        });
+    
+    // Theme and UI
+    egui::CollapsingHeader::new("🎨 Theme & UI")
+        .default_open(false)
+        .show(ui, |ui| {
+            help_section(ui, &[
+                ("Theme Editor", "Customize UI colors and fonts"),
+                ("Panel Locking", "Prevent accidental panel closure"),
+                ("Layout Reset", "Restore default panel layout"),
+                ("UI Scale", "Adjust interface size"),
+                ("Dark/Light Mode", "Toggle theme brightness"),
+            ]);
+        });
+    
+    ui.add_space(8.0);
+    ui.separator();
+    ui.small("💡 Tip: This help panel shows different controls based on your current simulation mode.");
+}
+
+/// Helper function to render a help section with key-value pairs.
+fn help_section(ui: &mut Ui, items: &[(&str, &str)]) {
+    egui::Grid::new("help_grid")
+        .num_columns(2)
+        .spacing([8.0, 4.0])
+        .show(ui, |ui| {
+            for (key, description) in items {
+                ui.label(egui::RichText::new(*key).strong().color(egui::Color32::from_rgb(150, 200, 255)));
+                ui.label(*description);
+                ui.end_row();
+            }
+        });
 }
 
 #[cfg(test)]

@@ -53,16 +53,24 @@ impl<Tab> DockArea<'_, Tab> {
                     unreachable!("a window surface should never be empty")
                 });
             let leaf = self.dock_state[surf_index][node_id].get_leaf_mut().unwrap();
-            tab_viewer
-                .title(&mut leaf.tabs[leaf.active.0])
-                .color(ui.visuals().widgets.noninteractive.fg_stroke.color)
+            
+            // Check if the leaf has any tabs before accessing them
+            if leaf.tabs.is_empty() {
+                // Return a default title for empty windows
+                WidgetText::from("Empty Window")
+            } else {
+                tab_viewer
+                    .title(&mut leaf.tabs[leaf.active.0])
+                    .color(ui.visuals().widgets.noninteractive.fg_stroke.color)
+            }
         };
 
         // Iterate through every node in dock_state[surf_index], and sum up the number of tabs in them
         let mut tab_count = 0;
         for node_index in self.dock_state[surf_index].breadth_first_index_iter() {
             if self.dock_state[surf_index][node_index].is_leaf() {
-                tab_count += self.dock_state[surf_index][node_index].tabs_count();
+                let node_tab_count = self.dock_state[surf_index][node_index].tabs_count();
+                tab_count += node_tab_count;
             }
         }
 

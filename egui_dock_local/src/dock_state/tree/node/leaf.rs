@@ -32,7 +32,7 @@ impl<Tab> LeafNode<Tab> {
             rect: Rect::NOTHING,
             viewport: Rect::NOTHING,
             tabs,
-            active: TabIndex(0),
+            active: TabIndex(0), // This will be invalid if tabs is empty, but we'll handle it in accessors
             scroll: 0.0,
             collapsed: false,
         }
@@ -136,8 +136,16 @@ impl<Tab> LeafNode<Tab> {
     /// This may return ``None`` if the leaf contains 0 tabs.
     #[inline]
     pub fn active_focused(&mut self) -> Option<(Rect, &mut Tab)> {
-        self.tabs
-            .get_mut(self.active.0)
-            .map(|tab| (self.viewport, tab))
+        if self.tabs.is_empty() {
+            None
+        } else {
+            // Ensure active index is valid
+            if self.active.0 >= self.tabs.len() {
+                self.active = TabIndex(0);
+            }
+            self.tabs
+                .get_mut(self.active.0)
+                .map(|tab| (self.viewport, tab))
+        }
     }
 }

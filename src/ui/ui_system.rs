@@ -106,8 +106,6 @@ impl UiSystem {
                     return false;
                 }
             }
-        } else {
-            println!("WARNING: viewport_rect is None!");
         }
         
         // Otherwise, check if egui wants the pointer
@@ -249,6 +247,18 @@ impl UiSystem {
                     .ui(ui, |ui| {
                         show_windows_menu(ui, &mut ui_state_copy, dock_manager);
                     });
+                
+                // Help button next to Windows dropdown
+                if ui.button("❓ Help").clicked() {
+                    let help_panel = crate::ui::panel::Panel::Help;
+                    if is_panel_open(dock_manager.current_tree(), &help_panel) {
+                        // If help is already open, close it
+                        close_panel(dock_manager.current_tree_mut(), &help_panel);
+                    } else {
+                        // Open help panel as floating window
+                        open_panel(dock_manager.current_tree_mut(), &help_panel);
+                    }
+                }
             });
         });
         
@@ -311,19 +321,33 @@ impl UiSystem {
                 editor_state.mode_graph_panel_location = Some(location);
                 dock_manager.current_tree_mut().remove_tab(location);
             } else {
-                // Panel is closed - restore to previous location or add to focused leaf
-                if let Some((surface, node, tab)) = editor_state.mode_graph_panel_location {
-                    // Try to restore to previous location - check if node still exists and is a leaf
-                    let tree = &dock_manager.current_tree()[surface];
-                    if node.0 < tree.len() && tree[node].is_leaf() {
-                        dock_manager.current_tree_mut()[surface][node].insert_tab(tab, panel);
+                // Panel is closed - restore to original location if available
+                if let Some((surface_index, node_index, tab_index)) = editor_state.mode_graph_panel_location {
+                    // Try to restore to the original location
+                    let dock_state = dock_manager.current_tree_mut();
+                    
+                    // Check if the surface still exists and has the node
+                    let can_restore = dock_state.get_surface(surface_index)
+                        .map(|surface| match surface {
+                            egui_dock::Surface::Main(tree) | egui_dock::Surface::Window(tree, _) => {
+                                node_index.0 < tree.len() && tree[node_index].is_leaf()
+                            }
+                            egui_dock::Surface::Empty => false,
+                        })
+                        .unwrap_or(false);
+                    
+                    if can_restore {
+                        // Restore to the original location
+                        dock_state[surface_index][node_index].insert_tab(tab_index, panel);
+                        editor_state.mode_graph_panel_location = None;
                     } else {
-                        // Node no longer exists or isn't a leaf, add to focused leaf
-                        dock_manager.current_tree_mut().push_to_focused_leaf(panel);
+                        // Original location no longer valid, create as floating window
+                        let _surface_index = dock_state.add_window(vec![panel]);
+                        editor_state.mode_graph_panel_location = None;
                     }
                 } else {
-                    // No stored location, add to focused leaf
-                    dock_manager.current_tree_mut().push_to_focused_leaf(panel);
+                    // No stored location, create as floating window
+                    let _surface_index = dock_manager.current_tree_mut().add_window(vec![panel]);
                 }
             }
         }
@@ -342,6 +366,28 @@ impl UiSystem {
         // Mark UI state as dirty if it changed
         if state_changed {
             self.mark_ui_state_dirty();
+        }
+
+        // Handle global click to clear text selection
+        if self.ctx.input(|i| i.pointer.any_click()) {
+            // Clear text selection on any click
+            self.ctx.memory_mut(|mem| {
+                mem.request_focus(egui::Id::NULL);
+            });
+            
+            // Clear text selection in labels
+            let plugin = self.ctx.plugin::<egui::text_selection::LabelSelectionState>();
+            plugin.lock().clear_selection();
+        }
+        
+        // Also clear text selection if Escape is pressed
+        if self.ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.ctx.memory_mut(|mem| {
+                mem.request_focus(egui::Id::NULL);
+            });
+            
+            let plugin = self.ctx.plugin::<egui::text_selection::LabelSelectionState>();
+            plugin.lock().clear_selection();
         }
 
         self.ctx.end_pass()
@@ -638,8 +684,9 @@ fn close_panel(tree: &mut egui_dock::DockState<crate::ui::panel::Panel>, panel: 
     tree.retain_tabs(|tab| tab != panel);
 }
 
-/// Open a panel in the dock tree
+/// Open a panel in the dock tree as a floating window
 fn open_panel(tree: &mut egui_dock::DockState<crate::ui::panel::Panel>, panel: &crate::ui::panel::Panel) {
-    // Add the panel to the focused leaf
-    tree.push_to_focused_leaf(*panel);
+    // Create a new floating window with the panel
+    // Ensure we always pass a non-empty vector to prevent crashes
+    let _surface_index = tree.add_window(vec![*panel]);
 }

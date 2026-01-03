@@ -218,16 +218,21 @@ impl CameraController {
             let delta = self.accumulated_mouse_delta.truncate() * self.mouse_sensitivity;
             
             if self.mode == CameraMode::Orbit {
-                // Orbit mode: rotate around world origin (matches BioSpheres-Q reference)
-                // Horizontal rotation (yaw) around world Y axis
-                let yaw = Quat::from_axis_angle(Vec3::Y, -delta.x);
+                // Orbit mode: consistent rotation around world origin
+                // Calculate yaw (horizontal) and pitch (vertical) separately
                 
-                // Vertical rotation (pitch) around camera's local right axis
-                let right = self.target_rotation * Vec3::X;
-                let pitch = Quat::from_axis_angle(right, -delta.y);
+                // Yaw: always rotate around world Y axis
+                let yaw_rotation = Quat::from_axis_angle(Vec3::Y, -delta.x);
                 
-                // Apply rotations to target (yaw * pitch * current_rotation)
-                self.target_rotation = yaw * pitch * self.target_rotation;
+                // Apply yaw rotation to current target rotation
+                self.target_rotation = yaw_rotation * self.target_rotation;
+                
+                // Pitch: rotate around the camera's current right axis (after yaw)
+                let right_axis = self.target_rotation * Vec3::X;
+                let pitch_rotation = Quat::from_axis_angle(right_axis, -delta.y);
+                
+                // Apply pitch rotation
+                self.target_rotation = pitch_rotation * self.target_rotation;
                 self.target_rotation = self.target_rotation.normalize();
             } else {
                 // FreeFly mode: free rotation

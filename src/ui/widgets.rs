@@ -878,7 +878,7 @@ pub fn modes_buttons(
 }
 
 /// Modes list items widget with full functionality
-/// Returns (selection_changed, initial_changed, rename_index, color_change)
+/// Returns (selection_changed, initial_changed, rename_completed, color_change)
 /// Validates: Requirements 3.3, 3.5, 3.6, 3.12
 pub fn modes_list_items(
     ui: &mut egui::Ui,
@@ -888,10 +888,12 @@ pub fn modes_list_items(
     width: f32,
     copy_into_mode: bool,
     color_picker_state: &mut Option<(usize, egui::ecolor::Hsva)>,
-) -> (bool, bool, Option<usize>, Option<(usize, (u8, u8, u8))>) { // Changed return type
+    renaming_mode: &mut Option<usize>,
+    rename_buffer: &mut String,
+) -> (bool, bool, Option<(usize, String)>, Option<(usize, (u8, u8, u8))>) { // Changed return type
     let mut selection_changed = false;
     let mut initial_changed = false;
-    let mut rename_index = None;
+    let mut rename_completed = None;
     let mut color_change = None;
     
     // Handle color picker if open - take ownership to avoid borrowing issues
@@ -967,6 +969,7 @@ pub fn modes_list_items(
             
             // Mode button with color and selection indicator
             let is_selected = *selected_index == index;
+            let is_renaming = renaming_mode.map_or(false, |idx| idx == index);
             
             // Calculate button colors based on selection state
             let button_color = if is_selected {
@@ -980,60 +983,123 @@ pub fn modes_list_items(
             // Calculate text color for readability
             let text_color = color_utils::text_color_for_background(button_color);
             
-            // Create button with custom styling
-            let button_response = ui.allocate_response(
-                egui::Vec2::new(width - 30.0, 20.0), // Reduced height from 24.0 to 20.0, reduced width margin from 40.0 to 30.0
-                egui::Sense::click()
-            );
-            
-            // Draw button background
-            let button_rect = button_response.rect;
-            let fill_color = if button_response.hovered() {
-                hovered_color
+            if is_renaming {
+                // Show inline text editor
+                let button_rect = egui::Rect::from_min_size(
+                    ui.cursor().min,
+                    egui::Vec2::new(width - 30.0, 20.0)
+                );
+                
+                // Draw button background for text editor
+                ui.painter().rect_filled(
+                    button_rect,
+                    egui::CornerRadius::same(4),
+                    button_color
+                );
+                
+                // Draw dashed border for selected mode
+                if is_selected {
+                    draw_dashed_border(ui, button_rect);
+                }
+                
+                // Create text editor for inline editing
+                let text_edit = egui::TextEdit::singleline(rename_buffer)
+                    .desired_width(width - 30.0)
+                    .font(egui::FontId::default());
+                
+                let text_response = ui.add(text_edit);
+                
+                // Auto-focus the text editor when it first appears
+                if text_response.gained_focus() {
+                    // Select all text for easy replacement
+                    if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), text_response.id) {
+                        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                            egui::text::CCursor::new(0),
+                            egui::text::CCursor::new(rename_buffer.len())
+                        )));
+                        state.store(ui.ctx(), text_response.id);
+                    }
+                } else if !text_response.has_focus() {
+                    // Request focus if not already focused
+                    text_response.request_focus();
+                }
+                
+                // Handle Enter key to confirm rename
+                if text_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    // Always save when Enter is pressed, even if empty (will be handled by caller)
+                    rename_completed = Some((index, rename_buffer.clone()));
+                    *renaming_mode = None;
+                    rename_buffer.clear();
+                }
+                
+                // Handle Escape key to cancel rename
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    *renaming_mode = None;
+                    rename_buffer.clear();
+                }
+                
+                // Handle clicking outside to cancel rename (don't save)
+                if text_response.lost_focus() && !ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    *renaming_mode = None;
+                    rename_buffer.clear();
+                }
             } else {
-                button_color
-            };
-            
-            ui.painter().rect_filled(
-                button_rect,
-                egui::CornerRadius::same(4),
-                fill_color
-            );
-            
-            // Draw dashed border for selected mode
-            if is_selected {
-                draw_dashed_border(ui, button_rect);
-            }
-            
-            // Draw text
-            ui.painter().text(
-                button_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                name,
-                egui::FontId::default(),
-                text_color,
-            );
-            
-            // Handle button interactions
-            if button_response.clicked() && !is_selected {
-                *selected_index = index;
-                selection_changed = true;
-            }
-            
-            // Handle double-click for rename (not in copy-into mode)
-            if button_response.double_clicked() && !copy_into_mode {
-                rename_index = Some(index);
-            }
-            
-            // Handle right-click for color picker
-            if button_response.secondary_clicked() {
-                let hsva = egui::ecolor::Hsva::from(color);
-                *color_picker_state = Some((index, hsva));
+                // Show normal button
+                let button_response = ui.allocate_response(
+                    egui::Vec2::new(width - 30.0, 20.0), // Reduced height from 24.0 to 20.0, reduced width margin from 40.0 to 30.0
+                    egui::Sense::click()
+                );
+                
+                // Draw button background
+                let button_rect = button_response.rect;
+                let fill_color = if button_response.hovered() {
+                    hovered_color
+                } else {
+                    button_color
+                };
+                
+                ui.painter().rect_filled(
+                    button_rect,
+                    egui::CornerRadius::same(4),
+                    fill_color
+                );
+                
+                // Draw dashed border for selected mode
+                if is_selected {
+                    draw_dashed_border(ui, button_rect);
+                }
+                
+                // Draw text
+                ui.painter().text(
+                    button_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    name,
+                    egui::FontId::default(),
+                    text_color,
+                );
+                
+                // Handle button interactions
+                if button_response.clicked() && !is_selected {
+                    *selected_index = index;
+                    selection_changed = true;
+                }
+                
+                // Handle double-click for rename (not in copy-into mode)
+                if button_response.double_clicked() && !copy_into_mode {
+                    *renaming_mode = Some(index);
+                    *rename_buffer = name.clone();
+                }
+                
+                // Handle right-click for color picker
+                if button_response.secondary_clicked() {
+                    let hsva = egui::ecolor::Hsva::from(color);
+                    *color_picker_state = Some((index, hsva));
+                }
             }
         });
     }
     
-    (selection_changed, initial_changed, rename_index, color_change)
+    (selection_changed, initial_changed, rename_completed, color_change)
 }
 
 /// Draw dashed border selection indicator with 6.0 pixel segments

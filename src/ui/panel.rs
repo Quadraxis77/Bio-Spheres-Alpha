@@ -64,6 +64,8 @@ pub enum Panel {
     TimeSlider,
     /// Mode graph panel for visualizing mode connections.
     ModeGraph,
+    /// Help panel showing context-specific controls and shortcuts.
+    Help,
 }
 
 impl Panel {
@@ -85,6 +87,7 @@ impl Panel {
             Panel::LightingSettings => true,
             Panel::GizmoSettings => true,
             Panel::RenderingControls => true,
+            Panel::Help => true,
 
             // Preview mode only (genome editing)
             Panel::GenomeEditor => mode == SimulationMode::Preview,
@@ -160,6 +163,7 @@ impl Panel {
             Panel::QuaternionBall,
             Panel::TimeSlider,
             Panel::ModeGraph,
+            Panel::Help,
         ]
     }
 
@@ -189,6 +193,7 @@ impl Panel {
             Panel::QuaternionBall => "Child Rotation",
             Panel::TimeSlider => "Time Slider",
             Panel::ModeGraph => "Mode Graph",
+            Panel::Help => "Help",
         }
     }
 
