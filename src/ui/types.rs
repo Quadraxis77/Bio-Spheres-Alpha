@@ -325,6 +325,12 @@ impl GlobalUiState {
         }
     }
 
+    /// Reset to embedded default UI state.
+    pub fn reset_to_embedded_default(&mut self) {
+        *self = Self::load_embedded_default();
+        log::info!("Reset UI state to embedded default");
+    }
+
     /// Take the pending mode request, if any.
     pub fn take_mode_request(&mut self) -> Option<SimulationMode> {
         self.mode_request.take()
@@ -349,12 +355,38 @@ impl GlobalUiState {
                     return state;
                 }
                 Err(e) => {
-                    log::warn!("Failed to load UI state: {}. Using default.", e);
+                    log::warn!("Failed to load UI state: {}. Using embedded default.", e);
                 }
             }
+        } else {
+            log::info!("No saved UI state found, using embedded default");
         }
         
-        Self::default()
+        // Try to load from embedded default
+        Self::load_embedded_default()
+    }
+
+    /// Load embedded default UI state.
+    fn load_embedded_default() -> Self {
+        let embedded_content = include_str!("../../default_ui_state.ron");
+        
+        log::info!("Attempting to load embedded default UI state");
+        log::debug!("Embedded UI state content length: {} characters", embedded_content.len());
+        
+        match ron::from_str::<GlobalUiState>(embedded_content) {
+            Ok(state) => {
+                log::info!("Successfully loaded embedded default UI state");
+                state
+            }
+            Err(e) => {
+                log::error!(
+                    "Failed to parse embedded default UI state: {}. Using hardcoded default.",
+                    e
+                );
+                log::debug!("Embedded content preview: {}", &embedded_content[..embedded_content.len().min(200)]);
+                Self::default()
+            }
+        }
     }
 
     /// Load UI state from a specific file.

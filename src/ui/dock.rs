@@ -105,13 +105,36 @@ impl DockManager {
         }
     }
 
-    /// Reset current scene to default layout.
-    pub fn reset_current_to_default(&mut self) {
+    /// Reset current scene to embedded default layout.
+    pub fn reset_current_to_embedded_default(&mut self) {
+        log::info!("Resetting {} layout to embedded default", self.current_mode.display_name());
         let default_state = Self::load_default_layout(self.current_mode);
         self.scene_trees.insert(self.current_mode, default_state);
         self.dirty = true;
         log::info!(
-            "Reset {} layout to saved default",
+            "Successfully reset {} layout to embedded default",
+            self.current_mode.display_name()
+        );
+    }
+
+    /// Reset all scenes to embedded default layouts.
+    pub fn reset_all_to_embedded_default(&mut self) {
+        for mode in SimulationMode::all() {
+            let default_state = Self::load_default_layout(*mode);
+            self.scene_trees.insert(*mode, default_state);
+        }
+        self.dirty = true;
+        log::info!("Reset all layouts to embedded defaults");
+    }
+
+    /// Reset current scene to default layout.
+    pub fn reset_current_to_default(&mut self) {
+        log::info!("Resetting {} layout to default", self.current_mode.display_name());
+        let default_state = Self::load_default_layout(self.current_mode);
+        self.scene_trees.insert(self.current_mode, default_state);
+        self.dirty = true;
+        log::info!(
+            "Successfully reset {} layout to saved default",
             self.current_mode.display_name()
         );
     }
@@ -155,27 +178,34 @@ impl DockManager {
         PathBuf::from(format!("default_dock_state_{}.ron", mode.dock_file_suffix()))
     }
 
-    /// Load default layout from file, or create hardcoded default if file doesn't exist.
+    /// Load default layout from embedded resources or create hardcoded default if not available.
     fn load_default_layout(mode: SimulationMode) -> DockState<Panel> {
-        let default_path = Self::default_layout_file_path(mode);
+        // Try to load from embedded resources first
+        let embedded_content = match mode {
+            SimulationMode::Preview => include_str!("../../default_dock_state_preview.ron"),
+            SimulationMode::Gpu => include_str!("../../default_dock_state_gpu.ron"),
+        };
         
-        if default_path.exists() {
-            match Self::load_from_file(&default_path) {
-                Ok(state) => {
-                    log::info!("Loaded saved default layout for {} from {:?}", mode.display_name(), default_path);
-                    return state;
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Failed to load saved default layout for {}: {}. Using hardcoded default.",
-                        mode.display_name(),
-                        e
-                    );
-                }
+        log::info!("Attempting to load embedded default layout for {}", mode.display_name());
+        log::debug!("Embedded content length: {} characters", embedded_content.len());
+        
+        match ron::from_str::<DockState<Panel>>(embedded_content) {
+            Ok(state) => {
+                log::info!("Successfully loaded embedded default layout for {}", mode.display_name());
+                return state;
+            }
+            Err(e) => {
+                log::error!(
+                    "Failed to parse embedded default layout for {}: {}. Using hardcoded default.",
+                    mode.display_name(),
+                    e
+                );
+                log::debug!("Embedded content preview: {}", &embedded_content[..embedded_content.len().min(200)]);
             }
         }
         
         // Fall back to hardcoded default
+        log::info!("Using hardcoded default layout for {}", mode.display_name());
         Self::create_hardcoded_default_layout(mode)
     }
 
@@ -191,14 +221,17 @@ impl DockManager {
                 }
                 Err(e) => {
                     log::warn!(
-                        "Failed to load dock layout for {}: {}. Using default.",
+                        "Failed to load dock layout for {}: {}. Using embedded default.",
                         mode.display_name(),
                         e
                     );
                 }
             }
+        } else {
+            log::info!("No saved dock layout found for {}, using embedded default", mode.display_name());
         }
 
+        // Use embedded default layout (this will be used for first-time users)
         Self::load_default_layout(mode)
     }
 
