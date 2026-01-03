@@ -107,11 +107,11 @@ impl DockManager {
 
     /// Reset current scene to default layout.
     pub fn reset_current_to_default(&mut self) {
-        let default_state = Self::create_default_layout(self.current_mode);
+        let default_state = Self::load_default_layout(self.current_mode);
         self.scene_trees.insert(self.current_mode, default_state);
         self.dirty = true;
         log::info!(
-            "Reset {} layout to default",
+            "Reset {} layout to saved default",
             self.current_mode.display_name()
         );
     }
@@ -119,11 +119,11 @@ impl DockManager {
     /// Reset all scenes to default layouts.
     pub fn reset_all_to_default(&mut self) {
         for mode in SimulationMode::all() {
-            let default_state = Self::create_default_layout(*mode);
+            let default_state = Self::load_default_layout(*mode);
             self.scene_trees.insert(*mode, default_state);
         }
         self.dirty = true;
-        log::info!("Reset all layouts to default");
+        log::info!("Reset all layouts to saved defaults");
     }
 
     /// Get list of available simulation modes.
@@ -134,6 +134,49 @@ impl DockManager {
     /// Get the dock file path for a specific mode.
     fn dock_file_path(mode: SimulationMode) -> PathBuf {
         PathBuf::from(format!("dock_state_{}.ron", mode.dock_file_suffix()))
+    }
+
+    /// Save current layout as the new default for new players.
+    ///
+    /// This copies the current dock layout files to serve as the new defaults
+    /// that will be used when the layout files don't exist (first-time startup).
+    pub fn save_current_as_default(&self) -> Result<(), DockSaveError> {
+        // Save current layouts to backup files that will be used as defaults
+        for (mode, state) in &self.scene_trees {
+            let default_path = Self::default_layout_file_path(*mode);
+            Self::save_to_file(&default_path, state)?;
+            log::info!("Saved current {} layout as new default to {:?}", mode.display_name(), default_path);
+        }
+        Ok(())
+    }
+
+    /// Get the path for the default layout file for a mode.
+    fn default_layout_file_path(mode: SimulationMode) -> PathBuf {
+        PathBuf::from(format!("default_dock_state_{}.ron", mode.dock_file_suffix()))
+    }
+
+    /// Load default layout from file, or create hardcoded default if file doesn't exist.
+    fn load_default_layout(mode: SimulationMode) -> DockState<Panel> {
+        let default_path = Self::default_layout_file_path(mode);
+        
+        if default_path.exists() {
+            match Self::load_from_file(&default_path) {
+                Ok(state) => {
+                    log::info!("Loaded saved default layout for {} from {:?}", mode.display_name(), default_path);
+                    return state;
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to load saved default layout for {}: {}. Using hardcoded default.",
+                        mode.display_name(),
+                        e
+                    );
+                }
+            }
+        }
+        
+        // Fall back to hardcoded default
+        Self::create_hardcoded_default_layout(mode)
     }
 
     /// Load dock state from disk or create default for a mode.
@@ -156,7 +199,7 @@ impl DockManager {
             }
         }
 
-        Self::create_default_layout(mode)
+        Self::load_default_layout(mode)
     }
 
     /// Load dock state from a RON file.
@@ -223,8 +266,8 @@ impl DockManager {
         log::info!("Reloaded dock layout for {}", mode.display_name());
     }
 
-    /// Create default layout for a specific mode.
-    fn create_default_layout(mode: SimulationMode) -> DockState<Panel> {
+    /// Create hardcoded default layout for a specific mode.
+    fn create_hardcoded_default_layout(mode: SimulationMode) -> DockState<Panel> {
         match mode {
             SimulationMode::Preview => create_default_preview_layout(),
             SimulationMode::Gpu => create_default_gpu_layout(),

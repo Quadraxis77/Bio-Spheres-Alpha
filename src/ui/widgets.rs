@@ -1024,22 +1024,20 @@ pub fn modes_list_items(
                     text_response.request_focus();
                 }
                 
-                // Handle Enter key to confirm rename
-                if text_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                // Handle Enter key to confirm rename (check this first, before focus loss)
+                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     // Always save when Enter is pressed, even if empty (will be handled by caller)
                     rename_completed = Some((index, rename_buffer.clone()));
                     *renaming_mode = None;
                     rename_buffer.clear();
                 }
-                
                 // Handle Escape key to cancel rename
-                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     *renaming_mode = None;
                     rename_buffer.clear();
                 }
-                
                 // Handle clicking outside to cancel rename (don't save)
-                if text_response.lost_focus() && !ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                else if text_response.lost_focus() {
                     *renaming_mode = None;
                     rename_buffer.clear();
                 }

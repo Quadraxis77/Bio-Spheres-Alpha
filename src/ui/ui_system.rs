@@ -660,17 +660,49 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
 
     ui.separator();
 
-    // Reset to Default Layout button
-    if ui.button("Reset to Default Layout").clicked() {
-        dock_manager.reset_current_to_default();
-        log::info!("Reset to default layout");
+    // Layout Management
+    ui.label("Layout Management:");
+    
+    // Save current layout as default button
+    if ui.button("💾 Save Current as Default").clicked() {
+        match dock_manager.save_current_as_default() {
+            Ok(()) => {
+                log::info!("Successfully saved current layout as default for new players");
+            }
+            Err(e) => {
+                log::error!("Failed to save current layout as default: {}", e);
+            }
+        }
     }
     
-    // Save Current as Default button
-    if ui.button("Save Current as Default").clicked() {
-        dock_manager.save_current();
-        log::info!("Saved current layout");
+    // Reset to default layout button
+    if ui.button("🔄 Reset to Default").clicked() {
+        dock_manager.reset_current_to_default();
     }
+    
+    ui.separator();
+    
+    // Layout file information
+    ui.label("Layout Files:");
+    ui.small("Current layout files:");
+    
+    let current_mode = dock_manager.current_mode();
+    let layout_file = format!("dock_state_{}.ron", current_mode.dock_file_suffix());
+    let default_file = format!("default_dock_state_{}.ron", current_mode.dock_file_suffix());
+    
+    ui.horizontal(|ui| {
+        ui.small("• Active:");
+        ui.small(&layout_file);
+    });
+    
+    ui.horizontal(|ui| {
+        ui.small("• Default:");
+        if std::path::Path::new(&default_file).exists() {
+            ui.small(&default_file);
+        } else {
+            ui.small("(using hardcoded default)");
+        }
+    });
 }
 
 /// Check if a panel is currently open in the dock tree
