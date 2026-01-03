@@ -663,18 +663,6 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
     // Layout Management
     ui.label("Layout Management:");
     
-    // Save current layout as default button
-    if ui.button("💾 Save Current as Default").clicked() {
-        match dock_manager.save_current_as_default() {
-            Ok(()) => {
-                log::info!("Successfully saved current layout as default for new players");
-            }
-            Err(e) => {
-                log::error!("Failed to save current layout as default: {}", e);
-            }
-        }
-    }
-    
     // Reset to default layout button
     if ui.button("🔄 Reset to Default").clicked() {
         dock_manager.reset_current_to_default();
