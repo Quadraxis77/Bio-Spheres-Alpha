@@ -61,7 +61,7 @@ impl PreviewScene {
         state.update_initial_state(&genome, &config);
 
         let renderer = CellRenderer::new(device, queue, surface_config, capacity);
-        let adhesion_renderer = AdhesionLineRenderer::new(device, queue, surface_config, capacity * 20); // 20 adhesions per cell max
+        let adhesion_renderer = AdhesionLineRenderer::new(device, queue, surface_config, capacity * 10); // 10 adhesions per cell max
         let gizmo_renderer = OrientationGizmoRenderer::new(device, queue, surface_config);
         let split_ring_renderer = SplitRingRenderer::new(device, queue, surface_config);
 

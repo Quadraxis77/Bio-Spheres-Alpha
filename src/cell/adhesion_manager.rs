@@ -3,10 +3,10 @@ use super::adhesion::{AdhesionConnections, AdhesionIndices, MAX_ADHESIONS_PER_CE
 use super::adhesion_zones::classify_bond_direction;
 
 /// Adhesion connection manager
-/// Handles proper adhesion index slot management (20 slots per cell, -1 for empty)
+/// Handles proper adhesion index slot management (10 slots per cell, -1 for empty)
 #[derive(Clone)]
 pub struct AdhesionConnectionManager {
-    /// Adhesion indices for each cell (20 slots per cell)
+    /// Adhesion indices for each cell (10 slots per cell)
     pub cell_adhesion_indices: Vec<AdhesionIndices>,
 }
 

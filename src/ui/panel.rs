@@ -209,14 +209,21 @@ impl Panel {
 
     /// Check if this panel should be closeable by the user.
     ///
-    /// All panels are closeable by default - locking is handled at the UI level.
+    /// The Viewport panel is not closeable as it's essential for the application.
+    /// All other panels are closeable by default - locking is handled at the UI level.
     pub fn is_closeable(&self) -> bool {
-        true // All panels are closeable unless locked by the UI system
+        match self {
+            Panel::Viewport => false, // Viewport is essential and cannot be closed
+            _ => true, // All other panels are closeable unless locked by the UI system
+        }
     }
 
     /// Check if this panel can be floated into a separate window.
     pub fn allowed_in_windows(&self) -> bool {
-        true // All panels can be floated
+        match self {
+            Panel::Viewport => false, // Viewport should stay in main window
+            _ => true, // All other panels can be floated
+        }
     }
 }
 
@@ -263,8 +270,10 @@ mod tests {
 
     #[test]
     fn test_all_panels_are_closeable() {
-        // All panels should be closeable by default - locking is handled at UI level
-        assert!(Panel::Viewport.is_closeable());
+        // Viewport is not closeable as it's essential
+        assert!(!Panel::Viewport.is_closeable());
+        
+        // All other panels should be closeable by default - locking is handled at UI level
         assert!(Panel::CellInspector.is_closeable());
         assert!(Panel::LeftPanel.is_closeable());
         assert!(Panel::RightPanel.is_closeable());

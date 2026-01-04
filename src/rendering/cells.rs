@@ -123,6 +123,29 @@ use crate::simulation::CanonicalState;
 use glam::{Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
 
+/// Adhesion line data for rendering connections between cells.
+///
+/// This structure contains all the data needed to render an adhesion line
+/// between two connected cells, including positions, visual properties,
+/// and connection strength information.
+#[derive(Debug, Clone)]
+pub struct AdhesionLineData {
+    /// Start position of the adhesion line (cell A surface)
+    pub start_pos: Vec3,
+    /// End position of the adhesion line (cell B surface)
+    pub end_pos: Vec3,
+    /// Radius of the starting cell (for surface attachment calculation)
+    pub start_radius: f32,
+    /// Radius of the ending cell (for surface attachment calculation)
+    pub end_radius: f32,
+    /// RGBA color of the adhesion line
+    pub color: [f32; 4],
+    /// Thickness of the adhesion line
+    pub thickness: f32,
+    /// Connection strength (0.0 = weak, 1.0 = strong)
+    pub connection_strength: f32,
+}
+
 /// High-performance cell renderer using GPU instancing and Order-Independent Transparency
 ///
 /// This renderer can handle thousands of cells efficiently by using GPU instancing
@@ -1220,5 +1243,303 @@ impl CellRenderer {
         }
 
         instances
+    }
+
+    /// Update camera and lighting uniforms for GPU scene rendering.
+    ///
+    /// This method updates the camera and lighting uniform buffers with the
+    /// current frame's camera and lighting data. It's used by the GPU scene
+    /// to update rendering parameters before drawing cells.
+    ///
+    /// # Arguments
+    /// * `queue` - wgpu queue for buffer updates
+    /// * `view_proj` - Combined view-projection matrix
+    /// * `camera_pos` - Camera world position
+    /// * `time` - Current simulation time for animations
+    pub fn update_camera_and_lighting(
+        &self,
+        queue: &wgpu::Queue,
+        view_proj: Mat4,
+        camera_pos: Vec3,
+        time: f32,
+    ) {
+        // Update camera uniform
+        let camera_uniform = CameraUniform {
+            view_proj: view_proj.to_cols_array_2d(),
+            camera_pos: camera_pos.to_array(),
+            _padding: 0.0,
+        };
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
+
+        // Update lighting uniform
+        let light_dir = Vec3::new(0.5, 1.0, 0.3).normalize();
+        let lighting_uniform = LightingUniform {
+            light_direction: light_dir.to_array(),
+            _padding1: 0.0,
+            light_color: [0.8, 0.8, 0.8],
+            _padding2: 0.0,
+            ambient_color: [0.3, 0.3, 0.35],
+            time,
+        };
+        queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
+    }
+
+    /// Render cells using GPU-extracted instance data.
+    ///
+    /// This method renders cells using instance data that was extracted directly
+    /// from GPU physics buffers by compute shaders. It bypasses the CPU instance
+    /// building process entirely for maximum performance.
+    ///
+    /// # Arguments
+    /// * `render_pass` - Active render pass for drawing
+    /// * `instance_buffer` - GPU buffer containing extracted instance data
+    /// * `instance_count` - Number of instances to render
+    ///
+    /// # Performance Notes
+    /// - Uses GPU-extracted instance data (no CPU involvement)
+    /// - Direct GPU-to-GPU rendering pipeline
+    /// - Optimal for large-scale simulations with thousands of cells
+    /// - Compatible with triple-buffered GPU scene architecture
+    pub fn render_with_gpu_instances(
+        &self,
+        render_pass: &mut wgpu::RenderPass,
+        instance_buffer: &wgpu::Buffer,
+        instance_count: u32,
+    ) {
+        if instance_count == 0 {
+            return;
+        }
+
+        // Set up rendering pipeline
+        render_pass.set_pipeline(&self.opaque_pipeline);
+        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        
+        // Set vertex buffers
+        render_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+        render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
+        
+        // Draw all instances
+        render_pass.draw(0..6, 0..instance_count);
+    }
+
+    /// Render cells using GPU-extracted instance data with depth pre-pass optimization.
+    ///
+    /// This method provides the most efficient rendering path for GPU-extracted instance data
+    /// by using a depth pre-pass to minimize overdraw. It's specifically optimized for
+    /// large-scale GPU simulations with thousands of cells.
+    ///
+    /// # Arguments
+    /// * `encoder` - Command encoder for GPU operations
+    /// * `queue` - wgpu queue for uniform buffer updates
+    /// * `view` - Render target texture view
+    /// * `instance_buffer` - GPU buffer containing extracted instance data
+    /// * `instance_count` - Number of instances to render
+    /// * `view_proj` - Combined view-projection matrix
+    /// * `camera_pos` - Camera world position
+    /// * `time` - Current simulation time for animations
+    ///
+    /// # Performance Notes
+    /// - Uses depth pre-pass for maximum overdraw reduction
+    /// - Direct GPU-to-GPU rendering pipeline
+    /// - No CPU involvement in instance data processing
+    /// - Optimal for GPU scene triple-buffered architecture
+    pub fn render_gpu_instances_optimized(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+        instance_buffer: &wgpu::Buffer,
+        instance_count: u32,
+        view_proj: glam::Mat4,
+        camera_pos: glam::Vec3,
+        time: f32,
+    ) {
+        if instance_count == 0 {
+            return;
+        }
+
+        // Update camera and lighting uniforms
+        self.update_camera_and_lighting(queue, view_proj, camera_pos, time);
+
+        // Pass 1: Depth pre-pass for all GPU-extracted instances
+        {
+            let mut depth_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("GPU Instances Depth Pre-Pass"),
+                color_attachments: &[], // No color output
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // Preserve existing depth
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            depth_pass.set_pipeline(&self.depth_only_pipeline);
+            depth_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            depth_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+            depth_pass.set_vertex_buffer(1, instance_buffer.slice(..));
+            depth_pass.draw(0..6, 0..instance_count);
+        }
+
+        // Pass 2: Color pass with depth testing (no depth writing)
+        {
+            let mut color_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("GPU Instances Color Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // Preserve background
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            color_pass.set_pipeline(&self.opaque_no_depth_write_pipeline);
+            color_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            color_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+            color_pass.set_vertex_buffer(1, instance_buffer.slice(..));
+            color_pass.draw(0..6, 0..instance_count);
+        }
+    }
+
+    /// Validate that a GPU instance buffer has the correct format and size.
+    ///
+    /// This method validates that the provided instance buffer is compatible
+    /// with the CellRenderer's expected instance data format. It checks both
+    /// the buffer size and alignment requirements.
+    ///
+    /// # Arguments
+    /// * `instance_buffer` - GPU buffer to validate
+    /// * `expected_instance_count` - Expected number of instances
+    ///
+    /// # Returns
+    /// `true` if the buffer is valid, `false` otherwise
+    ///
+    /// # Performance Notes
+    /// - This is a validation method for debugging and development
+    /// - Should not be called in performance-critical rendering loops
+    /// - Useful for ensuring GPU scene integration is working correctly
+    pub fn validate_gpu_instance_buffer(
+        &self,
+        instance_buffer: &wgpu::Buffer,
+        expected_instance_count: u32,
+    ) -> bool {
+        let expected_size = expected_instance_count as u64 * std::mem::size_of::<CellInstance>() as u64;
+        let actual_size = instance_buffer.size();
+        
+        if actual_size < expected_size {
+            log::warn!(
+                "GPU instance buffer too small: expected {} bytes for {} instances, got {} bytes",
+                expected_size, expected_instance_count, actual_size
+            );
+            return false;
+        }
+        
+        // Check that the buffer size is a multiple of the instance size
+        let instance_size = std::mem::size_of::<CellInstance>() as u64;
+        if actual_size % instance_size != 0 {
+            log::warn!(
+                "GPU instance buffer size {} is not a multiple of instance size {}",
+                actual_size, instance_size
+            );
+            return false;
+        }
+        
+        true
+    }
+
+    /// Get the expected instance data size for validation.
+    ///
+    /// Returns the size in bytes of a single CellInstance structure,
+    /// which is useful for validating GPU-extracted instance buffers.
+    ///
+    /// # Returns
+    /// Size of CellInstance in bytes
+    pub fn get_instance_size() -> usize {
+        std::mem::size_of::<CellInstance>()
+    }
+
+    /// Get the maximum number of instances this renderer can handle.
+    ///
+    /// Returns the capacity that was set when the renderer was created.
+    /// This is useful for GPU scene integration to ensure buffer sizes match.
+    ///
+    /// # Returns
+    /// Maximum instance capacity
+    pub fn get_instance_capacity(&self) -> usize {
+        self.instance_capacity
+    }
+
+    /// Update rendering parameters for GPU scene integration.
+    ///
+    /// This method allows the GPU scene to update rendering parameters
+    /// that affect how cells are rendered, such as lighting conditions
+    /// and visual effects settings.
+    ///
+    /// # Arguments
+    /// * `queue` - wgpu queue for buffer updates
+    /// * `light_direction` - Direction of primary light source
+    /// * `light_color` - Color and intensity of primary light
+    /// * `ambient_color` - Ambient light color
+    /// * `time` - Current simulation time for animations
+    pub fn update_lighting_parameters(
+        &self,
+        queue: &wgpu::Queue,
+        light_direction: glam::Vec3,
+        light_color: [f32; 3],
+        ambient_color: [f32; 3],
+        time: f32,
+    ) {
+        let lighting_uniform = LightingUniform {
+            light_direction: light_direction.to_array(),
+            _padding1: 0.0,
+            light_color,
+            _padding2: 0.0,
+            ambient_color,
+            time,
+        };
+        queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
+    }
+
+    /// Check if the renderer supports GPU-extracted instance data.
+    ///
+    /// This method always returns true for the current implementation,
+    /// but provides a way to check compatibility in the future.
+    ///
+    /// # Returns
+    /// `true` if GPU instance data is supported
+    pub fn supports_gpu_instances(&self) -> bool {
+        true
+    }
+
+    /// Get information about the renderer's capabilities for GPU scene integration.
+    ///
+    /// Returns information about the renderer's capabilities that is useful
+    /// for GPU scene integration and optimization.
+    ///
+    /// # Returns
+    /// Tuple of (max_instances, instance_size_bytes, supports_transparency)
+    pub fn get_renderer_capabilities(&self) -> (usize, usize, bool) {
+        (
+            self.instance_capacity,
+            std::mem::size_of::<CellInstance>(),
+            true, // Supports transparency through alpha blending
+        )
     }
 }

@@ -1,10 +1,10 @@
 use glam::{Vec3, Quat};
 
 /// Maximum adhesions per cell (matches C++ implementation)
-pub const MAX_ADHESIONS_PER_CELL: usize = 20;
+pub const MAX_ADHESIONS_PER_CELL: usize = 10;
 
-/// Maximum total adhesion connections (20 × max cells)
-pub const MAX_ADHESION_CONNECTIONS: usize = 5120;
+/// Maximum total adhesion connections (10 × max cells)
+pub const MAX_ADHESION_CONNECTIONS: usize = 2560;
 
 /// Adhesion connection between two cells (Structure-of-Arrays layout)
 #[derive(Clone)]
@@ -54,7 +54,7 @@ impl AdhesionConnections {
     }
 }
 
-/// Adhesion indices for each cell (20 slots, -1 for empty)
+/// Adhesion indices for each cell (10 slots, -1 for empty)
 pub type AdhesionIndices = [i32; MAX_ADHESIONS_PER_CELL];
 
 /// Initialize adhesion indices for a cell (all slots to -1)
