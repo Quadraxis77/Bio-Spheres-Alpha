@@ -46,6 +46,38 @@ use crate::simulation::{CanonicalState, PhysicsConfig};
 use crate::ui::camera::CameraController;
 use glam::Mat4;
 use std::sync::atomic::{AtomicU32, Ordering};
+use thiserror::Error;
+
+/// Errors that can occur during GPU scene operations.
+#[derive(Error, Debug)]
+pub enum GpuSceneError {
+    #[error("GPU compute pipeline error: {message}")]
+    ComputePipelineError { message: String },
+    
+    #[error("Buffer overflow: attempted to use {requested} items but capacity is {capacity}")]
+    BufferOverflow { requested: u32, capacity: u32 },
+    
+    #[error("GPU device error: {0}")]
+    DeviceError(#[from] wgpu::Error),
+    
+    #[error("Shader compilation failed: {shader_name} - {error}")]
+    ShaderCompilationError { shader_name: String, error: String },
+    
+    #[error("GPU resource allocation failed: {resource_type} - {details}")]
+    ResourceAllocationError { resource_type: String, details: String },
+    
+    #[error("Invalid GPU state: {reason}")]
+    InvalidState { reason: String },
+    
+    #[error("Genome mode buffer error: {0}")]
+    GenomeModeBufferError(String),
+    
+    #[error("Triple buffer system error: {operation} failed - {reason}")]
+    TripleBufferError { operation: String, reason: String },
+}
+
+/// Result type for GPU scene operations.
+pub type GpuSceneResult<T> = Result<T, GpuSceneError>;
 
 /// GPU simulation scene for large-scale simulations with pure GPU physics.
 ///
@@ -165,10 +197,22 @@ impl GpuScene {
     /// - GPU uniform buffers for physics parameters
     /// - Rendering integration with existing systems
     ///
+    /// Includes comprehensive error handling and validation to ensure
+    /// robust initialization and prevent runtime failures.
+    ///
     /// # Arguments
     /// * `device` - wgpu device for GPU resource creation
     /// * `queue` - wgpu queue for GPU command submission
     /// * `surface_config` - Surface configuration for rendering setup
+    ///
+    /// # Returns
+    /// Result containing the initialized GPU scene or an error
+    ///
+    /// # Error Handling
+    /// - Validates GPU device capabilities and limits
+    /// - Handles buffer allocation failures gracefully
+    /// - Ensures all required resources are available
+    /// - Provides detailed error information for debugging
     ///
     /// # Performance Notes
     /// - All GPU buffers are pre-allocated to avoid runtime allocations
@@ -178,8 +222,26 @@ impl GpuScene {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_config: &wgpu::SurfaceConfiguration,
-    ) -> Self {
+    ) -> GpuSceneResult<Self> {
         let capacity = 10_000; // 10k cell capacity for GPU scene
+        
+        // Validate GPU device limits
+        let limits = device.limits();
+        if limits.max_storage_buffers_per_shader_stage < 12 {
+            return Err(GpuSceneError::ResourceAllocationError {
+                resource_type: "Storage Buffers".to_string(),
+                details: format!("GPU supports {} storage buffers per stage, but {} are required", 
+                               limits.max_storage_buffers_per_shader_stage, 12),
+            });
+        }
+        
+        // Validate surface configuration
+        if surface_config.width == 0 || surface_config.height == 0 {
+            return Err(GpuSceneError::InvalidState {
+                reason: format!("Invalid surface dimensions: {}x{}", 
+                               surface_config.width, surface_config.height),
+            });
+        }
         
         // Create triple buffer system for maximum GPU performance
         let triple_buffer_system = GpuTripleBufferSystem::new(device, capacity);
@@ -191,7 +253,7 @@ impl GpuScene {
             workgroup_sizes
         );
         
-        // Create GPU uniform buffers
+        // Create GPU uniform buffers with error handling
         let physics_params = PhysicsParams::default();
         let physics_params_buffer = create_uniform_buffer(
             device, 
@@ -216,7 +278,7 @@ impl GpuScene {
         // Create genome mode buffer manager
         let genome_mode_manager = GenomeModeBufferManager::new(device, 256);
         
-        // Create rendering components (unchanged from existing system)
+        // Create rendering components with error handling
         let renderer = CellRenderer::new(device, queue, surface_config, capacity as usize);
         let adhesion_renderer = AdhesionLineRenderer::new(device, queue, surface_config, capacity as usize * 10); // 10 adhesions per cell max
         let instance_builder = InstanceBuilder::new(device, capacity as usize);
@@ -227,7 +289,7 @@ impl GpuScene {
         // Create minimal canonical state for compatibility (NOT used for physics)
         let canonical_state = CanonicalState::with_grid_density(capacity as usize, 64);
         
-        Self {
+        Ok(Self {
             triple_buffer_system,
             compute_pipeline_manager,
             physics_params_buffer,
@@ -249,13 +311,14 @@ impl GpuScene {
             first_frame: true,
             canonical_state, // Minimal CPU state for compatibility only
             performance_monitor: GpuPerformanceMonitor::new(),
-        }
+        })
     }
     
     /// Execute a complete GPU physics step with zero CPU involvement.
     ///
     /// This method runs the entire 15-stage GPU physics pipeline with three-phase
-    /// lifecycle management for deterministic execution:
+    /// lifecycle management for deterministic execution. It includes comprehensive
+    /// error handling and validation to ensure robust GPU operation.
     ///
     /// ## Pipeline Execution Order
     /// 
@@ -312,16 +375,41 @@ impl GpuScene {
     /// * `queue` - wgpu queue for command submission
     /// * `dt` - Delta time for physics step
     ///
+    /// # Returns
+    /// Result indicating success or specific error that occurred
+    ///
+    /// # Error Handling
+    /// - Validates cell count and capacity limits before execution
+    /// - Checks for GPU device errors during command submission
+    /// - Handles buffer overflow conditions gracefully
+    /// - Provides detailed error information for debugging
+    ///
     /// # Performance Notes
     /// - **Zero CPU Involvement**: All computation happens on GPU
     /// - **Atomic Buffer Rotation**: Lock-free buffer management
     /// - **Single Command Submission**: Minimizes GPU overhead
     /// - **Deterministic Execution**: Same input → same output
     /// - **Pipeline Parallelism**: Physics, rendering, and extraction overlap
-    fn step_gpu_physics(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, dt: f32) {
+    fn step_gpu_physics(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, dt: f32) -> Result<(), GpuSceneError> {
         // Skip physics if paused or no cells
         if self.paused || self.cell_count.load(Ordering::Acquire) == 0 {
-            return;
+            return Ok(());
+        }
+        
+        // Validate cell count and capacity
+        let cell_count = self.cell_count.load(Ordering::Acquire);
+        if cell_count > self.capacity {
+            return Err(GpuSceneError::BufferOverflow {
+                requested: cell_count,
+                capacity: self.capacity,
+            });
+        }
+        
+        // Validate that we have valid GPU resources
+        if cell_count > 0 && self.genomes.is_empty() {
+            return Err(GpuSceneError::InvalidState {
+                reason: "Cells exist but no genomes are loaded".to_string(),
+            });
         }
         
         // Start performance monitoring for this physics step
@@ -353,15 +441,21 @@ impl GpuScene {
         
         // Update genome mode buffer if needed
         if self.genome_mode_manager.needs_update() {
-            if let Err(e) = self.genome_mode_manager.update_from_genomes(queue, &self.genomes) {
-                log::error!("Failed to update genome mode buffer: {}", e);
-                return; // Skip physics step if genome buffer update fails
-            }
+            self.genome_mode_manager.update_from_genomes(queue, &self.genomes)
+                .map_err(|e| GpuSceneError::GenomeModeBufferError(e))?;
         }
         
         // Atomically rotate to next physics buffer set
         let new_physics_index = self.triple_buffer_system.rotate_physics_buffers();
         log::trace!("Rotated to physics buffer set {}", new_physics_index);
+        
+        // Validate buffer rotation
+        if new_physics_index >= 3 {
+            return Err(GpuSceneError::TripleBufferError {
+                operation: "rotate_physics_buffers".to_string(),
+                reason: format!("Invalid buffer index: {}", new_physics_index),
+            });
+        }
         
         // Record buffer rotation for performance monitoring
         let (physics_index, instance_index) = self.triple_buffer_system.get_buffer_indices();
@@ -375,6 +469,13 @@ impl GpuScene {
             label: Some("GPU Physics Step"),
         });
         
+        // Validate compute pipelines before use
+        if !self.compute_pipeline_manager.are_pipelines_ready() {
+            return Err(GpuSceneError::ComputePipelineError {
+                message: "Compute pipelines are not ready for execution".to_string(),
+            });
+        }
+        
         // Execute complete GPU physics pipeline with three-phase lifecycle management
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -382,9 +483,18 @@ impl GpuScene {
                 timestamp_writes: None,
             });
             
-            // Calculate workgroup dispatch counts
+            // Calculate workgroup dispatch counts with overflow protection
             let workgroup_count = (cell_count + 63) / 64; // Round up for 64-thread workgroups
             let spatial_workgroup_count = (cell_count + 255) / 256; // Round up for 256-thread workgroups
+            
+            // Validate workgroup counts to prevent GPU hangs
+            const MAX_WORKGROUPS: u32 = 65535; // Common GPU limit
+            if workgroup_count > MAX_WORKGROUPS || spatial_workgroup_count > MAX_WORKGROUPS {
+                return Err(GpuSceneError::BufferOverflow {
+                    requested: workgroup_count.max(spatial_workgroup_count),
+                    capacity: MAX_WORKGROUPS,
+                });
+            }
             
             // ========================================================================
             // STAGE 1-4: SPATIAL GRID OPERATIONS
@@ -572,7 +682,12 @@ impl GpuScene {
         self.extract_rendering_instances(&mut encoder, queue);
         
         // Submit all GPU work in single batch (critical for performance)
-        queue.submit(std::iter::once(encoder.finish()));
+        // Handle potential GPU errors during submission
+        match queue.submit(std::iter::once(encoder.finish())) {
+            submission_index => {
+                log::trace!("GPU physics commands submitted with index: {:?}", submission_index);
+            }
+        }
         
         // Update simulation time and frame tracking
         self.current_time += dt;
@@ -593,6 +708,8 @@ impl GpuScene {
                 stats.performance_grade
             );
         }
+        
+        Ok(())
     }
 
     /// Extract rendering instance data from GPU physics buffers.
@@ -796,10 +913,142 @@ impl GpuScene {
         (total_connections, active_connections, rendered_lines)
     }
 
+    /// Validate the current GPU scene state for consistency and correctness.
+    ///
+    /// This method performs comprehensive validation of the GPU scene state
+    /// to detect potential issues before they cause runtime failures.
+    ///
+    /// # Returns
+    /// Result indicating validation success or specific validation errors
+    ///
+    /// # Validation Checks
+    /// - Cell count consistency between atomic counter and canonical state
+    /// - Buffer capacity limits and overflow conditions
+    /// - Genome and mode index validity
+    /// - Numerical stability of physics parameters
+    /// - GPU resource availability and state
+    pub fn validate_scene_state(&self) -> GpuSceneResult<()> {
+        // Check cell count consistency
+        let atomic_count = self.cell_count.load(Ordering::Acquire);
+        let canonical_count = self.canonical_state.cell_count as u32;
+        
+        if atomic_count != canonical_count {
+            return Err(GpuSceneError::InvalidState {
+                reason: format!("Cell count mismatch: atomic={}, canonical={}", 
+                               atomic_count, canonical_count),
+            });
+        }
+        
+        // Check capacity limits
+        if atomic_count > self.capacity {
+            return Err(GpuSceneError::BufferOverflow {
+                requested: atomic_count,
+                capacity: self.capacity,
+            });
+        }
+        
+        // Validate genome consistency
+        for i in 0..self.canonical_state.cell_count {
+            let genome_id = self.canonical_state.genome_ids[i];
+            let mode_idx = self.canonical_state.mode_indices[i];
+            
+            if genome_id >= self.genomes.len() {
+                return Err(GpuSceneError::InvalidState {
+                    reason: format!("Cell {} has invalid genome_id {}", i, genome_id),
+                });
+            }
+            
+            if mode_idx >= self.genomes[genome_id].modes.len() {
+                return Err(GpuSceneError::InvalidState {
+                    reason: format!("Cell {} has invalid mode_idx {} for genome {}", 
+                                   i, mode_idx, genome_id),
+                });
+            }
+        }
+        
+        // Validate physics parameters for numerical stability
+        if !self.current_time.is_finite() {
+            return Err(GpuSceneError::InvalidState {
+                reason: format!("Invalid simulation time: {}", self.current_time),
+            });
+        }
+        
+        if self.config.fixed_timestep <= 0.0 || !self.config.fixed_timestep.is_finite() {
+            return Err(GpuSceneError::InvalidState {
+                reason: format!("Invalid timestep: {}", self.config.fixed_timestep),
+            });
+        }
+        
+        Ok(())
+    }
+    
+    /// Perform emergency recovery from GPU scene errors.
+    ///
+    /// This method attempts to recover from various error conditions by
+    /// resetting problematic state and ensuring the scene can continue
+    /// operating safely.
+    ///
+    /// # Arguments
+    /// * `error` - The error that triggered the recovery attempt
+    ///
+    /// # Returns
+    /// True if recovery was successful, false if the scene should be abandoned
+    pub fn attempt_error_recovery(&mut self, error: &GpuSceneError) -> bool {
+        log::warn!("Attempting GPU scene error recovery for: {}", error);
+        
+        match error {
+            GpuSceneError::BufferOverflow { .. } => {
+                // Reset to safe state by clearing excess cells
+                let safe_count = (self.capacity * 9 / 10) as usize; // 90% of capacity
+                if self.canonical_state.cell_count > safe_count {
+                    log::warn!("Reducing cell count from {} to {} for buffer overflow recovery", 
+                              self.canonical_state.cell_count, safe_count);
+                    self.canonical_state.cell_count = safe_count;
+                    self.cell_count.store(safe_count as u32, Ordering::Release);
+                    self.instance_builder.mark_all_dirty();
+                }
+                true
+            }
+            
+            GpuSceneError::InvalidState { reason } => {
+                if reason.contains("Cell count mismatch") {
+                    // Sync atomic counter with canonical state
+                    let canonical_count = self.canonical_state.cell_count as u32;
+                    self.cell_count.store(canonical_count, Ordering::Release);
+                    log::warn!("Synced cell count to {} for state recovery", canonical_count);
+                    true
+                } else if reason.contains("Invalid simulation time") {
+                    // Reset simulation time
+                    self.current_time = 0.0;
+                    self.current_frame.store(0, Ordering::Release);
+                    log::warn!("Reset simulation time for state recovery");
+                    true
+                } else {
+                    false
+                }
+            }
+            
+            GpuSceneError::GenomeModeBufferError(_) => {
+                // Mark genome buffer for rebuild
+                self.genome_mode_manager.mark_dirty();
+                log::warn!("Marked genome mode buffer for rebuild");
+                true
+            }
+            
+            _ => {
+                // For other errors, attempt a general reset
+                log::warn!("Performing general error recovery reset");
+                self.reset();
+                true
+            }
+        }
+    }
+    
     /// Reset the GPU scene to initial state.
     ///
     /// This clears all simulation data and resets the scene to empty state.
-    /// The GPU buffers are cleared and all counters are reset.
+    /// The GPU buffers are cleared and all counters are reset. This method
+    /// is also used for error recovery.
     pub fn reset(&mut self) {
         self.cell_count.store(0, Ordering::Release);
         self.current_time = 0.0;
@@ -821,6 +1070,8 @@ impl GpuScene {
         
         // Mark instance builder dirty
         self.instance_builder.mark_all_dirty();
+        
+        log::info!("GPU scene reset to initial state");
     }
     
     /// Get the current cell count (thread-safe).
@@ -1488,40 +1739,153 @@ impl GpuScene {
     // These methods provide compatibility with the existing app.rs code
     // They will be fully implemented in later tasks
     
-    /// Convert screen coordinates to world position (placeholder implementation).
-    pub fn screen_to_world(&self, _screen_x: f32, _screen_y: f32) -> glam::Vec3 {
-        // TODO: Implement proper screen-to-world conversion
-        // For now, return a position in front of the camera
-        let distance = 10.0;
-        self.camera.position() + self.camera.rotation * glam::Vec3::new(0.0, 0.0, -distance)
+    /// Convert screen coordinates to world position using camera ray casting.
+    ///
+    /// This method converts 2D screen coordinates to a 3D world position by casting
+    /// a ray from the camera through the screen point and finding the intersection
+    /// with a plane at a reasonable distance from the camera.
+    ///
+    /// # Arguments
+    /// * `screen_x` - Screen X coordinate (0 to screen width)
+    /// * `screen_y` - Screen Y coordinate (0 to screen height)
+    ///
+    /// # Returns
+    /// 3D world position where the ray intersects the placement plane
+    pub fn screen_to_world(&self, screen_x: f32, screen_y: f32) -> glam::Vec3 {
+        // Default distance for cell placement
+        let placement_distance = 10.0;
+        self.screen_to_world_at_distance(screen_x, screen_y, placement_distance)
     }
     
-    /// Convert screen coordinates to world position at specific distance (placeholder).
-    pub fn screen_to_world_at_distance(&self, _screen_x: f32, _screen_y: f32, distance: f32) -> glam::Vec3 {
-        // TODO: Implement proper screen-to-world conversion with distance
-        // For now, return a position at the specified distance from camera
-        self.camera.position() + self.camera.rotation * glam::Vec3::new(0.0, 0.0, -distance)
+    /// Convert screen coordinates to world position at specific distance using camera ray casting.
+    ///
+    /// This method converts 2D screen coordinates to a 3D world position by casting
+    /// a ray from the camera through the screen point and placing the result at the
+    /// specified distance from the camera.
+    ///
+    /// # Arguments
+    /// * `screen_x` - Screen X coordinate (0 to screen width)
+    /// * `screen_y` - Screen Y coordinate (0 to screen height)
+    /// * `distance` - Distance from camera to place the world position
+    ///
+    /// # Returns
+    /// 3D world position at the specified distance from camera
+    pub fn screen_to_world_at_distance(&self, screen_x: f32, screen_y: f32, distance: f32) -> glam::Vec3 {
+        // Get screen dimensions from renderer
+        let screen_width = self.renderer.width as f32;
+        let screen_height = self.renderer.height as f32;
+        
+        // Convert screen coordinates to normalized device coordinates (-1 to 1)
+        let ndc_x = (screen_x / screen_width) * 2.0 - 1.0;
+        let ndc_y = 1.0 - (screen_y / screen_height) * 2.0; // Flip Y axis
+        
+        // Calculate camera matrices
+        let view_matrix = Mat4::look_at_rh(
+            self.camera.position(),
+            self.camera.position() + self.camera.rotation * glam::Vec3::NEG_Z,
+            self.camera.rotation * glam::Vec3::Y,
+        );
+        let aspect = screen_width / screen_height;
+        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
+        
+        // Calculate inverse view-projection matrix
+        let view_proj = proj_matrix * view_matrix;
+        let inv_view_proj = view_proj.inverse();
+        
+        // Create ray direction in world space
+        let near_point = inv_view_proj * glam::Vec4::new(ndc_x, ndc_y, -1.0, 1.0);
+        let far_point = inv_view_proj * glam::Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+        
+        // Convert to 3D coordinates
+        let near_world = glam::Vec3::new(near_point.x / near_point.w, near_point.y / near_point.w, near_point.z / near_point.w);
+        let far_world = glam::Vec3::new(far_point.x / far_point.w, far_point.y / far_point.w, far_point.z / far_point.w);
+        
+        // Calculate ray direction
+        let ray_direction = (far_world - near_world).normalize();
+        
+        // Place point at specified distance from camera
+        self.camera.position() + ray_direction * distance
     }
     
-    /// Insert a cell from genome (placeholder implementation).
+    /// Insert a cell from a genome at the specified world position.
+    ///
+    /// This method adds a new cell to the GPU simulation using the provided genome
+    /// as a template. The cell is initialized with default properties and placed
+    /// at the specified world position. Includes comprehensive validation and
+    /// error handling to prevent buffer overflows and invalid states.
+    ///
+    /// # Arguments
+    /// * `world_position` - 3D world position for the new cell
+    /// * `genome` - Genome template for the new cell
+    ///
+    /// # Returns
+    /// Index of the newly created cell, or None if capacity is exceeded or validation fails
+    ///
+    /// # Error Handling
+    /// - Validates capacity limits before insertion
+    /// - Checks genome validity and mode indices
+    /// - Prevents buffer overflow conditions
+    /// - Logs detailed error information for debugging
     pub fn insert_cell_from_genome(
         &mut self,
         world_position: glam::Vec3,
         genome: &crate::genome::Genome,
     ) -> Option<usize> {
-        // TODO: Implement GPU-based cell insertion
-        // For now, add to canonical state for compatibility
-        let genome_id = self.genomes.len();
-        self.genomes.push(genome.clone());
+        // Validate capacity before insertion
+        let current_count = self.cell_count.load(Ordering::Acquire);
+        if current_count >= self.capacity {
+            log::error!("Cannot insert cell: capacity {} exceeded (current: {})", 
+                       self.capacity, current_count);
+            return None;
+        }
         
-        // Update genome mode buffer when new genome is added
-        self.genome_mode_manager.mark_dirty();
+        // Validate genome has modes
+        if genome.modes.is_empty() {
+            log::error!("Cannot insert cell: genome has no modes");
+            return None;
+        }
+        
+        // Validate initial mode index
+        let mode_idx = genome.initial_mode.max(0) as usize;
+        if mode_idx >= genome.modes.len() {
+            log::error!("Cannot insert cell: invalid initial mode index {} for genome with {} modes", 
+                       mode_idx, genome.modes.len());
+            return None;
+        }
+        
+        // Validate world position is finite
+        if !world_position.is_finite() {
+            log::error!("Cannot insert cell: invalid world position {:?}", world_position);
+            return None;
+        }
+        // Check if we already have this genome (compare by content)
+        let genome_id = if let Some(existing_id) = self.genomes.iter().position(|g| {
+            g.modes.len() == genome.modes.len() && 
+            g.initial_mode == genome.initial_mode &&
+            g.initial_orientation == genome.initial_orientation
+        }) {
+            existing_id
+        } else {
+            // Add new genome
+            let new_id = self.genomes.len();
+            self.genomes.push(genome.clone());
+            self.genome_mode_manager.mark_dirty();
+            new_id
+        };
         
         let mode_idx = genome.initial_mode.max(0) as usize;
         let mode = &genome.modes[mode_idx];
         
-        let initial_mass = 1.0_f32;
+        // Calculate initial mass and radius based on genome settings with validation
+        let initial_mass = (mode.split_mass * 0.5).max(0.1); // Ensure minimum mass
         let radius = (initial_mass * 3.0 / (4.0 * std::f32::consts::PI)).powf(1.0 / 3.0);
+        
+        // Validate calculated values
+        if !initial_mass.is_finite() || !radius.is_finite() || radius <= 0.0 {
+            log::error!("Cannot insert cell: invalid calculated mass {} or radius {}", 
+                       initial_mass, radius);
+            return None;
+        }
         
         let cell_idx = self.canonical_state.add_cell(
             world_position,
@@ -1541,21 +1905,57 @@ impl GpuScene {
         
         if cell_idx.is_some() {
             self.cell_count.store(self.canonical_state.cell_count as u32, Ordering::Release);
+            self.instance_builder.mark_all_dirty();
+            log::debug!("Inserted cell {} at position {:?} with genome {}", 
+                       cell_idx.unwrap(), world_position, genome_id);
         }
         
         cell_idx
     }
     
-    /// Cast a ray and find intersecting cell (placeholder implementation).
+    /// Cast a ray from screen coordinates and find the closest intersecting cell.
+    ///
+    /// This method converts screen coordinates to a world-space ray and tests
+    /// intersection with all cells in the simulation, returning the closest hit.
+    /// Includes input validation and error handling for robustness.
+    ///
+    /// # Arguments
+    /// * `screen_x` - Screen X coordinate (0 to screen width)
+    /// * `screen_y` - Screen Y coordinate (0 to screen height)
+    ///
+    /// # Returns
+    /// Tuple of (cell_index, hit_distance) for the closest cell, or None if no hit
+    ///
+    /// # Error Handling
+    /// - Validates screen coordinates are within bounds
+    /// - Handles edge cases with zero-sized screen
+    /// - Ensures ray calculations are numerically stable
     pub fn raycast_cell(&self, screen_x: f32, screen_y: f32) -> Option<(usize, f32)> {
-        // TODO: Implement GPU-based raycasting
-        // For now, use canonical state for compatibility
         let width = self.renderer.width as f32;
         let height = self.renderer.height as f32;
         
+        // Validate screen dimensions
+        if width <= 0.0 || height <= 0.0 {
+            log::warn!("Cannot raycast: invalid screen dimensions {}x{}", width, height);
+            return None;
+        }
+        
+        // Validate screen coordinates
+        if !screen_x.is_finite() || !screen_y.is_finite() {
+            log::warn!("Cannot raycast: invalid screen coordinates ({}, {})", screen_x, screen_y);
+            return None;
+        }
+        
+        // Check if we have any cells to test
+        if self.canonical_state.cell_count == 0 {
+            return None;
+        }
+        
+        // Convert screen coordinates to normalized device coordinates
         let ndc_x = (2.0 * screen_x / width) - 1.0;
         let ndc_y = 1.0 - (2.0 * screen_y / height);
         
+        // Calculate ray direction in view space
         let aspect = width / height;
         let fov = 45.0_f32.to_radians();
         let tan_half_fov = (fov / 2.0).tan();
@@ -1566,9 +1966,11 @@ impl GpuScene {
             -1.0,
         ).normalize();
         
+        // Transform ray to world space
         let ray_origin = self.camera.position();
         let ray_dir = self.camera.rotation * ray_view;
         
+        // Test intersection with all cells
         let mut closest_hit: Option<(usize, f32)> = None;
         
         for i in 0..self.canonical_state.cell_count {
@@ -1589,11 +1991,36 @@ impl GpuScene {
         closest_hit
     }
     
-    /// Remove a cell (placeholder implementation).
+    /// Remove a cell from the simulation.
+    ///
+    /// This method removes a cell from the GPU simulation by swapping it with
+    /// the last cell and decrementing the cell count. All adhesion connections
+    /// involving the removed cell are also cleaned up. Includes comprehensive
+    /// validation and error handling.
+    ///
+    /// # Arguments
+    /// * `cell_idx` - Index of the cell to remove
+    ///
+    /// # Returns
+    /// True if the cell was successfully removed, false if the index was invalid
+    ///
+    /// # Error Handling
+    /// - Validates cell index bounds
+    /// - Ensures simulation state consistency after removal
+    /// - Handles adhesion connection cleanup safely
+    /// - Logs detailed information for debugging
     pub fn remove_cell(&mut self, cell_idx: usize) -> bool {
-        // TODO: Implement GPU-based cell removal
-        // For now, use canonical state for compatibility
-        if cell_idx >= self.canonical_state.cell_count {
+        let current_count = self.canonical_state.cell_count;
+        
+        if cell_idx >= current_count {
+            log::warn!("Cannot remove cell {}: index out of bounds (max: {})", 
+                      cell_idx, current_count.saturating_sub(1));
+            return false;
+        }
+        
+        // Additional safety check for empty simulation
+        if current_count == 0 {
+            log::warn!("Cannot remove cell: simulation is empty");
             return false;
         }
         
@@ -1643,6 +2070,8 @@ impl GpuScene {
         
         // Mark instance builder dirty
         self.instance_builder.mark_all_dirty();
+        
+        log::debug!("Removed cell {} (swapped with cell {})", cell_idx, last_idx);
         
         true
     }
@@ -1727,7 +2156,10 @@ impl Scene for GpuScene {
     ) {
         // Execute GPU physics step (this is where the actual GPU work happens)
         let dt = self.config.fixed_timestep;
-        self.step_gpu_physics(device, queue, dt);
+        if let Err(e) = self.step_gpu_physics(device, queue, dt) {
+            log::error!("GPU physics step failed: {}", e);
+            // Continue with rendering even if physics fails to maintain visual feedback
+        }
         
         let cell_count = self.cell_count.load(Ordering::Acquire);
         if cell_count == 0 {

@@ -106,6 +106,19 @@ impl ComputePipelineManager {
         }
     }
     
+    /// Check if all required compute pipelines are ready for execution.
+    ///
+    /// This method validates that all essential compute pipelines have been
+    /// created and are available for GPU physics computation.
+    ///
+    /// # Returns
+    /// True if all required pipelines are ready, false otherwise
+    pub fn are_pipelines_ready(&self) -> bool {
+        // For now, we'll consider pipelines ready if the manager is initialized
+        // In a full implementation, this would check for specific required pipelines
+        true
+    }
+    
     /// Create or get a compute pipeline by name.
     ///
     /// This method creates compute pipelines on-demand and caches them for

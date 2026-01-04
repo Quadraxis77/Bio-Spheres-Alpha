@@ -66,7 +66,21 @@ impl SceneManager {
             }
             SimulationMode::Gpu => {
                 if self.gpu_scene.is_none() {
-                    self.gpu_scene = Some(GpuScene::new(device, queue, config));
+                    match GpuScene::new(device, queue, config) {
+                        Ok(gpu_scene) => {
+                            self.gpu_scene = Some(gpu_scene);
+                        }
+                        Err(e) => {
+                            log::error!("Failed to create GPU scene: {}", e);
+                            // Fall back to preview mode if GPU scene creation fails
+                            log::warn!("Falling back to Preview mode due to GPU scene creation failure");
+                            if self.preview_scene.is_none() {
+                                self.preview_scene = Some(PreviewScene::new(device, queue, config));
+                            }
+                            self.current_mode = SimulationMode::Preview;
+                            return;
+                        }
+                    }
                 }
             }
         }
