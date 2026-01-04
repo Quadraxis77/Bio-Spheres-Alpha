@@ -189,7 +189,8 @@ pub struct PhysicsParams {
     // === Padding to 256-byte alignment for uniform buffer (192 bytes) ===
     /// Explicit padding to ensure 256-byte total size
     /// Required for uniform buffer alignment on most GPUs
-    pub _padding: [f32; 48],
+    /// Using [f32; 4] arrays for proper 16-byte alignment in WGSL
+    pub _padding: [[f32; 4]; 12],
 }
 
 impl Default for PhysicsParams {
@@ -209,7 +210,7 @@ impl Default for PhysicsParams {
             enable_thrust_force: 1,      // Enable Flagellocyte thrust by default
             dragged_cell_index: -1,      // No cell being dragged
             _padding1: [0.0; 3],
-            _padding: [0.0; 48],
+            _padding: [[0.0; 4]; 12],
         }
     }
 }

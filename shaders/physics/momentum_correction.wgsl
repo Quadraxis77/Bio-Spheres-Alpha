@@ -47,8 +47,8 @@ struct PhysicsParams {
     dragged_cell_index: i32,
     _padding1: vec3<f32>,
     
-    // Padding to 256 bytes
-    _padding: array<f32, 48>,
+    // Padding to 256 bytes (using vec4<f32> for proper 16-byte alignment)
+    _padding: array<vec4<f32>, 12>,
 }
 
 // Momentum conservation data structure
@@ -139,74 +139,6 @@ fn calculate_kinetic_energy(
     let rotational_ke = 0.5 * moment_of_inertia * dot(angular_velocity, angular_velocity);
     
     return linear_ke + rotational_ke;
-}
-
-/// Perform workgroup reduction for vector values.
-///
-/// Reduces an array of vectors to a single sum using shared memory
-/// and workgroup synchronization.
-///
-/// # Arguments
-/// * `local_id` - Local thread ID within workgroup
-/// * `input_value` - Input vector for this thread
-/// * `shared_array` - Shared memory array for reduction
-///
-/// # Returns
-/// Sum of all input values (only valid for thread 0)
-fn workgroup_reduce_vec3(
-    local_id: u32,
-    input_value: vec3<f32>,
-    shared_array: ptr<workgroup, array<vec3<f32>, 64>>
-) -> vec3<f32> {
-    // Store input value in shared memory
-    (*shared_array)[local_id] = input_value;
-    workgroupBarrier();
-    
-    // Parallel reduction
-    var stride = 32u;
-    while (stride > 0u) {
-        if (local_id < stride && local_id + stride < 64u) {
-            (*shared_array)[local_id] += (*shared_array)[local_id + stride];
-        }
-        stride /= 2u;
-        workgroupBarrier();
-    }
-    
-    return (*shared_array)[0];
-}
-
-/// Perform workgroup reduction for scalar values.
-///
-/// Reduces an array of scalars to a single sum using shared memory
-/// and workgroup synchronization.
-///
-/// # Arguments
-/// * `local_id` - Local thread ID within workgroup
-/// * `input_value` - Input scalar for this thread
-/// * `shared_array` - Shared memory array for reduction
-///
-/// # Returns
-/// Sum of all input values (only valid for thread 0)
-fn workgroup_reduce_f32(
-    local_id: u32,
-    input_value: f32,
-    shared_array: ptr<workgroup, array<f32, 64>>
-) -> f32 {
-    // Store input value in shared memory
-    (*shared_array)[local_id] = input_value;
-    workgroupBarrier();
-    
-    // Parallel reduction
-    var stride = 32u;
-    while (stride > 0u) {
-        if (local_id < stride && local_id + stride < 64u) {
-            (*shared_array)[local_id] += (*shared_array)[local_id + stride];
-        }
-        stride /= 2u;
-        workgroupBarrier();
-    }
-    
-    return (*shared_array)[0];
 }
 
 /// Apply momentum correction to cell velocity.
@@ -328,10 +260,57 @@ fn main(
     
     // === Phase 2: Workgroup Reductions ===
     
-    let total_linear_momentum = workgroup_reduce_vec3(local_index, local_linear_momentum, &shared_linear_momentum);
-    let total_mass = workgroup_reduce_f32(local_index, local_mass, &shared_mass);
-    let total_weighted_position = workgroup_reduce_vec3(local_index, local_weighted_position, &shared_center_of_mass);
-    let total_kinetic_energy = workgroup_reduce_f32(local_index, local_kinetic_energy, &shared_kinetic_energy);
+    // Linear momentum reduction
+    shared_linear_momentum[local_index] = local_linear_momentum;
+    workgroupBarrier();
+    var stride = 32u;
+    while (stride > 0u) {
+        if (local_index < stride && local_index + stride < 64u) {
+            shared_linear_momentum[local_index] += shared_linear_momentum[local_index + stride];
+        }
+        stride /= 2u;
+        workgroupBarrier();
+    }
+    let total_linear_momentum = shared_linear_momentum[0];
+    
+    // Mass reduction
+    shared_mass[local_index] = local_mass;
+    workgroupBarrier();
+    stride = 32u;
+    while (stride > 0u) {
+        if (local_index < stride && local_index + stride < 64u) {
+            shared_mass[local_index] += shared_mass[local_index + stride];
+        }
+        stride /= 2u;
+        workgroupBarrier();
+    }
+    let total_mass = shared_mass[0];
+    
+    // Weighted position reduction
+    shared_center_of_mass[local_index] = local_weighted_position;
+    workgroupBarrier();
+    stride = 32u;
+    while (stride > 0u) {
+        if (local_index < stride && local_index + stride < 64u) {
+            shared_center_of_mass[local_index] += shared_center_of_mass[local_index + stride];
+        }
+        stride /= 2u;
+        workgroupBarrier();
+    }
+    let total_weighted_position = shared_center_of_mass[0];
+    
+    // Kinetic energy reduction
+    shared_kinetic_energy[local_index] = local_kinetic_energy;
+    workgroupBarrier();
+    stride = 32u;
+    while (stride > 0u) {
+        if (local_index < stride && local_index + stride < 64u) {
+            shared_kinetic_energy[local_index] += shared_kinetic_energy[local_index + stride];
+        }
+        stride /= 2u;
+        workgroupBarrier();
+    }
+    let total_kinetic_energy = shared_kinetic_energy[0];
     
     // Calculate center of mass (only valid for thread 0)
     var center_of_mass = vec3<f32>(0.0, 0.0, 0.0);
@@ -356,7 +335,18 @@ fn main(
         }
     }
     
-    let total_angular_momentum = workgroup_reduce_vec3(local_index, local_angular_momentum, &shared_angular_momentum);
+    // Angular momentum reduction
+    shared_angular_momentum[local_index] = local_angular_momentum;
+    workgroupBarrier();
+    stride = 32u;
+    while (stride > 0u) {
+        if (local_index < stride && local_index + stride < 64u) {
+            shared_angular_momentum[local_index] += shared_angular_momentum[local_index + stride];
+        }
+        stride /= 2u;
+        workgroupBarrier();
+    }
+    let total_angular_momentum = shared_angular_momentum[0];
     
     // === Phase 3: Store System Totals (Thread 0 Only) ===
     

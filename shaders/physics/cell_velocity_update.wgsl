@@ -46,8 +46,8 @@ struct PhysicsParams {
     dragged_cell_index: i32,
     _padding1: vec3<f32>,
     
-    // Padding to 256 bytes
-    _padding: array<f32, 48>,
+    // Padding to 256 bytes (using vec4<f32> for proper 16-byte alignment)
+    _padding: array<vec4<f32>, 12>,
 }
 
 // Bind group 0: Physics parameters and cell properties
@@ -160,11 +160,15 @@ fn clamp_angular_velocity(angular_velocity: vec3<f32>, max_angular_speed: f32) -
 /// # Returns
 /// True if velocity is valid, false otherwise
 fn is_valid_velocity(velocity: vec3<f32>) -> bool {
-    let is_finite_x = isFinite(velocity.x) && !isNan(velocity.x);
-    let is_finite_y = isFinite(velocity.y) && !isNan(velocity.y);
-    let is_finite_z = isFinite(velocity.z) && !isNan(velocity.z);
+    // Check for NaN by comparing value to itself (NaN != NaN)
+    // Check for infinity by comparing to large finite values
+    let max_valid = 1e6; // Large but finite value
     
-    return is_finite_x && is_finite_y && is_finite_z;
+    let is_valid_x = velocity.x == velocity.x && abs(velocity.x) < max_valid;
+    let is_valid_y = velocity.y == velocity.y && abs(velocity.y) < max_valid;
+    let is_valid_z = velocity.z == velocity.z && abs(velocity.z) < max_valid;
+    
+    return is_valid_x && is_valid_y && is_valid_z;
 }
 
 /// Perform velocity Verlet integration for velocity update.

@@ -46,8 +46,8 @@ struct PhysicsParams {
     dragged_cell_index: i32,
     _padding1: vec3<f32>,
     
-    // Padding to 256 bytes
-    _padding: array<f32, 48>,
+    // Padding to 256 bytes (using vec4<f32> for proper 16-byte alignment)
+    _padding: array<vec4<f32>, 12>,
 }
 
 // Bind group 0: Physics parameters and cell properties
@@ -91,12 +91,15 @@ fn apply_boundary_constraints(position: vec3<f32>, world_size: f32) -> vec3<f32>
 /// # Returns
 /// True if position is valid, false otherwise
 fn is_valid_position(position: vec3<f32>) -> bool {
-    // Check for NaN or infinite values
-    let is_finite_x = isFinite(position.x) && !isNan(position.x);
-    let is_finite_y = isFinite(position.y) && !isNan(position.y);
-    let is_finite_z = isFinite(position.z) && !isNan(position.z);
+    // Check for NaN by comparing value to itself (NaN != NaN)
+    // Check for infinity by comparing to large finite values
+    let max_valid = 1e6; // Large but finite value
     
-    return is_finite_x && is_finite_y && is_finite_z;
+    let is_valid_x = position.x == position.x && abs(position.x) < max_valid;
+    let is_valid_y = position.y == position.y && abs(position.y) < max_valid;
+    let is_valid_z = position.z == position.z && abs(position.z) < max_valid;
+    
+    return is_valid_x && is_valid_y && is_valid_z;
 }
 
 /// Apply position damping for numerical stability.
@@ -170,45 +173,38 @@ fn verlet_integrate_position(
 /// * `restitution` - Energy retention factor (0.0 = no bounce, 1.0 = perfect bounce)
 ///
 /// # Returns
-/// Tuple of (corrected_position, reflected_velocity)
+/// Corrected position (velocity reflection handled separately)
 fn handle_boundary_collision(
     position: vec3<f32>,
     velocity: vec3<f32>,
     world_size: f32,
     restitution: f32
-) -> vec2<vec3<f32>> {
+) -> vec3<f32> {
     let half_world = world_size * 0.5;
     var corrected_position = position;
-    var reflected_velocity = velocity;
     
     // X boundaries
     if (position.x > half_world) {
         corrected_position.x = half_world;
-        reflected_velocity.x = -abs(velocity.x) * restitution;
     } else if (position.x < -half_world) {
         corrected_position.x = -half_world;
-        reflected_velocity.x = abs(velocity.x) * restitution;
     }
     
     // Y boundaries
     if (position.y > half_world) {
         corrected_position.y = half_world;
-        reflected_velocity.y = -abs(velocity.y) * restitution;
     } else if (position.y < -half_world) {
         corrected_position.y = -half_world;
-        reflected_velocity.y = abs(velocity.y) * restitution;
     }
     
     // Z boundaries
     if (position.z > half_world) {
         corrected_position.z = half_world;
-        reflected_velocity.z = -abs(velocity.z) * restitution;
     } else if (position.z < -half_world) {
         corrected_position.z = -half_world;
-        reflected_velocity.z = abs(velocity.z) * restitution;
     }
     
-    return vec2<vec3<f32>>(corrected_position, reflected_velocity);
+    return corrected_position;
 }
 
 /// Main compute shader entry point.
@@ -294,14 +290,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Handle boundary collisions
     let restitution = 0.3; // Energy retention during boundary collisions
-    let collision_result = handle_boundary_collision(
+    new_position = handle_boundary_collision(
         new_position,
         current_velocity,
         physics_params.world_size,
         restitution
     );
-    new_position = collision_result.x;
-    // Note: reflected velocity will be handled by velocity update shader
+    // Note: velocity reflection will be handled by velocity update shader
     
     // Apply final boundary constraints as safety net
     new_position = apply_boundary_constraints(new_position, physics_params.world_size);

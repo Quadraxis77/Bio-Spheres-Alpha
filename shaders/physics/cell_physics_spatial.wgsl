@@ -53,8 +53,8 @@ struct PhysicsParams {
     dragged_cell_index: i32,
     _padding1: vec3<f32>,
     
-    // Padding to 256 bytes
-    _padding: array<f32, 48>,
+    // Padding to 256 bytes (using vec4<f32> for proper 16-byte alignment)
+    _padding: array<vec4<f32>, 12>,
 }
 
 // GPU Mode structure for genome-based behavior
@@ -314,7 +314,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pos_and_mass = position_and_mass[cell_index];
     let position = pos_and_mass.xyz;
     let mass = pos_and_mass.w;
-    let velocity = velocity[cell_index].xyz;
+    let cell_velocity = velocity[cell_index].xyz;
     let cell_orientation = orientation[cell_index];
     let mode_index = mode_indices[cell_index];
     
@@ -368,7 +368,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // Calculate collision force
                     let collision_force = calculate_collision_force(
                         position, other_position,
-                        velocity, other_velocity,
+                        cell_velocity, other_velocity,
                         radius, other_radius
                     );
                     

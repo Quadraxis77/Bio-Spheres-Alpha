@@ -32,7 +32,7 @@ struct PhysicsParams {
     enable_thrust_force: i32,
     dragged_cell_index: i32,
     _padding1: vec3<f32>,
-    _padding: array<f32, 48>,
+    _padding: array<vec4<f32>, 12>,
 }
 
 // GPU Mode structure matching reference implementation

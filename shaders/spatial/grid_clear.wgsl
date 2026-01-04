@@ -44,8 +44,8 @@ struct PhysicsParams {
     dragged_cell_index: i32,
     _padding1: vec3<f32>,
     
-    // Padding to 256 bytes
-    _padding: array<f32, 48>,
+    // Padding to 256 bytes (using vec4<f32> for proper 16-byte alignment)
+    _padding: array<vec4<f32>, 12>,
 }
 
 // Bind group 0: Physics parameters and grid buffers
