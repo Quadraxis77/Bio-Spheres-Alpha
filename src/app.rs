@@ -651,8 +651,15 @@ impl ApplicationHandler for AppState {
                 label: Some("Bio-Spheres Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits {
-                    // Instance builder compute shader uses 10 storage buffers
-                    max_storage_buffers_per_shader_stage: 12,
+                    // Cell internal update shader uses 14 storage buffers (bindings 0-13)
+                    // Set to 16 for safety margin
+                    max_storage_buffers_per_shader_stage: 16,
+                    // Increase compute workgroup limits for large-scale GPU simulation
+                    max_compute_workgroup_size_x: 256,
+                    max_compute_workgroups_per_dimension: 65535,
+                    // Increase buffer size limits for large simulations
+                    max_storage_buffer_binding_size: 1024 * 1024 * 1024, // 1GB
+                    max_buffer_size: 1024 * 1024 * 1024, // 1GB
                     ..wgpu::Limits::default()
                 },
                 memory_hints: Default::default(),

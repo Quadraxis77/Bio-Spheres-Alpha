@@ -147,8 +147,7 @@ fn calculate_base_nutrient_gain(cell_type: i32, velocity_magnitude: f32) -> f32 
 fn calculate_nutrient_priority(
     cell_type: i32,
     current_nitrates: f32,
-    mode_index: i32,
-    genome_modes: ptr<storage, array<GpuMode>, read>
+    mode_index: i32
 ) -> f32 {
     var priority = 1.0; // Base priority
     
@@ -163,7 +162,8 @@ fn calculate_nutrient_priority(
     }
     
     // TODO: Add genome-specific nutrient_priority when genome system is integrated
-    // if (mode_index >= 0 && mode_index < arrayLength(genome_modes)) {
+    // Access genome_modes directly as a global buffer
+    // if (mode_index >= 0 && mode_index < arrayLength(&genome_modes)) {
     //     let mode = genome_modes[mode_index];
     //     priority *= mode.nutrient_priority;
     // }
@@ -227,7 +227,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let base_gain = calculate_base_nutrient_gain(cell_type, velocity_magnitude);
     
     // Calculate nutrient priority for this cell
-    let priority = calculate_nutrient_priority(cell_type, current_nitrates, mode_index, &genome_modes);
+    let priority = calculate_nutrient_priority(cell_type, current_nitrates, mode_index);
     
     // Calculate nutrient flow from adhesion connections
     var nutrient_flow = 0.0;
@@ -264,7 +264,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let other_mode_index = mode_indices[other_cell_index];
                 let other_genome_id = genome_ids[other_cell_index];
                 let other_cell_type = get_cell_type(other_genome_id, other_mode_index);
-                let other_priority = calculate_nutrient_priority(other_cell_type, other_nitrates, other_mode_index, &genome_modes);
+                let other_priority = calculate_nutrient_priority(other_cell_type, other_nitrates, other_mode_index);
                 
                 // Calculate flow between cells
                 let flow = calculate_nutrient_flow(current_nitrates, other_nitrates, priority, other_priority);
