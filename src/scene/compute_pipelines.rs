@@ -71,14 +71,24 @@ impl ComputePipelineManager {
     ///
     /// # Arguments
     /// * `device` - wgpu device for pipeline creation
-    /// * `workgroup_sizes` - Optional custom workgroup sizes (uses defaults if None)
-    pub fn new(device: wgpu::Device, workgroup_sizes: Option<ComputeWorkgroupSizes>) -> Self {
+    /// * `workgroup_sizes` - Custom workgroup sizes
+    pub fn new(device: wgpu::Device, workgroup_sizes: ComputeWorkgroupSizes) -> Self {
         Self {
             pipelines: HashMap::new(),
             bind_group_layouts: HashMap::new(),
-            workgroup_sizes: workgroup_sizes.unwrap_or_default(),
+            workgroup_sizes,
             device,
         }
+    }
+    
+    /// Check if all required compute pipelines are ready for execution.
+    ///
+    /// # Returns
+    /// True if all required pipelines are ready, false otherwise
+    pub fn are_pipelines_ready(&self) -> bool {
+        // For now, we'll consider pipelines ready if the manager is initialized
+        // In a full implementation, this would check for specific required pipelines
+        true
     }
     
     /// Get or create a compute pipeline.
@@ -240,11 +250,11 @@ impl ComputePipelineManager {
     
     /// Create a bind group layout for spatial grid operations.
     ///
-    /// This layout includes buffers needed for spatial partitioning:
+    /// This layout matches the spatial grid assignment shader requirements:
     /// - Physics parameters (uniform)
-    /// - Grid counts (storage)
-    /// - Grid offsets (storage)
-    /// - Grid indices (storage)
+    /// - Positions (read-only storage)
+    /// - Grid counts (read-write storage with atomics)
+    /// - Grid assignments (read-write storage)
     ///
     /// # Returns
     /// Bind group layout for spatial grid pipelines
@@ -266,18 +276,18 @@ impl ComputePipelineManager {
                         },
                         count: None,
                     },
-                    // Binding 1: Grid counts (storage)
+                    // Binding 1: Positions (read-only storage)
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
                         count: None,
                     },
-                    // Binding 2: Grid offsets (storage)
+                    // Binding 2: Grid counts (read-write storage with atomics)
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -288,7 +298,7 @@ impl ComputePipelineManager {
                         },
                         count: None,
                     },
-                    // Binding 3: Grid indices (storage)
+                    // Binding 3: Grid assignments (read-write storage)
                     wgpu::BindGroupLayoutEntry {
                         binding: 3,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -390,17 +400,182 @@ impl ComputePipelineManager {
         self.bind_group_layouts.get(layout_name).unwrap()
     }
     
+    /// Create a bind group layout for collision detection operations.
+    ///
+    /// This layout matches the cell_physics_spatial.wgsl shader requirements:
+    /// Group 0: Physics data buffers
+    /// - Physics parameters (uniform)
+    /// - Position and mass (read-only storage)
+    /// - Velocity (read-only storage)
+    /// - Acceleration (read-write storage)
+    /// - Orientation (read-only storage)
+    /// - Mode indices (read-only storage)
+    /// - Genome modes (read-only storage)
+    ///
+    /// # Returns
+    /// Bind group layout for collision detection pipeline
+    pub fn create_collision_detection_bind_group_layout(&mut self) -> &wgpu::BindGroupLayout {
+        let layout_name = "collision_detection";
+        
+        if !self.bind_group_layouts.contains_key(layout_name) {
+            let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Collision Detection Bind Group Layout"),
+                entries: &[
+                    // Binding 0: Physics parameters (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 1: Position and mass (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 2: Velocity (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 3: Acceleration (read-write storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 4: Orientation (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 5: Mode indices (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 6: Genome modes (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            
+            self.bind_group_layouts.insert(layout_name.to_string(), layout);
+        }
+        
+        self.bind_group_layouts.get(layout_name).unwrap()
+    }
+    
     /// Get the spatial grid clear pipeline.
     ///
     /// # Returns
     /// Reference to the spatial grid clear compute pipeline
     pub fn get_spatial_grid_clear_pipeline(&mut self) -> &wgpu::ComputePipeline {
-        let layout = self.create_spatial_bind_group_layout().clone();
+        let layout = self.create_spatial_clear_bind_group_layout().clone();
         self.get_or_create_pipeline(
             "spatial_grid_clear",
             "spatial/grid_clear.wgsl",
             &layout,
         )
+    }
+    
+    /// Create a bind group layout for spatial grid clear operations.
+    ///
+    /// This layout matches the spatial grid clear shader requirements:
+    /// - Physics parameters (uniform)
+    /// - Grid counts (read-write storage)
+    /// - Grid offsets (read-write storage)
+    ///
+    /// # Returns
+    /// Bind group layout for spatial grid clear pipeline
+    pub fn create_spatial_clear_bind_group_layout(&mut self) -> &wgpu::BindGroupLayout {
+        let layout_name = "spatial_clear";
+        
+        if !self.bind_group_layouts.contains_key(layout_name) {
+            let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Spatial Grid Clear Bind Group Layout"),
+                entries: &[
+                    // Binding 0: Physics parameters (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 1: Grid counts (read-write storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 2: Grid offsets (read-write storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            
+            self.bind_group_layouts.insert(layout_name.to_string(), layout);
+        }
+        
+        self.bind_group_layouts.get(layout_name).unwrap()
     }
     
     /// Get the spatial grid assignment pipeline.
@@ -421,7 +596,7 @@ impl ComputePipelineManager {
     /// # Returns
     /// Reference to the collision detection compute pipeline
     pub fn get_collision_detection_pipeline(&mut self) -> &wgpu::ComputePipeline {
-        let layout = self.create_physics_bind_group_layout().clone();
+        let layout = self.create_collision_detection_bind_group_layout().clone();
         self.get_or_create_pipeline(
             "collision_detection",
             "physics/cell_physics_spatial.wgsl",
@@ -490,6 +665,315 @@ impl ComputePipelineManager {
         self.get_or_create_pipeline(
             "instance_extraction",
             "extract_instances.wgsl",
+            &layout,
+        )
+    }
+    
+    /// Get the spatial grid insertion pipeline.
+    ///
+    /// # Returns
+    /// Reference to the spatial grid insertion compute pipeline
+    pub fn get_spatial_grid_insert_pipeline(&mut self) -> &wgpu::ComputePipeline {
+        let layout = self.create_spatial_insert_bind_group_layout().clone();
+        self.get_or_create_pipeline(
+            "spatial_grid_insert",
+            "spatial/grid_insert.wgsl",
+            &layout,
+        )
+    }
+    
+    /// Create a bind group layout for spatial grid insertion operations.
+    ///
+    /// This layout matches the spatial grid insertion shader requirements:
+    /// - Physics parameters (uniform)
+    /// - Grid assignments (read-only storage)
+    /// - Grid offsets (read-only storage)
+    /// - Grid indices (read-write storage)
+    /// - Grid insertion counters (read-write storage with atomics)
+    ///
+    /// # Returns
+    /// Bind group layout for spatial grid insertion pipeline
+    pub fn create_spatial_insert_bind_group_layout(&mut self) -> &wgpu::BindGroupLayout {
+        let layout_name = "spatial_insert";
+        
+        if !self.bind_group_layouts.contains_key(layout_name) {
+            let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Spatial Grid Insert Bind Group Layout"),
+                entries: &[
+                    // Binding 0: Physics parameters (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 1: Grid assignments (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 2: Grid offsets (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 3: Grid indices (read-write storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 4: Grid insertion counters (read-write storage with atomics)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            
+            self.bind_group_layouts.insert(layout_name.to_string(), layout);
+        }
+        
+        self.bind_group_layouts.get(layout_name).unwrap()
+    }
+    
+    /// Get the spatial grid prefix sum pipeline.
+    ///
+    /// # Returns
+    /// Reference to the spatial grid prefix sum compute pipeline
+    pub fn get_spatial_grid_prefix_sum_pipeline(&mut self) -> &wgpu::ComputePipeline {
+        let layout = self.create_spatial_prefix_sum_bind_group_layout().clone();
+        self.get_or_create_pipeline(
+            "spatial_grid_prefix_sum",
+            "spatial/grid_prefix_sum.wgsl",
+            &layout,
+        )
+    }
+    
+    /// Create a bind group layout for spatial grid prefix sum operations.
+    ///
+    /// This layout matches the spatial grid prefix sum shader requirements:
+    /// - Physics parameters (uniform)
+    /// - Grid counts (read-only storage)
+    /// - Grid offsets (read-write storage)
+    ///
+    /// # Returns
+    /// Bind group layout for spatial grid prefix sum pipeline
+    pub fn create_spatial_prefix_sum_bind_group_layout(&mut self) -> &wgpu::BindGroupLayout {
+        let layout_name = "spatial_prefix_sum";
+        
+        if !self.bind_group_layouts.contains_key(layout_name) {
+            let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Spatial Grid Prefix Sum Bind Group Layout"),
+                entries: &[
+                    // Binding 0: Physics parameters (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 1: Grid counts (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 2: Grid offsets (read-write storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            
+            self.bind_group_layouts.insert(layout_name.to_string(), layout);
+        }
+        
+        self.bind_group_layouts.get(layout_name).unwrap()
+    }
+    
+    /// Get the adhesion physics pipeline.
+    ///
+    /// # Returns
+    /// Reference to the adhesion physics compute pipeline
+    pub fn get_adhesion_physics_pipeline(&mut self) -> &wgpu::ComputePipeline {
+        let layout = self.create_physics_bind_group_layout().clone();
+        self.get_or_create_pipeline(
+            "adhesion_physics",
+            "physics/adhesion_physics.wgsl",
+            &layout,
+        )
+    }
+    
+    /// Get the momentum correction pipeline.
+    ///
+    /// # Returns
+    /// Reference to the momentum correction compute pipeline
+    pub fn get_momentum_correction_pipeline(&mut self) -> &wgpu::ComputePipeline {
+        let layout = self.create_physics_bind_group_layout().clone();
+        self.get_or_create_pipeline(
+            "momentum_correction",
+            "physics/momentum_correction.wgsl",
+            &layout,
+        )
+    }
+    
+    /// Get the rigid body constraints pipeline.
+    ///
+    /// # Returns
+    /// Reference to the rigid body constraints compute pipeline
+    pub fn get_rigid_body_constraints_pipeline(&mut self) -> &wgpu::ComputePipeline {
+        let layout = self.create_physics_bind_group_layout().clone();
+        self.get_or_create_pipeline(
+            "rigid_body_constraints",
+            "physics/rigid_body_constraints.wgsl",
+            &layout,
+        )
+    }
+    
+    /// Get the cell internal update pipeline.
+    ///
+    /// # Returns
+    /// Reference to the cell internal update compute pipeline
+    pub fn get_cell_internal_update_pipeline(&mut self) -> &wgpu::ComputePipeline {
+        let layout = self.create_physics_bind_group_layout().clone();
+        self.get_or_create_pipeline(
+            "cell_internal_update",
+            "physics/cell_update_internal.wgsl",
+            &layout,
+        )
+    }
+    
+    /// Get the nutrient system pipeline.
+    ///
+    /// # Returns
+    /// Reference to the nutrient system compute pipeline
+    pub fn get_nutrient_system_pipeline(&mut self) -> &wgpu::ComputePipeline {
+        let layout = self.create_physics_bind_group_layout().clone();
+        self.get_or_create_pipeline(
+            "nutrient_system",
+            "physics/nutrient_system.wgsl",
+            &layout,
+        )
+    }
+    
+    /// Get the lifecycle death scan pipeline.
+    ///
+    /// # Returns
+    /// Reference to the lifecycle death scan compute pipeline
+    pub fn get_lifecycle_death_scan_pipeline(&mut self) -> &wgpu::ComputePipeline {
+        let layout = self.create_lifecycle_bind_group_layout().clone();
+        self.get_or_create_pipeline(
+            "lifecycle_death_scan",
+            "lifecycle/lifecycle_death_scan.wgsl",
+            &layout,
+        )
+    }
+    
+    /// Get the lifecycle death compact pipeline.
+    ///
+    /// # Returns
+    /// Reference to the lifecycle death compact compute pipeline
+    pub fn get_lifecycle_death_compact_pipeline(&mut self) -> &wgpu::ComputePipeline {
+        let layout = self.create_lifecycle_bind_group_layout().clone();
+        self.get_or_create_pipeline(
+            "lifecycle_death_compact",
+            "lifecycle/lifecycle_death_compact.wgsl",
+            &layout,
+        )
+    }
+    
+    /// Get the lifecycle division scan pipeline.
+    ///
+    /// # Returns
+    /// Reference to the lifecycle division scan compute pipeline
+    pub fn get_lifecycle_division_scan_pipeline(&mut self) -> &wgpu::ComputePipeline {
+        let layout = self.create_lifecycle_bind_group_layout().clone();
+        self.get_or_create_pipeline(
+            "lifecycle_division_scan",
+            "lifecycle/lifecycle_division_scan.wgsl",
+            &layout,
+        )
+    }
+    
+    /// Get the lifecycle slot assign pipeline.
+    ///
+    /// # Returns
+    /// Reference to the lifecycle slot assign compute pipeline
+    pub fn get_lifecycle_slot_assign_pipeline(&mut self) -> &wgpu::ComputePipeline {
+        let layout = self.create_lifecycle_bind_group_layout().clone();
+        self.get_or_create_pipeline(
+            "lifecycle_slot_assign",
+            "lifecycle/lifecycle_slot_assign.wgsl",
+            &layout,
+        )
+    }
+    
+    /// Get the lifecycle division execute pipeline.
+    ///
+    /// # Returns
+    /// Reference to the lifecycle division execute compute pipeline
+    pub fn get_lifecycle_division_execute_pipeline(&mut self) -> &wgpu::ComputePipeline {
+        let layout = self.create_lifecycle_bind_group_layout().clone();
+        self.get_or_create_pipeline(
+            "lifecycle_division_execute",
+            "lifecycle/lifecycle_division_execute.wgsl",
+            &layout,
+        )
+    }
+    
+    /// Get the lifecycle free slots pipeline.
+    ///
+    /// # Returns
+    /// Reference to the lifecycle free slots compute pipeline
+    pub fn get_lifecycle_free_slots_pipeline(&mut self) -> &wgpu::ComputePipeline {
+        let layout = self.create_lifecycle_bind_group_layout().clone();
+        self.get_or_create_pipeline(
+            "lifecycle_free_slots",
+            "lifecycle/lifecycle_free_slots.wgsl",
             &layout,
         )
     }

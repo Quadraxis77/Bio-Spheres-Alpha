@@ -58,15 +58,6 @@ pub struct GpuTripleBufferSystem {
     /// Current instance buffer index (0, 1, or 2)
     /// Updated atomically after visual data extraction
     current_instance_index: AtomicUsize,
-    
-    /// Command encoders (triple buffered)
-    /// Enables pipelined GPU work submission without blocking
-    #[allow(dead_code)] // Will be used when command buffer management is implemented
-    command_encoders: [Option<wgpu::CommandEncoder>; 3],
-    
-    /// Current command encoder index (0, 1, or 2)
-    /// Updated atomically after GPU command submission
-    current_encoder_index: AtomicUsize,
 }
 
 impl GpuTripleBufferSystem {
@@ -98,16 +89,11 @@ impl GpuTripleBufferSystem {
             GpuInstanceBuffers::new(device, capacity, "Instance Buffer Set 2"),
         ];
         
-        // Command encoders start as None and are created on-demand
-        let command_encoders = [None, None, None];
-        
         Self {
             physics_buffers,
             current_physics_index: AtomicUsize::new(0),
             instance_buffers,
             current_instance_index: AtomicUsize::new(0),
-            command_encoders,
-            current_encoder_index: AtomicUsize::new(0),
         }
     }
     
