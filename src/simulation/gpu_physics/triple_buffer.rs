@@ -113,6 +113,9 @@ pub struct GpuTripleBufferSystem {
     /// Updated by division shader, read by all other shaders
     pub cell_count_buffer: wgpu::Buffer,
     
+    /// Staging buffer for async cell count readback
+    cell_count_staging: wgpu::Buffer,
+    
     /// Genome mode data buffer for division (child orientations, split direction)
     /// Layout per mode: [child_a_orientation (vec4), child_b_orientation (vec4), split_direction (vec4)]
     /// Total size: num_modes * 48 bytes
@@ -129,6 +132,15 @@ pub struct GpuTripleBufferSystem {
     
     /// Pending cell insertions (cell indices to sync)
     pending_cell_insertions: Vec<usize>,
+    
+    /// Last known GPU cell count (updated asynchronously)
+    gpu_cell_count: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    
+    /// Whether an async cell count read is in progress (copy issued, waiting for map)
+    cell_count_read_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    
+    /// Whether map_async has been called for the current read
+    cell_count_map_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl GpuTripleBufferSystem {
@@ -219,6 +231,14 @@ impl GpuTripleBufferSystem {
         // GPU-side cell count: [0] = total cells, [1] = live cells
         let cell_count_buffer = Self::create_storage_buffer(device, 8, "Cell Count Buffer");
         
+        // Staging buffer for async cell count readback (MAP_READ)
+        let cell_count_staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Cell Count Staging Buffer"),
+            size: 8, // 2 x u32
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
         // Genome mode data: 40 modes per genome * 10 genomes max = 400 modes
         // Each mode: child_a_orientation (16 bytes) + child_b_orientation (16 bytes) + split_direction (16 bytes) = 48 bytes
         let max_modes = 40 * 10;
@@ -250,11 +270,15 @@ impl GpuTripleBufferSystem {
             nutrient_gain_rates,
             stiffnesses,
             cell_count_buffer,
+            cell_count_staging,
             genome_mode_data,
             current_index: AtomicUsize::new(0),
             capacity,
             needs_sync: true,
             pending_cell_insertions: Vec::new(),
+            gpu_cell_count: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            cell_count_read_pending: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            cell_count_map_started: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
     
@@ -569,5 +593,103 @@ impl GpuTripleBufferSystem {
     pub fn output_buffer_index(&self) -> usize {
         let current = self.current_index.load(Ordering::Acquire);
         (current + 1) % 3
+    }
+    
+    /// Start an async read of the GPU cell count.
+    /// Call this once per frame, then use `gpu_cell_count()` to get the latest value.
+    /// The read is non-blocking - it copies to a staging buffer and maps it asynchronously.
+    pub fn start_async_cell_count_read(&self, encoder: &mut wgpu::CommandEncoder) {
+        use std::sync::atomic::Ordering;
+        
+        // Don't start a new read if one is already pending (buffer may still be mapped)
+        if self.cell_count_read_pending.load(Ordering::Acquire) {
+            return;
+        }
+        
+        // Copy from GPU buffer to staging buffer
+        encoder.copy_buffer_to_buffer(
+            &self.cell_count_buffer,
+            0,
+            &self.cell_count_staging,
+            0,
+            8, // 2 x u32
+        );
+        
+        // Mark as pending and reset map_started flag
+        self.cell_count_read_pending.store(true, Ordering::Release);
+        self.cell_count_map_started.store(false, Ordering::Release);
+    }
+    
+    /// Poll for async cell count read completion.
+    /// Call this after queue.submit() to check if the read is ready.
+    pub fn poll_async_cell_count_read(&self, device: &wgpu::Device) {
+        use std::sync::atomic::Ordering;
+        
+        // Only poll if a read is pending
+        if !self.cell_count_read_pending.load(Ordering::Acquire) {
+            return;
+        }
+        
+        // Only call map_async once per read cycle
+        if self.cell_count_map_started.swap(true, Ordering::AcqRel) {
+            // Already started map, just poll the device
+            let _ = device.poll(wgpu::PollType::Poll);
+            return;
+        }
+        
+        let staging_slice = self.cell_count_staging.slice(..);
+        let read_pending = self.cell_count_read_pending.clone();
+        
+        staging_slice.map_async(wgpu::MapMode::Read, move |_result| {
+            // Mark read as no longer pending so we can start a new one
+            // The actual read happens in try_read_mapped_cell_count
+            read_pending.store(false, Ordering::Release);
+        });
+        
+        // Poll the device to process the map request (non-blocking)
+        let _ = device.poll(wgpu::PollType::Poll);
+    }
+    
+    /// Check if the staging buffer is mapped and read the cell count.
+    /// Returns true if a new value was read.
+    pub fn try_read_mapped_cell_count(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        
+        // If read is still pending, the buffer isn't mapped yet
+        if self.cell_count_read_pending.load(Ordering::Acquire) {
+            return false;
+        }
+        
+        // If map hasn't been started, there's nothing to read
+        if !self.cell_count_map_started.load(Ordering::Acquire) {
+            return false;
+        }
+        
+        // Try to get the mapped range - this will work if map_async completed successfully
+        // We wrap in catch_unwind since get_mapped_range panics if not mapped
+        let staging_slice = self.cell_count_staging.slice(..);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let view = staging_slice.get_mapped_range();
+            let data: &[u32] = bytemuck::cast_slice(&view);
+            let count = if !data.is_empty() { data[0] } else { 0 };
+            drop(view);
+            count
+        }));
+        
+        if let Ok(count) = result {
+            self.gpu_cell_count.store(count, Ordering::Release);
+            self.cell_count_staging.unmap();
+            // Reset map_started to prevent re-reading
+            self.cell_count_map_started.store(false, Ordering::Release);
+            return true;
+        }
+        
+        false
+    }
+    
+    /// Get the last known GPU cell count (updated asynchronously).
+    /// This value may be 1-2 frames behind the actual GPU state.
+    pub fn gpu_cell_count(&self) -> u32 {
+        self.gpu_cell_count.load(std::sync::atomic::Ordering::Acquire)
     }
 }

@@ -25,7 +25,9 @@ struct PhysicsParams {
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
     cell_capacity: u32,
-    _padding2: vec3<f32>,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0)
@@ -76,7 +78,7 @@ fn world_pos_to_grid_index(pos: vec3<f32>, world_size: f32, grid_cell_size: f32)
     return u32(grid_x + grid_y * GRID_RESOLUTION + grid_z * GRID_RESOLUTION * GRID_RESOLUTION);
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
     // Read cell count from GPU buffer

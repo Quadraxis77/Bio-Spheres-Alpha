@@ -7,6 +7,7 @@
 //
 // Output:
 // - death_flags[cell_idx] = 1 for dead cells, 0 for alive
+// - lifecycle_counts cleared to 0 (for subsequent stages)
 // - These become the input for free slot compaction
 
 struct PhysicsParams {
@@ -23,7 +24,9 @@ struct PhysicsParams {
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
     cell_capacity: u32,
-    _padding2: vec3<f32>,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0)
@@ -58,15 +61,25 @@ var<storage, read_write> free_slot_indices: array<u32>;
 @group(1) @binding(3)
 var<storage, read_write> division_slot_assignments: array<u32>;
 
+// Atomic counters: [0] = free slots, [1] = reservations, [2] = dead count
 @group(1) @binding(4)
-var<storage, read_write> lifecycle_counts: array<u32>;
+var<storage, read_write> lifecycle_counts: array<atomic<u32>>;
 
 // Death threshold - cells with mass below this are considered dead
 const DEATH_MASS_THRESHOLD: f32 = 0.1;
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(128)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
+    
+    // First thread clears all lifecycle counters (before any other work)
+    // This ensures counters are zeroed before prefix_sum and division_scan run
+    if (cell_idx == 0u) {
+        atomicStore(&lifecycle_counts[0], 0u);
+        atomicStore(&lifecycle_counts[1], 0u);
+        atomicStore(&lifecycle_counts[2], 0u);
+    }
+    
     // Read cell count from GPU buffer
     let cell_count = cell_count_buffer[0];
     if (cell_idx >= cell_count) {

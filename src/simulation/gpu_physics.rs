@@ -39,5 +39,5 @@ mod compute_pipelines;
 mod gpu_scene_integration;
 
 pub use triple_buffer::GpuTripleBufferSystem;
-pub use compute_pipelines::GpuPhysicsPipelines;
+pub use compute_pipelines::{GpuPhysicsPipelines, CachedBindGroups};
 pub use gpu_scene_integration::{execute_gpu_physics_step, execute_lifecycle_pipeline};

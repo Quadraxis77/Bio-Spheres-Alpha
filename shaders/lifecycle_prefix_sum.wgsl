@@ -1,14 +1,15 @@
 // Lifecycle Prefix Sum Shader
-// Stage 2: Compact free slots from dead cells
+// Stage 2: Compact free slots from dead cells using atomic operations
 // Workgroup size: 64 threads for cell operations
 //
 // Input: death_flags array (1 = dead, 0 = alive)
+//        lifecycle_counts already cleared by death_scan shader
 // Output: 
 // - free_slot_indices: compacted array of dead cell indices
-// - lifecycle_counts[0]: N = total free slots available
+// - lifecycle_counts[2]: D = dead cell count
 //
-// This creates the dense slot array [slot₀, slot₁, ..., slotₙ₋₁]
-// that will be used for division slot assignment.
+// Uses atomic operations for O(1) per thread instead of O(N) prefix sum
+// NOTE: Counters are cleared in death_scan shader (runs before this)
 
 struct PhysicsParams {
     delta_time: f32,
@@ -24,14 +25,14 @@ struct PhysicsParams {
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
     cell_capacity: u32,
-    _padding2: vec3<f32>,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0)
 var<uniform> params: PhysicsParams;
 
-// These bindings must be declared to match the physics bind group layout
-// even though this shader doesn't use them
 @group(0) @binding(1)
 var<storage, read> positions_in: array<vec4<f32>>;
 
@@ -61,10 +62,12 @@ var<storage, read_write> free_slot_indices: array<u32>;
 @group(1) @binding(3)
 var<storage, read_write> division_slot_assignments: array<u32>;
 
+// Atomic counters: [0] = free slots, [1] = reservations, [2] = dead count
+// Already cleared by death_scan shader
 @group(1) @binding(4)
-var<storage, read_write> lifecycle_counts: array<u32>;
+var<storage, read_write> lifecycle_counts: array<atomic<u32>>;
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(128)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
     
@@ -78,32 +81,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     let is_dead = death_flags[cell_idx] == 1u;
     
-    // Count dead cells before this one (exclusive prefix sum)
-    var prefix_count = 0u;
-    for (var i = 0u; i < cell_idx; i++) {
-        if (death_flags[i] == 1u) {
-            prefix_count += 1u;
-        }
-    }
-    
-    // If this cell is dead, write its index to the compacted free_slot_indices array
+    // If this cell is dead, atomically get a slot and write to free_slot_indices
     if (is_dead) {
-        free_slot_indices[prefix_count] = cell_idx;
-    }
-    
-    // Last cell writes total count of free slots
-    // Free slots = dead cells + unused capacity (cell_capacity - cell_count)
-    if (cell_idx == cell_count - 1u) {
-        var dead_count = prefix_count;
-        if (is_dead) {
-            dead_count += 1u;
-        }
-        
-        // Store dead_count in lifecycle_counts[2] for the execute shader
-        lifecycle_counts[2] = dead_count;
-        
-        // Total free slots = dead cells + unused capacity
-        let unused_capacity = params.cell_capacity - cell_count;
-        lifecycle_counts[0] = dead_count + unused_capacity;
+        let slot = atomicAdd(&lifecycle_counts[2], 1u);
+        free_slot_indices[slot] = cell_idx;
     }
 }

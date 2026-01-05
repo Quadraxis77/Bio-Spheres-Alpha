@@ -1,23 +1,19 @@
 // Lifecycle Division Scan Shader
-// Stage 3: Identify cells ready to divide and compact reservations
+// Stage 3: Identify cells ready to divide using atomic operations
 // Workgroup size: 64 threads for cell operations
 //
 // Input: 
 // - Cell state (mass, birth_time, split_interval, split_mass)
-// - lifecycle_counts[0] = N (free slots available)
+// - lifecycle_counts[2] = D (dead cell count from prefix_sum)
 //
 // Output:
 // - division_flags[cell_idx] = 1 for cells ready to divide
 // - division_slot_assignments[cell_idx] = reservation index for this cell
+// - lifecycle_counts[0] = N (total free slots = dead + unused capacity)
 // - lifecycle_counts[1] = M (total reservations needed)
 //
-// Division criteria:
-// - Cell must be alive (death_flags == 0)
-// - Cell mass >= split_mass threshold
-// - Time since birth >= split_interval
-// - splits_remaining (current_splits < max_splits or max_splits == 0)
-//
-// The availability check (N >= M) happens in the execute shader.
+// Uses atomic operations for O(1) per thread instead of O(N) prefix sum
+// NOTE: lifecycle_counts[0] and [1] are cleared in death_scan shader
 
 struct PhysicsParams {
     delta_time: f32,
@@ -33,7 +29,9 @@ struct PhysicsParams {
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
     cell_capacity: u32,
-    _padding2: vec3<f32>,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0)
@@ -68,8 +66,9 @@ var<storage, read_write> free_slot_indices: array<u32>;
 @group(1) @binding(3)
 var<storage, read_write> division_slot_assignments: array<u32>;
 
+// Atomic counters: [0] = free slots, [1] = reservations, [2] = dead count
 @group(1) @binding(4)
-var<storage, read_write> lifecycle_counts: array<u32>;
+var<storage, read_write> lifecycle_counts: array<atomic<u32>>;
 
 // Cell state bind group (group 2)
 @group(2) @binding(0)
@@ -87,11 +86,29 @@ var<storage, read> split_counts: array<u32>;
 @group(2) @binding(4)
 var<storage, read> max_splits: array<u32>;
 
-// Helper function to check if a cell wants to divide
-fn cell_wants_to_divide(cell_idx: u32) -> bool {
+@compute @workgroup_size(128)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let cell_idx = global_id.x;
+    // Read cell count from GPU buffer
+    let cell_count = cell_count_buffer[0];
+    
+    // First thread calculates total free slots
+    // This must happen before any thread tries to reserve a slot
+    if (cell_idx == 0u) {
+        // Total free slots = dead cells + unused capacity
+        let dead_count = atomicLoad(&lifecycle_counts[2]);
+        let unused_capacity = params.cell_capacity - cell_count;
+        atomicStore(&lifecycle_counts[0], dead_count + unused_capacity);
+    }
+    
+    if (cell_idx >= cell_count) {
+        return;
+    }
+    
     // Skip dead cells - they can't divide
     if (death_flags[cell_idx] == 1u) {
-        return false;
+        division_flags[cell_idx] = 0u;
+        return;
     }
     
     // Read mass from OUTPUT buffer (physics results)
@@ -110,44 +127,14 @@ fn cell_wants_to_divide(cell_idx: u32) -> bool {
     let time_ready = age >= split_interval;
     let splits_remaining = current_splits < max_split || max_split == 0u;
     
-    return mass_ready && time_ready && splits_remaining;
-}
-
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let cell_idx = global_id.x;
-    // Read cell count from GPU buffer
-    let cell_count = cell_count_buffer[0];
-    if (cell_idx >= cell_count) {
-        return;
-    }
-    
-    let wants_to_divide = cell_wants_to_divide(cell_idx);
+    let wants_to_divide = mass_ready && time_ready && splits_remaining;
     
     // Write division flag
     division_flags[cell_idx] = select(0u, 1u, wants_to_divide);
     
-    // Count dividing cells before this one (exclusive prefix sum)
-    // This creates the compacted reservation array
-    var prefix_count = 0u;
-    for (var i = 0u; i < cell_idx; i++) {
-        if (cell_wants_to_divide(i)) {
-            prefix_count += 1u;
-        }
-    }
-    
-    // If this cell wants to divide, assign it a reservation index
-    // This is the index into the free_slot_indices array
+    // If this cell wants to divide, atomically get a reservation index
     if (wants_to_divide) {
-        division_slot_assignments[cell_idx] = prefix_count;
-    }
-    
-    // Last cell writes total reservation count (M)
-    if (cell_idx == cell_count - 1u) {
-        var total_reservations = prefix_count;
-        if (wants_to_divide) {
-            total_reservations += 1u;
-        }
-        lifecycle_counts[1] = total_reservations; // M = reservations needed
+        let reservation_idx = atomicAdd(&lifecycle_counts[1], 1u);
+        division_slot_assignments[cell_idx] = reservation_idx;
     }
 }

@@ -125,6 +125,10 @@ pub struct InstanceBuilder {
     
     // Last visible count for draw calls
     last_visible_count: u32,
+    
+    // Async stats readback state
+    stats_map_pending: bool,
+    stats_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
 
 
@@ -463,6 +467,8 @@ impl InstanceBuilder {
             min_screen_size: 0.0,
             min_distance: 0.0,
             last_visible_count: 0,
+            stats_map_pending: false,
+            stats_receiver: None,
             temp_positions: Vec::new(),
             temp_rotations: Vec::new(),
             temp_mode_indices: Vec::new(),
@@ -1134,14 +1140,16 @@ impl InstanceBuilder {
             4,  // 4 bytes (u32)
         );
         
-        // Copy counters to readback buffer for stats
-        encoder.copy_buffer_to_buffer(
-            &self.counters_buffer,
-            0,
-            &self.counters_readback_buffer,
-            0,
-            16,
-        );
+        // Copy counters to readback buffer for stats (only if not currently mapped)
+        if !self.stats_map_pending {
+            encoder.copy_buffer_to_buffer(
+                &self.counters_buffer,
+                0,
+                &self.counters_readback_buffer,
+                0,
+                16,
+            );
+        }
         
         // For stats display, use capacity (actual count is in GPU buffer)
         self.last_visible_count = cell_capacity as u32;
@@ -1228,6 +1236,88 @@ impl InstanceBuilder {
             self.counters_readback_buffer.unmap();
         }
         
+        self.last_stats
+    }
+    
+    /// Start an async read of culling statistics.
+    /// Call poll_culling_stats() to check if the read is complete.
+    /// This is non-blocking and won't cause frame spikes.
+    pub fn start_culling_stats_read(&mut self) {
+        // Don't start a new read if one is already pending
+        if self.stats_map_pending {
+            return;
+        }
+        
+        let buffer_slice = self.counters_readback_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        
+        self.stats_map_pending = true;
+        self.stats_receiver = Some(rx);
+    }
+    
+    /// Poll for async culling stats read completion.
+    /// Returns true if new stats are available, false if still pending or no read started.
+    /// This is non-blocking.
+    pub fn poll_culling_stats(&mut self, device: &wgpu::Device) -> bool {
+        if !self.stats_map_pending {
+            return false;
+        }
+        
+        // Do a non-blocking poll to push GPU work forward
+        let _ = device.poll(wgpu::PollType::Poll);
+        
+        // Check if the map operation completed
+        if let Some(ref rx) = self.stats_receiver {
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    // Map succeeded, read the data
+                    let buffer_slice = self.counters_readback_buffer.slice(..);
+                    let data = buffer_slice.get_mapped_range();
+                    let counters: &[u32] = bytemuck::cast_slice(&data);
+                    
+                    self.last_stats = CullingStats {
+                        visible_cells: counters[0],
+                        total_cells: counters[1],
+                        frustum_culled: counters[2],
+                        occluded: counters[3],
+                    };
+                    self.last_visible_count = counters[0];
+                    
+                    drop(data);
+                    self.counters_readback_buffer.unmap();
+                    
+                    self.stats_map_pending = false;
+                    self.stats_receiver = None;
+                    return true;
+                }
+                Ok(Err(_)) => {
+                    // Map failed, reset state
+                    self.stats_map_pending = false;
+                    self.stats_receiver = None;
+                    return false;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // Still pending
+                    return false;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // Channel closed unexpectedly
+                    self.stats_map_pending = false;
+                    self.stats_receiver = None;
+                    return false;
+                }
+            }
+        }
+        
+        false
+    }
+    
+    /// Get the last known culling stats (may be from a previous frame).
+    pub fn last_culling_stats(&self) -> CullingStats {
         self.last_stats
     }
     

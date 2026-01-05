@@ -417,6 +417,7 @@ impl App {
             gpu_scene.set_occlusion_mip_override(self.ui.state.occlusion_mip_override);
             gpu_scene.set_occlusion_min_screen_size(self.ui.state.occlusion_min_screen_size);
             gpu_scene.set_occlusion_min_distance(self.ui.state.occlusion_min_distance);
+            gpu_scene.set_readbacks_enabled(self.ui.state.gpu_readbacks_enabled);
             
             // Set culling mode based on enabled flags
             let culling_mode = match (self.ui.state.frustum_enabled, self.ui.state.occlusion_enabled) {
@@ -432,16 +433,25 @@ impl App {
         let cell_type_visuals = &self.editor_state.cell_type_visuals;
         self.scene_manager.render(&self.device, &self.queue, &view, Some(cell_type_visuals));
         
-        // Update culling stats from GPU scene once per second (blocking read is expensive)
-        if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
-            if self.performance.should_refresh_culling_stats() {
-                let stats = gpu_scene.read_culling_stats(&self.device);
-                self.performance.set_culling_stats(
-                    stats.total_cells,
-                    stats.visible_cells,
-                    stats.frustum_culled,
-                    stats.occluded,
-                );
+        // Update culling stats from GPU scene using non-blocking async read
+        // Only if GPU readbacks are enabled (can be disabled to avoid CPU-GPU sync overhead)
+        if self.ui.state.gpu_readbacks_enabled {
+            if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                // Poll for any pending async stats read
+                if gpu_scene.instance_builder.poll_culling_stats(&self.device) {
+                    let stats = gpu_scene.instance_builder.last_culling_stats();
+                    self.performance.set_culling_stats(
+                        stats.total_cells,
+                        stats.visible_cells,
+                        stats.frustum_culled,
+                        stats.occluded,
+                    );
+                }
+                
+                // Start a new async read periodically (once per second)
+                if self.performance.should_refresh_culling_stats() {
+                    gpu_scene.instance_builder.start_culling_stats_read();
+                }
             }
         }
         

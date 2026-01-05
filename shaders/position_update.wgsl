@@ -15,7 +15,9 @@ struct PhysicsParams {
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
     cell_capacity: u32,
-    _padding2: vec3<f32>,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0)
@@ -44,7 +46,7 @@ var<storage, read> rotations_in: array<vec4<f32>>;
 @group(1) @binding(1)
 var<storage, read_write> rotations_out: array<vec4<f32>>;
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
     // Read cell count from GPU buffer

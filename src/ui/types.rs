@@ -215,6 +215,11 @@ pub struct GlobalUiState {
     #[serde(default = "default_true")]
     pub frustum_enabled: bool,
 
+    /// Whether GPU readbacks are enabled (cell count, culling stats)
+    /// Disabling this can improve performance by avoiding CPU-GPU sync
+    #[serde(default = "default_true")]
+    pub gpu_readbacks_enabled: bool,
+
     /// Requested mode change (processed by main app loop)
     #[serde(skip)]
     pub mode_request: Option<SimulationMode>,
@@ -249,6 +254,7 @@ impl Default for GlobalUiState {
             occlusion_min_distance: 0.0,
             occlusion_enabled: true,
             frustum_enabled: true,
+            gpu_readbacks_enabled: true,
             mode_request: None,
         }
     }

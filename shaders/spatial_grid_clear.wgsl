@@ -4,8 +4,9 @@
 // Only clears spatial_grid_counts - the actual cell data doesn't need clearing
 // because we use the count to know how many valid entries exist
 
+// Use atomic for consistency with spatial_grid_insert which uses atomicAdd
 @group(0) @binding(0)
-var<storage, read_write> spatial_grid_counts: array<u32>;
+var<storage, read_write> spatial_grid_counts: array<atomic<u32>>;
 
 @group(0) @binding(1)
 var<storage, read_write> spatial_grid_offsets: array<u32>;
@@ -31,7 +32,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Only clear the count - we use this to know how many valid cells exist
-    // No need to clear spatial_grid_cells since we only read up to count entries
-    spatial_grid_counts[grid_idx] = 0u;
+    // Clear the count atomically for consistency with insert shader
+    atomicStore(&spatial_grid_counts[grid_idx], 0u);
 }

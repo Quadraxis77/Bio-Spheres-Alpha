@@ -300,7 +300,13 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, _state: &Global
             // Show simulation info to the right of buttons
             ui.vertical(|ui| {
                 ui.label(format!("Time: {:.1}s", context.current_time()));
-                ui.label(format!("Cells: {}", context.cell_count()));
+                
+                // Show GPU cell count if available (async, more accurate)
+                if let Some(gpu_count) = context.gpu_cell_count() {
+                    ui.label(format!("Cells: {} (GPU)", gpu_count));
+                } else {
+                    ui.label(format!("Cells: {}", context.cell_count()));
+                }
                 
                 // Show genome count
                 if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
@@ -317,7 +323,13 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, _state: &Global
 fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
     ui.heading("Cell Inspector");
     ui.separator();
-    ui.label(format!("Total Cells: {}", context.cell_count()));
+    
+    // Show GPU cell count if available (async, more accurate)
+    if let Some(gpu_count) = context.gpu_cell_count() {
+        ui.label(format!("Total Cells: {} (GPU)", gpu_count));
+    } else {
+        ui.label(format!("Total Cells: {}", context.cell_count()));
+    }
     
     // Get the inspected cell index from radial menu state
     let inspected_cell = context.editor_state.radial_menu.inspected_cell;
@@ -437,6 +449,13 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
     let perf = context.performance;
     
     egui::ScrollArea::vertical().show(ui, |ui| {
+        // GPU Readbacks toggle at the top
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut state.gpu_readbacks_enabled, "Enable GPU Readbacks");
+            ui.label("").on_hover_text("Disable to avoid CPU-GPU sync overhead.\nCell count and culling stats won't update.");
+        });
+        ui.separator();
+        
         // FPS and Frame Time section
         ui.heading("Frame Rate");
         ui.separator();
@@ -508,7 +527,12 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
         
         ui.horizontal(|ui| {
             ui.label("Cells:");
-            ui.label(format!("{}", context.cell_count()));
+            // Show GPU cell count if available (async, more accurate)
+            if let Some(gpu_count) = context.gpu_cell_count() {
+                ui.label(format!("{} (GPU)", gpu_count));
+            } else {
+                ui.label(format!("{}", context.cell_count()));
+            }
         });
         
         ui.horizontal(|ui| {

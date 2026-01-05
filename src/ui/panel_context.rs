@@ -281,6 +281,12 @@ impl<'a> PanelContext<'a> {
     pub fn cell_count(&self) -> usize {
         self.scene_manager.active_scene().cell_count()
     }
+    
+    /// Get the GPU cell count (async, may be 1-2 frames behind).
+    /// Returns None if not in GPU mode.
+    pub fn gpu_cell_count(&self) -> Option<u32> {
+        self.scene_manager.gpu_scene().map(|s| s.gpu_cell_count())
+    }
 
     /// Get the current simulation time from the active scene.
     pub fn current_time(&self) -> f32 {

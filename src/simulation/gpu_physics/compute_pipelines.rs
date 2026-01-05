@@ -52,6 +52,25 @@
 
 use super::GpuTripleBufferSystem;
 
+/// Cached bind groups for GPU physics pipeline
+/// Pre-created for all 3 buffer indices to avoid per-frame allocation
+pub struct CachedBindGroups {
+    /// Physics bind groups for each buffer index [0, 1, 2]
+    pub physics: [wgpu::BindGroup; 3],
+    /// Spatial grid bind group (same for all frames)
+    pub spatial_grid: wgpu::BindGroup,
+    /// Lifecycle bind group (same for all frames)
+    pub lifecycle: wgpu::BindGroup,
+    /// Cell state read bind group (same for all frames)
+    pub cell_state_read: wgpu::BindGroup,
+    /// Cell state write bind groups for each buffer index [0, 1, 2]
+    pub cell_state_write: [wgpu::BindGroup; 3],
+    /// Mass accumulation bind group (same for all frames)
+    pub mass_accum: wgpu::BindGroup,
+    /// Rotations bind groups for each buffer index [0, 1, 2]
+    pub rotations: [wgpu::BindGroup; 3],
+}
+
 /// GPU physics compute pipelines
 pub struct GpuPhysicsPipelines {
     pub spatial_grid_clear: wgpu::ComputePipeline,
@@ -447,6 +466,130 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: buffers.rotations[output_index].as_entire_binding(),
+                },
+            ],
+        })
+    }
+    
+    /// Create all cached bind groups for the physics pipeline
+    /// Call once at initialization, not per-frame
+    pub fn create_cached_bind_groups(
+        &self,
+        device: &wgpu::Device,
+        buffers: &GpuTripleBufferSystem,
+    ) -> CachedBindGroups {
+        // Create physics bind groups for all 3 buffer indices
+        let physics = [
+            self.create_physics_bind_group_for_index(device, buffers, 0),
+            self.create_physics_bind_group_for_index(device, buffers, 1),
+            self.create_physics_bind_group_for_index(device, buffers, 2),
+        ];
+        
+        // Spatial grid bind group (same for all frames)
+        let spatial_grid = self.create_spatial_grid_bind_group_internal(device, buffers);
+        
+        // Lifecycle bind group (same for all frames)
+        let lifecycle = self.create_lifecycle_bind_group(device, buffers);
+        
+        // Cell state read bind group (same for all frames)
+        let cell_state_read = self.create_cell_state_read_bind_group(device, buffers);
+        
+        // Cell state write bind groups for all 3 buffer indices
+        let cell_state_write = [
+            self.create_cell_state_write_bind_group(device, buffers, 0),
+            self.create_cell_state_write_bind_group(device, buffers, 1),
+            self.create_cell_state_write_bind_group(device, buffers, 2),
+        ];
+        
+        // Mass accumulation bind group (same for all frames)
+        let mass_accum = self.create_mass_accum_bind_group(device, buffers);
+        
+        // Rotations bind groups for all 3 buffer indices
+        let rotations = [
+            self.create_rotations_bind_group(device, buffers, 0),
+            self.create_rotations_bind_group(device, buffers, 1),
+            self.create_rotations_bind_group(device, buffers, 2),
+        ];
+        
+        CachedBindGroups {
+            physics,
+            spatial_grid,
+            lifecycle,
+            cell_state_read,
+            cell_state_write,
+            mass_accum,
+            rotations,
+        }
+    }
+    
+    /// Create physics bind group for a specific buffer index
+    fn create_physics_bind_group_for_index(
+        &self,
+        device: &wgpu::Device,
+        buffers: &GpuTripleBufferSystem,
+        buffer_index: usize,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("Physics Bind Group {}", buffer_index)),
+            layout: &self.physics_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.physics_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.position_and_mass[buffer_index].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.velocity[buffer_index].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffers.position_and_mass[(buffer_index + 1) % 3].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.velocity[(buffer_index + 1) % 3].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.cell_count_buffer.as_entire_binding(),
+                },
+            ],
+        })
+    }
+    
+    /// Create spatial grid bind group (internal, for caching)
+    fn create_spatial_grid_bind_group_internal(
+        &self,
+        device: &wgpu::Device,
+        buffers: &GpuTripleBufferSystem,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Spatial Grid Bind Group"),
+            layout: &self.spatial_grid_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.spatial_grid_counts.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.spatial_grid_offsets.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.cell_grid_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffers.spatial_grid_cells.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.stiffnesses.as_entire_binding(),
                 },
             ],
         })

@@ -7,7 +7,7 @@ use crate::genome::Genome;
 use crate::rendering::{CellRenderer, CullingMode, HizGenerator, InstanceBuilder};
 use crate::scene::Scene;
 use crate::simulation::{CanonicalState, PhysicsConfig};
-use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, GpuPhysicsPipelines, GpuTripleBufferSystem};
+use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem};
 use crate::ui::camera::CameraController;
 use glam::Mat4;
 
@@ -28,6 +28,8 @@ pub struct GpuScene {
     pub gpu_physics_pipelines: GpuPhysicsPipelines,
     /// Triple buffer system for GPU physics
     pub gpu_triple_buffers: GpuTripleBufferSystem,
+    /// Cached bind groups (created once, not per-frame)
+    pub cached_bind_groups: CachedBindGroups,
     /// Physics configuration
     pub config: PhysicsConfig,
     /// Whether simulation is paused
@@ -42,6 +44,8 @@ pub struct GpuScene {
     time_accumulator: f32,
     /// Whether this is the first frame (no Hi-Z data yet)
     first_frame: bool,
+    /// Whether GPU readbacks are enabled (cell count, etc.)
+    readbacks_enabled: bool,
 }
 
 impl GpuScene {
@@ -68,6 +72,9 @@ impl GpuScene {
         // Create GPU physics components
         let gpu_physics_pipelines = GpuPhysicsPipelines::new(device);
         let gpu_triple_buffers = GpuTripleBufferSystem::new(device, capacity);
+        
+        // Create cached bind groups (once, not per-frame!)
+        let cached_bind_groups = gpu_physics_pipelines.create_cached_bind_groups(device, &gpu_triple_buffers);
 
         Self {
             canonical_state,
@@ -76,6 +83,7 @@ impl GpuScene {
             hiz_generator,
             gpu_physics_pipelines,
             gpu_triple_buffers,
+            cached_bind_groups,
             config,
             paused: false,
             camera: CameraController::new(),
@@ -83,6 +91,7 @@ impl GpuScene {
             genomes: Vec::new(),
             time_accumulator: 0.0,
             first_frame: true,
+            readbacks_enabled: true,
         }
     }
 
@@ -171,6 +180,12 @@ impl GpuScene {
         self.instance_builder.set_min_distance(distance);
     }
     
+    /// Set whether GPU readbacks are enabled (cell count, etc.)
+    /// Disabling this can improve performance by avoiding CPU-GPU sync overhead.
+    pub fn set_readbacks_enabled(&mut self, enabled: bool) {
+        self.readbacks_enabled = enabled;
+    }
+    
     /// Read culling statistics from GPU (blocking).
     pub fn read_culling_stats(&mut self, device: &wgpu::Device) -> crate::rendering::CullingStats {
         self.instance_builder.read_culling_stats_blocking(device)
@@ -195,12 +210,14 @@ impl GpuScene {
         
         // Execute pure GPU physics pipeline (7 compute shader stages)
         // Cell count is read from GPU buffer by shaders
+        // Uses cached bind groups (no per-frame allocation!)
         execute_gpu_physics_step(
             device,
             encoder,
             queue,
             &self.gpu_physics_pipelines,
             &mut self.gpu_triple_buffers,
+            &self.cached_bind_groups,
             delta_time,
             self.current_time,
         );
@@ -214,6 +231,7 @@ impl GpuScene {
             queue,
             &self.gpu_physics_pipelines,
             &mut self.gpu_triple_buffers,
+            &self.cached_bind_groups,
             self.current_time,
         );
         
@@ -238,8 +256,27 @@ impl GpuScene {
             copy_size,
         );
         
+        // Start async read of GPU cell count for performance monitoring (if enabled)
+        if self.readbacks_enabled {
+            self.gpu_triple_buffers.start_async_cell_count_read(encoder);
+        }
+        
         // Clear positions dirty flag since we just copied from GPU
         self.instance_builder.clear_positions_dirty();
+    }
+    
+    /// Get the GPU cell count (updated asynchronously, may be 1-2 frames behind).
+    /// This is the actual cell count on the GPU, which may differ from canonical_state
+    /// when cells are dividing or dying.
+    pub fn gpu_cell_count(&self) -> u32 {
+        self.gpu_triple_buffers.gpu_cell_count()
+    }
+    
+    /// Poll for async GPU cell count read completion.
+    /// Call this after queue.submit() to process the async read.
+    pub fn poll_gpu_cell_count(&self, device: &wgpu::Device) {
+        self.gpu_triple_buffers.poll_async_cell_count_read(device);
+        self.gpu_triple_buffers.try_read_mapped_cell_count();
     }
     
     /// Find an existing genome by name, or return None.
@@ -727,6 +764,11 @@ impl Scene for GpuScene {
 
         // Single submit for all GPU work
         queue.submit(std::iter::once(encoder.finish()));
+        
+        // Poll for async GPU cell count read completion (if enabled)
+        if self.readbacks_enabled {
+            self.poll_gpu_cell_count(device);
+        }
 
         // Mark that we now have Hi-Z data for next frame
         self.first_frame = false;

@@ -18,12 +18,12 @@
 //! 11. Division execute (64 workgroup) - create child cells
 //! 
 //! ## Key Patterns
-//! - NO atomics in shaders - uses prefix-sum compaction
+//! - Uses cached bind groups (created once, not per-frame)
 //! - NO CPU readback during simulation
 //! - Triple buffering for lock-free GPU computation
 //! - 64³ spatial grid for collision acceleration
 
-use super::{GpuPhysicsPipelines, GpuTripleBufferSystem};
+use super::{CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem};
 
 /// Physics parameters for GPU uniform buffer (256-byte aligned)
 /// 
@@ -49,11 +49,11 @@ struct PhysicsParams {
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
     
-    // Capacity for division (4 bytes + 12 bytes padding to align)
+    // Capacity for division (16 bytes - cell_capacity + 3 padding floats)
     cell_capacity: u32,        // Maximum cells that can exist
-    _padding2: [f32; 3],       // Align to 16 bytes
+    _padding2: [f32; 3],       // Explicit padding to 16 bytes
     
-    // Padding to 256 bytes (192 bytes)
+    // Padding to 256 bytes (192 bytes = 48 floats)
     _padding: [f32; 48],
 }
 
@@ -63,16 +63,23 @@ const GRID_RESOLUTION: u32 = 64;
 /// Workgroup size for grid operations (optimal for 64³ grid)
 const WORKGROUP_SIZE_GRID: u32 = 256;
 
-/// Workgroup size for cell operations (good balance for cell iteration)
-const WORKGROUP_SIZE_CELLS: u32 = 64;
+/// Workgroup size for simple cell operations (high throughput)
+const WORKGROUP_SIZE_CELLS_SIMPLE: u32 = 256;
+
+/// Workgroup size for complex cell operations (collision detection with 27-neighbor loop)
+const WORKGROUP_SIZE_CELLS_COMPLEX: u32 = 64;
+
+/// Workgroup size for lifecycle operations (moderate complexity)
+const WORKGROUP_SIZE_LIFECYCLE: u32 = 128;
 
 /// Execute the 6-stage GPU physics pipeline
 pub fn execute_gpu_physics_step(
-    device: &wgpu::Device,
+    _device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     queue: &wgpu::Queue,
     pipelines: &GpuPhysicsPipelines,
     triple_buffers: &mut GpuTripleBufferSystem,
+    cached_bind_groups: &CachedBindGroups,
     delta_time: f32,
     current_time: f32,
 ) {
@@ -101,17 +108,17 @@ pub fn execute_gpu_physics_step(
     };
     queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
     
-    // Create bind groups for this frame (includes cell_count_buffer)
-    let (physics_bind_group, spatial_grid_bind_group) = pipelines.create_bind_groups(
-        device,
-        triple_buffers,
-        current_index,
-    );
+    // Use cached bind groups (no per-frame allocation!)
+    let physics_bind_group = &cached_bind_groups.physics[current_index];
+    let spatial_grid_bind_group = &cached_bind_groups.spatial_grid;
+    let rotations_bind_group = &cached_bind_groups.rotations[current_index];
+    let mass_accum_bind_group = &cached_bind_groups.mass_accum;
     
     // Calculate workgroup counts - dispatch for capacity, shaders check cell_count
     let total_grid_cells = GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION;
     let grid_workgroups = (total_grid_cells + WORKGROUP_SIZE_GRID - 1) / WORKGROUP_SIZE_GRID;
-    let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+    let cell_workgroups_simple = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS_SIMPLE - 1) / WORKGROUP_SIZE_CELLS_SIMPLE;
+    let cell_workgroups_complex = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS_COMPLEX - 1) / WORKGROUP_SIZE_CELLS_COMPLEX;
     
     // Execute the 6 compute shader stages
     {
@@ -120,78 +127,70 @@ pub fn execute_gpu_physics_step(
             timestamp_writes: None,
         });
         
-        // Stage 1: Clear spatial grid
+        // Stage 1: Clear spatial grid (256 threads)
         compute_pass.set_pipeline(&pipelines.spatial_grid_clear);
-        compute_pass.set_bind_group(0, &spatial_grid_bind_group, &[]);
+        compute_pass.set_bind_group(0, spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(grid_workgroups, 1, 1);
         
-        // Stage 2: Assign cells to grid
+        // Stage 2: Assign cells to grid (256 threads - simple operation)
         compute_pass.set_pipeline(&pipelines.spatial_grid_assign);
-        compute_pass.set_bind_group(0, &physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &spatial_grid_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups_simple, 1, 1);
         
-        // Stage 3: Insert cells into grid (no-op pass for pipeline consistency)
+        // Stage 3: Insert cells into grid (256 threads - simple atomic operation)
         compute_pass.set_pipeline(&pipelines.spatial_grid_insert);
-        compute_pass.set_bind_group(0, &physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &spatial_grid_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups_simple, 1, 1);
         
-        // Stage 4: Collision detection
+        // Stage 4: Collision detection (64 threads - complex 27-neighbor loop)
         compute_pass.set_pipeline(&pipelines.collision_detection);
-        compute_pass.set_bind_group(0, &physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &spatial_grid_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups_complex, 1, 1);
         
-        // Stage 5: Position integration (also propagates rotations)
-        let rotations_bind_group = pipelines.create_rotations_bind_group(device, triple_buffers, current_index);
+        // Stage 5: Position integration (256 threads - simple operation)
         compute_pass.set_pipeline(&pipelines.position_update);
-        compute_pass.set_bind_group(0, &physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &rotations_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, rotations_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups_simple, 1, 1);
         
-        // Stage 6: Velocity integration
+        // Stage 6: Velocity integration (256 threads - simple operation)
         compute_pass.set_pipeline(&pipelines.velocity_update);
-        compute_pass.set_bind_group(0, &physics_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups_simple, 1, 1);
         
-        // Stage 7: Mass accumulation (mass increase based on nutrient_gain_rate)
-        let mass_accum_bind_group = pipelines.create_mass_accum_bind_group(device, triple_buffers);
+        // Stage 7: Mass accumulation (256 threads - simple operation)
         compute_pass.set_pipeline(&pipelines.mass_accum);
-        compute_pass.set_bind_group(0, &physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &mass_accum_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, mass_accum_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups_simple, 1, 1);
     }
 }
 
 /// Execute the lifecycle pipeline for cell division
 /// This is called after the main physics pipeline when division is enabled
 pub fn execute_lifecycle_pipeline(
-    device: &wgpu::Device,
+    _device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     _queue: &wgpu::Queue,
     pipelines: &GpuPhysicsPipelines,
     triple_buffers: &mut GpuTripleBufferSystem,
+    cached_bind_groups: &CachedBindGroups,
     _current_time: f32,
 ) {
     // Get current buffer index (already rotated by physics pipeline)
     let current_index = triple_buffers.current_index();
     
-    // NOTE: We do NOT update physics_params here - the physics pipeline already set it
-    // and we don't want to overwrite delta_time with 0.0
-    
-    // Create bind groups (includes cell_count_buffer)
-    let (physics_bind_group, _) = pipelines.create_bind_groups(
-        device,
-        triple_buffers,
-        current_index,
-    );
-    let lifecycle_bind_group = pipelines.create_lifecycle_bind_group(device, triple_buffers);
-    let cell_state_read_bind_group = pipelines.create_cell_state_read_bind_group(device, triple_buffers);
-    let cell_state_write_bind_group = pipelines.create_cell_state_write_bind_group(device, triple_buffers, current_index);
+    // Use cached bind groups (no per-frame allocation!)
+    let physics_bind_group = &cached_bind_groups.physics[current_index];
+    let lifecycle_bind_group = &cached_bind_groups.lifecycle;
+    let cell_state_read_bind_group = &cached_bind_groups.cell_state_read;
+    let cell_state_write_bind_group = &cached_bind_groups.cell_state_write[current_index];
     
     // Calculate workgroup counts - dispatch for capacity, shaders check cell_count
-    let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+    let cell_workgroups_lifecycle = (triple_buffers.capacity + WORKGROUP_SIZE_LIFECYCLE - 1) / WORKGROUP_SIZE_LIFECYCLE;
     
     // Execute lifecycle pipeline
     {
@@ -200,30 +199,30 @@ pub fn execute_lifecycle_pipeline(
             timestamp_writes: None,
         });
         
-        // Stage 1: Death scan - identify dead cells
+        // Stage 1: Death scan - identify dead cells (128 threads)
         compute_pass.set_pipeline(&pipelines.lifecycle_death_scan);
-        compute_pass.set_bind_group(0, &physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &lifecycle_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
         
-        // Stage 2: Prefix sum - compact free slots
+        // Stage 2: Prefix sum - compact free slots (128 threads)
         compute_pass.set_pipeline(&pipelines.lifecycle_prefix_sum);
-        compute_pass.set_bind_group(0, &physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &lifecycle_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
         
-        // Stage 3: Division scan - identify cells ready to divide
+        // Stage 3: Division scan - identify cells ready to divide (128 threads)
         compute_pass.set_pipeline(&pipelines.lifecycle_division_scan);
-        compute_pass.set_bind_group(0, &physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &lifecycle_bind_group, &[]);
-        compute_pass.set_bind_group(2, &cell_state_read_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
+        compute_pass.set_bind_group(2, cell_state_read_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
         
-        // Stage 4: Division execute - create child cells
+        // Stage 4: Division execute - create child cells (128 threads)
         compute_pass.set_pipeline(&pipelines.lifecycle_division_execute);
-        compute_pass.set_bind_group(0, &physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &lifecycle_bind_group, &[]);
-        compute_pass.set_bind_group(2, &cell_state_write_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
+        compute_pass.set_bind_group(2, cell_state_write_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
     }
 }
