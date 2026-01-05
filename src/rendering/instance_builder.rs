@@ -551,6 +551,11 @@ impl InstanceBuilder {
         self.positions_dirty = true;
     }
     
+    /// Clear positions dirty flag (call after GPU-to-GPU copy of positions).
+    pub fn clear_positions_dirty(&mut self) {
+        self.positions_dirty = false;
+    }
+    
     /// Mark rotations buffer as dirty (call when cell rotations change).
     pub fn mark_rotations_dirty(&mut self) {
         self.rotations_dirty = true;
@@ -690,9 +695,15 @@ impl InstanceBuilder {
             self.resize_cell_buffers(device, cell_count * 2);
         }
         
-        // Detect changes via cell count
+        // Detect changes via cell count - mark non-position buffers dirty
+        // Positions come from GPU physics, so don't mark them dirty here
         if cell_count != self.last_cell_count {
-            self.mark_all_dirty();
+            // Don't call mark_all_dirty() - positions come from GPU
+            self.rotations_dirty = true;
+            self.radii_dirty = true;
+            self.mode_indices_dirty = true;
+            self.cell_ids_dirty = true;
+            self.genome_ids_dirty = true;
             self.last_cell_count = cell_count;
         }
         
@@ -701,6 +712,9 @@ impl InstanceBuilder {
         }
         
         // Only update buffers that are marked as dirty
+        // NOTE: positions_dirty is only set by mark_all_dirty() which is called
+        // on resize or initial setup. During normal operation, positions come
+        // from GPU physics via copy_buffer_to_buffer.
         if self.positions_dirty {
             // Update positions (convert Vec3 to vec4 for GPU alignment)
             // Reuse temporary buffer to avoid allocations
@@ -1206,5 +1220,10 @@ impl InstanceBuilder {
     /// Get current cell capacity.
     pub fn capacity(&self) -> usize {
         self.cell_capacity
+    }
+    
+    /// Get the positions buffer for external GPU-to-GPU copies.
+    pub fn positions_buffer(&self) -> &wgpu::Buffer {
+        &self.positions_buffer
     }
 }

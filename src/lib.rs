@@ -12,8 +12,8 @@
 //! 
 //! The core physics and state management:
 //! - [`simulation::CanonicalState`] - Structure-of-Arrays (SoA) layout for all cell data
-//! - [`simulation::cpu_physics`] - CPU-based physics with spatial grid collision detection
-//! - [`simulation::gpu_physics`] - GPU compute shader physics (planned)
+//! - [`simulation::preview_physics`] - CPU-based physics for preview scene with time scrubbing
+//! - [`simulation::gpu_physics`] - GPU compute shader physics for large-scale simulations
 //! - [`simulation::PhysicsConfig`] - Configurable physics parameters
 //! 
 //! **Key Design**: Uses SoA layout for cache-friendly iteration over large cell populations.

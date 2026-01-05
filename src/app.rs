@@ -206,7 +206,7 @@ impl App {
                             ) {
                                 // Set mass to split_mass threshold so cell can divide
                                 let split_mass = gpu_scene.canonical_state.split_masses[cell_idx];
-                                gpu_scene.canonical_state.masses[cell_idx] = split_mass;
+                                gpu_scene.set_cell_mass(&self.queue, cell_idx, split_mass);
                             }
                         }
                         self.window.request_redraw();
@@ -296,9 +296,7 @@ impl App {
                                 self.editor_state.drag_distance,
                             );
                             if cell_idx < gpu_scene.canonical_state.cell_count {
-                                gpu_scene.canonical_state.positions[cell_idx] = new_pos;
-                                gpu_scene.canonical_state.prev_positions[cell_idx] = new_pos;
-                                gpu_scene.canonical_state.velocities[cell_idx] = glam::Vec3::ZERO;
+                                gpu_scene.set_cell_position(&self.queue, cell_idx, new_pos);
                             }
                         }
                         self.window.request_redraw();

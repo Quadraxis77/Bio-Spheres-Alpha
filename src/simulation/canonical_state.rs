@@ -150,7 +150,7 @@
 //! - Arrays naturally aligned for vectorized operations
 
 use glam::{Vec3, Quat};
-use crate::simulation::cpu_physics::DeterministicSpatialGrid;
+use crate::simulation::spatial_grid::DeterministicSpatialGrid;
 use crate::cell::{AdhesionConnections, AdhesionConnectionManager, MAX_ADHESIONS_PER_CELL};
 use crate::genome::AdhesionSettings;
 

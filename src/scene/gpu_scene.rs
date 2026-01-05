@@ -7,7 +7,7 @@ use crate::genome::Genome;
 use crate::rendering::{CellRenderer, CullingMode, HizGenerator, InstanceBuilder};
 use crate::scene::Scene;
 use crate::simulation::{CanonicalState, PhysicsConfig};
-use crate::simulation::cpu_physics;
+use crate::simulation::gpu_physics::{execute_gpu_physics_step, GpuPhysicsPipelines, GpuTripleBufferSystem};
 use crate::ui::camera::CameraController;
 use glam::Mat4;
 
@@ -24,6 +24,10 @@ pub struct GpuScene {
     pub instance_builder: InstanceBuilder,
     /// Hi-Z generator for occlusion culling
     pub hiz_generator: HizGenerator,
+    /// GPU physics pipelines (6 compute shaders)
+    pub gpu_physics_pipelines: GpuPhysicsPipelines,
+    /// Triple buffer system for GPU physics
+    pub gpu_triple_buffers: GpuTripleBufferSystem,
     /// Physics configuration
     pub config: PhysicsConfig,
     /// Whether simulation is paused
@@ -47,25 +51,31 @@ impl GpuScene {
         queue: &wgpu::Queue,
         surface_config: &wgpu::SurfaceConfiguration,
     ) -> Self {
-        let capacity = 10_000; // 10k cell cap for GPU scene
+        let capacity: u32 = 10_000; // 10k cell cap for GPU scene
         // Use 64x64x64 grid for spatial partitioning
-        let canonical_state = CanonicalState::with_grid_density(capacity, 64);
+        let canonical_state = CanonicalState::with_grid_density(capacity as usize, 64);
         let config = PhysicsConfig::default();
 
-        let renderer = CellRenderer::new(device, queue, surface_config, capacity);
+        let renderer = CellRenderer::new(device, queue, surface_config, capacity as usize);
         
         // Create instance builder - culling mode will be set per-frame in render()
-        let instance_builder = InstanceBuilder::new(device, capacity);
+        let instance_builder = InstanceBuilder::new(device, capacity as usize);
         
         // Create Hi-Z generator for occlusion culling
         let mut hiz_generator = HizGenerator::new(device);
         hiz_generator.resize(device, surface_config.width, surface_config.height);
+
+        // Create GPU physics components
+        let gpu_physics_pipelines = GpuPhysicsPipelines::new(device);
+        let gpu_triple_buffers = GpuTripleBufferSystem::new(device, capacity);
 
         Self {
             canonical_state,
             renderer,
             instance_builder,
             hiz_generator,
+            gpu_physics_pipelines,
+            gpu_triple_buffers,
             config,
             paused: false,
             camera: CameraController::new(),
@@ -91,6 +101,8 @@ impl GpuScene {
         self.genomes.clear();
         // Mark instance builder dirty
         self.instance_builder.mark_all_dirty();
+        // Mark GPU buffers as needing sync (will be no-op since cell_count is 0)
+        self.gpu_triple_buffers.mark_needs_sync();
     }
     
     /// Remove unused genomes from the end of the genomes list.
@@ -161,31 +173,50 @@ impl GpuScene {
         self.instance_builder.read_culling_stats_blocking(device)
     }
 
-    /// Run physics step using CPU physics with genome-based features.
-    fn run_physics(&mut self) {
+    /// Run physics step using GPU compute shaders with zero CPU involvement.
+    fn run_physics(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, delta_time: f32) {
         if self.canonical_state.cell_count == 0 {
             return;
+        }
+        
+        // Sync pending cell insertions (only new cells, not all cells)
+        self.gpu_triple_buffers.sync_pending_insertions(queue, &self.canonical_state);
+        
+        // Full sync only needed for initial setup (first time cells are added)
+        if self.gpu_triple_buffers.needs_sync {
+            self.gpu_triple_buffers.sync_from_canonical_state(queue, &self.canonical_state);
         }
         
         // Clear the masses changed flag before physics
         self.canonical_state.masses_changed = false;
         
-        // Use CPU physics with all genomes for division and adhesion
-        let _division_events = cpu_physics::physics_step_with_genomes(
-            &mut self.canonical_state,
-            &self.genomes,
-            &self.config,
-            self.current_time,
+        // Execute pure GPU physics pipeline (6 compute shader stages)
+        execute_gpu_physics_step(
+            device,
+            encoder,
+            queue,
+            &self.gpu_physics_pipelines,
+            &mut self.gpu_triple_buffers,
+            self.canonical_state.cell_count as u32,
+            delta_time,
         );
         
-        // Mark buffers as dirty based on what actually changed
-        // Positions always change during physics
-        self.instance_builder.mark_positions_dirty();
+        // Copy GPU physics output to instance builder's positions buffer
+        // The output buffer index is (current + 1) % 3 after rotate_buffers was called
+        let output_idx = self.gpu_triple_buffers.output_buffer_index();
+        let copy_size = (self.canonical_state.cell_count * 16) as u64; // Vec4<f32> = 16 bytes
+        encoder.copy_buffer_to_buffer(
+            &self.gpu_triple_buffers.position_and_mass[output_idx],
+            0,
+            self.instance_builder.positions_buffer(),
+            0,
+            copy_size,
+        );
         
-        // Only mark radii as dirty if masses actually changed
-        if self.canonical_state.masses_changed {
-            self.instance_builder.mark_radii_dirty();
-        }
+        // Clear positions dirty flag since we just copied from GPU
+        // (radii still need to be updated from canonical_state)
+        self.instance_builder.clear_positions_dirty();
+        self.instance_builder.mark_radii_dirty();
     }
     
     /// Find an existing genome by name, or return None.
@@ -263,7 +294,7 @@ impl GpuScene {
         let initial_mass = 1.0_f32;
         let radius = (initial_mass * 3.0 / (4.0 * std::f32::consts::PI)).powf(1.0 / 3.0);
         
-        self.canonical_state.add_cell(
+        let result = self.canonical_state.add_cell(
             world_position,
             glam::Vec3::ZERO,                    // velocity
             genome.initial_orientation,          // rotation
@@ -277,7 +308,55 @@ impl GpuScene {
             mode.split_interval,                 // split_interval
             mode.split_mass,                     // split_mass
             mode.membrane_stiffness,             // stiffness (use mode-specific membrane stiffness)
-        )
+        );
+        
+        // Queue the new cell for GPU sync (only syncs this cell, not all cells)
+        if let Some(cell_idx) = result {
+            self.gpu_triple_buffers.queue_cell_insertion(cell_idx);
+        }
+        
+        result
+    }
+    
+    /// Update a cell's position and sync to GPU buffers.
+    /// Used by the drag tool to move cells.
+    pub fn set_cell_position(&mut self, queue: &wgpu::Queue, cell_idx: usize, position: glam::Vec3) {
+        if cell_idx >= self.canonical_state.cell_count {
+            return;
+        }
+        
+        // Update canonical state
+        self.canonical_state.positions[cell_idx] = position;
+        self.canonical_state.prev_positions[cell_idx] = position;
+        self.canonical_state.velocities[cell_idx] = glam::Vec3::ZERO;
+        
+        // Sync to GPU immediately
+        let velocity = glam::Vec3::ZERO;
+        let mass = self.canonical_state.masses[cell_idx];
+        self.gpu_triple_buffers.sync_single_cell(queue, cell_idx, position, velocity, mass);
+    }
+    
+    /// Update a cell's mass and sync to GPU buffers.
+    /// Used by the boost tool to increase cell mass.
+    pub fn set_cell_mass(&mut self, queue: &wgpu::Queue, cell_idx: usize, mass: f32) {
+        if cell_idx >= self.canonical_state.cell_count {
+            return;
+        }
+        
+        // Update canonical state
+        self.canonical_state.masses[cell_idx] = mass;
+        
+        // Update radius based on new mass
+        let radius = (mass * 3.0 / (4.0 * std::f32::consts::PI)).powf(1.0 / 3.0);
+        self.canonical_state.radii[cell_idx] = radius;
+        
+        // Sync to GPU immediately
+        let position = self.canonical_state.positions[cell_idx];
+        let velocity = self.canonical_state.velocities[cell_idx];
+        self.gpu_triple_buffers.sync_single_cell(queue, cell_idx, position, velocity, mass);
+        
+        // Mark radii dirty so instance builder updates
+        self.instance_builder.mark_radii_dirty();
     }
     
     /// Find the cell closest to a world position within a given radius.
@@ -360,6 +439,9 @@ impl GpuScene {
         // Mark instance builder dirty
         self.instance_builder.mark_all_dirty();
         
+        // Mark GPU buffers as needing sync
+        self.gpu_triple_buffers.mark_needs_sync();
+        
         true
     }
     
@@ -433,10 +515,11 @@ impl GpuScene {
         self.camera.position() + ray_world * distance
     }
     
-    /// Convert screen coordinates to world position on a plane at the camera's focal point.
+    /// Convert screen coordinates to world position at a fixed distance from camera.
+    /// Uses a constant distance so cells are always inserted at the same depth.
     pub fn screen_to_world(&self, screen_x: f32, screen_y: f32) -> glam::Vec3 {
-        let distance = self.camera.distance.max(10.0);
-        self.screen_to_world_at_distance(screen_x, screen_y, distance)
+        const INSERT_DISTANCE: f32 = 25.0; // Fixed distance for cell insertion
+        self.screen_to_world_at_distance(screen_x, screen_y, INSERT_DISTANCE)
     }
 }
 
@@ -475,24 +558,8 @@ impl Scene for GpuScene {
         }
 
         // Fixed timestep accumulator pattern
+        // Physics steps will be executed in render() based on accumulated time
         self.time_accumulator += dt;
-        let fixed_dt = self.config.fixed_timestep;
-        
-        // Run physics steps to catch up (max 4 steps per frame to avoid spiral of death)
-        let max_steps = 4;
-        let mut steps = 0;
-        
-        while self.time_accumulator >= fixed_dt && steps < max_steps {
-            self.run_physics();
-            self.current_time += fixed_dt;
-            self.time_accumulator -= fixed_dt;
-            steps += 1;
-        }
-        
-        // If we hit max steps, discard remaining accumulated time to prevent buildup
-        if steps >= max_steps {
-            self.time_accumulator = 0.0;
-        }
     }
 
     fn render(
@@ -539,6 +606,26 @@ impl Scene for GpuScene {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("GPU Scene Encoder"),
         });
+
+        // Execute GPU physics pipeline if not paused and has cells
+        // Use fixed timestep accumulator for consistent physics behavior
+        if !self.paused && self.canonical_state.cell_count > 0 {
+            let fixed_dt = self.config.fixed_timestep;
+            let max_steps = 4; // Prevent spiral of death
+            let mut steps = 0;
+            
+            while self.time_accumulator >= fixed_dt && steps < max_steps {
+                self.run_physics(device, &mut encoder, queue, fixed_dt);
+                self.current_time += fixed_dt;
+                self.time_accumulator -= fixed_dt;
+                steps += 1;
+            }
+            
+            // If we hit max steps, discard remaining accumulated time
+            if steps >= max_steps {
+                self.time_accumulator = 0.0;
+            }
+        }
 
         // Build instances with GPU culling (compute pass)
         // Calculate total mode count across all genomes

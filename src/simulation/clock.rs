@@ -1,1 +1,0 @@
-// Simulation clock and timing

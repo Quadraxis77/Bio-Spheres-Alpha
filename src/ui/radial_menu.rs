@@ -330,7 +330,7 @@ pub fn show_tool_cursor(ctx: &egui::Context, state: &RadialMenuState) {
         };
         
         egui::Area::new(egui::Id::new("tool_cursor"))
-            .fixed_pos(pos + Vec2::new(12.0, 12.0)) // Offset from actual cursor
+            .fixed_pos(pos - Vec2::new(12.0, 12.0)) // Center icon at cursor tip
             .order(egui::Order::Tooltip)
             .interactable(false)
             .show(ctx, |ui| {

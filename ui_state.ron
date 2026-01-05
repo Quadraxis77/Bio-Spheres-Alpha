@@ -1,34 +1,11 @@
 (
-    current_mode: Preview,
+    current_mode: Gpu,
     ui_scale: 1.0,
     windows_locked: false,
     lock_tab_bar: false,
     lock_tabs: false,
     lock_close_buttons: false,
     scene_configs: {
-        Gpu: (
-            visibility: (
-                show_cell_inspector: true,
-                show_genome_editor: false,
-                show_scene_manager: true,
-                show_performance_monitor: true,
-                show_rendering_controls: true,
-                show_time_scrubber: false,
-                show_theme_editor: false,
-                show_camera_settings: true,
-                show_lighting_settings: false,
-            ),
-            locked_windows: [
-                "RightPanel",
-                "SceneManager",
-                "Viewport",
-            ],
-            lock_settings: (
-                lock_tab_bar: false,
-                lock_tabs: false,
-                lock_close_buttons: false,
-            ),
-        ),
         Preview: (
             visibility: (
                 show_cell_inspector: false,
@@ -42,16 +19,39 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "Modes",
-                "RightPanel",
-                "QuaternionBall",
-                "LeftPanel",
-                "CircleSliders",
-                "ModeGraph",
-                "BottomPanel",
-                "NameTypeEditor",
                 "SceneManager",
+                "QuaternionBall",
+                "Viewport",
+                "NameTypeEditor",
+                "RightPanel",
+                "ModeGraph",
+                "CircleSliders",
+                "Modes",
+                "BottomPanel",
+                "LeftPanel",
                 "TimeSlider",
+            ],
+            lock_settings: (
+                lock_tab_bar: false,
+                lock_tabs: false,
+                lock_close_buttons: false,
+            ),
+        ),
+        Gpu: (
+            visibility: (
+                show_cell_inspector: true,
+                show_genome_editor: false,
+                show_scene_manager: true,
+                show_performance_monitor: true,
+                show_rendering_controls: true,
+                show_time_scrubber: false,
+                show_theme_editor: false,
+                show_camera_settings: true,
+                show_lighting_settings: false,
+            ),
+            locked_windows: [
+                "SceneManager",
+                "RightPanel",
                 "Viewport",
             ],
             lock_settings: (
@@ -65,6 +65,6 @@
     occlusion_mip_override: -1,
     occlusion_min_screen_size: 50.0,
     occlusion_min_distance: 50.0,
-    occlusion_enabled: true,
+    occlusion_enabled: false,
     frustum_enabled: true,
 )

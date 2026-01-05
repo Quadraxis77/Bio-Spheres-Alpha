@@ -270,7 +270,7 @@ impl PreviewState {
             for step in 0..steps {
                 let current_time = (start_step + step) as f32 * config.fixed_timestep;
                 
-                let _ = crate::simulation::cpu_physics::physics_step_with_genome(
+                let _ = crate::simulation::preview_physics::physics_step_with_genome(
                     &mut self.canonical_state,
                     genome,
                     config,
@@ -309,7 +309,7 @@ impl PreviewState {
         for step in 0..steps {
             let current_time = (start_step + step) as f32 * config.fixed_timestep;
             
-            let _ = crate::simulation::cpu_physics::physics_step_with_genome(
+            let _ = crate::simulation::preview_physics::physics_step_with_genome(
                 &mut canonical_state,
                 genome,
                 config,
