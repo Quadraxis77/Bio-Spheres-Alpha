@@ -26,6 +26,8 @@ struct PhysicsParams {
     grid_cell_size: f32,
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
+    cell_capacity: u32,
+    _padding2: vec3<f32>,
 }
 
 @group(0) @binding(0)
@@ -42,6 +44,10 @@ var<storage, read_write> positions_out: array<vec4<f32>>;
 
 @group(0) @binding(4)
 var<storage, read_write> velocities_out: array<vec4<f32>>;
+
+// GPU-side cell count: [0] = total cells, [1] = live cells
+@group(0) @binding(5)
+var<storage, read_write> cell_count_buffer: array<u32>;
 
 @group(1) @binding(0)
 var<storage, read_write> spatial_grid_counts: array<u32>;
@@ -80,7 +86,9 @@ fn grid_index_to_coords(grid_idx: u32) -> vec3<i32> {
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
-    if (cell_idx >= params.cell_count) {
+    // Read cell count from GPU buffer
+    let cell_count = cell_count_buffer[0];
+    if (cell_idx >= cell_count) {
         return;
     }
     

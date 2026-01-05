@@ -17,6 +17,8 @@ struct PhysicsParams {
     grid_cell_size: f32,
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
+    cell_capacity: u32,
+    _padding2: vec3<f32>,
 }
 
 @group(0) @binding(0)
@@ -33,6 +35,10 @@ var<storage, read_write> positions_out: array<vec4<f32>>;
 
 @group(0) @binding(4)
 var<storage, read_write> velocities_out: array<vec4<f32>>;
+
+// GPU-side cell count: [0] = total cells, [1] = live cells
+@group(0) @binding(5)
+var<storage, read_write> cell_count_buffer: array<u32>;
 
 @group(1) @binding(0)
 var<storage, read_write> spatial_grid_counts: array<u32>;
@@ -61,9 +67,11 @@ fn main(
     let cell_idx = global_id.x;
     let local_idx = local_id.x;
     let workgroup_start = workgroup_id.x * WORKGROUP_SIZE;
+    // Read cell count from GPU buffer
+    let cell_count = cell_count_buffer[0];
     
     // Load this cell's grid index into shared memory (or invalid if out of bounds)
-    if (cell_idx < params.cell_count) {
+    if (cell_idx < cell_count) {
         local_grid_indices[local_idx] = cell_grid_indices[cell_idx];
     } else {
         local_grid_indices[local_idx] = 0xFFFFFFFFu; // Invalid marker
@@ -71,7 +79,7 @@ fn main(
     
     workgroupBarrier();
     
-    if (cell_idx >= params.cell_count) {
+    if (cell_idx >= cell_count) {
         return;
     }
     
@@ -115,7 +123,7 @@ fn main(
     // Check cells after this workgroup
     if (is_last_in_grid) {
         let next_workgroup_start = workgroup_start + WORKGROUP_SIZE;
-        for (var i = next_workgroup_start; i < params.cell_count; i++) {
+        for (var i = next_workgroup_start; i < cell_count; i++) {
             if (cell_grid_indices[i] == my_grid_idx) {
                 is_last_in_grid = false;
                 break;

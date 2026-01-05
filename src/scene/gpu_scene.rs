@@ -7,7 +7,7 @@ use crate::genome::Genome;
 use crate::rendering::{CellRenderer, CullingMode, HizGenerator, InstanceBuilder};
 use crate::scene::Scene;
 use crate::simulation::{CanonicalState, PhysicsConfig};
-use crate::simulation::gpu_physics::{execute_gpu_physics_step, GpuPhysicsPipelines, GpuTripleBufferSystem};
+use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, GpuPhysicsPipelines, GpuTripleBufferSystem};
 use crate::ui::camera::CameraController;
 use glam::Mat4;
 
@@ -51,7 +51,7 @@ impl GpuScene {
         queue: &wgpu::Queue,
         surface_config: &wgpu::SurfaceConfiguration,
     ) -> Self {
-        let capacity: u32 = 10_000; // 10k cell cap for GPU scene
+        let capacity: u32 = 100_000; // 100k cell cap for GPU scene
         // Use 64x64x64 grid for spatial partitioning
         let canonical_state = CanonicalState::with_grid_density(capacity as usize, 64);
         let config = PhysicsConfig::default();
@@ -175,36 +175,49 @@ impl GpuScene {
 
     /// Run physics step using GPU compute shaders with zero CPU involvement.
     fn run_physics(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, delta_time: f32) {
-        if self.canonical_state.cell_count == 0 {
+        if self.canonical_state.cell_count == 0 && !self.gpu_triple_buffers.needs_sync {
             return;
         }
         
         // Sync pending cell insertions (only new cells, not all cells)
-        self.gpu_triple_buffers.sync_pending_insertions(queue, &self.canonical_state);
+        self.gpu_triple_buffers.sync_pending_insertions(queue, &self.canonical_state, &self.genomes);
         
         // Full sync only needed for initial setup (first time cells are added)
         if self.gpu_triple_buffers.needs_sync {
-            self.gpu_triple_buffers.sync_from_canonical_state(queue, &self.canonical_state);
+            self.gpu_triple_buffers.sync_from_canonical_state(queue, &self.canonical_state, &self.genomes);
         }
         
         // Clear the masses changed flag before physics
         self.canonical_state.masses_changed = false;
         
-        // Execute pure GPU physics pipeline (6 compute shader stages)
+        // Execute pure GPU physics pipeline (7 compute shader stages)
+        // Cell count is read from GPU buffer by shaders
         execute_gpu_physics_step(
             device,
             encoder,
             queue,
             &self.gpu_physics_pipelines,
             &mut self.gpu_triple_buffers,
-            self.canonical_state.cell_count as u32,
             delta_time,
+            self.current_time,
+        );
+        
+        // Execute lifecycle pipeline for cell division (4 compute shader stages)
+        // This handles death detection, free slot compaction, and cell division
+        // Cell count is updated on GPU by division shader
+        execute_lifecycle_pipeline(
+            device,
+            encoder,
+            queue,
+            &self.gpu_physics_pipelines,
+            &mut self.gpu_triple_buffers,
+            self.current_time,
         );
         
         // Copy GPU physics output to instance builder's positions buffer
-        // The output buffer index is (current + 1) % 3 after rotate_buffers was called
+        // Copy full capacity - the build_instances shader will use cell_count_buffer
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
-        let copy_size = (self.canonical_state.cell_count * 16) as u64; // Vec4<f32> = 16 bytes
+        let copy_size = (self.gpu_triple_buffers.capacity as usize * 16) as u64; // Vec4<f32> = 16 bytes
         encoder.copy_buffer_to_buffer(
             &self.gpu_triple_buffers.position_and_mass[output_idx],
             0,
@@ -214,9 +227,7 @@ impl GpuScene {
         );
         
         // Clear positions dirty flag since we just copied from GPU
-        // (radii still need to be updated from canonical_state)
         self.instance_builder.clear_positions_dirty();
-        self.instance_builder.mark_radii_dirty();
     }
     
     /// Find an existing genome by name, or return None.
@@ -597,7 +608,7 @@ impl Scene for GpuScene {
         } else if let Some(hiz_view) = self.hiz_generator.hiz_view() {
             // Pass Hi-Z texture to instance builder for occlusion culling
             // Note: culling mode is set by app.rs based on UI settings, we just provide the texture
-            self.instance_builder.set_hiz_texture(device, hiz_view, self.hiz_generator.mip_count());
+            self.instance_builder.set_hiz_texture(device, hiz_view, self.hiz_generator.mip_count(), &self.gpu_triple_buffers.cell_count_buffer);
         }
         // Don't override culling mode here - it's set by app.rs based on UI settings
 
@@ -629,17 +640,20 @@ impl Scene for GpuScene {
 
         // Build instances with GPU culling (compute pass)
         // Calculate total mode count across all genomes
+        // Use capacity for dispatch - shader reads actual cell_count from GPU buffer
         let total_mode_count: usize = self.genomes.iter().map(|g| g.modes.len()).sum();
         self.instance_builder.build_instances_with_encoder(
+            device,
             &mut encoder,
             queue,
-            self.canonical_state.cell_count,
+            self.gpu_triple_buffers.capacity as usize,
             total_mode_count,
             cell_type_visuals.map(|v| v.len()).unwrap_or(1),
             view_proj,
             self.camera.position(),
             self.renderer.width,
             self.renderer.height,
+            &self.gpu_triple_buffers.cell_count_buffer,
         );
 
         // Clear pass

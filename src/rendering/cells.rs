@@ -697,6 +697,7 @@ impl CellRenderer {
 
     /// Full render with optimized depth pre-pass and GPU culling.
     /// This is the most efficient rendering path with maximum overdraw reduction.
+    #[allow(dead_code)]
     pub fn render_optimized(
         &self,
         device: &wgpu::Device,
@@ -709,6 +710,8 @@ impl CellRenderer {
         camera_pos: Vec3,
         camera_rotation: Quat,
         time: f32,
+        cell_count_buffer: &wgpu::Buffer,
+        cell_capacity: usize,
     ) {
         if state.cell_count == 0 {
             return;
@@ -749,15 +752,17 @@ impl CellRenderer {
 
         // Use GPU culling to build instances with frustum and occlusion culling
         instance_builder.build_instances_with_encoder(
+            device,
             &mut encoder,
             queue,
-            state.cell_count,
+            cell_capacity,
             genome.map_or(1, |g| g.modes.len()),
             cell_type_visuals.map_or(1, |v| v.len()),
             view_proj,
             camera_pos,
             self.width,
             self.height,
+            cell_count_buffer,
         );
 
         let visible_count = instance_builder.visible_count();

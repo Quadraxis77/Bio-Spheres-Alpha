@@ -71,12 +71,23 @@ struct BuildParams {
 @group(0) @binding(0) var<uniform> params: BuildParams;
 
 // Input buffers (read-only)
+// Note: positions.w contains mass, radius is calculated from mass in shader
 @group(0) @binding(1) var<storage, read> positions: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read> rotations: array<vec4<f32>>;
-@group(0) @binding(3) var<storage, read> radii: array<f32>;
+@group(0) @binding(3) var<storage, read> radii: array<f32>;  // Fallback, prefer mass-based calculation
 @group(0) @binding(4) var<storage, read> mode_indices: array<u32>;
 @group(0) @binding(5) var<storage, read> cell_ids: array<u32>;
 @group(0) @binding(6) var<storage, read> genome_ids: array<u32>;
+
+// Constants for radius calculation
+const PI: f32 = 3.14159265359;
+
+// Calculate radius from mass (assuming unit density spheres)
+// radius = (mass * 3 / (4 * PI))^(1/3)
+fn calculate_radius_from_mass(mass: f32) -> f32 {
+    let volume = mass / 1.0;  // density = 1.0
+    return pow(volume * 3.0 / (4.0 * PI), 1.0 / 3.0);
+}
 
 // Lookup tables
 @group(0) @binding(7) var<storage, read> mode_visuals: array<ModeVisuals>;
@@ -92,6 +103,9 @@ struct BuildParams {
 // Hi-Z depth texture for occlusion culling (optional, binding 11)
 // Note: R32Float is not filterable, so we use textureLoad instead of textureSample
 @group(0) @binding(11) var hiz_texture: texture_2d<f32>;
+
+// GPU-side cell count buffer: [0] = total cells, [1] = live cells
+@group(0) @binding(12) var<storage, read> cell_count_buffer: array<u32>;
 
 // ============================================================================
 // Frustum Culling
@@ -211,18 +225,18 @@ fn sphere_occluded_hiz(center: vec3<f32>, radius: f32) -> bool {
     let clamped_uv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
     
     // Select mip level: use override if >= 0, otherwise use mip 0
-    var mip_level = 0u;
+    var mip_level: u32 = 0u;
     if (params.occlusion_mip_override >= 0) {
         mip_level = clamp(u32(params.occlusion_mip_override), 0u, params.hiz_mip_count - 1u);
     }
     
     // Get texture dimensions at selected mip level
-    let tex_dims = textureDimensions(hiz_texture, mip_level);
+    let tex_dims = textureDimensions(hiz_texture, i32(mip_level));
     let texel_coord = vec2<i32>(clamped_uv * vec2<f32>(tex_dims));
     let clamped_coord = clamp(texel_coord, vec2<i32>(0), vec2<i32>(tex_dims) - vec2<i32>(1));
     
     // Load Hi-Z depth at billboard center
-    let hiz_depth = textureLoad(hiz_texture, clamped_coord, mip_level).r;
+    let hiz_depth = textureLoad(hiz_texture, clamped_coord, i32(mip_level)).r;
     
     // Billboard is at center depth (flat quad facing camera)
     // Occluded if billboard depth is behind the Hi-Z depth
@@ -236,14 +250,22 @@ fn sphere_occluded_hiz(center: vec3<f32>, radius: f32) -> bool {
 @compute @workgroup_size(128)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx >= params.cell_count) {
+    
+    // Read cell count from GPU buffer (zero CPU involvement)
+    let cell_count = cell_count_buffer[0];
+    
+    if (idx >= cell_count) {
         return;
     }
     
     // Read cell data
-    let position = positions[idx].xyz;
+    let pos_and_mass = positions[idx];
+    let position = pos_and_mass.xyz;
+    let mass = pos_and_mass.w;
     let rotation = rotations[idx];
-    let radius = radii[idx];
+    // Calculate radius from mass (GPU-side) for proper growth visualization
+    // This ensures cells visually grow as mass increases from mass_accum shader
+    let radius = calculate_radius_from_mass(mass);
     let mode_index = mode_indices[idx];
     let cell_id = cell_ids[idx];
     let cell_type = genome_ids[idx];
