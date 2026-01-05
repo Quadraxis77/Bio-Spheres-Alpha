@@ -62,6 +62,10 @@ var<storage, read_write> cell_grid_indices: array<u32>;
 @group(1) @binding(3)
 var<storage, read_write> spatial_grid_cells: array<u32>;
 
+// Per-cell membrane stiffness from genome mode
+@group(1) @binding(4)
+var<storage, read> stiffnesses: array<f32>;
+
 const GRID_RESOLUTION: i32 = 64;
 const MAX_CELLS_PER_GRID: u32 = 16u;
 const PI: f32 = 3.14159265359;
@@ -96,6 +100,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mass = positions_in[cell_idx].w;
     let vel = velocities_in[cell_idx].xyz;
     let radius = calculate_radius_from_mass(mass);
+    let my_stiffness = stiffnesses[cell_idx];
     let my_grid_idx = cell_grid_indices[cell_idx];
     let my_grid_coords = grid_index_to_coords(my_grid_idx);
     
@@ -175,12 +180,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                             }
                         }
                         
+                        // Use average of both cells' membrane stiffness for collision response
+                        let other_stiffness = stiffnesses[other_idx];
+                        let combined_stiffness = (my_stiffness + other_stiffness) * 0.5;
+                        
                         // Spring force with damping
                         let other_vel = velocities_in[other_idx].xyz;
                         let relative_vel = vel - other_vel;
                         let damping = dot(relative_vel, normal) * 0.5;
                         
-                        force += normal * (penetration * params.boundary_stiffness - damping);
+                        force += normal * (penetration * combined_stiffness - damping);
                     }
                 }
             }

@@ -52,6 +52,10 @@ var<storage, read_write> cell_grid_indices: array<u32>;
 @group(1) @binding(3)
 var<storage, read_write> spatial_grid_cells: array<u32>;
 
+// Unused in this shader but required for bind group layout compatibility
+@group(1) @binding(4)
+var<storage, read> stiffnesses: array<f32>;
+
 const MAX_CELLS_PER_GRID: u32 = 16u;
 const WORKGROUP_SIZE: u32 = 64u;
 

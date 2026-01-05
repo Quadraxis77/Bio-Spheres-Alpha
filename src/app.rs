@@ -526,7 +526,7 @@ impl App {
                 crate::ui::panel_context::SceneModeRequest::Reset => {
                     // Reset the GPU scene
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
-                        gpu_scene.reset();
+                        gpu_scene.reset(&self.queue);
                     }
                 }
                 _ => {
@@ -649,8 +649,8 @@ impl ApplicationHandler for AppState {
                 label: Some("Bio-Spheres Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits {
-                    // Instance builder compute shader uses 10 storage buffers
-                    max_storage_buffers_per_shader_stage: 12,
+                    // Cell state write bind group uses 14 storage buffers (rotations, genome_mode_data, etc.)
+                    max_storage_buffers_per_shader_stage: 16,
                     ..wgpu::Limits::default()
                 },
                 memory_hints: Default::default(),

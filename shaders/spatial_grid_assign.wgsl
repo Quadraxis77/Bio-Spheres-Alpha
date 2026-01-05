@@ -57,6 +57,14 @@ var<storage, read_write> spatial_grid_offsets: array<u32>;
 @group(1) @binding(2)
 var<storage, read_write> cell_grid_indices: array<u32>;
 
+// Unused in this shader but required for bind group layout compatibility
+@group(1) @binding(3)
+var<storage, read_write> spatial_grid_cells: array<u32>;
+
+// Unused in this shader but required for bind group layout compatibility
+@group(1) @binding(4)
+var<storage, read> stiffnesses: array<f32>;
+
 const GRID_RESOLUTION: i32 = 64;
 
 fn world_pos_to_grid_index(pos: vec3<f32>, world_size: f32, grid_cell_size: f32) -> u32 {

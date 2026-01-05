@@ -107,29 +107,45 @@ var<storage, read_write> next_cell_id: array<u32>;
 @group(2) @binding(9)
 var<storage, read_write> nutrient_gain_rates: array<f32>;
 
+@group(2) @binding(10)
+var<storage, read_write> stiffnesses: array<f32>;
+
+// Rotations input (from current buffer)
+@group(2) @binding(11)
+var<storage, read> rotations_in: array<vec4<f32>>;
+
+// Rotations output (to next buffer)
+@group(2) @binding(12)
+var<storage, read_write> rotations_out: array<vec4<f32>>;
+
+// Genome mode data: [child_a_orientation (vec4), child_b_orientation (vec4), split_direction (vec4)] per mode
+// Total 48 bytes per mode, indexed by mode_index
+@group(2) @binding(13)
+var<storage, read> genome_mode_data: array<vec4<f32>>;
+
 const PI: f32 = 3.14159265359;
 
-// Deterministic pseudo-random direction based on cell index and frame
-// Same input → Same output (reproducible)
-fn deterministic_split_direction(cell_idx: u32, frame: i32) -> vec3<f32> {
-    // Use golden ratio based distribution for uniform sphere sampling
-    let golden_ratio = 1.618033988749895;
-    let seed = f32(cell_idx) * golden_ratio + f32(frame) * 0.1;
-    
-    // Spherical coordinates
-    let theta = seed * 2.0 * PI;
-    let phi = acos(1.0 - 2.0 * fract(seed * golden_ratio));
-    
-    return vec3<f32>(
-        sin(phi) * cos(theta),
-        sin(phi) * sin(theta),
-        cos(phi)
-    );
+// Rotate a vector by a quaternion
+fn rotate_vector_by_quat(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
+    let qvec = q.xyz;
+    let uv = cross(qvec, v);
+    let uuv = cross(qvec, uv);
+    return v + ((uv * q.w) + uuv) * 2.0;
 }
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     let volume = mass / 1.0;
     return pow(volume * 3.0 / (4.0 * PI), 1.0 / 3.0);
+}
+
+// Quaternion multiplication: result = a * b
+fn quat_multiply(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z
+    );
 }
 
 @compute @workgroup_size(64)
@@ -181,22 +197,47 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let parent_pos = positions_out[cell_idx].xyz;
     let parent_mass = positions_out[cell_idx].w;
     let parent_vel = velocities_out[cell_idx].xyz;
+    let parent_rotation = rotations_in[cell_idx];
+    
+    // Get parent's mode index for looking up child orientations and split direction
+    let parent_mode_idx = mode_indices[cell_idx];
+    
+    // Read child orientations and split direction from genome mode data
+    // Layout: [child_a_orientation (vec4), child_b_orientation (vec4), split_direction (vec4)] per mode
+    // Each mode takes 3 vec4s (indices mode_idx * 3, mode_idx * 3 + 1, mode_idx * 3 + 2)
+    let child_a_orientation = genome_mode_data[parent_mode_idx * 3u];
+    let child_b_orientation = genome_mode_data[parent_mode_idx * 3u + 1u];
+    let split_direction_local = genome_mode_data[parent_mode_idx * 3u + 2u].xyz;
+    
+    // Calculate child rotations: parent_rotation * child_orientation
+    let child_a_rotation = quat_multiply(parent_rotation, child_a_orientation);
+    let child_b_rotation = quat_multiply(parent_rotation, child_b_orientation);
+    
+    // Calculate parent radius for offset calculation (before mass split)
+    let parent_radius = calculate_radius_from_mass(parent_mass);
     
     // Split mass 50/50
     let child_mass = parent_mass * 0.5;
-    let child_radius = calculate_radius_from_mass(child_mass);
     
-    // Deterministic split direction
-    let split_dir = deterministic_split_direction(cell_idx, params.current_frame);
+    // Transform split direction from local to world space using parent rotation
+    // If split direction is zero (default), use Z axis
+    var split_dir_local = split_direction_local;
+    if (length(split_dir_local) < 0.0001) {
+        split_dir_local = vec3<f32>(0.0, 0.0, 1.0);
+    }
+    let split_dir = normalize(rotate_vector_by_quat(split_dir_local, parent_rotation));
     
-    // Offset children from parent position
-    let offset = child_radius * 1.1; // Slight separation to avoid immediate collision
-    let child_a_pos = parent_pos - split_dir * offset;
-    let child_b_pos = parent_pos + split_dir * offset;
+    // 75% overlap means centers are 25% of combined diameter apart
+    // Match preview scene: offset_distance = parent_radius * 0.25
+    // Match reference convention: Child A at +offset, Child B at -offset
+    let offset = parent_radius * 0.25;
+    let child_a_pos = parent_pos + split_dir * offset;
+    let child_b_pos = parent_pos - split_dir * offset;
     
     // === Create Child A (overwrites parent slot) ===
     positions_out[cell_idx] = vec4<f32>(child_a_pos, child_mass);
     velocities_out[cell_idx] = vec4<f32>(parent_vel, 0.0);
+    rotations_out[cell_idx] = child_a_rotation;
     
     // Update Child A state
     birth_times[cell_idx] = params.current_time;
@@ -207,6 +248,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // === Create Child B (placed in assigned free slot) ===
     positions_out[child_b_slot] = vec4<f32>(child_b_pos, child_mass);
     velocities_out[child_b_slot] = vec4<f32>(parent_vel, 0.0);
+    rotations_out[child_b_slot] = child_b_rotation;
     
     // Copy state to Child B
     birth_times[child_b_slot] = params.current_time;
@@ -217,6 +259,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     genome_ids[child_b_slot] = genome_ids[cell_idx]; // Copy genome reference
     mode_indices[child_b_slot] = mode_indices[cell_idx];
     nutrient_gain_rates[child_b_slot] = nutrient_gain_rates[cell_idx]; // Copy nutrient gain rate
+    stiffnesses[child_b_slot] = stiffnesses[cell_idx]; // Copy membrane stiffness
     
     // Assign new cell ID to Child B
     cell_ids[child_b_slot] = cell_count + cell_idx;

@@ -143,9 +143,11 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(1, &spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 5: Position integration
+        // Stage 5: Position integration (also propagates rotations)
+        let rotations_bind_group = pipelines.create_rotations_bind_group(device, triple_buffers, current_index);
         compute_pass.set_pipeline(&pipelines.position_update);
         compute_pass.set_bind_group(0, &physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &rotations_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
         // Stage 6: Velocity integration
@@ -186,7 +188,7 @@ pub fn execute_lifecycle_pipeline(
     );
     let lifecycle_bind_group = pipelines.create_lifecycle_bind_group(device, triple_buffers);
     let cell_state_read_bind_group = pipelines.create_cell_state_read_bind_group(device, triple_buffers);
-    let cell_state_write_bind_group = pipelines.create_cell_state_write_bind_group(device, triple_buffers);
+    let cell_state_write_bind_group = pipelines.create_cell_state_write_bind_group(device, triple_buffers, current_index);
     
     // Calculate workgroup counts - dispatch for capacity, shaders check cell_count
     let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;

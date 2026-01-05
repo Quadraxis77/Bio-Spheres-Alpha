@@ -87,7 +87,7 @@ impl GpuScene {
     }
 
     /// Reset the simulation to initial state.
-    pub fn reset(&mut self) {
+    pub fn reset(&mut self, queue: &wgpu::Queue) {
         self.canonical_state.cell_count = 0;
         self.canonical_state.next_cell_id = 0;
         self.current_time = 0.0;
@@ -101,6 +101,9 @@ impl GpuScene {
         self.genomes.clear();
         // Mark instance builder dirty
         self.instance_builder.mark_all_dirty();
+        // Reset GPU cell count buffer to 0 immediately (don't wait for sync)
+        let cell_counts: [u32; 2] = [0, 0];
+        queue.write_buffer(&self.gpu_triple_buffers.cell_count_buffer, 0, bytemuck::cast_slice(&cell_counts));
         // Mark GPU buffers as needing sync (will be no-op since cell_count is 0)
         self.gpu_triple_buffers.mark_needs_sync();
     }
@@ -226,6 +229,15 @@ impl GpuScene {
             copy_size,
         );
         
+        // Copy rotations from GPU to instance builder
+        encoder.copy_buffer_to_buffer(
+            &self.gpu_triple_buffers.rotations[output_idx],
+            0,
+            self.instance_builder.rotations_buffer(),
+            0,
+            copy_size,
+        );
+        
         // Clear positions dirty flag since we just copied from GPU
         self.instance_builder.clear_positions_dirty();
     }
@@ -344,7 +356,8 @@ impl GpuScene {
         // Sync to GPU immediately
         let velocity = glam::Vec3::ZERO;
         let mass = self.canonical_state.masses[cell_idx];
-        self.gpu_triple_buffers.sync_single_cell(queue, cell_idx, position, velocity, mass);
+        let rotation = self.canonical_state.rotations[cell_idx];
+        self.gpu_triple_buffers.sync_single_cell(queue, cell_idx, position, velocity, mass, rotation);
     }
     
     /// Update a cell's mass and sync to GPU buffers.
@@ -364,7 +377,8 @@ impl GpuScene {
         // Sync to GPU immediately
         let position = self.canonical_state.positions[cell_idx];
         let velocity = self.canonical_state.velocities[cell_idx];
-        self.gpu_triple_buffers.sync_single_cell(queue, cell_idx, position, velocity, mass);
+        let rotation = self.canonical_state.rotations[cell_idx];
+        self.gpu_triple_buffers.sync_single_cell(queue, cell_idx, position, velocity, mass, rotation);
         
         // Mark radii dirty so instance builder updates
         self.instance_builder.mark_radii_dirty();

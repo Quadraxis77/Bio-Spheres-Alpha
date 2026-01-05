@@ -75,6 +75,7 @@ pub struct GpuPhysicsPipelines {
     pub cell_state_read_layout: wgpu::BindGroupLayout,
     pub cell_state_write_layout: wgpu::BindGroupLayout,
     pub mass_accum_layout: wgpu::BindGroupLayout,
+    pub rotations_layout: wgpu::BindGroupLayout,
 }
 
 impl GpuPhysicsPipelines {
@@ -87,6 +88,7 @@ impl GpuPhysicsPipelines {
         let cell_state_read_layout = Self::create_cell_state_bind_group_layout(device, true);
         let cell_state_write_layout = Self::create_cell_state_bind_group_layout(device, false);
         let mass_accum_layout = Self::create_mass_accum_bind_group_layout(device);
+        let rotations_layout = Self::create_rotations_bind_group_layout(device);
         
         // Create compute pipelines
         let spatial_grid_clear = Self::create_compute_pipeline(
@@ -125,7 +127,7 @@ impl GpuPhysicsPipelines {
             device,
             include_str!("../../../shaders/position_update.wgsl"),
             "main",
-            &[&physics_layout],
+            &[&physics_layout, &rotations_layout],
             "Position Update",
         );
         
@@ -196,6 +198,7 @@ impl GpuPhysicsPipelines {
             cell_state_read_layout,
             cell_state_write_layout,
             mass_accum_layout,
+            rotations_layout,
         }
     }
     
@@ -256,6 +259,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: buffers.spatial_grid_cells.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.stiffnesses.as_entire_binding(),
                 },
             ],
         });
@@ -336,7 +343,9 @@ impl GpuPhysicsPipelines {
         &self,
         device: &wgpu::Device,
         buffers: &GpuTripleBufferSystem,
+        buffer_index: usize,
     ) -> wgpu::BindGroup {
+        let output_index = (buffer_index + 1) % 3;
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cell State Write Bind Group"),
             layout: &self.cell_state_write_layout,
@@ -381,6 +390,22 @@ impl GpuPhysicsPipelines {
                     binding: 9,
                     resource: buffers.nutrient_gain_rates.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: buffers.stiffnesses.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: buffers.rotations[buffer_index].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: buffers.rotations[output_index].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: buffers.genome_mode_data.as_entire_binding(),
+                },
             ],
         })
     }
@@ -398,6 +423,30 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: buffers.nutrient_gain_rates.as_entire_binding(),
+                },
+            ],
+        })
+    }
+    
+    /// Create rotations bind group for position_update shader
+    pub fn create_rotations_bind_group(
+        &self,
+        device: &wgpu::Device,
+        buffers: &GpuTripleBufferSystem,
+        buffer_index: usize,
+    ) -> wgpu::BindGroup {
+        let output_index = (buffer_index + 1) % 3;
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Rotations Bind Group"),
+            layout: &self.rotations_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.rotations[buffer_index].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.rotations[output_index].as_entire_binding(),
                 },
             ],
         })
@@ -552,6 +601,17 @@ impl GpuPhysicsPipelines {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Stiffnesses (per-cell membrane stiffness from genome)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -805,6 +865,50 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
+                    // Stiffnesses (membrane stiffness per cell)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 10,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Rotations input (read-only, from current buffer)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Rotations output (read-write, to next buffer)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 12,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Genome mode data (child orientations)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 13,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             })
         }
@@ -821,6 +925,37 @@ impl GpuPhysicsPipelines {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create rotations bind group layout for position_update shader
+    fn create_rotations_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Rotations Bind Group Layout"),
+            entries: &[
+                // Rotations input (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Rotations output (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },

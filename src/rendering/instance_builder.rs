@@ -1250,4 +1250,9 @@ impl InstanceBuilder {
     pub fn positions_buffer(&self) -> &wgpu::Buffer {
         &self.positions_buffer
     }
+    
+    /// Get the rotations buffer for external GPU-to-GPU copies.
+    pub fn rotations_buffer(&self) -> &wgpu::Buffer {
+        &self.rotations_buffer
+    }
 }

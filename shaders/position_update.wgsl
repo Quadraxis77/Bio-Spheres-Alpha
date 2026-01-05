@@ -37,6 +37,13 @@ var<storage, read_write> velocities_out: array<vec4<f32>>;
 @group(0) @binding(5)
 var<storage, read_write> cell_count_buffer: array<u32>;
 
+// Rotations (group 1) - propagate from input to output
+@group(1) @binding(0)
+var<storage, read> rotations_in: array<vec4<f32>>;
+
+@group(1) @binding(1)
+var<storage, read_write> rotations_out: array<vec4<f32>>;
+
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
@@ -64,4 +71,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Write updated position
     positions_out[cell_idx] = vec4<f32>(final_pos, mass);
+    
+    // Propagate rotation from input to output (no rotation physics yet)
+    rotations_out[cell_idx] = rotations_in[cell_idx];
 }
