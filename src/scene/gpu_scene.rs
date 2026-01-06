@@ -48,6 +48,12 @@ pub struct GpuScene {
     readbacks_enabled: bool,
     /// Time scale multiplier (1.0 = normal, 2.0 = 2x speed)
     pub time_scale: f32,
+    /// DEBUG: Track frames since last insertion for debugging
+    debug_frames_since_insertion: u32,
+    /// DEBUG: Last known cell count for detecting drops
+    debug_last_cell_count: usize,
+    /// DEBUG: Frame counter for periodic logging
+    debug_frame_counter: u32,
 }
 
 impl GpuScene {
@@ -95,6 +101,9 @@ impl GpuScene {
             first_frame: true,
             readbacks_enabled: true,
             time_scale: 1.0,
+            debug_frames_since_insertion: u32::MAX, // Start high so we don't log on startup
+            debug_last_cell_count: 0,
+            debug_frame_counter: 0,
         }
     }
 
@@ -200,8 +209,51 @@ impl GpuScene {
             return;
         }
         
+        self.debug_frame_counter += 1;
+        
+        // DEBUG: Periodic status every 120 frames (~2 seconds at 60fps)
+        if self.debug_frame_counter % 120 == 0 {
+            let gpu_count = self.gpu_triple_buffers.gpu_cell_count();
+            println!("DEBUG [frame {}]: canonical_cell_count={}, gpu_cell_count={}, genomes={}", 
+                self.debug_frame_counter, self.canonical_state.cell_count, gpu_count, self.genomes.len());
+        }
+        
+        // DEBUG: Detect cell count drops (sign of the bug)
+        let gpu_count = self.gpu_triple_buffers.gpu_cell_count() as usize;
+        if self.debug_last_cell_count > 0 && gpu_count > 0 && gpu_count < self.debug_last_cell_count / 2 {
+            println!("!!! CELL COUNT DROP DETECTED: {} -> {} !!!", self.debug_last_cell_count, gpu_count);
+            self.gpu_triple_buffers.debug_log_buffer_state(device, queue, self.debug_last_cell_count.max(gpu_count), "AFTER CELL DROP");
+        }
+        if gpu_count > 0 {
+            self.debug_last_cell_count = gpu_count;
+        }
+        
+        // DEBUG: Log buffer state on frames 1-3 after an insertion to see what physics does
+        if self.debug_frames_since_insertion < 5 {
+            self.debug_frames_since_insertion += 1;
+            println!("DEBUG: Frame {} after insertion, cell_count={}", 
+                self.debug_frames_since_insertion, self.canonical_state.cell_count);
+            self.gpu_triple_buffers.debug_log_buffer_state(device, queue, self.canonical_state.cell_count, 
+                &format!("FRAME {} AFTER INSERTION (before this frame's physics)", self.debug_frames_since_insertion));
+        }
+        
+        // DEBUG: Log buffer state BEFORE sync if we have pending insertions
+        let has_pending = self.gpu_triple_buffers.has_pending_insertions();
+        if has_pending {
+            println!("DEBUG: About to sync {} pending insertions, total genomes={}", 
+                self.gpu_triple_buffers.pending_insertion_count(), self.genomes.len());
+            self.gpu_triple_buffers.debug_log_buffer_state(device, queue, self.canonical_state.cell_count, "BEFORE sync_pending_insertions");
+            // Reset frame counter to track what happens after this insertion
+            self.debug_frames_since_insertion = 0;
+        }
+        
         // Sync pending cell insertions (only new cells, not all cells)
         self.gpu_triple_buffers.sync_pending_insertions(queue, &self.canonical_state, &self.genomes);
+        
+        // DEBUG: Log buffer state AFTER sync (if we had pending insertions)
+        if has_pending {
+            self.gpu_triple_buffers.debug_log_buffer_state(device, queue, self.canonical_state.cell_count, "AFTER sync_pending_insertions");
+        }
         
         // Full sync only needed for initial setup (first time cells are added)
         if self.gpu_triple_buffers.needs_sync {
@@ -381,6 +433,16 @@ impl GpuScene {
         world_position: glam::Vec3,
         genome: &Genome,
     ) -> Option<usize> {
+        // CRITICAL: Sync canonical_state.cell_count with GPU cell count before inserting.
+        // The GPU may have more cells due to division that the CPU doesn't know about.
+        // Without this, we would overwrite existing GPU cells.
+        let gpu_count = self.gpu_triple_buffers.gpu_cell_count() as usize;
+        if gpu_count > self.canonical_state.cell_count {
+            println!("DEBUG: Syncing canonical cell_count {} -> {} (GPU has more cells from division)", 
+                self.canonical_state.cell_count, gpu_count);
+            self.canonical_state.cell_count = gpu_count;
+        }
+        
         // Find or add the genome
         let genome_id = self.add_genome(genome.clone());
         

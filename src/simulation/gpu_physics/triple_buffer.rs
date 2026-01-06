@@ -243,9 +243,9 @@ impl GpuTripleBufferSystem {
             mapped_at_creation: false,
         });
         
-        // Genome mode data: 40 modes per genome * 10 genomes max = 400 modes
+        // Genome mode data: 40 modes per genome * 10,000 genomes max = 400,000 modes
         // Each mode: child_a_orientation (16 bytes) + child_b_orientation (16 bytes) + split_direction (16 bytes) = 48 bytes
-        let max_modes = 40 * 10;
+        let max_modes = 40 * 10_000;
         let genome_mode_data = Self::create_storage_buffer(device, max_modes * 48, "Genome Mode Data");
         
         Self {
@@ -556,6 +556,16 @@ impl GpuTripleBufferSystem {
         self.pending_cell_insertions.push(cell_idx);
     }
     
+    /// Check if there are pending cell insertions
+    pub fn has_pending_insertions(&self) -> bool {
+        !self.pending_cell_insertions.is_empty()
+    }
+    
+    /// Get the number of pending cell insertions
+    pub fn pending_insertion_count(&self) -> usize {
+        self.pending_cell_insertions.len()
+    }
+    
     /// Sync pending cell insertions to GPU buffers
     pub fn sync_pending_insertions(&mut self, queue: &wgpu::Queue, state: &crate::simulation::CanonicalState, genomes: &[crate::genome::Genome]) {
         // Pre-calculate genome mode offsets for absolute mode index calculation
@@ -569,12 +579,22 @@ impl GpuTripleBufferSystem {
             offsets
         };
         
+        // DEBUG: Log genome info
+        if !self.pending_cell_insertions.is_empty() {
+            println!("DEBUG sync_pending_insertions: {} genomes, offsets={:?}", genomes.len(), genome_mode_offsets);
+        }
+        
         for &cell_idx in &self.pending_cell_insertions {
             if cell_idx < state.cell_count {
                 let position = state.positions[cell_idx];
                 let velocity = state.velocities[cell_idx];
                 let mass = state.masses[cell_idx];
                 let rotation = state.rotations[cell_idx];
+                
+                // DEBUG: Log cell being synced
+                println!("DEBUG: Syncing cell {} - pos=({:.2},{:.2},{:.2}), mass={:.4}", 
+                    cell_idx, position.x, position.y, position.z, mass);
+                
                 self.sync_single_cell(queue, cell_idx, position, velocity, mass, rotation);
                 
                 // Get max_splits, nutrient_gain_rate, max_cell_size, and stiffness from genome mode
@@ -586,14 +606,22 @@ impl GpuTripleBufferSystem {
                         let mode = &genome.modes[local_mode_idx];
                         (mode.max_splits, mode.nutrient_gain_rate, mode.max_cell_size, mode.membrane_stiffness)
                     } else {
+                        println!("DEBUG: Cell {} has invalid mode_idx {} for genome {} (has {} modes)", 
+                            cell_idx, local_mode_idx, genome_id, genome.modes.len());
                         (-1, 0.2, 2.0, 50.0) // Defaults if mode not found
                     }
                 } else {
+                    println!("DEBUG: Cell {} has invalid genome_id {} (only {} genomes)", 
+                        cell_idx, genome_id, genomes.len());
                     (-1, 0.2, 2.0, 50.0) // Defaults if genome not found
                 };
                 
                 // Calculate absolute mode index (with genome offset)
                 let absolute_mode_idx = genome_mode_offsets.get(genome_id).copied().unwrap_or(0) + local_mode_idx;
+                
+                // DEBUG: Log genome/mode info
+                println!("DEBUG: Cell {} genome_id={}, local_mode={}, absolute_mode={}", 
+                    cell_idx, genome_id, local_mode_idx, absolute_mode_idx);
                 
                 // Also sync cell state for division system
                 self.sync_single_cell_state(
@@ -742,5 +770,89 @@ impl GpuTripleBufferSystem {
     /// This value may be 1-2 frames behind the actual GPU state.
     pub fn gpu_cell_count(&self) -> u32 {
         self.gpu_cell_count.load(std::sync::atomic::Ordering::Acquire)
+    }
+    
+    /// DEBUG: Blocking readback of position/mass data from a specific buffer.
+    /// This is expensive and should only be used for debugging!
+    pub fn debug_read_positions_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue, buffer_index: usize, cell_count: usize) -> Vec<[f32; 4]> {
+        if cell_count == 0 || buffer_index >= 3 {
+            return Vec::new();
+        }
+        
+        let read_size = (cell_count * 16) as u64; // Vec4<f32> = 16 bytes
+        
+        // Create staging buffer for readback
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Debug Position Staging"),
+            size: read_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
+        // Copy from GPU buffer to staging
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Debug Readback Encoder"),
+        });
+        encoder.copy_buffer_to_buffer(
+            &self.position_and_mass[buffer_index],
+            0,
+            &staging,
+            0,
+            read_size,
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        
+        // Map and read (blocking)
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        
+        if rx.recv().ok().and_then(|r| r.ok()).is_some() {
+            let view = slice.get_mapped_range();
+            let data: Vec<[f32; 4]> = bytemuck::cast_slice(&view).to_vec();
+            drop(view);
+            staging.unmap();
+            data
+        } else {
+            Vec::new()
+        }
+    }
+    
+    /// DEBUG: Log the state of all position/mass buffers for the first N cells.
+    /// This helps identify which buffer has corrupted data.
+    pub fn debug_log_buffer_state(&self, device: &wgpu::Device, queue: &wgpu::Queue, cell_count: usize, label: &str) {
+        let current_idx = self.current_index.load(Ordering::Acquire);
+        let output_idx = (current_idx + 1) % 3;
+        
+        println!("=== DEBUG BUFFER STATE: {} ===", label);
+        println!("current_index={}, output_index={}, cell_count={}", current_idx, output_idx, cell_count);
+        
+        let max_cells_to_log = cell_count.min(10); // Only log first 10 cells
+        
+        for buf_idx in 0..3 {
+            let data = self.debug_read_positions_blocking(device, queue, buf_idx, cell_count);
+            let marker = if buf_idx == current_idx { " (INPUT)" } else if buf_idx == output_idx { " (OUTPUT)" } else { "" };
+            
+            println!("Buffer {}{}:", buf_idx, marker);
+            for (i, pos_mass) in data.iter().take(max_cells_to_log).enumerate() {
+                let mass = pos_mass[3];
+                let status = if mass < 0.1 { " DEAD!" } else { "" };
+                println!("  Cell {}: pos=({:.2}, {:.2}, {:.2}), mass={:.4}{}", 
+                    i, pos_mass[0], pos_mass[1], pos_mass[2], mass, status);
+            }
+            
+            // Count cells with mass < 0.1
+            let dead_count = data.iter().filter(|p| p[3] < 0.1).count();
+            if dead_count > 0 {
+                println!("  Total cells with mass < 0.1: {}/{}", dead_count, data.len());
+            }
+        }
+        println!("=== END DEBUG BUFFER STATE ===");
     }
 }
