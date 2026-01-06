@@ -236,6 +236,15 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // Transform the world normal by the inverse of the cell's rotation to get local-space normal
     // This makes the noise texture rotate with the cell
     let local_noise_pos = quat_rotate_inverse(in.cell_rotation, world_normal);
+    
+    // Add random texture offset based on instance seed to make each cell unique
+    let texture_offset = vec3<f32>(
+        sin(in.instance_seed * 12.9898) * 43758.5453,
+        sin(in.instance_seed * 78.233) * 43758.5453,
+        sin(in.instance_seed * 37.719) * 43758.5453
+    );
+    let offset_noise_pos = local_noise_pos + texture_offset;
+    
     // Use stable animation offset from cell ID (membrane_params.w) so splits don't cause jumps
     let anim_offset = in.membrane_params.w;
     let anim_time = lighting.time * noise_speed + anim_offset;
@@ -258,7 +267,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
             // Use fast single-sample noise for membrane (4x faster)
             perturbed_normal = perturb_normal_fast(
                 world_normal,
-                local_noise_pos,
+                offset_noise_pos,  // Use offset position for unique texture per cell
                 noise_scale,
                 effective_noise_strength,
                 anim_time
@@ -294,15 +303,16 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
             nuc_local_normal.z * in.billboard_forward
         );
         
-        // Nucleus noise - use same approach as membrane
+        // Nucleus noise - use same approach as membrane with unique offset
         var nuc_perturbed_normal = nuc_world_normal;
         if (effective_noise_strength > 0.001 && screen_size > 0.03) {
-            // Same coordinate system as membrane - just the rotated normal
+            // Same coordinate system as membrane - just the rotated normal with offset
             let nuc_local_noise_pos = quat_rotate_inverse(in.cell_rotation, nuc_world_normal);
+            let nuc_offset_noise_pos = nuc_local_noise_pos + texture_offset;
             
             nuc_perturbed_normal = perturb_normal_fast(
                 nuc_world_normal,
-                nuc_local_noise_pos,
+                nuc_offset_noise_pos,  // Use offset position for unique nucleus texture
                 noise_scale * 1.5,
                 noise_strength * 0.7,
                 anim_time * 0.5
