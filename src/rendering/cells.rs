@@ -460,10 +460,23 @@ impl CellRenderer {
                 push_constant_ranges: &[],
             });
 
-        // Load opaque shader
+        // Load shaders - separate shaders for depth pre-pass and color pass
+        // This enables early-Z optimization by avoiding discard in the color pass
         let opaque_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Cell Billboard Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cell_billboard.wgsl").into()),
+        });
+        
+        // Minimal depth-only shader - only calculates depth, no lighting/noise
+        let depth_only_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Cell Billboard Depth-Only Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cell_billboard_depth_only.wgsl").into()),
+        });
+        
+        // Color-only shader - no discard, relies on depth buffer for rejection
+        let color_only_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Cell Billboard Color-Only Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cell_billboard_color_only.wgsl").into()),
         });
 
         // Create opaque pipeline (with depth writing for single-pass rendering)
@@ -503,18 +516,20 @@ impl CellRenderer {
             cache: None,
         });
 
-        // Create opaque pipeline for post-depth-prepass (no depth writing)
+        // Create color-only pipeline for post-depth-prepass (no depth writing, no discard)
+        // Uses LessEqual to handle floating-point precision issues with depth comparison
+        // The color shader writes explicit frag_depth to match the depth pre-pass exactly
         let opaque_no_depth_write_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Cell Opaque No Depth Write Pipeline"),
+            label: Some("Cell Color-Only Pipeline (Post Depth Pre-Pass)"),
             layout: Some(&cell_pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &opaque_shader,
+                module: &color_only_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[vertex_layout.clone(), instance_layout.clone()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &opaque_shader,
+                module: &color_only_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
@@ -531,7 +546,7 @@ impl CellRenderer {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: false, // No depth writing - depth prepass handles this
-                depth_compare: wgpu::CompareFunction::Equal, // Only render pixels at exact depth
+                depth_compare: wgpu::CompareFunction::LessEqual, // LessEqual for precision tolerance
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -540,18 +555,18 @@ impl CellRenderer {
             cache: None,
         });
 
-        // Create depth-only pipeline for pre-pass (uses same shader as opaque for consistent depth)
+        // Create depth-only pipeline for pre-pass - minimal shader, only depth calculation
         let depth_only_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Cell Depth-Only Pipeline"),
             layout: Some(&cell_pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &opaque_shader, // Use same shader as opaque for consistent depth calculation
+                module: &depth_only_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[vertex_layout.clone(), instance_layout.clone()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &opaque_shader, // Use same shader as opaque for consistent depth calculation
+                module: &depth_only_shader,
                 entry_point: Some("fs_main"),
                 targets: &[], // No color targets - depth only
                 compilation_options: Default::default(),

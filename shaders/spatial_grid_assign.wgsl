@@ -1,6 +1,6 @@
 // Stage 2: Assign cells to grid cells and count cells per grid cell
 // Each cell computes its grid index and increments the count for that grid cell
-// Workgroup size: 64 threads for cell operations
+// Workgroup size: 256 threads for optimal GPU occupancy
 //
 // This pass:
 // 1. Calculates which grid cell each cell belongs to

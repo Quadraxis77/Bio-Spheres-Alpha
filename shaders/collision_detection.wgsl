@@ -1,16 +1,21 @@
 // Stage 4: Collision detection using O(1) spatial grid neighbor lookup
 // Only processes cells in neighboring 3x3x3 grid cells using spatial_grid_cells
-// Workgroup size: 64 threads for cell operations
+// Workgroup size: 256 threads for optimal GPU occupancy
+//
+// Optimizations applied:
+// - Pre-computed 27 neighbor grid indices (reduces redundant calculations)
+// - Branchless boundary checks using clamp + select (reduces warp divergence)
+// - 256-thread workgroups (8 warps = optimal GPU scheduling)
 //
 // Algorithm:
 // 1. Get this cell's grid coordinates
-// 2. For each of 27 neighbor grid cells (3x3x3):
-//    - Calculate neighbor grid index
-//    - Read count from spatial_grid_counts[neighbor_grid_idx]
+// 2. Pre-compute all 27 neighbor grid indices and counts
+// 3. For each neighbor grid cell:
+//    - Read count from pre-computed array
 //    - Iterate spatial_grid_cells[grid_base + 0..count] for O(1) lookup
 //    - Compute collision for each neighbor cell
 //
-// This is O(27 * max_cells_per_grid) = O(27 * 32) = O(864) per cell,
+// This is O(27 * max_cells_per_grid) = O(27 * 16) = O(432) per cell,
 // which is constant time regardless of total cell count.
 
 struct PhysicsParams {
@@ -89,7 +94,7 @@ fn grid_index_to_coords(grid_idx: u32) -> vec3<i32> {
     return vec3<i32>(x, y, z);
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
     // Read cell count from GPU buffer
@@ -108,92 +113,98 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     var force = vec3<f32>(0.0);
     
-    // Boundary forces - soft spherical boundary
+    // Boundary forces - soft spherical boundary (branchless)
     let dist_from_center = length(pos);
     let boundary_radius = params.world_size * 0.5;
+    let soft_zone = 5.0;
+    let soft_zone_start = boundary_radius - soft_zone;
+    let penetration = (dist_from_center - soft_zone_start) / soft_zone;
+    let clamped_pen = clamp(penetration, 0.0, 1.0);
+    // Use select to avoid branch - safe_dist avoids division by zero
+    let safe_dist = max(dist_from_center, 0.001);
+    let normal = -pos / safe_dist;
+    // Only apply force when penetration > 0 (clamped_pen handles this naturally)
+    force += normal * clamped_pen * clamped_pen * 500.0;
     
-    if (dist_from_center > 0.001) {
-        let soft_zone = 5.0;
-        let soft_zone_start = boundary_radius - soft_zone;
-        
-        if (dist_from_center > soft_zone_start) {
-            let penetration = (dist_from_center - soft_zone_start) / soft_zone;
-            let clamped_pen = clamp(penetration, 0.0, 1.0);
-            let normal = -pos / dist_from_center;
-            force += normal * clamped_pen * clamped_pen * 500.0;
-        }
-    }
+    // Pre-compute all 27 neighbor grid indices and counts to reduce redundant calculations
+    // and improve memory access patterns
+    var neighbor_indices: array<u32, 27>;
+    var neighbor_counts: array<u32, 27>;
+    var n_idx = 0u;
     
-    // Cell-cell collision using O(1) spatial grid lookup
-    // Iterate through 27 neighbor grid cells (3x3x3)
     for (var dz = -1; dz <= 1; dz++) {
         for (var dy = -1; dy <= 1; dy++) {
             for (var dx = -1; dx <= 1; dx++) {
-                let nx = my_grid_coords.x + dx;
-                let ny = my_grid_coords.y + dy;
-                let nz = my_grid_coords.z + dz;
+                // Use clamp instead of branch for boundary check
+                let nx = clamp(my_grid_coords.x + dx, 0, GRID_RESOLUTION - 1);
+                let ny = clamp(my_grid_coords.y + dy, 0, GRID_RESOLUTION - 1);
+                let nz = clamp(my_grid_coords.z + dz, 0, GRID_RESOLUTION - 1);
                 
-                // Skip out-of-bounds grid cells
-                if (nx < 0 || nx >= GRID_RESOLUTION ||
-                    ny < 0 || ny >= GRID_RESOLUTION ||
-                    nz < 0 || nz >= GRID_RESOLUTION) {
-                    continue;
-                }
+                // Check if this is actually a valid neighbor (not clamped)
+                let is_valid = (my_grid_coords.x + dx >= 0) && (my_grid_coords.x + dx < GRID_RESOLUTION) &&
+                               (my_grid_coords.y + dy >= 0) && (my_grid_coords.y + dy < GRID_RESOLUTION) &&
+                               (my_grid_coords.z + dz >= 0) && (my_grid_coords.z + dz < GRID_RESOLUTION);
                 
                 let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz);
-                let cell_count_in_grid = min(spatial_grid_counts[neighbor_grid_idx], MAX_CELLS_PER_GRID);
+                neighbor_indices[n_idx] = neighbor_grid_idx;
+                // Use select to zero out invalid neighbors (branchless)
+                neighbor_counts[n_idx] = select(0u, min(spatial_grid_counts[neighbor_grid_idx], MAX_CELLS_PER_GRID), is_valid);
+                n_idx++;
+            }
+        }
+    }
+    
+    // Cell-cell collision using pre-computed neighbor data
+    for (var n = 0u; n < 27u; n++) {
+        let cell_count_in_grid = neighbor_counts[n];
+        if (cell_count_in_grid == 0u) {
+            continue;
+        }
+        
+        let grid_base_offset = neighbor_indices[n] * MAX_CELLS_PER_GRID;
+        
+        for (var i = 0u; i < cell_count_in_grid; i++) {
+            let other_idx = spatial_grid_cells[grid_base_offset + i];
+            
+            if (other_idx == cell_idx) {
+                continue;
+            }
+            
+            let other_pos = positions_in[other_idx].xyz;
+            let other_mass = positions_in[other_idx].w;
+            let other_radius = calculate_radius_from_mass(other_mass);
+            
+            let delta = pos - other_pos;
+            let dist = length(delta);
+            let min_dist = radius + other_radius;
+            
+            if (dist < min_dist) {
+                let coll_penetration = min_dist - dist;
                 
-                if (cell_count_in_grid == 0u) {
-                    continue;
-                }
-                
-                // O(1) lookup: iterate only cells in this grid cell via spatial_grid_cells
-                let grid_base_offset = neighbor_grid_idx * MAX_CELLS_PER_GRID;
-                
-                for (var i = 0u; i < cell_count_in_grid; i++) {
-                    let other_idx = spatial_grid_cells[grid_base_offset + i];
-                    
-                    if (other_idx == cell_idx) {
-                        continue;
-                    }
-                    
-                    let other_pos = positions_in[other_idx].xyz;
-                    let other_mass = positions_in[other_idx].w;
-                    let other_radius = calculate_radius_from_mass(other_mass);
-                    
-                    let delta = pos - other_pos;
-                    let dist = length(delta);
-                    let min_dist = radius + other_radius;
-                    
-                    if (dist < min_dist) {
-                        let penetration = min_dist - dist;
-                        
-                        // Handle cells at same position - use deterministic separation direction
-                        var normal: vec3<f32>;
-                        if (dist > 0.0001) {
-                            normal = delta / dist;
-                        } else {
-                            // Cells at same position - use cell index to determine separation direction
-                            // This ensures deterministic behavior
-                            if (cell_idx > other_idx) {
-                                normal = vec3<f32>(1.0, 0.0, 0.0);
-                            } else {
-                                normal = vec3<f32>(-1.0, 0.0, 0.0);
-                            }
-                        }
-                        
-                        // Use average of both cells' membrane stiffness for collision response
-                        let other_stiffness = stiffnesses[other_idx];
-                        let combined_stiffness = (my_stiffness + other_stiffness) * 0.5;
-                        
-                        // Spring force with damping
-                        let other_vel = velocities_in[other_idx].xyz;
-                        let relative_vel = vel - other_vel;
-                        let damping = dot(relative_vel, normal) * 0.5;
-                        
-                        force += normal * (penetration * combined_stiffness - damping);
+                // Handle cells at same position - use deterministic separation direction
+                var coll_normal: vec3<f32>;
+                if (dist > 0.0001) {
+                    coll_normal = delta / dist;
+                } else {
+                    // Cells at same position - use cell index to determine separation direction
+                    // This ensures deterministic behavior
+                    if (cell_idx > other_idx) {
+                        coll_normal = vec3<f32>(1.0, 0.0, 0.0);
+                    } else {
+                        coll_normal = vec3<f32>(-1.0, 0.0, 0.0);
                     }
                 }
+                
+                // Use average of both cells' membrane stiffness for collision response
+                let other_stiffness = stiffnesses[other_idx];
+                let combined_stiffness = (my_stiffness + other_stiffness) * 0.5;
+                
+                // Spring force with damping
+                let other_vel = velocities_in[other_idx].xyz;
+                let relative_vel = vel - other_vel;
+                let damping = dot(relative_vel, coll_normal) * 0.5;
+                
+                force += coll_normal * (coll_penetration * combined_stiffness - damping);
             }
         }
     }

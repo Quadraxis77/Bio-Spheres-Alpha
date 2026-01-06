@@ -1,6 +1,6 @@
 // Mass Accumulation Shader
 // Phase 7: Energy & Mass Transfer - mass_accum stage
-// Workgroup size: 64 threads for cell operations
+// Workgroup size: 256 threads for optimal GPU occupancy
 //
 // This shader increases cell mass over time based on the nutrient_gain_rate
 // from the cell's genome mode. This is the proper implementation that reads

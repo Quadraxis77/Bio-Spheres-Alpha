@@ -1,6 +1,6 @@
 // Stage 3: Insert cells into spatial grid using atomic operations
 // Each cell atomically claims a slot in its grid cell
-// Workgroup size: 64 threads for cell operations
+// Workgroup size: 256 threads for optimal GPU occupancy
 //
 // Algorithm:
 // 1. Read this cell's pre-computed grid index from cell_grid_indices

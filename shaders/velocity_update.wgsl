@@ -1,5 +1,5 @@
 // Stage 6: Velocity integration with damping
-// Workgroup size: 64 threads for cell operations
+// Workgroup size: 256 threads for optimal GPU occupancy
 
 struct PhysicsParams {
     delta_time: f32,

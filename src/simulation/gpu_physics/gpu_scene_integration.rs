@@ -2,23 +2,26 @@
 //! 
 //! Executes the GPU physics pipeline using compute shaders.
 //! 
-//! ## Pipeline Stages
-//! 1. Clear spatial grid (256 workgroup)
-//! 2. Assign cells to grid (64 workgroup)
-//! 3. Insert cells into grid (64 workgroup)
-//! 4. Collision detection (64 workgroup)
-//! 5. Position integration (64 workgroup)
-//! 6. Velocity integration (64 workgroup)
-//! 7. Mass accumulation (64 workgroup) - mass increase based on nutrient_gain_rate
+//! ## Pipeline Stages (all use 256-thread workgroups for optimal GPU occupancy)
+//! 1. Clear spatial grid
+//! 2. Assign cells to grid
+//! 3. Insert cells into grid
+//! 4. Collision detection (optimized with pre-computed neighbor indices)
+//! 5. Position integration
+//! 6. Velocity integration
+//! 7. Mass accumulation - mass increase based on nutrient_gain_rate
 //! 
-//! ## Lifecycle Pipeline (optional, for cell division)
-//! 8. Death scan (64 workgroup) - identify dead cells
-//! 9. Prefix sum (256 workgroup) - compact free slots
-//! 10. Division scan (64 workgroup) - identify dividing cells
-//! 11. Division execute (64 workgroup) - create child cells
+//! ## Lifecycle Pipeline (128-thread workgroups)
+//! 8. Death scan - identify dead cells
+//! 9. Prefix sum - compact free slots
+//! 10. Division scan - identify dividing cells
+//! 11. Division execute - create child cells
 //! 
-//! ## Key Patterns
-//! - Uses cached bind groups (created once, not per-frame)
+//! ## Performance Optimizations
+//! - Unified 256-thread workgroups (8 warps = optimal GPU scheduling)
+//! - Pre-computed neighbor grid indices in collision detection
+//! - Branchless boundary checks using clamp + select
+//! - Cached bind groups (created once, not per-frame)
 //! - NO CPU readback during simulation
 //! - Triple buffering for lock-free GPU computation
 //! - 64³ spatial grid for collision acceleration
@@ -63,11 +66,9 @@ const GRID_RESOLUTION: u32 = 64;
 /// Workgroup size for grid operations (optimal for 64³ grid)
 const WORKGROUP_SIZE_GRID: u32 = 256;
 
-/// Workgroup size for simple cell operations (high throughput)
-const WORKGROUP_SIZE_CELLS_SIMPLE: u32 = 256;
-
-/// Workgroup size for complex cell operations (collision detection with 27-neighbor loop)
-const WORKGROUP_SIZE_CELLS_COMPLEX: u32 = 64;
+/// Workgroup size for cell operations (unified for optimal GPU occupancy)
+/// 256 threads = 8 warps = optimal for GPU scheduling
+const WORKGROUP_SIZE_CELLS: u32 = 256;
 
 /// Workgroup size for lifecycle operations (moderate complexity)
 const WORKGROUP_SIZE_LIFECYCLE: u32 = 128;
@@ -115,10 +116,10 @@ pub fn execute_gpu_physics_step(
     let mass_accum_bind_group = &cached_bind_groups.mass_accum;
     
     // Calculate workgroup counts - dispatch for capacity, shaders check cell_count
+    // All cell operations use unified 256-thread workgroups for optimal GPU occupancy
     let total_grid_cells = GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION;
     let grid_workgroups = (total_grid_cells + WORKGROUP_SIZE_GRID - 1) / WORKGROUP_SIZE_GRID;
-    let cell_workgroups_simple = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS_SIMPLE - 1) / WORKGROUP_SIZE_CELLS_SIMPLE;
-    let cell_workgroups_complex = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS_COMPLEX - 1) / WORKGROUP_SIZE_CELLS_COMPLEX;
+    let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
     
     // Execute the 6 compute shader stages
     {
@@ -132,40 +133,40 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(0, spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(grid_workgroups, 1, 1);
         
-        // Stage 2: Assign cells to grid (256 threads - simple operation)
+        // Stage 2: Assign cells to grid (256 threads)
         compute_pass.set_pipeline(&pipelines.spatial_grid_assign);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups_simple, 1, 1);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 3: Insert cells into grid (256 threads - simple atomic operation)
+        // Stage 3: Insert cells into grid (256 threads)
         compute_pass.set_pipeline(&pipelines.spatial_grid_insert);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups_simple, 1, 1);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 4: Collision detection (64 threads - complex 27-neighbor loop)
+        // Stage 4: Collision detection (256 threads - optimized with pre-computed neighbors)
         compute_pass.set_pipeline(&pipelines.collision_detection);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups_complex, 1, 1);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 5: Position integration (256 threads - simple operation)
+        // Stage 5: Position integration (256 threads)
         compute_pass.set_pipeline(&pipelines.position_update);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, rotations_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups_simple, 1, 1);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 6: Velocity integration (256 threads - simple operation)
+        // Stage 6: Velocity integration (256 threads)
         compute_pass.set_pipeline(&pipelines.velocity_update);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups_simple, 1, 1);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 7: Mass accumulation (256 threads - simple operation)
+        // Stage 7: Mass accumulation (256 threads)
         compute_pass.set_pipeline(&pipelines.mass_accum);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, mass_accum_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups_simple, 1, 1);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
     }
 }
 

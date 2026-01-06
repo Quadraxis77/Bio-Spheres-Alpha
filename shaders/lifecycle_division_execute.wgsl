@@ -104,7 +104,7 @@ var<storage, read_write> mode_indices: array<u32>;
 var<storage, read_write> cell_ids: array<u32>;
 
 @group(2) @binding(8)
-var<storage, read_write> next_cell_id: array<u32>;
+var<storage, read_write> next_cell_id: array<atomic<u32>>;
 
 @group(2) @binding(9)
 var<storage, read_write> nutrient_gain_rates: array<f32>;
@@ -244,6 +244,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Update Child A state
     birth_times[cell_idx] = params.current_time;
     split_counts[cell_idx] = split_counts[cell_idx] + 1u;
+    // Assign new cell ID to Child A using atomic increment for uniqueness
+    let child_a_id = atomicAdd(&next_cell_id[0], 1u);
+    cell_ids[cell_idx] = child_a_id;
     // Child A keeps genome reference (genome_ids unchanged)
     // Child A keeps mode (mode_indices unchanged)
     
@@ -263,8 +266,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     nutrient_gain_rates[child_b_slot] = nutrient_gain_rates[cell_idx]; // Copy nutrient gain rate
     stiffnesses[child_b_slot] = stiffnesses[cell_idx]; // Copy membrane stiffness
     
-    // Assign new cell ID to Child B
-    cell_ids[child_b_slot] = cell_count + cell_idx;
+    // Assign new cell ID to Child B using atomic increment for uniqueness
+    let child_b_id = atomicAdd(&next_cell_id[0], 1u);
+    cell_ids[child_b_slot] = child_b_id;
     
     // Clear death flag for the new slot (it's now occupied by Child B)
     death_flags[child_b_slot] = 0u;
