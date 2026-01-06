@@ -27,6 +27,8 @@ pub enum SceneModeRequest {
     TogglePause,
     /// Request to reset the simulation
     Reset,
+    /// Request to toggle fast forward mode (2x speed)
+    ToggleFastForward,
 }
 
 impl SceneModeRequest {
@@ -275,6 +277,20 @@ impl<'a> PanelContext<'a> {
     /// Request to reset the simulation.
     pub fn request_reset(&mut self) {
         *self.scene_request = SceneModeRequest::Reset;
+    }
+
+    /// Request to toggle fast forward mode.
+    pub fn request_toggle_fast_forward(&mut self) {
+        *self.scene_request = SceneModeRequest::ToggleFastForward;
+    }
+
+    /// Check if fast forward mode is enabled.
+    pub fn is_fast_forward(&self) -> bool {
+        if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
+            gpu_scene.time_scale > 1.5
+        } else {
+            false
+        }
     }
 
     /// Get the current cell count from the active scene.

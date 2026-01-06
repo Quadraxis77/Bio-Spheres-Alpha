@@ -110,19 +110,22 @@ var<storage, read_write> next_cell_id: array<atomic<u32>>;
 var<storage, read_write> nutrient_gain_rates: array<f32>;
 
 @group(2) @binding(10)
+var<storage, read_write> max_cell_sizes: array<f32>;
+
+@group(2) @binding(11)
 var<storage, read_write> stiffnesses: array<f32>;
 
 // Rotations input (from current buffer)
-@group(2) @binding(11)
+@group(2) @binding(12)
 var<storage, read> rotations_in: array<vec4<f32>>;
 
 // Rotations output (to next buffer)
-@group(2) @binding(12)
+@group(2) @binding(13)
 var<storage, read_write> rotations_out: array<vec4<f32>>;
 
 // Genome mode data: [child_a_orientation (vec4), child_b_orientation (vec4), split_direction (vec4)] per mode
 // Total 48 bytes per mode, indexed by mode_index
-@group(2) @binding(13)
+@group(2) @binding(14)
 var<storage, read> genome_mode_data: array<vec4<f32>>;
 
 const PI: f32 = 3.14159265359;
@@ -171,15 +174,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let reservation_count = lifecycle_counts[1]; // M = cells wanting to divide
     let dead_count = lifecycle_counts[2]; // D = dead cell slots (from prefix sum)
     
-    // Availability check: N >= M ?
-    // If not enough free slots, division fails for ALL cells
-    if (free_slot_count < reservation_count) {
-        // Division fails - cells keep growing, death still happens
-        return;
-    }
-    
     // Get this cell's reservation index
     let reservation_idx = division_slot_assignments[cell_idx];
+    
+    // Partial division: only cells with reservation_idx < free_slot_count can divide
+    // This allows some cells to divide even when there aren't enough slots for all
+    // Cells that don't get a slot will keep growing and try again next frame
+    if (reservation_idx >= free_slot_count) {
+        // This cell didn't get a slot - skip division, try again later
+        return;
+    }
     
     // Compute the actual slot index:
     // - If reservation_idx < dead_count: use free_slot_indices[reservation_idx] (dead cell slot)
@@ -264,6 +268,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     genome_ids[child_b_slot] = genome_ids[cell_idx]; // Copy genome reference
     mode_indices[child_b_slot] = mode_indices[cell_idx];
     nutrient_gain_rates[child_b_slot] = nutrient_gain_rates[cell_idx]; // Copy nutrient gain rate
+    max_cell_sizes[child_b_slot] = max_cell_sizes[cell_idx]; // Copy max cell size
     stiffnesses[child_b_slot] = stiffnesses[cell_idx]; // Copy membrane stiffness
     
     // Assign new cell ID to Child B using atomic increment for uniqueness
@@ -276,9 +281,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Update cell count if we used a new slot (not a dead cell slot)
     // Only the first dividing cell (reservation_idx == 0) updates the count
     // to avoid race conditions. It adds the total number of new cells.
-    if (reservation_idx == 0u && reservation_count > dead_count) {
-        // Number of new slots used = reservation_count - dead_count
-        let new_cells = reservation_count - dead_count;
-        cell_count_buffer[0] = cell_count + new_cells;
+    // With partial division, we cap at free_slot_count divisions
+    if (reservation_idx == 0u) {
+        let actual_divisions = min(reservation_count, free_slot_count);
+        if (actual_divisions > dead_count) {
+            // Number of new slots used = actual_divisions - dead_count
+            let new_cells = actual_divisions - dead_count;
+            cell_count_buffer[0] = cell_count + new_cells;
+        }
     }
 }

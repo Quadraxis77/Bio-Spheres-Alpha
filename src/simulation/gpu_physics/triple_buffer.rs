@@ -105,6 +105,9 @@ pub struct GpuTripleBufferSystem {
     /// Nutrient gain rates per cell (from genome mode)
     pub nutrient_gain_rates: wgpu::Buffer,
     
+    /// Max cell sizes per cell (from genome mode) - caps mass growth
+    pub max_cell_sizes: wgpu::Buffer,
+    
     /// Membrane stiffnesses per cell (from genome mode)
     /// Used for collision repulsion strength
     pub stiffnesses: wgpu::Buffer,
@@ -226,6 +229,7 @@ impl GpuTripleBufferSystem {
         let cell_ids = Self::create_storage_buffer(device, u32_per_cell, "Cell IDs");
         let next_cell_id = Self::create_storage_buffer(device, 4, "Next Cell ID");
         let nutrient_gain_rates = Self::create_storage_buffer(device, f32_per_cell, "Nutrient Gain Rates");
+        let max_cell_sizes = Self::create_storage_buffer(device, f32_per_cell, "Max Cell Sizes");
         let stiffnesses = Self::create_storage_buffer(device, f32_per_cell, "Stiffnesses");
         
         // GPU-side cell count: [0] = total cells, [1] = live cells
@@ -268,6 +272,7 @@ impl GpuTripleBufferSystem {
             cell_ids,
             next_cell_id,
             nutrient_gain_rates,
+            max_cell_sizes,
             stiffnesses,
             cell_count_buffer,
             cell_count_staging,
@@ -375,10 +380,11 @@ impl GpuTripleBufferSystem {
         let split_counts: Vec<u32> = state.split_counts[..state.cell_count].iter().map(|&x| x as u32).collect();
         queue.write_buffer(&self.split_counts, 0, bytemuck::cast_slice(&split_counts));
         
-        // Max splits and nutrient gain rates (from genome modes)
+        // Max splits, nutrient gain rates, max cell sizes, and stiffnesses (from genome modes)
         // Convert -1 (infinite) to 0 (unlimited in GPU)
         let mut max_splits_data: Vec<u32> = Vec::with_capacity(state.cell_count);
         let mut nutrient_gain_rates_data: Vec<f32> = Vec::with_capacity(state.cell_count);
+        let mut max_cell_sizes_data: Vec<f32> = Vec::with_capacity(state.cell_count);
         let mut stiffnesses_data: Vec<f32> = Vec::with_capacity(state.cell_count);
         
         for i in 0..state.cell_count {
@@ -391,28 +397,52 @@ impl GpuTripleBufferSystem {
                     let ms = mode.max_splits;
                     max_splits_data.push(if ms < 0 { 0 } else { ms as u32 });
                     nutrient_gain_rates_data.push(mode.nutrient_gain_rate);
+                    max_cell_sizes_data.push(mode.max_cell_size);
                     stiffnesses_data.push(mode.membrane_stiffness);
                 } else {
                     max_splits_data.push(0); // Unlimited if mode not found
                     nutrient_gain_rates_data.push(0.2); // Default nutrient gain rate
+                    max_cell_sizes_data.push(2.0); // Default max cell size
                     stiffnesses_data.push(50.0); // Default membrane stiffness
                 }
             } else {
                 max_splits_data.push(0); // Unlimited if genome not found
                 nutrient_gain_rates_data.push(0.2); // Default nutrient gain rate
+                max_cell_sizes_data.push(2.0); // Default max cell size
                 stiffnesses_data.push(50.0); // Default membrane stiffness
             }
         }
         queue.write_buffer(&self.max_splits, 0, bytemuck::cast_slice(&max_splits_data));
         queue.write_buffer(&self.nutrient_gain_rates, 0, bytemuck::cast_slice(&nutrient_gain_rates_data));
+        queue.write_buffer(&self.max_cell_sizes, 0, bytemuck::cast_slice(&max_cell_sizes_data));
         queue.write_buffer(&self.stiffnesses, 0, bytemuck::cast_slice(&stiffnesses_data));
         
         // Genome IDs
         let genome_ids: Vec<u32> = state.genome_ids[..state.cell_count].iter().map(|&x| x as u32).collect();
         queue.write_buffer(&self.genome_ids, 0, bytemuck::cast_slice(&genome_ids));
         
-        // Mode indices
-        let mode_indices: Vec<u32> = state.mode_indices[..state.cell_count].iter().map(|&x| x as u32).collect();
+        // Mode indices - store ABSOLUTE indices (with genome offset applied)
+        // This matches how the instance builder's mode_visuals buffer is organized:
+        // mode_visuals[0..genome0.modes.len()] = genome 0's modes
+        // mode_visuals[genome0.modes.len()..] = genome 1's modes, etc.
+        let genome_mode_offsets: Vec<usize> = {
+            let mut offsets = Vec::with_capacity(genomes.len());
+            let mut offset = 0usize;
+            for genome in genomes {
+                offsets.push(offset);
+                offset += genome.modes.len();
+            }
+            offsets
+        };
+        
+        let mode_indices: Vec<u32> = (0..state.cell_count)
+            .map(|i| {
+                let genome_id = state.genome_ids[i];
+                let local_mode_idx = state.mode_indices[i];
+                let offset = genome_mode_offsets.get(genome_id).copied().unwrap_or(0);
+                (offset + local_mode_idx) as u32
+            })
+            .collect();
         queue.write_buffer(&self.mode_indices, 0, bytemuck::cast_slice(&mode_indices));
         
         // Cell IDs
@@ -492,6 +522,7 @@ impl GpuTripleBufferSystem {
         cell_id: usize,
         max_splits: i32,
         nutrient_gain_rate: f32,
+        max_cell_size: f32,
         stiffness: f32,
     ) {
         let offset = (cell_idx * 4) as u64; // f32/u32 = 4 bytes
@@ -506,6 +537,7 @@ impl GpuTripleBufferSystem {
         queue.write_buffer(&self.max_splits, offset, bytemuck::bytes_of(&gpu_max_splits));
         
         queue.write_buffer(&self.nutrient_gain_rates, offset, bytemuck::bytes_of(&nutrient_gain_rate));
+        queue.write_buffer(&self.max_cell_sizes, offset, bytemuck::bytes_of(&max_cell_size));
         queue.write_buffer(&self.stiffnesses, offset, bytemuck::bytes_of(&stiffness));
         queue.write_buffer(&self.genome_ids, offset, bytemuck::bytes_of(&(genome_id as u32)));
         queue.write_buffer(&self.mode_indices, offset, bytemuck::bytes_of(&(mode_index as u32)));
@@ -526,6 +558,17 @@ impl GpuTripleBufferSystem {
     
     /// Sync pending cell insertions to GPU buffers
     pub fn sync_pending_insertions(&mut self, queue: &wgpu::Queue, state: &crate::simulation::CanonicalState, genomes: &[crate::genome::Genome]) {
+        // Pre-calculate genome mode offsets for absolute mode index calculation
+        let genome_mode_offsets: Vec<usize> = {
+            let mut offsets = Vec::with_capacity(genomes.len());
+            let mut offset = 0usize;
+            for genome in genomes {
+                offsets.push(offset);
+                offset += genome.modes.len();
+            }
+            offsets
+        };
+        
         for &cell_idx in &self.pending_cell_insertions {
             if cell_idx < state.cell_count {
                 let position = state.positions[cell_idx];
@@ -534,20 +577,23 @@ impl GpuTripleBufferSystem {
                 let rotation = state.rotations[cell_idx];
                 self.sync_single_cell(queue, cell_idx, position, velocity, mass, rotation);
                 
-                // Get max_splits, nutrient_gain_rate, and stiffness from genome mode
+                // Get max_splits, nutrient_gain_rate, max_cell_size, and stiffness from genome mode
                 let genome_id = state.genome_ids[cell_idx];
-                let mode_idx = state.mode_indices[cell_idx];
-                let (max_splits, nutrient_gain_rate, stiffness) = if genome_id < genomes.len() {
+                let local_mode_idx = state.mode_indices[cell_idx];
+                let (max_splits, nutrient_gain_rate, max_cell_size, stiffness) = if genome_id < genomes.len() {
                     let genome = &genomes[genome_id];
-                    if mode_idx < genome.modes.len() {
-                        let mode = &genome.modes[mode_idx];
-                        (mode.max_splits, mode.nutrient_gain_rate, mode.membrane_stiffness)
+                    if local_mode_idx < genome.modes.len() {
+                        let mode = &genome.modes[local_mode_idx];
+                        (mode.max_splits, mode.nutrient_gain_rate, mode.max_cell_size, mode.membrane_stiffness)
                     } else {
-                        (-1, 0.2, 50.0) // Defaults if mode not found
+                        (-1, 0.2, 2.0, 50.0) // Defaults if mode not found
                     }
                 } else {
-                    (-1, 0.2, 50.0) // Defaults if genome not found
+                    (-1, 0.2, 2.0, 50.0) // Defaults if genome not found
                 };
+                
+                // Calculate absolute mode index (with genome offset)
+                let absolute_mode_idx = genome_mode_offsets.get(genome_id).copied().unwrap_or(0) + local_mode_idx;
                 
                 // Also sync cell state for division system
                 self.sync_single_cell_state(
@@ -557,10 +603,11 @@ impl GpuTripleBufferSystem {
                     state.split_intervals[cell_idx],
                     state.split_masses[cell_idx],
                     state.genome_ids[cell_idx],
-                    state.mode_indices[cell_idx],
+                    absolute_mode_idx, // Use absolute mode index
                     state.cell_ids[cell_idx] as usize,
                     max_splits,
                     nutrient_gain_rate,
+                    max_cell_size,
                     stiffness,
                 );
             }
@@ -601,8 +648,10 @@ impl GpuTripleBufferSystem {
     pub fn start_async_cell_count_read(&self, encoder: &mut wgpu::CommandEncoder) {
         use std::sync::atomic::Ordering;
         
-        // Don't start a new read if one is already pending (buffer may still be mapped)
-        if self.cell_count_read_pending.load(Ordering::Acquire) {
+        // Don't start a new read if one is already pending OR if buffer is still mapped
+        // map_started stays true until we unmap in try_read_mapped_cell_count
+        if self.cell_count_read_pending.load(Ordering::Acquire) 
+            || self.cell_count_map_started.load(Ordering::Acquire) {
             return;
         }
         
@@ -615,9 +664,8 @@ impl GpuTripleBufferSystem {
             8, // 2 x u32
         );
         
-        // Mark as pending and reset map_started flag
+        // Mark as pending (map_started will be set when we call map_async)
         self.cell_count_read_pending.store(true, Ordering::Release);
-        self.cell_count_map_started.store(false, Ordering::Release);
     }
     
     /// Poll for async cell count read completion.
@@ -625,24 +673,27 @@ impl GpuTripleBufferSystem {
     pub fn poll_async_cell_count_read(&self, device: &wgpu::Device) {
         use std::sync::atomic::Ordering;
         
-        // Only poll if a read is pending
+        // Only poll if a read is pending and map hasn't started yet
         if !self.cell_count_read_pending.load(Ordering::Acquire) {
             return;
         }
         
         // Only call map_async once per read cycle
-        if self.cell_count_map_started.swap(true, Ordering::AcqRel) {
+        if self.cell_count_map_started.load(Ordering::Acquire) {
             // Already started map, just poll the device
             let _ = device.poll(wgpu::PollType::Poll);
             return;
         }
         
+        // Mark that we're starting the map (this stays true until unmap)
+        self.cell_count_map_started.store(true, Ordering::Release);
+        
         let staging_slice = self.cell_count_staging.slice(..);
         let read_pending = self.cell_count_read_pending.clone();
         
         staging_slice.map_async(wgpu::MapMode::Read, move |_result| {
-            // Mark read as no longer pending so we can start a new one
-            // The actual read happens in try_read_mapped_cell_count
+            // Mark read as no longer pending - the map is complete
+            // Note: map_started stays true until we unmap in try_read_mapped_cell_count
             read_pending.store(false, Ordering::Release);
         });
         
@@ -655,7 +706,7 @@ impl GpuTripleBufferSystem {
     pub fn try_read_mapped_cell_count(&self) -> bool {
         use std::sync::atomic::Ordering;
         
-        // If read is still pending, the buffer isn't mapped yet
+        // If read is still pending, the map callback hasn't fired yet
         if self.cell_count_read_pending.load(Ordering::Acquire) {
             return false;
         }
@@ -679,7 +730,7 @@ impl GpuTripleBufferSystem {
         if let Ok(count) = result {
             self.gpu_cell_count.store(count, Ordering::Release);
             self.cell_count_staging.unmap();
-            // Reset map_started to prevent re-reading
+            // Reset map_started AFTER unmapping - this allows new reads to start
             self.cell_count_map_started.store(false, Ordering::Release);
             return true;
         }

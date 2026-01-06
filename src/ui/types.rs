@@ -192,7 +192,7 @@ pub struct GlobalUiState {
     pub scene_configs: HashMap<SimulationMode, SceneUiConfig>,
 
     /// Occlusion culling bias (negative = more aggressive, positive = more conservative)
-    #[serde(default)]
+    #[serde(default = "default_occlusion_bias")]
     pub occlusion_bias: f32,
 
     /// Occlusion mip level override (-1 = auto, 0+ = force specific mip)
@@ -227,6 +227,10 @@ pub struct GlobalUiState {
 
 fn default_mip_override() -> i32 {
     -1
+}
+
+fn default_occlusion_bias() -> f32 {
+    0.005 // Small positive bias to prevent self-occlusion from temporal jitter
 }
 
 fn default_true() -> bool {

@@ -539,6 +539,18 @@ impl App {
                         gpu_scene.reset(&self.queue);
                     }
                 }
+                crate::ui::panel_context::SceneModeRequest::ToggleFastForward => {
+                    // Toggle between normal (1x) and fast forward (3x) speed
+                    if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                        if gpu_scene.time_scale > 1.5 {
+                            gpu_scene.time_scale = 1.0;
+                            log::info!("Normal speed (1x)");
+                        } else {
+                            gpu_scene.time_scale = 3.0;
+                            log::info!("Fast forward (3x)");
+                        }
+                    }
+                }
                 _ => {
                     if let Some(target_mode) = scene_request.target_mode() {
                         self.ui.state.request_mode_switch(target_mode);
@@ -659,7 +671,7 @@ impl ApplicationHandler for AppState {
                 label: Some("Bio-Spheres Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits {
-                    // Cell state write bind group uses 14 storage buffers (rotations, genome_mode_data, etc.)
+                    // Cell state write bind group uses 15 storage buffers (rotations, genome_mode_data, max_cell_sizes, etc.)
                     max_storage_buffers_per_shader_stage: 16,
                     ..wgpu::Limits::default()
                 },

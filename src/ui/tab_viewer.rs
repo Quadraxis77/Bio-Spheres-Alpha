@@ -286,6 +286,19 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, _state: &Global
                 context.request_toggle_pause();
             }
             
+            // Fast forward toggle button
+            let is_fast = context.is_fast_forward();
+            let fast_button = egui::Button::new(egui::RichText::new("⏩").size(20.0))
+                .selected(is_fast);
+            let fast_tooltip = if is_fast { "Normal speed" } else { "Fast forward (3x)" };
+            
+            if ui.add_sized([40.0, 40.0], fast_button)
+                .on_hover_text(fast_tooltip)
+                .clicked() 
+            {
+                context.request_toggle_fast_forward();
+            }
+            
             // Reset button with symbol
             if ui.add_sized(
                 [40.0, 40.0],
@@ -294,25 +307,11 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, _state: &Global
                 context.request_reset();
             }
             
-            // Add some spacing between buttons and info
+            // Add some spacing between buttons and time
             ui.add_space(20.0);
             
-            // Show simulation info to the right of buttons
-            ui.vertical(|ui| {
-                ui.label(format!("Time: {:.1}s", context.current_time()));
-                
-                // Show GPU cell count if available (async, more accurate)
-                if let Some(gpu_count) = context.gpu_cell_count() {
-                    ui.label(format!("Cells: {} (GPU)", gpu_count));
-                } else {
-                    ui.label(format!("Cells: {}", context.cell_count()));
-                }
-                
-                // Show genome count
-                if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
-                    ui.label(format!("Genomes: {}", gpu_scene.genomes.len()));
-                }
-            });
+            // Show only simulation time
+            ui.label(format!("{:.1}s", context.current_time()));
         });
         
         ui.add_space(5.0);

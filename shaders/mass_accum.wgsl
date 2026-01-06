@@ -55,6 +55,10 @@ var<storage, read_write> cell_count_buffer: array<u32>;
 @group(1) @binding(0)
 var<storage, read> nutrient_gain_rates: array<f32>;
 
+// Max cell sizes per cell (from genome mode)
+@group(1) @binding(1)
+var<storage, read> max_cell_sizes: array<f32>;
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
@@ -68,12 +72,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pos_mass = positions_out[cell_idx];
     let current_mass = pos_mass.w;
     
-    // Read per-cell nutrient gain rate from genome mode
+    // Read per-cell nutrient gain rate and max size from genome mode
     let nutrient_gain_rate = nutrient_gain_rates[cell_idx];
+    let max_mass = max_cell_sizes[cell_idx];
     
-    // Calculate mass increase: mass += nutrient_gain_rate * delta_time
-    let mass_increase = nutrient_gain_rate * params.delta_time;
-    let new_mass = current_mass + mass_increase;
+    // Only grow if below max size
+    var new_mass = current_mass;
+    if (current_mass < max_mass) {
+        // Calculate mass increase: mass += nutrient_gain_rate * delta_time
+        let mass_increase = nutrient_gain_rate * params.delta_time;
+        new_mass = min(current_mass + mass_increase, max_mass);
+    }
     
     // Write updated mass back (position unchanged)
     positions_out[cell_idx] = vec4<f32>(pos_mass.xyz, new_mass);

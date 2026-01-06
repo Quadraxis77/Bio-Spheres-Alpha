@@ -1345,4 +1345,39 @@ impl InstanceBuilder {
     pub fn rotations_buffer(&self) -> &wgpu::Buffer {
         &self.rotations_buffer
     }
+    
+    /// Get the mode indices buffer for external GPU-to-GPU copies.
+    pub fn mode_indices_buffer(&self) -> &wgpu::Buffer {
+        &self.mode_indices_buffer
+    }
+    
+    /// Get the cell IDs buffer for external GPU-to-GPU copies.
+    pub fn cell_ids_buffer(&self) -> &wgpu::Buffer {
+        &self.cell_ids_buffer
+    }
+    
+    /// Get the genome IDs buffer for external GPU-to-GPU copies.
+    pub fn genome_ids_buffer(&self) -> &wgpu::Buffer {
+        &self.genome_ids_buffer
+    }
+    
+    /// Clear mode indices dirty flag (call after GPU-to-GPU copy).
+    pub fn clear_mode_indices_dirty(&mut self) {
+        self.mode_indices_dirty = false;
+    }
+    
+    /// Clear cell IDs dirty flag (call after GPU-to-GPU copy).
+    pub fn clear_cell_ids_dirty(&mut self) {
+        self.cell_ids_dirty = false;
+    }
+    
+    /// Clear genome IDs dirty flag (call after GPU-to-GPU copy).
+    pub fn clear_genome_ids_dirty(&mut self) {
+        self.genome_ids_dirty = false;
+    }
+    
+    /// Clear rotations dirty flag (call after GPU-to-GPU copy).
+    pub fn clear_rotations_dirty(&mut self) {
+        self.rotations_dirty = false;
+    }
 }

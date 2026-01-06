@@ -188,7 +188,7 @@ fn get_hiz_mip_level(screen_size: f32) -> u32 {
 
 // Test if a billboard sprite is occluded using Hi-Z
 // Returns true if occluded (should be culled), false if potentially visible
-// Note: Cells are rendered as camera-facing billboards, not 3D spheres
+// Note: Cells are rendered as camera-facing billboards with sphere depth
 fn sphere_occluded_hiz(center: vec3<f32>, radius: f32) -> bool {
     // Distance check - don't cull objects closer than min_distance
     let dist_to_camera = length(params.camera_pos - center);
@@ -235,12 +235,22 @@ fn sphere_occluded_hiz(center: vec3<f32>, radius: f32) -> bool {
     let texel_coord = vec2<i32>(clamped_uv * vec2<f32>(tex_dims));
     let clamped_coord = clamp(texel_coord, vec2<i32>(0), vec2<i32>(tex_dims) - vec2<i32>(1));
     
-    // Load Hi-Z depth at billboard center
+    // Load Hi-Z depth (max depth = farthest surface in this region)
+    // With MAX depth, we only cull if the cell is behind EVERYTHING in the region
     let hiz_depth = textureLoad(hiz_texture, clamped_coord, i32(mip_level)).r;
     
-    // Billboard is at center depth (flat quad facing camera)
-    // Occluded if billboard depth is behind the Hi-Z depth
-    return center_ndc.z > (hiz_depth + params.occlusion_bias);
+    // Calculate the front surface depth of this cell
+    // The front surface is at (center - radius) along the view direction
+    // Project the front surface point to get its depth
+    let view_dir = normalize(center - params.camera_pos);
+    let front_surface_world = center - view_dir * radius;
+    let front_clip = params.view_proj * vec4<f32>(front_surface_world, 1.0);
+    let front_depth = front_clip.z / front_clip.w;
+    
+    // Occluded if the cell's front surface is behind the Hi-Z depth (farthest in region)
+    // This means the cell is behind everything visible in that screen region
+    // Bias helps prevent z-fighting artifacts
+    return front_depth > (hiz_depth + params.occlusion_bias);
 }
 
 // ============================================================================

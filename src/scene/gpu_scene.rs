@@ -46,6 +46,8 @@ pub struct GpuScene {
     first_frame: bool,
     /// Whether GPU readbacks are enabled (cell count, etc.)
     readbacks_enabled: bool,
+    /// Time scale multiplier (1.0 = normal, 2.0 = 2x speed)
+    pub time_scale: f32,
 }
 
 impl GpuScene {
@@ -92,6 +94,7 @@ impl GpuScene {
             time_accumulator: 0.0,
             first_frame: true,
             readbacks_enabled: true,
+            time_scale: 1.0,
         }
     }
 
@@ -235,25 +238,55 @@ impl GpuScene {
             self.current_time,
         );
         
-        // Copy GPU physics output to instance builder's positions buffer
+        // Copy GPU physics output to instance builder's buffers
         // Copy full capacity - the build_instances shader will use cell_count_buffer
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
-        let copy_size = (self.gpu_triple_buffers.capacity as usize * 16) as u64; // Vec4<f32> = 16 bytes
+        let vec4_copy_size = (self.gpu_triple_buffers.capacity as usize * 16) as u64; // Vec4<f32> = 16 bytes
+        let u32_copy_size = (self.gpu_triple_buffers.capacity as usize * 4) as u64; // u32 = 4 bytes
+        
+        // Copy positions (Vec4: x, y, z, mass)
         encoder.copy_buffer_to_buffer(
             &self.gpu_triple_buffers.position_and_mass[output_idx],
             0,
             self.instance_builder.positions_buffer(),
             0,
-            copy_size,
+            vec4_copy_size,
         );
         
-        // Copy rotations from GPU to instance builder
+        // Copy rotations (Vec4: quaternion)
         encoder.copy_buffer_to_buffer(
             &self.gpu_triple_buffers.rotations[output_idx],
             0,
             self.instance_builder.rotations_buffer(),
             0,
-            copy_size,
+            vec4_copy_size,
+        );
+        
+        // Copy mode indices (u32) - critical for correct cell colors after division
+        encoder.copy_buffer_to_buffer(
+            &self.gpu_triple_buffers.mode_indices,
+            0,
+            self.instance_builder.mode_indices_buffer(),
+            0,
+            u32_copy_size,
+        );
+        
+        // Copy cell IDs (u32) - needed for stable animation offsets
+        encoder.copy_buffer_to_buffer(
+            &self.gpu_triple_buffers.cell_ids,
+            0,
+            self.instance_builder.cell_ids_buffer(),
+            0,
+            u32_copy_size,
+        );
+        
+        // Copy genome IDs (u32) - needed for cell type visuals lookup
+        encoder.copy_buffer_to_buffer(
+            &self.gpu_triple_buffers.genome_ids,
+            0,
+            self.instance_builder.genome_ids_buffer(),
+            0,
+            u32_copy_size,
         );
         
         // Start async read of GPU cell count for performance monitoring (if enabled)
@@ -261,8 +294,12 @@ impl GpuScene {
             self.gpu_triple_buffers.start_async_cell_count_read(encoder);
         }
         
-        // Clear positions dirty flag since we just copied from GPU
+        // Clear dirty flags since we just copied from GPU
         self.instance_builder.clear_positions_dirty();
+        self.instance_builder.clear_rotations_dirty();
+        self.instance_builder.clear_mode_indices_dirty();
+        self.instance_builder.clear_cell_ids_dirty();
+        self.instance_builder.clear_genome_ids_dirty();
     }
     
     /// Get the GPU cell count (updated asynchronously, may be 1-2 frames behind).
@@ -621,7 +658,8 @@ impl Scene for GpuScene {
 
         // Fixed timestep accumulator pattern
         // Physics steps will be executed in render() based on accumulated time
-        self.time_accumulator += dt;
+        // Apply time_scale to make simulation run faster/slower
+        self.time_accumulator += dt * self.time_scale;
     }
 
     fn render(
@@ -673,7 +711,8 @@ impl Scene for GpuScene {
         // Use fixed timestep accumulator for consistent physics behavior
         if !self.paused && self.canonical_state.cell_count > 0 {
             let fixed_dt = self.config.fixed_timestep;
-            let max_steps = 4; // Prevent spiral of death
+            // Allow more steps when time_scale > 1 (fast forward)
+            let max_steps = (4.0 * self.time_scale).ceil() as i32;
             let mut steps = 0;
             
             while self.time_accumulator >= fixed_dt && steps < max_steps {

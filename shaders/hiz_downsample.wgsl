@@ -1,5 +1,7 @@
 // Hi-Z downsample shader
-// Downsamples Hi-Z mip N to mip N+1 by taking max of 2x2 block
+// Downsamples Hi-Z mip N to mip N+1 by taking MAX of 2x2 block
+// Using MAX depth for occlusion culling: a cell is occluded only if it's behind
+// the FARTHEST thing in that region (conservative for the occludee)
 
 struct HizParams {
     src_width: u32,
@@ -32,7 +34,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let d01 = textureLoad(src_texture, src_coord + vec2<i32>(0, 1), 0).r;
     let d11 = textureLoad(src_texture, src_coord + vec2<i32>(1, 1), 0).r;
     
-    // Take maximum depth (furthest from camera - conservative for occlusion)
+    // Take maximum depth (farthest from camera)
+    // A cell is occluded only if it's behind the farthest thing in this region
+    // This is conservative: we only cull if we're SURE the cell is fully occluded
     let max_depth = max(max(d00, d10), max(d01, d11));
     
     textureStore(dst_texture, dst_coord, vec4<f32>(max_depth, 0.0, 0.0, 1.0));

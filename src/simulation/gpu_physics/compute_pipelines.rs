@@ -411,25 +411,29 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 10,
-                    resource: buffers.stiffnesses.as_entire_binding(),
+                    resource: buffers.max_cell_sizes.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 11,
-                    resource: buffers.rotations[buffer_index].as_entire_binding(),
+                    resource: buffers.stiffnesses.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 12,
-                    resource: buffers.rotations[output_index].as_entire_binding(),
+                    resource: buffers.rotations[buffer_index].as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 13,
+                    resource: buffers.rotations[output_index].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
                     resource: buffers.genome_mode_data.as_entire_binding(),
                 },
             ],
         })
     }
     
-    /// Create mass accumulation bind group (nutrient gain rates per cell)
+    /// Create mass accumulation bind group (nutrient gain rates and max cell sizes per cell)
     pub fn create_mass_accum_bind_group(
         &self,
         device: &wgpu::Device,
@@ -442,6 +446,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: buffers.nutrient_gain_rates.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.max_cell_sizes.as_entire_binding(),
                 },
             ],
         })
@@ -1008,7 +1016,7 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Stiffnesses (membrane stiffness per cell)
+                    // Max cell sizes
                     wgpu::BindGroupLayoutEntry {
                         binding: 10,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -1019,9 +1027,20 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Rotations input (read-only, from current buffer)
+                    // Stiffnesses (membrane stiffness per cell)
                     wgpu::BindGroupLayoutEntry {
                         binding: 11,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Rotations input (read-only, from current buffer)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 12,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -1032,7 +1051,7 @@ impl GpuPhysicsPipelines {
                     },
                     // Rotations output (read-write, to next buffer)
                     wgpu::BindGroupLayoutEntry {
-                        binding: 12,
+                        binding: 13,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -1043,7 +1062,7 @@ impl GpuPhysicsPipelines {
                     },
                     // Genome mode data (child orientations)
                     wgpu::BindGroupLayoutEntry {
-                        binding: 13,
+                        binding: 14,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -1057,7 +1076,7 @@ impl GpuPhysicsPipelines {
         }
     }
     
-    /// Create mass accumulation bind group layout (nutrient gain rates per cell)
+    /// Create mass accumulation bind group layout (nutrient gain rates and max cell sizes per cell)
     fn create_mass_accum_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Mass Accumulation Bind Group Layout"),
@@ -1065,6 +1084,17 @@ impl GpuPhysicsPipelines {
                 // Nutrient gain rates (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Max cell sizes (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
