@@ -26,6 +26,156 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::simulation::CanonicalState;
 
+/// Deterministic slot allocation system for cell addition
+/// 
+/// Maintains a sorted list of free slots and allocates them in deterministic order.
+/// Uses the same prefix-sum compaction pattern as the division system.
+#[derive(Debug, Clone)]
+pub struct DeterministicSlotAllocator {
+    /// Free slot indices (sorted for deterministic allocation)
+    free_slots: Vec<u32>,
+    /// Total capacity
+    capacity: u32,
+    /// Next cell ID to assign
+    next_cell_id: u32,
+}
+
+impl DeterministicSlotAllocator {
+    /// Create new slot allocator with given capacity
+    pub fn new(capacity: u32) -> Self {
+        // Initialize with all slots free (0..capacity)
+        let free_slots: Vec<u32> = (0..capacity).collect();
+        
+        Self {
+            free_slots,
+            capacity,
+            next_cell_id: 1, // Start from 1 (0 reserved for invalid)
+        }
+    }
+    
+    /// Allocate next available slot deterministically
+    /// Returns (slot_index, cell_id) or None if no slots available
+    pub fn allocate_slot(&mut self) -> Option<(u32, u32)> {
+        if self.free_slots.is_empty() {
+            return None; // No free slots
+        }
+        
+        // Always take the first (lowest) slot for deterministic allocation
+        let slot = self.free_slots.remove(0);
+        let cell_id = self.next_cell_id;
+        
+        self.next_cell_id += 1;
+        
+        Some((slot, cell_id))
+    }
+    
+    /// Free a slot (mark for reuse)
+    pub fn free_slot(&mut self, slot: u32) {
+        if slot < self.capacity && !self.free_slots.contains(&slot) {
+            // Add to free slots list (will be sorted during compaction)
+            self.free_slots.push(slot);
+        }
+    }
+    
+    /// Compact free slots using deterministic sorting (like prefix-sum)
+    /// This ensures consistent allocation order across runs
+    pub fn compact_free_slots(&mut self) {
+        // Sort all free slots for deterministic order
+        self.free_slots.sort_unstable();
+        
+        // Remove duplicates while maintaining order
+        self.free_slots.dedup();
+    }
+    
+    /// Get current allocated count
+    pub fn allocated_count(&self) -> u32 {
+        self.capacity - self.free_slots.len() as u32
+    }
+    
+    /// Get available slot count
+    pub fn available_slots(&self) -> usize {
+        self.free_slots.len()
+    }
+    
+    /// Reset allocator to initial state
+    pub fn reset(&mut self) {
+        self.free_slots = (0..self.capacity).collect();
+        self.next_cell_id = 1;
+    }
+    
+    /// Set the next cell ID (for synchronization with canonical state)
+    pub fn set_next_cell_id(&mut self, next_id: u32) {
+        self.next_cell_id = next_id;
+    }
+}
+
+/// Cell addition request for deterministic processing
+#[derive(Debug, Clone)]
+pub struct CellAdditionRequest {
+    pub position: glam::Vec3,
+    pub velocity: glam::Vec3,
+    pub mass: f32,
+    pub rotation: glam::Quat,
+    pub genome_id: usize,
+    pub mode_index: usize,
+    pub birth_time: f32,
+    pub split_interval: f32,
+    pub split_mass: f32,
+    pub stiffness: f32,
+    pub radius: f32,
+    pub genome_orientation: glam::Quat,
+    pub angular_velocity: glam::Vec3,
+}
+
+impl CellAdditionRequest {
+    /// Create deterministic hash for sorting
+    pub fn deterministic_hash(&self) -> u64 {
+        // Use position and genome info for deterministic ordering
+        let x = (self.position.x * 1000.0) as i64;
+        let y = (self.position.y * 1000.0) as i64;
+        let z = (self.position.z * 1000.0) as i64;
+        let g = self.genome_id as u64;
+        let m = self.mode_index as u64;
+        
+        // Combine into deterministic hash
+        ((x as u64) << 32) ^ ((y as u64) << 16) ^ (z as u64) ^ (g << 8) ^ m
+    }
+}
+
+/// Deterministic cell addition pipeline
+/// 
+/// Processes cell additions in batches with deterministic ordering to ensure
+/// the same input produces the same output across runs.
+#[derive(Debug)]
+pub struct DeterministicCellAddition {
+    /// Pending addition requests
+    pending_requests: Vec<CellAdditionRequest>,
+}
+
+impl DeterministicCellAddition {
+    /// Create new cell addition pipeline
+    pub fn new() -> Self {
+        Self {
+            pending_requests: Vec::new(),
+        }
+    }
+    
+    /// Queue a cell for addition
+    pub fn queue_cell_addition(&mut self, request: CellAdditionRequest) {
+        self.pending_requests.push(request);
+    }
+    
+    /// Get number of pending requests
+    pub fn pending_count(&self) -> usize {
+        self.pending_requests.len()
+    }
+    
+    /// Clear all pending requests
+    pub fn clear_pending(&mut self) {
+        self.pending_requests.clear();
+    }
+}
+
 /// Triple-buffered GPU simulation state using Structure-of-Arrays layout
 pub struct GpuTripleBufferSystem {
     /// Cell positions and masses: Vec4(x, y, z, mass) - triple buffered
@@ -144,6 +294,12 @@ pub struct GpuTripleBufferSystem {
     
     /// Whether map_async has been called for the current read
     cell_count_map_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    
+    /// Deterministic slot allocation system
+    slot_allocator: DeterministicSlotAllocator,
+    
+    /// Deterministic cell addition pipeline
+    cell_addition_pipeline: DeterministicCellAddition,
 }
 
 impl GpuTripleBufferSystem {
@@ -284,6 +440,8 @@ impl GpuTripleBufferSystem {
             gpu_cell_count: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             cell_count_read_pending: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cell_count_map_started: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            slot_allocator: DeterministicSlotAllocator::new(capacity),
+            cell_addition_pipeline: DeterministicCellAddition::new(),
         }
     }
     
@@ -303,6 +461,9 @@ impl GpuTripleBufferSystem {
     /// WARNING: This overwrites ALL GPU positions with CPU data.
     /// Only use for initial setup, not during simulation.
     pub fn sync_from_canonical_state(&mut self, queue: &wgpu::Queue, state: &CanonicalState, genomes: &[crate::genome::Genome]) {
+        // Sync slot allocator with canonical state
+        self.sync_slot_allocator_with_canonical(state);
+        
         // Always update GPU cell count buffer, even when cell_count is 0
         let cell_counts: [u32; 2] = [state.cell_count as u32, state.cell_count as u32];
         queue.write_buffer(&self.cell_count_buffer, 0, bytemuck::cast_slice(&cell_counts));
@@ -546,6 +707,243 @@ impl GpuTripleBufferSystem {
         queue.write_buffer(&self.division_flags, offset, bytemuck::bytes_of(&0u32)); // Not dividing
     }
     
+    /// Add cell with deterministic slot assignment
+    /// Returns (slot_index, cell_id) if successful, None if no slots available
+    pub fn add_cell_deterministic(
+        &mut self,
+        queue: &wgpu::Queue,
+        request: CellAdditionRequest,
+        genomes: &[crate::genome::Genome],
+    ) -> Option<(u32, u32)> {
+        // Allocate slot deterministically
+        let (slot, cell_id) = self.slot_allocator.allocate_slot()?;
+        
+        // Sync position/velocity/rotation to all buffer sets
+        self.sync_single_cell(
+            queue,
+            slot as usize,
+            request.position,
+            request.velocity,
+            request.mass,
+            request.rotation,
+        );
+        
+        // Calculate absolute mode index (with genome offset)
+        let absolute_mode_idx = self.calculate_absolute_mode_index(
+            request.genome_id,
+            request.mode_index,
+            genomes,
+        );
+        
+        // Sync cell state for division system
+        self.sync_single_cell_state(
+            queue,
+            slot as usize,
+            request.birth_time,
+            request.split_interval,
+            request.split_mass,
+            request.genome_id,
+            absolute_mode_idx,
+            cell_id as usize,
+            -1, // Default max_splits (unlimited)
+            0.2, // Default nutrient_gain_rate
+            2.0, // Default max_cell_size
+            request.stiffness,
+        );
+        
+        // Update GPU cell count
+        let new_count = self.slot_allocator.allocated_count();
+        self.update_gpu_cell_count(queue, new_count);
+        
+        Some((slot, cell_id))
+    }
+    
+    /// Calculate absolute mode index with genome offset
+    fn calculate_absolute_mode_index(
+        &self,
+        genome_id: usize,
+        local_mode_idx: usize,
+        genomes: &[crate::genome::Genome],
+    ) -> usize {
+        let mut offset = 0;
+        for (i, genome) in genomes.iter().enumerate() {
+            if i == genome_id {
+                return offset + local_mode_idx;
+            }
+            offset += genome.modes.len();
+        }
+        offset + local_mode_idx // Fallback if genome not found
+    }
+    
+    /// Update GPU cell count buffer
+    pub fn update_gpu_cell_count(&self, queue: &wgpu::Queue, new_count: u32) {
+        let cell_counts: [u32; 2] = [new_count, new_count];
+        queue.write_buffer(&self.cell_count_buffer, 0, bytemuck::cast_slice(&cell_counts));
+    }
+    
+    /// Free a cell slot (for cell death)
+    pub fn free_cell_slot(&mut self, slot: u32) {
+        self.slot_allocator.free_slot(slot);
+    }
+    
+    /// Compact free slots for deterministic allocation
+    pub fn compact_free_slots(&mut self) {
+        self.slot_allocator.compact_free_slots();
+    }
+    
+    /// Get current allocated cell count
+    pub fn allocated_cell_count(&self) -> u32 {
+        self.slot_allocator.allocated_count()
+    }
+    
+    /// Get available slot count
+    pub fn available_slots(&self) -> usize {
+        self.slot_allocator.available_slots()
+    }
+    
+    /// Reset slot allocator (for scene reset)
+    pub fn reset_slot_allocator(&mut self) {
+        self.slot_allocator.reset();
+        self.cell_addition_pipeline.clear_pending();
+    }
+    
+    /// Synchronize slot allocator with canonical state
+    pub fn sync_slot_allocator_with_canonical(&mut self, canonical_state: &CanonicalState) {
+        // Reset allocator
+        self.slot_allocator.reset();
+        
+        // Set next cell ID to match canonical state
+        self.slot_allocator.set_next_cell_id(canonical_state.next_cell_id as u32);
+        
+        // Mark slots as allocated for existing cells
+        for i in 0..canonical_state.cell_count {
+            if let Some((slot, _)) = self.slot_allocator.allocate_slot() {
+                // Slot allocated successfully
+                assert_eq!(slot, i as u32, "Slot allocation mismatch during sync");
+            }
+        }
+    }
+    
+    /// Queue a cell for deterministic addition
+    /// 
+    /// The cell will be added during the next call to `process_pending_cell_additions()`.
+    /// This ensures all additions are processed in deterministic order.
+    pub fn queue_cell_addition(&mut self, request: CellAdditionRequest) {
+        self.cell_addition_pipeline.queue_cell_addition(request);
+    }
+    
+    /// Process all pending cell additions in deterministic order
+    /// 
+    /// Returns list of (slot_index, cell_id) pairs for successfully added cells.
+    /// This method should be called once per frame to process queued additions.
+    pub fn process_pending_cell_additions(
+        &mut self,
+        queue: &wgpu::Queue,
+        canonical_state: &mut CanonicalState,
+        genomes: &[crate::genome::Genome],
+    ) -> Vec<(u32, u32)> {
+        // Extract pending requests to avoid borrowing issues
+        let mut pending_requests = std::mem::take(&mut self.cell_addition_pipeline.pending_requests);
+        
+        if pending_requests.is_empty() {
+            return Vec::new();
+        }
+        
+        // Sort requests by deterministic hash for consistent ordering
+        pending_requests.sort_by_key(|req| req.deterministic_hash());
+        
+        let mut added_cells = Vec::new();
+        
+        // Process each request in sorted order
+        for request in pending_requests {
+            if let Some((slot, cell_id)) = self.add_cell_deterministic(
+                queue,
+                request.clone(),
+                genomes,
+            ) {
+                // Also add to canonical state at the same slot
+                if let Some(_canonical_index) = canonical_state.add_cell_at_slot(
+                    slot as usize,
+                    request.position,
+                    request.velocity,
+                    request.rotation,
+                    request.genome_orientation,
+                    request.angular_velocity,
+                    request.mass,
+                    request.radius,
+                    request.genome_id,
+                    request.mode_index,
+                    request.birth_time,
+                    request.split_interval,
+                    request.split_mass,
+                    request.stiffness,
+                    cell_id,
+                ) {
+                    added_cells.push((slot, cell_id));
+                } else {
+                    // Failed to add to canonical state, free the GPU slot
+                    self.slot_allocator.free_slot(slot);
+                }
+            }
+        }
+        
+        added_cells
+    }
+    
+    /// Get number of pending cell additions
+    pub fn pending_cell_addition_count(&self) -> usize {
+        self.cell_addition_pipeline.pending_count()
+    }
+    
+    /// Clear all pending cell additions
+    pub fn clear_pending_cell_additions(&mut self) {
+        self.cell_addition_pipeline.clear_pending();
+    }
+    
+    /// Create a cell addition request from basic parameters
+    pub fn create_cell_addition_request(
+        position: glam::Vec3,
+        velocity: glam::Vec3,
+        mass: f32,
+        rotation: glam::Quat,
+        genome_id: usize,
+        mode_index: usize,
+        birth_time: f32,
+        genomes: &[crate::genome::Genome],
+    ) -> CellAdditionRequest {
+        // Get parameters from genome mode
+        let (split_interval, split_mass, stiffness) = if genome_id < genomes.len() {
+            let genome = &genomes[genome_id];
+            if mode_index < genome.modes.len() {
+                let mode = &genome.modes[mode_index];
+                (mode.split_interval, mode.split_mass, mode.membrane_stiffness)
+            } else {
+                (10.0, 2.0, 50.0) // Default values
+            }
+        } else {
+            (10.0, 2.0, 50.0) // Default values
+        };
+        
+        // Calculate radius from mass
+        let radius = (mass * 3.0 / (4.0 * std::f32::consts::PI)).powf(1.0 / 3.0);
+        
+        CellAdditionRequest {
+            position,
+            velocity,
+            mass,
+            rotation,
+            genome_id,
+            mode_index,
+            birth_time,
+            split_interval,
+            split_mass,
+            stiffness,
+            radius,
+            genome_orientation: rotation, // Use same as physics rotation initially
+            angular_velocity: glam::Vec3::ZERO,
+        }
+    }
+    
     /// Mark that buffers need to be synced from canonical state
     pub fn mark_needs_sync(&mut self) {
         self.needs_sync = true;
@@ -579,21 +977,12 @@ impl GpuTripleBufferSystem {
             offsets
         };
         
-        // DEBUG: Log genome info
-        if !self.pending_cell_insertions.is_empty() {
-            println!("DEBUG sync_pending_insertions: {} genomes, offsets={:?}", genomes.len(), genome_mode_offsets);
-        }
-        
         for &cell_idx in &self.pending_cell_insertions {
             if cell_idx < state.cell_count {
                 let position = state.positions[cell_idx];
                 let velocity = state.velocities[cell_idx];
                 let mass = state.masses[cell_idx];
                 let rotation = state.rotations[cell_idx];
-                
-                // DEBUG: Log cell being synced
-                println!("DEBUG: Syncing cell {} - pos=({:.2},{:.2},{:.2}), mass={:.4}", 
-                    cell_idx, position.x, position.y, position.z, mass);
                 
                 self.sync_single_cell(queue, cell_idx, position, velocity, mass, rotation);
                 
@@ -606,22 +995,14 @@ impl GpuTripleBufferSystem {
                         let mode = &genome.modes[local_mode_idx];
                         (mode.max_splits, mode.nutrient_gain_rate, mode.max_cell_size, mode.membrane_stiffness)
                     } else {
-                        println!("DEBUG: Cell {} has invalid mode_idx {} for genome {} (has {} modes)", 
-                            cell_idx, local_mode_idx, genome_id, genome.modes.len());
                         (-1, 0.2, 2.0, 50.0) // Defaults if mode not found
                     }
                 } else {
-                    println!("DEBUG: Cell {} has invalid genome_id {} (only {} genomes)", 
-                        cell_idx, genome_id, genomes.len());
                     (-1, 0.2, 2.0, 50.0) // Defaults if genome not found
                 };
                 
                 // Calculate absolute mode index (with genome offset)
                 let absolute_mode_idx = genome_mode_offsets.get(genome_id).copied().unwrap_or(0) + local_mode_idx;
-                
-                // DEBUG: Log genome/mode info
-                println!("DEBUG: Cell {} genome_id={}, local_mode={}, absolute_mode={}", 
-                    cell_idx, genome_id, local_mode_idx, absolute_mode_idx);
                 
                 // Also sync cell state for division system
                 self.sync_single_cell_state(
@@ -843,36 +1224,155 @@ impl GpuTripleBufferSystem {
             Vec::new()
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::{Vec3, Quat};
     
-    /// DEBUG: Log the state of all position/mass buffers for the first N cells.
-    /// This helps identify which buffer has corrupted data.
-    pub fn debug_log_buffer_state(&self, device: &wgpu::Device, queue: &wgpu::Queue, cell_count: usize, label: &str) {
-        let current_idx = self.current_index.load(Ordering::Acquire);
-        let output_idx = (current_idx + 1) % 3;
+    #[test]
+    fn test_deterministic_slot_allocator() {
+        let mut allocator = DeterministicSlotAllocator::new(10);
         
-        println!("=== DEBUG BUFFER STATE: {} ===", label);
-        println!("current_index={}, output_index={}, cell_count={}", current_idx, output_idx, cell_count);
+        // Test initial state
+        assert_eq!(allocator.allocated_count(), 0);
+        assert_eq!(allocator.available_slots(), 10);
         
-        let max_cells_to_log = cell_count.min(10); // Only log first 10 cells
+        // Allocate some slots
+        let (slot1, id1) = allocator.allocate_slot().unwrap();
+        let (slot2, id2) = allocator.allocate_slot().unwrap();
+        let (slot3, id3) = allocator.allocate_slot().unwrap();
         
-        for buf_idx in 0..3 {
-            let data = self.debug_read_positions_blocking(device, queue, buf_idx, cell_count);
-            let marker = if buf_idx == current_idx { " (INPUT)" } else if buf_idx == output_idx { " (OUTPUT)" } else { "" };
-            
-            println!("Buffer {}{}:", buf_idx, marker);
-            for (i, pos_mass) in data.iter().take(max_cells_to_log).enumerate() {
-                let mass = pos_mass[3];
-                let status = if mass < 0.1 { " DEAD!" } else { "" };
-                println!("  Cell {}: pos=({:.2}, {:.2}, {:.2}), mass={:.4}{}", 
-                    i, pos_mass[0], pos_mass[1], pos_mass[2], mass, status);
-            }
-            
-            // Count cells with mass < 0.1
-            let dead_count = data.iter().filter(|p| p[3] < 0.1).count();
-            if dead_count > 0 {
-                println!("  Total cells with mass < 0.1: {}/{}", dead_count, data.len());
-            }
-        }
-        println!("=== END DEBUG BUFFER STATE ===");
+        // Should allocate in order
+        assert_eq!(slot1, 0);
+        assert_eq!(slot2, 1);
+        assert_eq!(slot3, 2);
+        
+        // IDs should increment
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(id3, 3);
+        
+        // Check counts
+        assert_eq!(allocator.allocated_count(), 3);
+        assert_eq!(allocator.available_slots(), 7);
+        
+        // Free a slot
+        allocator.free_slot(1);
+        assert_eq!(allocator.available_slots(), 8); // Now 8 (1 freed + 7 remaining)
+        
+        // Compact and check (should still be 8)
+        allocator.compact_free_slots();
+        assert_eq!(allocator.available_slots(), 8); // Still 8 after compaction
+        
+        // Next allocation should use slot 1 (freed slot, lowest available)
+        let (slot4, id4) = allocator.allocate_slot().unwrap();
+        assert_eq!(slot4, 1); // Reused freed slot
+        assert_eq!(id4, 4);   // ID continues incrementing
+    }
+    
+    #[test]
+    fn test_cell_addition_request_deterministic_hash() {
+        let request1 = CellAdditionRequest {
+            position: Vec3::new(1.0, 2.0, 3.0),
+            velocity: Vec3::ZERO,
+            mass: 1.0,
+            rotation: Quat::IDENTITY,
+            genome_id: 0,
+            mode_index: 0,
+            birth_time: 0.0,
+            split_interval: 10.0,
+            split_mass: 2.0,
+            stiffness: 50.0,
+            radius: 1.0,
+            genome_orientation: Quat::IDENTITY,
+            angular_velocity: Vec3::ZERO,
+        };
+        
+        let request2 = CellAdditionRequest {
+            position: Vec3::new(1.0, 2.0, 3.0), // Same position
+            velocity: Vec3::new(1.0, 0.0, 0.0), // Different velocity (shouldn't affect hash)
+            mass: 2.0,                           // Different mass (shouldn't affect hash)
+            rotation: Quat::IDENTITY,
+            genome_id: 0,                        // Same genome/mode
+            mode_index: 0,
+            birth_time: 5.0,                     // Different time (shouldn't affect hash)
+            split_interval: 15.0,
+            split_mass: 3.0,
+            stiffness: 75.0,
+            radius: 1.2,
+            genome_orientation: Quat::IDENTITY,
+            angular_velocity: Vec3::ZERO,
+        };
+        
+        let request3 = CellAdditionRequest {
+            position: Vec3::new(1.0, 2.0, 3.0), // Same position
+            velocity: Vec3::ZERO,
+            mass: 1.0,
+            rotation: Quat::IDENTITY,
+            genome_id: 1,                        // Different genome (should affect hash)
+            mode_index: 0,
+            birth_time: 0.0,
+            split_interval: 10.0,
+            split_mass: 2.0,
+            stiffness: 50.0,
+            radius: 1.0,
+            genome_orientation: Quat::IDENTITY,
+            angular_velocity: Vec3::ZERO,
+        };
+        
+        // Same position and genome should have same hash
+        assert_eq!(request1.deterministic_hash(), request2.deterministic_hash());
+        
+        // Different genome should have different hash
+        assert_ne!(request1.deterministic_hash(), request3.deterministic_hash());
+    }
+    
+    #[test]
+    fn test_deterministic_cell_addition_sorting() {
+        let mut pipeline = DeterministicCellAddition::new();
+        
+        // Add requests in non-deterministic order
+        let request_high_hash = CellAdditionRequest {
+            position: Vec3::new(10.0, 10.0, 10.0), // High coordinates = high hash
+            velocity: Vec3::ZERO,
+            mass: 1.0,
+            rotation: Quat::IDENTITY,
+            genome_id: 1,
+            mode_index: 1,
+            birth_time: 0.0,
+            split_interval: 10.0,
+            split_mass: 2.0,
+            stiffness: 50.0,
+            radius: 1.0,
+            genome_orientation: Quat::IDENTITY,
+            angular_velocity: Vec3::ZERO,
+        };
+        
+        let request_low_hash = CellAdditionRequest {
+            position: Vec3::new(1.0, 1.0, 1.0), // Low coordinates = low hash
+            velocity: Vec3::ZERO,
+            mass: 1.0,
+            rotation: Quat::IDENTITY,
+            genome_id: 0,
+            mode_index: 0,
+            birth_time: 0.0,
+            split_interval: 10.0,
+            split_mass: 2.0,
+            stiffness: 50.0,
+            radius: 1.0,
+            genome_orientation: Quat::IDENTITY,
+            angular_velocity: Vec3::ZERO,
+        };
+        
+        // Add high hash first, then low hash
+        pipeline.queue_cell_addition(request_high_hash.clone());
+        pipeline.queue_cell_addition(request_low_hash.clone());
+        
+        assert_eq!(pipeline.pending_count(), 2);
+        
+        // Verify they get sorted by hash (low hash should come first)
+        assert!(request_low_hash.deterministic_hash() < request_high_hash.deterministic_hash());
     }
 }

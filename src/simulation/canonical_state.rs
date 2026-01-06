@@ -594,6 +594,108 @@ impl CanonicalState {
         Some(index)
     }
     
+    /// Add a cell at a specific slot index (for deterministic GPU synchronization)
+    /// 
+    /// This method is used by the GPU scene to add cells at predetermined slots
+    /// to maintain consistency between CPU and GPU state. Unlike `add_cell()`,
+    /// this method allows specifying the exact index and cell ID.
+    /// 
+    /// # Arguments
+    /// * `slot_index` - Exact index where the cell should be placed
+    /// * `position` - Initial 3D world position
+    /// * `velocity` - Initial velocity vector
+    /// * `rotation` - Initial orientation quaternion
+    /// * `genome_orientation` - Genome-space orientation for adhesion zones
+    /// * `angular_velocity` - Initial rotational velocity
+    /// * `mass` - Initial cell mass
+    /// * `radius` - Visual and collision radius
+    /// * `genome_id` - Which genome this cell uses
+    /// * `mode_index` - Current behavior mode within the genome
+    /// * `birth_time` - Simulation time when cell was created
+    /// * `split_interval` - Time between divisions
+    /// * `split_mass` - Mass threshold for division
+    /// * `stiffness` - Membrane stiffness for collision response
+    /// * `cell_id` - Specific cell ID to assign (for GPU sync)
+    /// 
+    /// # Returns
+    /// * `Some(index)` - Index where the cell was placed (should equal slot_index)
+    /// * `None` - If slot_index is invalid or already occupied
+    /// 
+    /// # Safety
+    /// This method assumes the caller has verified the slot is available.
+    /// It will overwrite existing data at the slot index without checking.
+    pub fn add_cell_at_slot(
+        &mut self,
+        slot_index: usize,
+        position: Vec3,
+        velocity: Vec3,
+        rotation: Quat,
+        genome_orientation: Quat,
+        angular_velocity: Vec3,
+        mass: f32,
+        radius: f32,
+        genome_id: usize,
+        mode_index: usize,
+        birth_time: f32,
+        split_interval: f32,
+        split_mass: f32,
+        stiffness: f32,
+        cell_id: u32,
+    ) -> Option<usize> {
+        // Validate slot index
+        if slot_index >= self.capacity {
+            return None;
+        }
+        
+        // Expand cell_count if necessary to include this slot
+        if slot_index >= self.cell_count {
+            self.cell_count = slot_index + 1;
+        }
+        
+        // Assign the specific cell ID (don't auto-increment)
+        self.cell_ids[slot_index] = cell_id;
+        
+        // Update next_cell_id if this ID is higher
+        if cell_id >= self.next_cell_id {
+            self.next_cell_id = cell_id + 1;
+        }
+        
+        // Initialize all cell properties at the specified slot
+        // Position and motion
+        self.positions[slot_index] = position;
+        self.prev_positions[slot_index] = position;  // Start with same position for Verlet
+        self.velocities[slot_index] = velocity;
+        
+        // Cell properties
+        self.masses[slot_index] = mass;
+        self.radii[slot_index] = radius;
+        self.genome_ids[slot_index] = genome_id;
+        self.mode_indices[slot_index] = mode_index;
+        
+        // Orientation
+        self.rotations[slot_index] = rotation;
+        self.genome_orientations[slot_index] = genome_orientation;
+        self.angular_velocities[slot_index] = angular_velocity;
+        
+        // Physics state - start with zero forces/accelerations
+        self.forces[slot_index] = Vec3::ZERO;
+        self.torques[slot_index] = Vec3::ZERO;
+        self.accelerations[slot_index] = Vec3::ZERO;
+        self.prev_accelerations[slot_index] = Vec3::ZERO;
+        self.stiffnesses[slot_index] = stiffness;
+        
+        // Division parameters
+        self.birth_times[slot_index] = birth_time;
+        self.split_intervals[slot_index] = split_interval;
+        self.split_masses[slot_index] = split_mass;
+        self.split_counts[slot_index] = 0;  // New cell hasn't divided yet
+        
+        // Initialize adhesion system for this cell
+        self.adhesion_manager.init_cell_adhesion_indices(slot_index);
+        
+        Some(slot_index)
+    }
+    
     /// Update cached adhesion settings from genome if needed (single genome version)
     /// 
     /// This is a convenience method for simulations using a single genome.

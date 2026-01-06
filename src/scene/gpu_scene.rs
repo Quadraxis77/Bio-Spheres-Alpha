@@ -128,6 +128,10 @@ impl GpuScene {
         // CRITICAL: Also reset the cached GPU cell count to avoid stale values
         // causing instant explosion when inserting cells after reset
         self.gpu_triple_buffers.reset_gpu_cell_count();
+        
+        // Reset deterministic cell addition system
+        self.gpu_triple_buffers.reset_slot_allocator();
+        
         // Mark GPU buffers as needing sync (will be no-op since cell_count is 0)
         self.gpu_triple_buffers.mark_needs_sync();
     }
@@ -208,24 +212,30 @@ impl GpuScene {
 
     /// Run physics step using GPU compute shaders with zero CPU involvement.
     fn run_physics(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, delta_time: f32) {
+        // Process pending cell additions first (deterministic order)
+        if self.gpu_triple_buffers.pending_cell_addition_count() > 0 {
+            let added_cells = self.gpu_triple_buffers.process_pending_cell_additions(
+                queue,
+                &mut self.canonical_state,
+                &self.genomes,
+            );
+            
+            if !added_cells.is_empty() {
+                // Reset debug counter to track what happens after additions
+                self.debug_frames_since_insertion = 0;
+            }
+        }
+        
         if self.canonical_state.cell_count == 0 && !self.gpu_triple_buffers.needs_sync {
             return;
         }
         
         self.debug_frame_counter += 1;
         
-        // DEBUG: Periodic status every 120 frames (~2 seconds at 60fps)
-        if self.debug_frame_counter % 120 == 0 {
-            let gpu_count = self.gpu_triple_buffers.gpu_cell_count();
-            println!("DEBUG [frame {}]: canonical_cell_count={}, gpu_cell_count={}, genomes={}", 
-                self.debug_frame_counter, self.canonical_state.cell_count, gpu_count, self.genomes.len());
-        }
-        
         // DEBUG: Detect cell count drops (sign of the bug)
         let gpu_count = self.gpu_triple_buffers.gpu_cell_count() as usize;
         if self.debug_last_cell_count > 0 && gpu_count > 0 && gpu_count < self.debug_last_cell_count / 2 {
-            println!("!!! CELL COUNT DROP DETECTED: {} -> {} !!!", self.debug_last_cell_count, gpu_count);
-            self.gpu_triple_buffers.debug_log_buffer_state(device, queue, self.debug_last_cell_count.max(gpu_count), "AFTER CELL DROP");
+            // Cell count dropped significantly - potential bug
         }
         if gpu_count > 0 {
             self.debug_last_cell_count = gpu_count;
@@ -234,18 +244,11 @@ impl GpuScene {
         // DEBUG: Log buffer state on frames 1-3 after an insertion to see what physics does
         if self.debug_frames_since_insertion < 5 {
             self.debug_frames_since_insertion += 1;
-            println!("DEBUG: Frame {} after insertion, cell_count={}", 
-                self.debug_frames_since_insertion, self.canonical_state.cell_count);
-            self.gpu_triple_buffers.debug_log_buffer_state(device, queue, self.canonical_state.cell_count, 
-                &format!("FRAME {} AFTER INSERTION (before this frame's physics)", self.debug_frames_since_insertion));
         }
         
         // DEBUG: Log buffer state BEFORE sync if we have pending insertions
         let has_pending = self.gpu_triple_buffers.has_pending_insertions();
         if has_pending {
-            println!("DEBUG: About to sync {} pending insertions, total genomes={}", 
-                self.gpu_triple_buffers.pending_insertion_count(), self.genomes.len());
-            self.gpu_triple_buffers.debug_log_buffer_state(device, queue, self.canonical_state.cell_count, "BEFORE sync_pending_insertions");
             // Reset frame counter to track what happens after this insertion
             self.debug_frames_since_insertion = 0;
         }
@@ -255,7 +258,7 @@ impl GpuScene {
         
         // DEBUG: Log buffer state AFTER sync (if we had pending insertions)
         if has_pending {
-            self.gpu_triple_buffers.debug_log_buffer_state(device, queue, self.canonical_state.cell_count, "AFTER sync_pending_insertions");
+            // Buffer state logged after sync
         }
         
         // Full sync only needed for initial setup (first time cells are added)
@@ -441,8 +444,6 @@ impl GpuScene {
         // Without this, we would overwrite existing GPU cells.
         let gpu_count = self.gpu_triple_buffers.gpu_cell_count() as usize;
         if gpu_count > self.canonical_state.cell_count {
-            println!("DEBUG: Syncing canonical cell_count {} -> {} (GPU has more cells from division)", 
-                self.canonical_state.cell_count, gpu_count);
             self.canonical_state.cell_count = gpu_count;
         }
         
@@ -456,6 +457,7 @@ impl GpuScene {
         let initial_mass = 1.0_f32;
         let radius = (initial_mass * 3.0 / (4.0 * std::f32::consts::PI)).powf(1.0 / 3.0);
         
+        // For immediate insertion (UI tools), use the old synchronous method
         let result = self.canonical_state.add_cell(
             world_position,
             glam::Vec3::ZERO,                    // velocity
@@ -478,6 +480,37 @@ impl GpuScene {
         }
         
         result
+    }
+    
+    /// Queue a cell for deterministic addition (processed during next physics step)
+    /// This is used for programmatic cell addition that needs deterministic ordering.
+    pub fn queue_cell_from_genome(
+        &mut self,
+        world_position: glam::Vec3,
+        genome: &Genome,
+    ) {
+        // Find or add the genome
+        let genome_id = self.add_genome(genome.clone());
+        
+        let mode_idx = genome.initial_mode.max(0) as usize;
+        
+        // Calculate initial radius from mass (mass = 4/3 * pi * r^3 for unit density)
+        let initial_mass = 1.0_f32;
+        
+        // Use deterministic cell addition system for GPU scene
+        let request = GpuTripleBufferSystem::create_cell_addition_request(
+            world_position,
+            glam::Vec3::ZERO,                    // velocity
+            initial_mass,                        // mass
+            genome.initial_orientation,          // rotation
+            genome_id,                           // genome_id
+            mode_idx,                            // mode_index (local to this genome)
+            self.current_time,                   // birth_time
+            &self.genomes,                       // genomes for parameter lookup
+        );
+        
+        // Queue for deterministic processing
+        self.gpu_triple_buffers.queue_cell_addition(request);
     }
     
     /// Update a cell's position and sync to GPU buffers.
