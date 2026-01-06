@@ -772,6 +772,26 @@ impl GpuTripleBufferSystem {
         self.gpu_cell_count.load(std::sync::atomic::Ordering::Acquire)
     }
     
+    /// Reset the cached GPU cell count to 0.
+    /// Must be called during scene reset to avoid stale values being used.
+    /// Also resets async read state to prevent in-flight reads from overwriting with stale data.
+    pub fn reset_gpu_cell_count(&self) {
+        use std::sync::atomic::Ordering;
+        self.gpu_cell_count.store(0, Ordering::Release);
+        // Cancel any in-flight async reads by resetting the state flags.
+        // This prevents an async read started before reset from overwriting with stale data.
+        let was_map_started = self.cell_count_map_started.swap(false, Ordering::AcqRel);
+        self.cell_count_read_pending.store(false, Ordering::Release);
+        // If a map was in progress, try to unmap the staging buffer to avoid issues
+        // with the next read. This is safe even if the buffer isn't currently mapped.
+        if was_map_started {
+            // Use catch_unwind since unmap on unmapped buffer may panic
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.cell_count_staging.unmap();
+            }));
+        }
+    }
+    
     /// DEBUG: Blocking readback of position/mass data from a specific buffer.
     /// This is expensive and should only be used for debugging!
     pub fn debug_read_positions_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue, buffer_index: usize, cell_count: usize) -> Vec<[f32; 4]> {

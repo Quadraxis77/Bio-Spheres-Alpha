@@ -125,6 +125,9 @@ impl GpuScene {
         // Reset GPU cell count buffer to 0 immediately (don't wait for sync)
         let cell_counts: [u32; 2] = [0, 0];
         queue.write_buffer(&self.gpu_triple_buffers.cell_count_buffer, 0, bytemuck::cast_slice(&cell_counts));
+        // CRITICAL: Also reset the cached GPU cell count to avoid stale values
+        // causing instant explosion when inserting cells after reset
+        self.gpu_triple_buffers.reset_gpu_cell_count();
         // Mark GPU buffers as needing sync (will be no-op since cell_count is 0)
         self.gpu_triple_buffers.mark_needs_sync();
     }
