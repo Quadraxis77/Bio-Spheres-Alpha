@@ -46,12 +46,12 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
 }
 
-// Zone colors (matching CPU implementation)
+// Zone colors (matching reference implementation)
 fn get_zone_color(zone: u32) -> vec4<f32> {
     switch (zone) {
-        case 0u: { return vec4<f32>(1.0, 0.3, 0.3, 0.8); } // Zone A - Red
-        case 1u: { return vec4<f32>(0.3, 1.0, 0.3, 0.8); } // Zone B - Green
-        default: { return vec4<f32>(0.3, 0.3, 1.0, 0.8); } // Zone C - Blue
+        case 0u: { return vec4<f32>(0.0, 1.0, 0.0, 0.8); } // Zone A - Green (opposite to split direction -> Child B)
+        case 1u: { return vec4<f32>(0.0, 0.0, 1.0, 0.8); } // Zone B - Blue (same as split direction -> Child A)
+        default: { return vec4<f32>(1.0, 0.0, 0.0, 0.8); } // Zone C - Red (equatorial -> both children)
     }
 }
 

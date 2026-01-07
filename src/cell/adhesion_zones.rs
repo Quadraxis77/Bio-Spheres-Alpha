@@ -14,15 +14,16 @@ pub enum AdhesionZone {
     ZoneC = 2,  // Red in visualization (equatorial)
 }
 
-/// Equatorial threshold in degrees (±4° from 90°)
-pub const EQUATORIAL_THRESHOLD_DEGREES: f32 = 4.0;
+/// Equatorial threshold in degrees (±2° from 90°, matching Biospheres-Master)
+pub const EQUATORIAL_THRESHOLD_DEGREES: f32 = 2.0;
 
 /// Classify adhesion bond direction relative to split direction
 /// 
-/// This matches the GPU implementation exactly:
-/// - Zone A: dot < 0 (pointing opposite to split direction)
-/// - Zone B: dot > 0 and not equatorial (pointing same as split direction)
-/// - Zone C: angle ≈ 90° from split direction (equatorial band ±4°)
+/// This matches the reference implementation (Biospheres-Master) EXACTLY:
+/// - Uses dot product threshold: sin(2°) ≈ 0.0349
+/// - Zone C: abs(dot) <= threshold (almost perpendicular to split direction)
+/// - Zone B: dot > 0 (pointing same direction as split) → inherit to child A
+/// - Zone A: dot < 0 (pointing opposite to split) → inherit to child B
 /// 
 /// # Arguments
 /// * `bond_direction` - Direction of the adhesion bond (normalized)
@@ -31,17 +32,16 @@ pub const EQUATORIAL_THRESHOLD_DEGREES: f32 = 4.0;
 /// # Returns
 /// The zone classification for this adhesion
 pub fn classify_bond_direction(bond_direction: Vec3, split_direction: Vec3) -> AdhesionZone {
-    let dot_product = bond_direction.dot(split_direction);
-    let angle = dot_product.clamp(-1.0, 1.0).acos().to_degrees();
-    let half_width = EQUATORIAL_THRESHOLD_DEGREES;
-    let equatorial_angle = 90.0;
+    let dot_product = bond_direction.normalize().dot(split_direction.normalize());
     
-    // Check if within equatorial threshold (90° ± 4°)
-    if (angle - equatorial_angle).abs() <= half_width {
-        AdhesionZone::ZoneC // Equatorial band
-    }
-    // Classify based on which side relative to split direction
-    else if dot_product > 0.0 {
+    // Reference uses: sin(radians(2.0)) as threshold
+    // sin(2°) ≈ 0.0349
+    let equatorial_threshold = EQUATORIAL_THRESHOLD_DEGREES.to_radians().sin();
+    
+    // Zone classification based on dot product (matches reference exactly)
+    if dot_product.abs() <= equatorial_threshold {
+        AdhesionZone::ZoneC // Equatorial - almost perpendicular to split direction
+    } else if dot_product > 0.0 {
         AdhesionZone::ZoneB // Positive dot product (same direction as split)
     } else {
         AdhesionZone::ZoneA // Negative dot product (opposite to split)
@@ -75,6 +75,7 @@ mod tests {
         assert_eq!(classify_bond_direction(bond_b, split_dir), AdhesionZone::ZoneB);
         
         // Test Zone C (equatorial - perpendicular to split)
+        // sin(2°) ≈ 0.0349, so dot product must be <= 0.0349 for Zone C
         let bond_c = Vec3::new(1.0, 0.0, 0.0).normalize();
         assert_eq!(classify_bond_direction(bond_c, split_dir), AdhesionZone::ZoneC);
         
@@ -82,9 +83,15 @@ mod tests {
         let bond_c2 = Vec3::new(0.0, 0.0, 1.0).normalize();
         assert_eq!(classify_bond_direction(bond_c2, split_dir), AdhesionZone::ZoneC);
         
-        // Test near-equatorial (should be Zone C)
-        let bond_near_eq = Vec3::new(1.0, 0.07, 0.0).normalize(); // ~86° from Y (within 4° threshold)
+        // Test near-equatorial (should be Zone C with 2° threshold)
+        // dot = sin(2°) ≈ 0.0349, so y component of 0.034 at x=1 gives dot ≈ 0.034
+        let bond_near_eq = Vec3::new(1.0, 0.034, 0.0).normalize();
         assert_eq!(classify_bond_direction(bond_near_eq, split_dir), AdhesionZone::ZoneC);
+        
+        // Test just outside equatorial (should be Zone B with 2° threshold)
+        // y component of 0.05 at x=1 gives dot ≈ 0.05 which is > sin(2°) ≈ 0.0349
+        let bond_outside_eq = Vec3::new(1.0, 0.05, 0.0).normalize();
+        assert_eq!(classify_bond_direction(bond_outside_eq, split_dir), AdhesionZone::ZoneB);
     }
     
     #[test]

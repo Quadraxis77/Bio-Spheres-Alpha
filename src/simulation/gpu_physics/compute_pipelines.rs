@@ -232,12 +232,12 @@ impl GpuPhysicsPipelines {
             "Mass Accumulation",
         );
         
-        // Create adhesion physics pipeline
+        // Create adhesion physics pipeline (per-cell processing, no atomic force accumulation)
         let adhesion_physics = Self::create_compute_pipeline(
             device,
             include_str!("../../../shaders/adhesion_physics.wgsl"),
             "main",
-            &[&physics_layout, &adhesion_layout, &rotations_layout, &force_accum_layout],
+            &[&physics_layout, &adhesion_layout, &rotations_layout],
             "Adhesion Physics",
         );
         
@@ -563,7 +563,8 @@ impl GpuPhysicsPipelines {
         })
     }
     
-    /// Create rotations bind group for position_update and adhesion physics shaders
+    /// Create rotations bind group for adhesion physics shader (per-cell processing)
+    /// Includes both input and output buffers for direct velocity updates
     pub fn create_rotations_bind_group(
         &self,
         device: &wgpu::Device,
@@ -571,6 +572,7 @@ impl GpuPhysicsPipelines {
         adhesion_buffers: &super::AdhesionBuffers,
         buffer_index: usize,
     ) -> wgpu::BindGroup {
+        let output_index = (buffer_index + 1) % 3;
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Rotations Bind Group"),
             layout: &self.rotations_layout,
@@ -582,6 +584,14 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: adhesion_buffers.angular_velocities[buffer_index].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.rotations[output_index].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: adhesion_buffers.angular_velocities[output_index].as_entire_binding(),
                 },
             ],
         })
@@ -1313,7 +1323,8 @@ impl GpuPhysicsPipelines {
         })
     }
     
-    /// Create rotations bind group layout for position_update and adhesion physics shaders
+    /// Create rotations bind group layout for adhesion physics shader (per-cell processing)
+    /// Needs read-write access to rotations and angular velocities for direct updates
     fn create_rotations_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Rotations Bind Group Layout"),
@@ -1329,12 +1340,34 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 1: Angular velocities (read-only) - required by adhesion physics shader
+                // Binding 1: Angular velocities input (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Rotations output (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Angular velocities output (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -1380,12 +1413,12 @@ impl GpuPhysicsPipelines {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Adhesion Bind Group Layout"),
             entries: &[
-                // Binding 0: Adhesion connections (read-write)
+                // Binding 0: Adhesion connections (read-only for per-cell processing)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -1402,12 +1435,23 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 2: Adhesion counts (read-write)
+                // Binding 2: Adhesion counts (read-only for per-cell processing)
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Cell adhesion indices (read-only, 20 indices per cell)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -1620,6 +1664,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: adhesion_buffers.adhesion_counts.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: adhesion_buffers.cell_adhesion_indices.as_entire_binding(),
                 },
             ],
         })

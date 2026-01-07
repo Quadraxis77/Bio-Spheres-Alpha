@@ -188,8 +188,8 @@ const ZONE_B: u32 = 1u; // Positive dot product - goes to Child A
 const ZONE_C: u32 = 2u; // Equatorial - duplicated for both children
 
 // Inheritance angle threshold (degrees) - defines equatorial zone width
-// Reference uses 4° (BioSpheres-Q) or 2° (Biospheres-Master)
-const EQUATORIAL_THRESHOLD_DEG: f32 = 4.0;
+// Reference Biospheres-Master uses 2°
+const EQUATORIAL_THRESHOLD_DEG: f32 = 2.0;
 
 // Maximum adhesions per cell
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
@@ -223,25 +223,22 @@ fn quat_inverse(q: vec4<f32>) -> vec4<f32> {
 }
 
 // Classify adhesion zone based on anchor direction and split direction
-// Matches reference implementation exactly:
-// - Zone A: dot < 0 (pointing opposite to split direction) -> goes to Child B
-// - Zone B: dot > 0 and not equatorial (pointing same as split direction) -> goes to Child A
-// - Zone C: angle ≈ 90° from split direction (equatorial band ±4°) -> both children
+// Matches reference implementation EXACTLY:
+// - Uses dot product threshold: sin(radians(2.0)) ≈ 0.0349
+// - Zone C: abs(dot) <= threshold (almost perpendicular to split direction)
+// - Zone B: dot > 0 (pointing same direction as split) -> goes to Child A
+// - Zone A: dot < 0 (pointing opposite to split) -> goes to Child B
 fn classify_adhesion_zone(anchor_dir_local: vec3<f32>, split_dir_local: vec3<f32>) -> u32 {
-    let dot_product = dot(anchor_dir_local, split_dir_local);
-    let angle_rad = acos(clamp(dot_product, -1.0, 1.0));
-    let angle_deg = angle_rad * 180.0 / PI;
+    let dot_product = dot(normalize(anchor_dir_local), normalize(split_dir_local));
     
-    // Equatorial zone is centered at 90 degrees (perpendicular to split direction)
-    let equatorial_angle = 90.0;
-    let half_width = EQUATORIAL_THRESHOLD_DEG;
+    // Reference uses: sin(radians(2.0)) as threshold
+    // sin(2°) ≈ 0.0349
+    let equatorial_threshold = sin(EQUATORIAL_THRESHOLD_DEG * PI / 180.0);
     
-    // Check if within equatorial threshold (90° ± 4°)
-    if (abs(angle_deg - equatorial_angle) <= half_width) {
-        return ZONE_C; // Equatorial band - duplicated for both children
-    }
-    // Classify based on which side relative to split direction
-    else if (dot_product > 0.0) {
+    // Zone classification based on dot product (matches reference exactly)
+    if (abs(dot_product) <= equatorial_threshold) {
+        return ZONE_C; // Equatorial - almost perpendicular to split direction
+    } else if (dot_product > 0.0) {
         return ZONE_B; // Positive dot product (same direction as split) -> Child A
     } else {
         return ZONE_A; // Negative dot product (opposite to split) -> Child B
@@ -666,6 +663,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (give_to_child_a && !give_to_child_b) {
             // Only Child A inherits
             
+            // Get neighbor's genome orientation for anchor calculation
+            let neighbor_rotation = rotations_in[neighbor_idx];
+            
+            // Calculate relative rotation: inv(neighbor_orientation) * parent_orientation
+            let relative_rotation = quat_multiply(quat_inverse(neighbor_rotation), parent_rotation);
+            
             // Calculate new anchor direction for child using geometric approach (matches reference)
             let child_anchor = calculate_child_anchor_direction(
                 child_a_pos_parent_frame,
@@ -673,25 +676,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 child_a_orientation
             );
             
-            // IMPORTANT: Neighbor's anchor direction should NOT change!
-            // The neighbor is still pointing at the same physical location.
-            // Only the cell at that location has changed from parent to child.
-            // The neighbor's anchor was already correct - it pointed toward the parent,
-            // and now Child A is at (approximately) the same location.
+            // Calculate neighbor's anchor direction pointing to Child A
+            // Direction from neighbor to Child A in parent frame
+            let dir_to_child_parent_frame = normalize(child_a_pos_parent_frame - neighbor_pos_parent_frame);
+            // Transform to neighbor's local frame
+            let neighbor_anchor = normalize(rotate_vector_by_quat(dir_to_child_parent_frame, relative_rotation));
             
             // Update the connection - preserve original side assignment
             // Child A overwrites parent slot, so cell index stays the same
             if (is_parent_cell_a) {
                 // Parent was cellA, so child stays as cellA
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_anchor, 0.0);
-                // Keep neighbor's anchor direction unchanged: anchor_direction_b stays the same
+                adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(neighbor_anchor, 0.0);
                 adhesion_connections[adh_idx].twist_reference_a = child_a_rotation;
                 // Zone classification for child's side
                 adhesion_connections[adh_idx].zone_a = classify_adhesion_zone(child_anchor, split_dir_local);
             } else {
                 // Parent was cellB, so child stays as cellB
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_anchor, 0.0);
-                // Keep neighbor's anchor direction unchanged: anchor_direction_a stays the same
+                adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(neighbor_anchor, 0.0);
                 adhesion_connections[adh_idx].twist_reference_b = child_a_rotation;
                 // Zone classification for child's side
                 adhesion_connections[adh_idx].zone_b = classify_adhesion_zone(child_anchor, split_dir_local);
@@ -709,7 +712,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         } else if (give_to_child_b && !give_to_child_a) {
             // Only Child B inherits
             
-            // Calculate new anchor direction for child using geometric approach (matches reference)
+            // Get neighbor's genome orientation for anchor calculation
+            let neighbor_rotation = rotations_in[neighbor_idx];
+            
+            // Calculate relative rotation: inv(neighbor_orientation) * parent_orientation
+            let relative_rotation = quat_multiply(quat_inverse(neighbor_rotation), parent_rotation);
+            
             // Calculate new anchor direction for child using geometric approach (matches reference)
             let child_anchor = calculate_child_anchor_direction(
                 child_b_pos_parent_frame,
@@ -717,23 +725,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 child_b_orientation
             );
             
-            // IMPORTANT: Neighbor's anchor direction should NOT change!
-            // The neighbor is still pointing at the same physical location.
-            // Only the cell at that location has changed from parent to child.
+            // Calculate neighbor's anchor direction pointing to Child B
+            // Direction from neighbor to Child B in parent frame
+            let dir_to_child_parent_frame = normalize(child_b_pos_parent_frame - neighbor_pos_parent_frame);
+            // Transform to neighbor's local frame
+            let neighbor_anchor = normalize(rotate_vector_by_quat(dir_to_child_parent_frame, relative_rotation));
             
             // Update the connection - preserve original side assignment and update cell index
             if (is_parent_cell_a) {
                 // Parent was cellA, so child B takes cellA position
                 adhesion_connections[adh_idx].cell_a_index = child_b_slot;
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_anchor, 0.0);
-                // Keep neighbor's anchor direction unchanged: anchor_direction_b stays the same
+                adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(neighbor_anchor, 0.0);
                 adhesion_connections[adh_idx].twist_reference_a = child_b_rotation;
                 adhesion_connections[adh_idx].zone_a = classify_adhesion_zone(child_anchor, split_dir_local);
             } else {
                 // Parent was cellB, so child B takes cellB position
                 adhesion_connections[adh_idx].cell_b_index = child_b_slot;
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_anchor, 0.0);
-                // Keep neighbor's anchor direction unchanged: anchor_direction_a stays the same
+                adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(neighbor_anchor, 0.0);
                 adhesion_connections[adh_idx].twist_reference_b = child_b_rotation;
                 adhesion_connections[adh_idx].zone_b = classify_adhesion_zone(child_anchor, split_dir_local);
             }
@@ -746,6 +756,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             
         } else if (give_to_child_a && give_to_child_b) {
             // Zone C: Both children inherit - need to duplicate the adhesion
+            // CRITICAL: Neighbor needs TWO different anchor directions - one for each child
+            // This is the "intermediate anchor step" from the reference
+            
+            // Get neighbor's genome orientation for anchor calculation
+            let neighbor_rotation = rotations_in[neighbor_idx];
+            
+            // Calculate relative rotation: inv(neighbor_orientation) * parent_orientation
+            // This transforms directions from parent frame to neighbor's local frame
+            let relative_rotation = quat_multiply(quat_inverse(neighbor_rotation), parent_rotation);
             
             // === Child A gets the original connection ===
             let child_a_anchor = calculate_child_anchor_direction(
@@ -754,16 +773,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 child_a_orientation
             );
             
-            // Update original connection for Child A
-            // IMPORTANT: Neighbor's anchor direction should NOT change!
+            // Calculate neighbor's anchor direction pointing to Child A
+            // Direction from neighbor to Child A in parent frame
+            let dir_to_child_a_parent_frame = normalize(child_a_pos_parent_frame - neighbor_pos_parent_frame);
+            // Transform to neighbor's local frame
+            let neighbor_anchor_to_a = normalize(rotate_vector_by_quat(dir_to_child_a_parent_frame, relative_rotation));
+            
+            // Update original connection for Child A with BOTH anchor directions updated
             if (is_parent_cell_a) {
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_a_anchor, 0.0);
-                // Keep neighbor's anchor direction unchanged: anchor_direction_b stays the same
+                adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(neighbor_anchor_to_a, 0.0);
                 adhesion_connections[adh_idx].twist_reference_a = child_a_rotation;
                 adhesion_connections[adh_idx].zone_a = classify_adhesion_zone(child_a_anchor, split_dir_local);
             } else {
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_a_anchor, 0.0);
-                // Keep neighbor's anchor direction unchanged: anchor_direction_a stays the same
+                adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(neighbor_anchor_to_a, 0.0);
                 adhesion_connections[adh_idx].twist_reference_b = child_a_rotation;
                 adhesion_connections[adh_idx].zone_b = classify_adhesion_zone(child_a_anchor, split_dir_local);
             }
@@ -783,8 +807,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     child_b_orientation
                 );
                 
-                // Create duplicate connection
-                // IMPORTANT: Copy neighbor's anchor direction from original connection!
+                // Calculate neighbor's anchor direction pointing to Child B
+                // Direction from neighbor to Child B in parent frame
+                let dir_to_child_b_parent_frame = normalize(child_b_pos_parent_frame - neighbor_pos_parent_frame);
+                // Transform to neighbor's local frame
+                let neighbor_anchor_to_b = normalize(rotate_vector_by_quat(dir_to_child_b_parent_frame, relative_rotation));
+                
+                // Create duplicate connection with BOTH anchor directions calculated
                 var dup_conn: AdhesionConnection;
                 dup_conn.mode_index = conn.mode_index;
                 dup_conn.is_active = 1u;
@@ -796,20 +825,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     dup_conn.cell_a_index = child_b_slot;
                     dup_conn.cell_b_index = neighbor_idx;
                     dup_conn.anchor_direction_a = vec4<f32>(child_b_anchor, 0.0);
-                    dup_conn.anchor_direction_b = conn.anchor_direction_b; // Copy from original (already vec4)
+                    dup_conn.anchor_direction_b = vec4<f32>(neighbor_anchor_to_b, 0.0); // Calculated anchor to Child B
                     dup_conn.twist_reference_a = child_b_rotation;
-                    dup_conn.twist_reference_b = conn.twist_reference_b; // Copy from original!
+                    dup_conn.twist_reference_b = neighbor_rotation;
                     dup_conn.zone_a = classify_adhesion_zone(child_b_anchor, split_dir_local);
-                    dup_conn.zone_b = conn.zone_b; // Keep neighbor's zone
+                    dup_conn.zone_b = classify_adhesion_zone(neighbor_anchor_to_b, split_dir_local);
                 } else {
                     // Parent was cellB, so child B takes cellB position in duplicate
                     dup_conn.cell_a_index = neighbor_idx;
                     dup_conn.cell_b_index = child_b_slot;
-                    dup_conn.anchor_direction_a = conn.anchor_direction_a; // Copy from original (already vec4)
+                    dup_conn.anchor_direction_a = vec4<f32>(neighbor_anchor_to_b, 0.0); // Calculated anchor to Child B
                     dup_conn.anchor_direction_b = vec4<f32>(child_b_anchor, 0.0);
-                    dup_conn.twist_reference_a = conn.twist_reference_a; // Copy from original!
+                    dup_conn.twist_reference_a = neighbor_rotation;
                     dup_conn.twist_reference_b = child_b_rotation;
-                    dup_conn.zone_a = conn.zone_a; // Keep neighbor's zone
+                    dup_conn.zone_a = classify_adhesion_zone(neighbor_anchor_to_b, split_dir_local);
                     dup_conn.zone_b = classify_adhesion_zone(child_b_anchor, split_dir_local);
                 }
                 

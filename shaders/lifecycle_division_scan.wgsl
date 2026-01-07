@@ -167,6 +167,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
+    // Count current adhesions (matching reference: adhesionCount >= mode.maxAdhesions check)
+    // If cell already has too many adhesions, it cannot split (splitting creates new sibling adhesion)
+    let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
+    var adhesion_count = 0u;
+    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+        if (cell_adhesion_indices[adhesion_base + i] >= 0) {
+            adhesion_count++;
+        }
+    }
+    
+    // If cell has max adhesions, it cannot split (no room for sibling bond)
+    // Using MAX_ADHESIONS_PER_CELL - 1 to leave room for the new sibling adhesion
+    if (adhesion_count >= MAX_ADHESIONS_PER_CELL) {
+        division_flags[cell_idx] = 0u;
+        return;
+    }
+    
     // === DEFERRAL CHECK ===
     // Check if any neighbor (via adhesion) also wants to divide.
     // If so, the cell with the HIGHER index defers to avoid race conditions
@@ -177,7 +194,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // The other will divide next frame after the adhesion inheritance is complete.
     
     var should_defer = false;
-    let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
+    // Note: adhesion_base already calculated above for adhesion count check
     
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
         let adh_idx_signed = cell_adhesion_indices[adhesion_base + i];
@@ -211,25 +228,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
         
-        // Check if neighbor also wants to divide
-        // We need to check the same criteria we used for ourselves
-        let neighbor_mass = positions_out[neighbor_idx].w;
+        // Check if neighbor is also ready to split (matching reference exactly)
+        // Reference only checks: other.age < otherMode.splitInterval
+        // If neighbor's age >= split_interval, they want to split
         let neighbor_birth_time = birth_times[neighbor_idx];
         let neighbor_split_interval = split_intervals[neighbor_idx];
-        let neighbor_split_mass = split_masses[neighbor_idx];
-        let neighbor_current_splits = split_counts[neighbor_idx];
-        let neighbor_max_split = max_splits[neighbor_idx];
-        
         let neighbor_age = params.current_time - neighbor_birth_time;
-        let neighbor_mass_ready = neighbor_mass >= neighbor_split_mass;
-        let neighbor_time_ready = neighbor_age >= neighbor_split_interval;
-        let neighbor_splits_remaining = neighbor_current_splits < neighbor_max_split || neighbor_max_split == 0u;
         
-        let neighbor_wants_to_divide = neighbor_mass_ready && neighbor_time_ready && neighbor_splits_remaining;
+        // Skip if neighbor is not ready to split (age < split_interval)
+        if (neighbor_age < neighbor_split_interval) {
+            continue;
+        }
         
-        // If neighbor wants to divide AND has a lower index, we defer
-        // Lower index wins - this is deterministic and ensures one cell always proceeds
-        if (neighbor_wants_to_divide && neighbor_idx < cell_idx) {
+        // Neighbor wants to split - compare priority
+        // Lower index = higher priority (lower priority value)
+        // If neighbor has lower index (higher priority), we defer
+        if (neighbor_idx < cell_idx) {
             should_defer = true;
             break;
         }

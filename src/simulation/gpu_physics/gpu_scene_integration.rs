@@ -169,16 +169,15 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(2, &cached_bind_groups.collision_force_accum, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 5: Adhesion physics (64 threads per workgroup)
-        // Each thread handles one adhesion and atomically accumulates forces
+        // Stage 5: Adhesion physics (256 threads per workgroup, per-cell processing)
+        // Each thread handles ONE cell and iterates through its adhesion indices
+        // Forces are applied directly to velocity (no atomic accumulation needed)
         compute_pass.set_pipeline(&pipelines.adhesion_physics);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
         compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
-        compute_pass.set_bind_group(3, &cached_bind_groups.force_accum, &[]);
-        // Dispatch based on adhesion capacity, shader checks actual count
-        let adhesion_workgroups = (MAX_ADHESION_CONNECTIONS + WORKGROUP_SIZE_ADHESION - 1) / WORKGROUP_SIZE_ADHESION;
-        compute_pass.dispatch_workgroups(adhesion_workgroups, 1, 1);
+        // Dispatch based on cell count (per-cell processing)
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
         // Stage 6: Position integration (256 threads)
         // Now reads accumulated forces and applies them with proper integration
