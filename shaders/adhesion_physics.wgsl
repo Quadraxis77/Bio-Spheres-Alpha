@@ -1,7 +1,7 @@
 // Adhesion Physics Compute Shader
 // Processes adhesions PER-CELL (matching reference implementation)
 // Each thread handles ONE cell and iterates through its adhesion indices
-// Forces are applied directly to acceleration (no atomic accumulation needed)
+// Forces are accumulated to atomic force buffers (matching collision detection)
 // Workgroup size: 256 threads for optimal GPU occupancy
 
 struct PhysicsParams {
@@ -99,6 +99,28 @@ var<storage, read_write> rotations_out: array<vec4<f32>>;
 
 @group(2) @binding(3)
 var<storage, read_write> angular_velocities_out: array<vec4<f32>>;
+
+// Force accumulation buffers (group 3) - atomic i32 for multi-adhesion accumulation
+@group(3) @binding(0)
+var<storage, read_write> force_accum_x: array<atomic<i32>>;
+
+@group(3) @binding(1)
+var<storage, read_write> force_accum_y: array<atomic<i32>>;
+
+@group(3) @binding(2)
+var<storage, read_write> force_accum_z: array<atomic<i32>>;
+
+// Torque accumulation buffers - atomic i32 for multi-adhesion accumulation
+@group(3) @binding(3)
+var<storage, read_write> torque_accum_x: array<atomic<i32>>;
+
+@group(3) @binding(4)
+var<storage, read_write> torque_accum_y: array<atomic<i32>>;
+
+@group(3) @binding(5)
+var<storage, read_write> torque_accum_z: array<atomic<i32>>;
+
+const FIXED_POINT_SCALE: f32 = 1000.0;
 
 const PI: f32 = 3.14159265359;
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
@@ -301,32 +323,33 @@ fn compute_adhesion_forces_for_cell(
         torque_b += twist_torque_b + twist_damping_b;
     }
     
-    // Apply tangential forces from torques (matching reference exactly)
-    let force_from_torque_a = cross(-delta_pos, torque_b);
-    let force_from_torque_b = cross(delta_pos, torque_a);
+    // Apply tangential forces from torques
+    // For Newton's third law: force on A must equal -force on B
+    // The reference applies asymmetric forces which violates this
+    // We compute symmetric forces by averaging the torque effects
+    let avg_torque = (torque_a + torque_b) * 0.5;
+    let tangential_force = cross(delta_pos, avg_torque);
     
+    // Cell A gets positive force, Cell B gets negative (equal and opposite)
     if (is_cell_a) {
-        force += force_from_torque_a;
+        force -= tangential_force;
+        torque = torque_a;
     } else {
-        force += force_from_torque_b;
-    }
-    
-    // Angular momentum conservation (matching reference exactly)
-    let torque_a_copy = torque_a;
-    let final_torque_a = torque_a - torque_b;
-    let final_torque_b = torque_b - torque_a_copy;
-    
-    if (is_cell_a) {
-        torque = final_torque_a;
-    } else {
-        torque = final_torque_b;
+        force += tangential_force;
+        torque = torque_b;
     }
     
     return array<vec3<f32>, 2>(force, torque);
 }
 
+// Convert float to fixed-point i32 for atomic accumulation
+fn float_to_fixed(v: f32) -> i32 {
+    return i32(v * FIXED_POINT_SCALE);
+}
+
 // Process adhesions PER-CELL (matching reference implementation)
 // Each thread handles ONE cell and iterates through its adhesion indices
+// Forces are accumulated to atomic buffers (matching collision detection pattern)
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
@@ -449,27 +472,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         total_torque += result[1];
     }
     
-    // Convert force to acceleration (F = ma, so a = F/m)
-    let acceleration = total_force / my_mass;
+    // Clamp forces and torques to prevent instability
+    let max_force = 1000.0;
+    let max_torque = 100.0;
+    let force_mag = length(total_force);
+    let torque_mag = length(total_torque);
     
-    // Convert torque to angular acceleration (τ = Iα, so α = τ/I)
-    // Moment of inertia for sphere: I = 2/5 * m * r^2
-    let moment_of_inertia = 0.4 * my_mass * my_radius * my_radius;
-    var angular_acceleration = vec3<f32>(0.0);
-    if (moment_of_inertia > 0.0001) {
-        angular_acceleration = total_torque / moment_of_inertia;
+    if (force_mag > max_force) {
+        total_force = total_force * (max_force / force_mag);
+    }
+    if (torque_mag > max_torque) {
+        total_torque = total_torque * (max_torque / torque_mag);
     }
     
-    // Read current velocity from output buffer (collision detection may have updated it)
-    let current_vel = velocities_out[cell_idx].xyz;
-    let current_ang_vel = angular_velocities_out[cell_idx].xyz;
+    // Accumulate forces to atomic force buffers (matching collision detection pattern)
+    // Forces will be integrated in position_update shader using Verlet integration
+    atomicAdd(&force_accum_x[cell_idx], float_to_fixed(total_force.x));
+    atomicAdd(&force_accum_y[cell_idx], float_to_fixed(total_force.y));
+    atomicAdd(&force_accum_z[cell_idx], float_to_fixed(total_force.z));
     
-    // Add adhesion acceleration to velocity (simple Euler integration)
-    // This matches the reference which uses: velocity += acceleration * dt
-    let new_vel = current_vel + acceleration * params.delta_time;
-    let new_ang_vel = current_ang_vel + angular_acceleration * params.delta_time;
-    
-    // Write updated velocities
-    velocities_out[cell_idx] = vec4<f32>(new_vel, 0.0);
-    angular_velocities_out[cell_idx] = vec4<f32>(new_ang_vel, 0.0);
+    // Accumulate torques to atomic torque buffers
+    // Torques will be integrated in velocity_update shader
+    atomicAdd(&torque_accum_x[cell_idx], float_to_fixed(total_torque.x));
+    atomicAdd(&torque_accum_y[cell_idx], float_to_fixed(total_torque.y));
+    atomicAdd(&torque_accum_z[cell_idx], float_to_fixed(total_torque.z));
 }

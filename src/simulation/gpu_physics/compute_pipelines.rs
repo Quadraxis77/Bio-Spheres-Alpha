@@ -232,12 +232,12 @@ impl GpuPhysicsPipelines {
             "Mass Accumulation",
         );
         
-        // Create adhesion physics pipeline (per-cell processing, no atomic force accumulation)
+        // Create adhesion physics pipeline (per-cell processing, accumulates to force buffers)
         let adhesion_physics = Self::create_compute_pipeline(
             device,
             include_str!("../../../shaders/adhesion_physics.wgsl"),
             "main",
-            &[&physics_layout, &adhesion_layout, &rotations_layout],
+            &[&physics_layout, &adhesion_layout, &rotations_layout, &force_accum_layout],
             "Adhesion Physics",
         );
         
