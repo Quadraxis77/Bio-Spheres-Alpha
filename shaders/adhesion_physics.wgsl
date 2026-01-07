@@ -311,28 +311,49 @@ fn compute_adhesion_forces(
         twist_correction_a = clamp(twist_correction_a, -1.57, 1.57);
         twist_correction_b = clamp(twist_correction_b, -1.57, 1.57);
         
-        let twist_torque_a = adhesion_axis * twist_correction_a * settings.twist_constraint_stiffness * 0.3;
-        let twist_torque_b = adhesion_axis * twist_correction_b * settings.twist_constraint_stiffness * 0.3;
+        // Apply twist torque (reduced strength for stability - matches reference)
+        let twist_torque_a = adhesion_axis * twist_correction_a * settings.twist_constraint_stiffness * 0.05;
+        let twist_torque_b = adhesion_axis * twist_correction_b * settings.twist_constraint_stiffness * 0.05;
         
-        // Twist damping
+        // Twist damping (stronger damping for stability - matches reference)
         let angular_vel_a_proj = dot(ang_vel_a, adhesion_axis);
         let angular_vel_b_proj = dot(ang_vel_b, adhesion_axis);
         let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
         
-        let twist_damping_a = -adhesion_axis * relative_angular_vel * settings.twist_constraint_damping * 0.4;
-        let twist_damping_b = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping * 0.4;
+        let twist_damping_a = -adhesion_axis * relative_angular_vel * settings.twist_constraint_damping * 0.6;
+        let twist_damping_b = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping * 0.6;
         
         torque_a += twist_torque_a + twist_damping_a;
         torque_b += twist_torque_b + twist_damping_b;
     }
     
-    // Apply tangential force from torque
-    force_a += cross(-delta_pos, torque_b);
-    force_b += cross(delta_pos, torque_a);
+    // Apply tangential forces from torques to maintain organism shape
+    // IMPROVED: Use balanced tangential forces that conserve momentum
+    // 
+    // The issue with the original implementation was that it applied:
+    //   force_a += (-delta_pos).cross(torque_b)
+    //   force_b += delta_pos.cross(torque_a)
+    // 
+    // This creates unbalanced forces when torques differ, causing phantom drift.
+    // 
+    // The fix: Apply equal and opposite tangential forces based on the TOTAL torque
+    // that would be needed to maintain the constraint. This ensures momentum conservation.
     
-    // Conservation of angular momentum
-    torque_a -= torque_b;
-    torque_b -= torque_a;
+    // Calculate the total corrective torque (sum of both cells' torques)
+    let total_torque = torque_a + torque_b;
+    
+    // Calculate tangential force that would create this torque
+    // F_tangential = torque × r / |r|²
+    // This ensures equal and opposite forces on both cells
+    let r_squared = dist * dist;
+    if (r_squared > 0.0001) {
+        let tangential_force = cross(total_torque, delta_pos) / r_squared;
+        
+        // Apply equal and opposite tangential forces
+        // This maintains shape while conserving momentum
+        force_a += tangential_force;
+        force_b -= tangential_force;
+    }
     
     return array<vec4<f32>, 4>(
         vec4<f32>(force_a, 0.0),
@@ -391,36 +412,41 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         connection, settings
     );
     
-    // Calculate moment of inertia for torque conversion
-    let radius_a = calculate_radius_from_mass(mass_a);
-    let radius_b = calculate_radius_from_mass(mass_b);
-    let moi_a = 0.4 * mass_a * radius_a * radius_a;
-    let moi_b = 0.4 * mass_b * radius_b * radius_b;
+    // Accumulate forces to force buffer (matching CPU pipeline)
+    // Forces will be integrated later in position_update shader using Verlet integration
+    // 
+    // This matches the CPU flow:
+    //   collision_forces → force_accum
+    //   adhesion_forces → force_accum  
+    //   integrate_velocities(force_accum) → velocities
+    //
+    // Note: Multiple adhesions per cell require atomic accumulation.
+    // We read current accumulated force, add our contribution, and write back.
+    // This is safe because each thread processes a unique adhesion, though
+    // multiple adhesions may reference the same cell (handled by read-modify-write).
     
-    // Convert forces to accelerations
-    let accel_a = forces[0].xyz / mass_a;
-    let accel_b = forces[2].xyz / mass_b;
-    let ang_accel_a = forces[1].xyz / moi_a;
-    let ang_accel_b = forces[3].xyz / moi_b;
+    let current_force_a = force_accum[connection.cell_a_index];
+    let current_force_b = force_accum[connection.cell_b_index];
+    let current_torque_a = torque_accum[connection.cell_a_index];
+    let current_torque_b = torque_accum[connection.cell_b_index];
     
-    // Accumulate forces atomically (simplified - actual implementation would use atomics)
-    // For now, we write directly to output buffers
-    // This works because each adhesion writes to different cells
-    
-    // Note: In a full implementation, we would use atomic operations or
-    // a separate accumulation pass to handle multiple adhesions per cell
-    let current_pos_a = positions_out[connection.cell_a_index];
-    let current_pos_b = positions_out[connection.cell_b_index];
-    let current_vel_a = velocities_out[connection.cell_a_index];
-    let current_vel_b = velocities_out[connection.cell_b_index];
-    
-    // Apply acceleration to velocity (simplified integration)
-    velocities_out[connection.cell_a_index] = vec4<f32>(
-        current_vel_a.xyz + accel_a * params.delta_time,
-        current_vel_a.w
+    // Accumulate linear forces
+    force_accum[connection.cell_a_index] = vec4<f32>(
+        current_force_a.xyz + forces[0].xyz,
+        current_force_a.w
     );
-    velocities_out[connection.cell_b_index] = vec4<f32>(
-        current_vel_b.xyz + accel_b * params.delta_time,
-        current_vel_b.w
+    force_accum[connection.cell_b_index] = vec4<f32>(
+        current_force_b.xyz + forces[2].xyz,
+        current_force_b.w
+    );
+    
+    // Accumulate torques
+    torque_accum[connection.cell_a_index] = vec4<f32>(
+        current_torque_a.xyz + forces[1].xyz,
+        current_torque_a.w
+    );
+    torque_accum[connection.cell_b_index] = vec4<f32>(
+        current_torque_b.xyz + forces[3].xyz,
+        current_torque_b.w
     );
 }

@@ -77,6 +77,14 @@ pub struct CachedBindGroups {
     pub force_accum: wgpu::BindGroup,
     /// Lifecycle adhesion bind group (same for all frames)
     pub lifecycle_adhesion: wgpu::BindGroup,
+    /// Clear forces bind group (same for all frames)
+    pub clear_forces: wgpu::BindGroup,
+    /// Collision force accum bind group (same for all frames)
+    pub collision_force_accum: wgpu::BindGroup,
+    /// Position update force accum bind group (same for all frames)
+    pub position_update_force_accum: wgpu::BindGroup,
+    /// Velocity update angular bind group (same for all frames)
+    pub velocity_update_angular: wgpu::BindGroup,
 }
 
 /// GPU physics compute pipelines
@@ -84,6 +92,7 @@ pub struct GpuPhysicsPipelines {
     pub spatial_grid_clear: wgpu::ComputePipeline,
     pub spatial_grid_assign: wgpu::ComputePipeline,
     pub spatial_grid_insert: wgpu::ComputePipeline,
+    pub clear_forces: wgpu::ComputePipeline,
     pub collision_detection: wgpu::ComputePipeline,
     pub position_update: wgpu::ComputePipeline,
     pub velocity_update: wgpu::ComputePipeline,
@@ -97,6 +106,9 @@ pub struct GpuPhysicsPipelines {
     pub lifecycle_prefix_sum: wgpu::ComputePipeline,
     pub lifecycle_division_scan: wgpu::ComputePipeline,
     pub lifecycle_division_execute: wgpu::ComputePipeline,
+    
+    // Adhesion cleanup pipeline (runs after death scan)
+    pub adhesion_cleanup: wgpu::ComputePipeline,
     
     // Bind group layouts
     pub physics_layout: wgpu::BindGroupLayout,
@@ -112,6 +124,18 @@ pub struct GpuPhysicsPipelines {
     pub adhesion_layout: wgpu::BindGroupLayout,
     pub force_accum_layout: wgpu::BindGroupLayout,
     pub lifecycle_adhesion_layout: wgpu::BindGroupLayout,
+    
+    // Clear forces bind group layout
+    pub clear_forces_layout: wgpu::BindGroupLayout,
+    
+    // Collision force accum bind group layout (for collision_detection group 2)
+    pub collision_force_accum_layout: wgpu::BindGroupLayout,
+    
+    // Position update force accum bind group layout (for position_update group 2)
+    pub position_update_force_accum_layout: wgpu::BindGroupLayout,
+    
+    // Velocity update angular bind group layout (for velocity_update group 1)
+    pub velocity_update_angular_layout: wgpu::BindGroupLayout,
 }
 
 impl GpuPhysicsPipelines {
@@ -131,6 +155,12 @@ impl GpuPhysicsPipelines {
         let adhesion_layout = Self::create_adhesion_bind_group_layout(device);
         let force_accum_layout = Self::create_force_accum_bind_group_layout(device);
         let lifecycle_adhesion_layout = Self::create_lifecycle_adhesion_bind_group_layout(device);
+        
+        // Create new bind group layouts for force accumulation pipeline
+        let clear_forces_layout = Self::create_clear_forces_bind_group_layout(device);
+        let collision_force_accum_layout = Self::create_collision_force_accum_bind_group_layout(device);
+        let position_update_force_accum_layout = Self::create_position_update_force_accum_bind_group_layout(device);
+        let velocity_update_angular_layout = Self::create_velocity_update_angular_bind_group_layout(device);
         
         // Create compute pipelines
         let spatial_grid_clear = Self::create_compute_pipeline(
@@ -157,11 +187,20 @@ impl GpuPhysicsPipelines {
             "Spatial Grid Insert",
         );
         
+        // Clear forces pipeline (runs before collision and adhesion)
+        let clear_forces = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/clear_forces.wgsl"),
+            "main",
+            &[&physics_layout, &clear_forces_layout],
+            "Clear Forces",
+        );
+        
         let collision_detection = Self::create_compute_pipeline(
             device,
             include_str!("../../../shaders/collision_detection.wgsl"),
             "main",
-            &[&physics_layout, &spatial_grid_layout],
+            &[&physics_layout, &spatial_grid_layout, &collision_force_accum_layout],
             "Collision Detection",
         );
         
@@ -169,7 +208,7 @@ impl GpuPhysicsPipelines {
             device,
             include_str!("../../../shaders/position_update.wgsl"),
             "main",
-            &[&physics_layout, &position_update_rotations_layout],
+            &[&physics_layout, &position_update_rotations_layout, &position_update_force_accum_layout],
             "Position Update",
         );
         
@@ -177,7 +216,7 @@ impl GpuPhysicsPipelines {
             device,
             include_str!("../../../shaders/velocity_update.wgsl"),
             "main",
-            &[&physics_layout],
+            &[&physics_layout, &velocity_update_angular_layout],
             "Velocity Update",
         );
         
@@ -231,10 +270,20 @@ impl GpuPhysicsPipelines {
             "Lifecycle Division Execute",
         );
         
+        // Adhesion cleanup pipeline (runs after death scan, before prefix sum)
+        let adhesion_cleanup = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/adhesion_cleanup.wgsl"),
+            "main",
+            &[&physics_layout, &lifecycle_layout, &lifecycle_adhesion_layout],
+            "Adhesion Cleanup",
+        );
+        
         Self {
             spatial_grid_clear,
             spatial_grid_assign,
             spatial_grid_insert,
+            clear_forces,
             collision_detection,
             position_update,
             velocity_update,
@@ -244,6 +293,7 @@ impl GpuPhysicsPipelines {
             lifecycle_prefix_sum,
             lifecycle_division_scan,
             lifecycle_division_execute,
+            adhesion_cleanup,
             physics_layout,
             spatial_grid_layout,
             lifecycle_layout,
@@ -255,6 +305,10 @@ impl GpuPhysicsPipelines {
             adhesion_layout,
             force_accum_layout,
             lifecycle_adhesion_layout,
+            clear_forces_layout,
+            collision_force_accum_layout,
+            position_update_force_accum_layout,
+            velocity_update_angular_layout,
         }
     }
     
@@ -599,7 +653,19 @@ impl GpuPhysicsPipelines {
         let force_accum = self.create_force_accum_bind_group(device, adhesion_buffers);
         
         // Lifecycle adhesion bind group (same for all frames)
-        let lifecycle_adhesion = self.create_lifecycle_adhesion_bind_group(device, adhesion_buffers);
+        let lifecycle_adhesion = self.create_lifecycle_adhesion_bind_group(device, adhesion_buffers, buffers);
+        
+        // Clear forces bind group (same for all frames)
+        let clear_forces = self.create_clear_forces_bind_group(device, adhesion_buffers);
+        
+        // Collision force accum bind group (same for all frames)
+        let collision_force_accum = self.create_collision_force_accum_bind_group(device, adhesion_buffers);
+        
+        // Position update force accum bind group (same for all frames)
+        let position_update_force_accum = self.create_position_update_force_accum_bind_group(device, adhesion_buffers, buffers);
+        
+        // Velocity update angular bind group (same for all frames)
+        let velocity_update_angular = self.create_velocity_update_angular_bind_group(device, adhesion_buffers, buffers);
         
         CachedBindGroups {
             physics,
@@ -613,6 +679,10 @@ impl GpuPhysicsPipelines {
             adhesion,
             force_accum,
             lifecycle_adhesion,
+            clear_forces,
+            collision_force_accum,
+            position_update_force_accum,
+            velocity_update_angular,
         }
     }
     
@@ -1388,6 +1458,28 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 4: Child A keep adhesion flags (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: Child B keep adhesion flags (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -1445,6 +1537,7 @@ impl GpuPhysicsPipelines {
         &self,
         device: &wgpu::Device,
         adhesion_buffers: &super::AdhesionBuffers,
+        triple_buffers: &GpuTripleBufferSystem,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Lifecycle Adhesion Bind Group"),
@@ -1465,6 +1558,228 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: adhesion_buffers.free_adhesion_slots.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: triple_buffers.child_a_keep_adhesion_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: triple_buffers.child_b_keep_adhesion_flags.as_entire_binding(),
+                },
+            ],
+        })
+    }
+    
+    /// Create clear forces bind group layout (Group 1 in clear_forces shader)
+    fn create_clear_forces_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Clear Forces Bind Group Layout"),
+            entries: &[
+                // Binding 0: Force accumulation buffer (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Torque accumulation buffer (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create collision force accum bind group layout (Group 2 in collision_detection shader)
+    fn create_collision_force_accum_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Collision Force Accum Bind Group Layout"),
+            entries: &[
+                // Binding 0: Force accumulation buffer (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create position update force accum bind group layout (Group 2 in position_update shader)
+    fn create_position_update_force_accum_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Position Update Force Accum Bind Group Layout"),
+            entries: &[
+                // Binding 0: Force accumulation buffer (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Previous accelerations buffer (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create velocity update angular bind group layout (Group 1 in velocity_update shader)
+    fn create_velocity_update_angular_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Velocity Update Angular Bind Group Layout"),
+            entries: &[
+                // Binding 0: Torque accumulation buffer (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Angular velocities buffer (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Rotations buffer (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create clear forces bind group (Group 1 in clear_forces shader)
+    fn create_clear_forces_bind_group(
+        &self,
+        device: &wgpu::Device,
+        adhesion_buffers: &super::AdhesionBuffers,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Clear Forces Bind Group"),
+            layout: &self.clear_forces_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: adhesion_buffers.force_accum.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: adhesion_buffers.torque_accum.as_entire_binding(),
+                },
+            ],
+        })
+    }
+    
+    /// Create collision force accum bind group (Group 2 in collision_detection shader)
+    fn create_collision_force_accum_bind_group(
+        &self,
+        device: &wgpu::Device,
+        adhesion_buffers: &super::AdhesionBuffers,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Collision Force Accum Bind Group"),
+            layout: &self.collision_force_accum_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: adhesion_buffers.force_accum.as_entire_binding(),
+                },
+            ],
+        })
+    }
+    
+    /// Create position update force accum bind group (Group 2 in position_update shader)
+    fn create_position_update_force_accum_bind_group(
+        &self,
+        device: &wgpu::Device,
+        adhesion_buffers: &super::AdhesionBuffers,
+        triple_buffers: &GpuTripleBufferSystem,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Position Update Force Accum Bind Group"),
+            layout: &self.position_update_force_accum_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: adhesion_buffers.force_accum.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: triple_buffers.prev_accelerations.as_entire_binding(),
+                },
+            ],
+        })
+    }
+    
+    /// Create velocity update angular bind group (Group 1 in velocity_update shader)
+    fn create_velocity_update_angular_bind_group(
+        &self,
+        device: &wgpu::Device,
+        adhesion_buffers: &super::AdhesionBuffers,
+        triple_buffers: &GpuTripleBufferSystem,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Velocity Update Angular Bind Group"),
+            layout: &self.velocity_update_angular_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: adhesion_buffers.torque_accum.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: adhesion_buffers.angular_velocities[0].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: triple_buffers.rotations[0].as_entire_binding(),
                 },
             ],
         })

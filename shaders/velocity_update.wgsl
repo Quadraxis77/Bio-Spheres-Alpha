@@ -1,4 +1,6 @@
-// Stage 6: Velocity integration with damping
+// Stage 7: Angular velocity integration
+// Linear velocity is now handled in position_update with Verlet integration
+// This shader handles angular velocity damping and rotation integration
 // Workgroup size: 256 threads for optimal GPU occupancy
 
 struct PhysicsParams {
@@ -39,6 +41,33 @@ var<storage, read_write> velocities_out: array<vec4<f32>>;
 @group(0) @binding(5)
 var<storage, read_write> cell_count_buffer: array<u32>;
 
+// Torque accumulation and angular velocities (group 1)
+@group(1) @binding(0)
+var<storage, read> torque_accum: array<vec4<f32>>;
+
+@group(1) @binding(1)
+var<storage, read_write> angular_velocities: array<vec4<f32>>;
+
+@group(1) @binding(2)
+var<storage, read_write> rotations: array<vec4<f32>>;
+
+const PI: f32 = 3.14159265359;
+
+fn calculate_radius_from_mass(mass: f32) -> f32 {
+    let volume = mass / 1.0;
+    return pow(volume * 3.0 / (4.0 * PI), 1.0 / 3.0);
+}
+
+// Quaternion multiplication
+fn quat_multiply(q1: vec4<f32>, q2: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(
+        q1.w * q2.x + q1.x * q2.w + q1.y * q2.z - q1.z * q2.y,
+        q1.w * q2.y - q1.x * q2.z + q1.y * q2.w + q1.z * q2.x,
+        q1.w * q2.z + q1.x * q2.y - q1.y * q2.x + q1.z * q2.w,
+        q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z
+    );
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
@@ -48,21 +77,48 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    let vel = velocities_out[cell_idx].xyz;
+    let mass = positions_out[cell_idx].w;
+    let radius = calculate_radius_from_mass(mass);
     
-    // Apply velocity damping
-    let damping_factor = pow(params.acceleration_damping, params.delta_time * 100.0);
-    let new_vel = vel * damping_factor;
+    // Read accumulated torque from adhesion physics
+    let torque = torque_accum[cell_idx].xyz;
     
-    // Clamp velocity to prevent instability
-    let max_speed = 100.0;
-    let speed = length(new_vel);
-    var final_vel = new_vel;
+    // Calculate moment of inertia (solid sphere: I = 2/5 * m * r^2)
+    let moment_of_inertia = 0.4 * mass * radius * radius;
     
-    if (speed > max_speed) {
-        final_vel = normalize(new_vel) * max_speed;
+    // Calculate angular acceleration from torque
+    var angular_acceleration = vec3<f32>(0.0);
+    if (moment_of_inertia > 0.0001) {
+        angular_acceleration = torque / moment_of_inertia;
     }
     
-    // Write updated velocity
-    velocities_out[cell_idx] = vec4<f32>(final_vel, 0.0);
+    // Read current angular velocity
+    let ang_vel = angular_velocities[cell_idx].xyz;
+    
+    // Apply angular damping (matching CPU: damping^(dt*100))
+    let angular_damping_factor = pow(params.acceleration_damping, params.delta_time * 100.0);
+    let new_ang_vel = (ang_vel + angular_acceleration * params.delta_time) * angular_damping_factor;
+    
+    // Write updated angular velocity
+    angular_velocities[cell_idx] = vec4<f32>(new_ang_vel, 0.0);
+    
+    // Integrate rotation using angular velocity
+    let ang_vel_mag = length(new_ang_vel);
+    if (ang_vel_mag > 0.0001) {
+        let angle = ang_vel_mag * params.delta_time;
+        let axis = new_ang_vel / ang_vel_mag;
+        
+        // Create rotation quaternion from axis-angle
+        let half_angle = angle * 0.5;
+        let sin_half = sin(half_angle);
+        let cos_half = cos(half_angle);
+        let delta_rotation = vec4<f32>(axis * sin_half, cos_half);
+        
+        // Apply rotation: new_rot = delta_rot * current_rot
+        let current_rot = rotations[cell_idx];
+        let new_rot = quat_multiply(delta_rotation, current_rot);
+        
+        // Normalize to prevent drift
+        rotations[cell_idx] = normalize(new_rot);
+    }
 }

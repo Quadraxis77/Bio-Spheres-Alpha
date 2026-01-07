@@ -73,6 +73,10 @@ var<storage, read_write> spatial_grid_cells: array<u32>;
 @group(1) @binding(4)
 var<storage, read> stiffnesses: array<f32>;
 
+// Force accumulation buffer (group 2)
+@group(2) @binding(0)
+var<storage, read_write> force_accum: array<vec4<f32>>;
+
 const GRID_RESOLUTION: i32 = 64;
 const MAX_CELLS_PER_GRID: u32 = 16u;
 const PI: f32 = 3.14159265359;
@@ -212,11 +216,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // No gravity in this simulation (cells float in fluid)
     // force.y -= params.gravity * mass;
     
-    // Calculate new velocity from force
-    let acceleration = force / mass;
-    let new_vel = vel + acceleration * params.delta_time * params.acceleration_damping;
+    // Accumulate forces to force buffer (matching CPU pipeline)
+    // Forces will be integrated later in position_update shader using Verlet integration
+    // This ensures collision and adhesion forces are combined before integration
+    let current_force = force_accum[cell_idx];
+    force_accum[cell_idx] = vec4<f32>(current_force.xyz + force, current_force.w);
     
-    // Write to output buffers
+    // Copy position and velocity to output (no modification here)
+    // Velocity will be updated in position_update after all forces are accumulated
     positions_out[cell_idx] = vec4<f32>(pos, mass);
-    velocities_out[cell_idx] = vec4<f32>(new_vel, 0.0);
+    velocities_out[cell_idx] = vec4<f32>(vel, 0.0);
 }

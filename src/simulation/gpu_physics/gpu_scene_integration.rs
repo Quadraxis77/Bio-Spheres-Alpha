@@ -13,10 +13,11 @@
 //! 8. Mass accumulation - mass increase based on nutrient_gain_rate
 //! 
 //! ## Lifecycle Pipeline (128-thread workgroups)
-//! 8. Death scan - identify dead cells
-//! 9. Prefix sum - compact free slots
-//! 10. Division scan - identify dividing cells
-//! 11. Division execute - create child cells
+//! 1. Death scan - identify dead cells
+//! 1.5. Adhesion cleanup - remove adhesions for dead cells, update per-cell indices
+//! 2. Prefix sum - compact free slots
+//! 3. Division scan - identify dividing cells
+//! 4. Division execute - create child cells
 //! 
 //! ## Performance Optimizations
 //! - Unified 256-thread workgroups (8 warps = optimal GPU scheduling)
@@ -147,13 +148,23 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
+        // Stage 3.5: Clear force accumulators (256 threads)
+        // Must run before collision detection and adhesion physics
+        compute_pass.set_pipeline(&pipelines.clear_forces);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.clear_forces, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        
         // Stage 4: Collision detection (256 threads - optimized with pre-computed neighbors)
+        // Now accumulates forces to force_accum instead of applying directly
         compute_pass.set_pipeline(&pipelines.collision_detection);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.collision_force_accum, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
         // Stage 5: Adhesion physics (256 threads - dispatch based on adhesion count)
+        // Now accumulates forces to force_accum instead of applying directly
         compute_pass.set_pipeline(&pipelines.adhesion_physics);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
@@ -164,14 +175,18 @@ pub fn execute_gpu_physics_step(
         compute_pass.dispatch_workgroups(adhesion_workgroups, 1, 1);
         
         // Stage 6: Position integration (256 threads)
+        // Now reads accumulated forces and applies them with proper integration
         compute_pass.set_pipeline(&pipelines.position_update);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, position_update_rotations_bind_group, &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.position_update_force_accum, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 7: Velocity integration (256 threads)
+        // Stage 7: Angular velocity integration (256 threads)
+        // Applies accumulated torques to angular velocities and rotations
         compute_pass.set_pipeline(&pipelines.velocity_update);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.velocity_update_angular, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
         // Stage 8: Mass accumulation (256 threads)
@@ -217,6 +232,17 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
+        
+        // Stage 1.5: Adhesion cleanup - remove adhesions for dead cells (128 threads)
+        // This must run after death scan so we know which cells are dead
+        // and before prefix sum so freed adhesion slots can be reused
+        compute_pass.set_pipeline(&pipelines.adhesion_cleanup);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.lifecycle_adhesion, &[]);
+        // Dispatch based on adhesion capacity, shader checks actual count
+        let adhesion_workgroups = (100_000 + WORKGROUP_SIZE_LIFECYCLE - 1) / WORKGROUP_SIZE_LIFECYCLE;
+        compute_pass.dispatch_workgroups(adhesion_workgroups, 1, 1);
         
         // Stage 2: Prefix sum - compact free slots (128 threads)
         compute_pass.set_pipeline(&pipelines.lifecycle_prefix_sum);

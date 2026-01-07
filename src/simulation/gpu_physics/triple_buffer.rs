@@ -187,6 +187,10 @@ pub struct GpuTripleBufferSystem {
     /// Cell rotations: Vec4(x, y, z, w) quaternion - triple buffered
     pub rotations: [wgpu::Buffer; 3],
     
+    /// Previous frame accelerations for Verlet integration: Vec4(x, y, z, padding)
+    /// Used to compute velocity_change = 0.5 * (old_accel + new_accel) * dt
+    pub prev_accelerations: wgpu::Buffer,
+    
     /// Spatial grid cell counts (64³ = 262,144 grid cells)
     /// spatial_grid_counts[grid_idx] = number of cells in that grid cell
     pub spatial_grid_counts: wgpu::Buffer,
@@ -278,6 +282,14 @@ pub struct GpuTripleBufferSystem {
     /// Stores whether each mode allows sibling adhesion creation during division
     pub parent_make_adhesion_flags: wgpu::Buffer,
     
+    /// Child A keep adhesion flags buffer (one u32 per mode)
+    /// Stores whether Child A should inherit adhesions during division
+    pub child_a_keep_adhesion_flags: wgpu::Buffer,
+    
+    /// Child B keep adhesion flags buffer (one u32 per mode)
+    /// Stores whether Child B should inherit adhesions during division
+    pub child_b_keep_adhesion_flags: wgpu::Buffer,
+    
     /// Current buffer index (atomic for lock-free rotation)
     current_index: AtomicUsize,
     
@@ -329,6 +341,9 @@ impl GpuTripleBufferSystem {
             Self::create_storage_buffer(device, buffer_size, "Rotations Buffer 1"),
             Self::create_storage_buffer(device, buffer_size, "Rotations Buffer 2"),
         ];
+        
+        // Previous accelerations for Verlet integration (single buffer, not triple buffered)
+        let prev_accelerations = Self::create_storage_buffer(device, buffer_size, "Previous Accelerations");
         
         // Create spatial grid buffers (64³ = 262,144 grid cells)
         let grid_size = 64 * 64 * 64;
@@ -411,10 +426,17 @@ impl GpuTripleBufferSystem {
         // Parent make adhesion flags: one u32 per mode
         let parent_make_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Parent Make Adhesion Flags");
         
+        // Child A keep adhesion flags: one u32 per mode
+        let child_a_keep_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Child A Keep Adhesion Flags");
+        
+        // Child B keep adhesion flags: one u32 per mode
+        let child_b_keep_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Child B Keep Adhesion Flags");
+        
         Self {
             position_and_mass,
             velocity,
             rotations,
+            prev_accelerations,
             spatial_grid_counts,
             spatial_grid_offsets,
             spatial_grid_cells,
@@ -441,6 +463,8 @@ impl GpuTripleBufferSystem {
             cell_count_staging,
             genome_mode_data,
             parent_make_adhesion_flags,
+            child_a_keep_adhesion_flags,
+            child_b_keep_adhesion_flags,
             current_index: AtomicUsize::new(0),
             capacity,
             needs_sync: true,
@@ -674,6 +698,24 @@ impl GpuTripleBufferSystem {
         
         if !flags_data.is_empty() {
             queue.write_buffer(&self.parent_make_adhesion_flags, 0, bytemuck::cast_slice(&flags_data));
+        }
+    }
+    
+    /// Sync child keep adhesion flags for division shader (zone-based inheritance)
+    pub fn sync_child_keep_adhesion_flags(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let mut child_a_flags: Vec<u32> = Vec::new();
+        let mut child_b_flags: Vec<u32> = Vec::new();
+        
+        for genome in genomes {
+            for mode in &genome.modes {
+                child_a_flags.push(if mode.child_a.keep_adhesion { 1 } else { 0 });
+                child_b_flags.push(if mode.child_b.keep_adhesion { 1 } else { 0 });
+            }
+        }
+        
+        if !child_a_flags.is_empty() {
+            queue.write_buffer(&self.child_a_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_a_flags));
+            queue.write_buffer(&self.child_b_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_b_flags));
         }
     }
     
