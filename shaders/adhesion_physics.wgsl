@@ -100,12 +100,24 @@ var<storage, read> rotations_in: array<vec4<f32>>;
 @group(2) @binding(1)
 var<storage, read> angular_velocities: array<vec4<f32>>;
 
-// Force accumulation buffers (group 3)
+// Force accumulation buffers (group 3) - using atomic for multi-adhesion accumulation
 @group(3) @binding(0)
-var<storage, read_write> force_accum: array<vec4<f32>>;
+var<storage, read_write> force_accum_x: array<atomic<i32>>;
 
 @group(3) @binding(1)
-var<storage, read_write> torque_accum: array<vec4<f32>>;
+var<storage, read_write> force_accum_y: array<atomic<i32>>;
+
+@group(3) @binding(2)
+var<storage, read_write> force_accum_z: array<atomic<i32>>;
+
+@group(3) @binding(3)
+var<storage, read_write> torque_accum_x: array<atomic<i32>>;
+
+@group(3) @binding(4)
+var<storage, read_write> torque_accum_y: array<atomic<i32>>;
+
+@group(3) @binding(5)
+var<storage, read_write> torque_accum_z: array<atomic<i32>>;
 
 const PI: f32 = 3.14159265359;
 
@@ -363,17 +375,41 @@ fn compute_adhesion_forces(
     );
 }
 
-@compute @workgroup_size(256)
+// Fixed-point scale for atomic accumulation (allows ~0.001 precision)
+const FIXED_POINT_SCALE: f32 = 1000.0;
+
+// Convert float to fixed-point i32 for atomic operations
+fn float_to_fixed(v: f32) -> i32 {
+    return i32(v * FIXED_POINT_SCALE);
+}
+
+// Atomically add force to a cell's accumulator
+fn atomic_add_force(cell_idx: u32, force: vec3<f32>) {
+    atomicAdd(&force_accum_x[cell_idx], float_to_fixed(force.x));
+    atomicAdd(&force_accum_y[cell_idx], float_to_fixed(force.y));
+    atomicAdd(&force_accum_z[cell_idx], float_to_fixed(force.z));
+}
+
+// Atomically add torque to a cell's accumulator
+fn atomic_add_torque(cell_idx: u32, torque: vec3<f32>) {
+    atomicAdd(&torque_accum_x[cell_idx], float_to_fixed(torque.x));
+    atomicAdd(&torque_accum_y[cell_idx], float_to_fixed(torque.y));
+    atomicAdd(&torque_accum_z[cell_idx], float_to_fixed(torque.z));
+}
+
+// Process adhesions PER-ADHESION with atomic accumulation
+// Each thread handles ONE adhesion and atomically adds forces to both cells
+// This allows multiple adhesions per cell without race conditions
+@compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let adhesion_idx = global_id.x;
     
-    // Get total adhesion count
-    let total_adhesions = adhesion_counts[0];
-    if (adhesion_idx >= total_adhesions) {
+    // Get adhesion count from adhesion_counts[0]
+    let adhesion_count = adhesion_counts[0];
+    if (adhesion_idx >= adhesion_count) {
         return;
     }
     
-    // Load connection
     let connection = adhesion_connections[adhesion_idx];
     
     // Skip inactive connections
@@ -381,72 +417,45 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Validate cell indices
+    let cell_a_idx = connection.cell_a_index;
+    let cell_b_idx = connection.cell_b_index;
+    
+    // Get cell count for validation
     let cell_count = cell_count_buffer[0];
-    if (connection.cell_a_index >= cell_count || connection.cell_b_index >= cell_count) {
+    if (cell_a_idx >= cell_count || cell_b_idx >= cell_count) {
         return;
     }
     
-    // Load cell data
-    let pos_a = positions_in[connection.cell_a_index].xyz;
-    let mass_a = positions_in[connection.cell_a_index].w;
-    let pos_b = positions_in[connection.cell_b_index].xyz;
-    let mass_b = positions_in[connection.cell_b_index].w;
+    // Load cell A data
+    let pos_a = positions_in[cell_a_idx].xyz;
+    let mass_a = positions_in[cell_a_idx].w;
+    let vel_a = velocities_in[cell_a_idx].xyz;
+    let rot_a = rotations_in[cell_a_idx];
+    let ang_vel_a = angular_velocities[cell_a_idx].xyz;
     
-    let vel_a = velocities_in[connection.cell_a_index].xyz;
-    let vel_b = velocities_in[connection.cell_b_index].xyz;
-    
-    let rot_a = rotations_in[connection.cell_a_index];
-    let rot_b = rotations_in[connection.cell_b_index];
-    
-    let ang_vel_a = angular_velocities[connection.cell_a_index].xyz;
-    let ang_vel_b = angular_velocities[connection.cell_b_index].xyz;
+    // Load cell B data
+    let pos_b = positions_in[cell_b_idx].xyz;
+    let mass_b = positions_in[cell_b_idx].w;
+    let vel_b = velocities_in[cell_b_idx].xyz;
+    let rot_b = rotations_in[cell_b_idx];
+    let ang_vel_b = angular_velocities[cell_b_idx].xyz;
     
     // Load adhesion settings for this mode
     let settings = adhesion_settings[connection.mode_index];
     
-    // Compute forces
+    // Compute forces for both cells
     let forces = compute_adhesion_forces(
         pos_a, pos_b, vel_a, vel_b, mass_a, mass_b,
         rot_a, rot_b, ang_vel_a, ang_vel_b,
         connection, settings
     );
     
-    // Accumulate forces to force buffer (matching CPU pipeline)
-    // Forces will be integrated later in position_update shader using Verlet integration
-    // 
-    // This matches the CPU flow:
-    //   collision_forces → force_accum
-    //   adhesion_forces → force_accum  
-    //   integrate_velocities(force_accum) → velocities
-    //
-    // Note: Multiple adhesions per cell require atomic accumulation.
-    // We read current accumulated force, add our contribution, and write back.
-    // This is safe because each thread processes a unique adhesion, though
-    // multiple adhesions may reference the same cell (handled by read-modify-write).
+    // forces[0] = force on cell A, forces[1] = torque on cell A
+    // forces[2] = force on cell B, forces[3] = torque on cell B
     
-    let current_force_a = force_accum[connection.cell_a_index];
-    let current_force_b = force_accum[connection.cell_b_index];
-    let current_torque_a = torque_accum[connection.cell_a_index];
-    let current_torque_b = torque_accum[connection.cell_b_index];
-    
-    // Accumulate linear forces
-    force_accum[connection.cell_a_index] = vec4<f32>(
-        current_force_a.xyz + forces[0].xyz,
-        current_force_a.w
-    );
-    force_accum[connection.cell_b_index] = vec4<f32>(
-        current_force_b.xyz + forces[2].xyz,
-        current_force_b.w
-    );
-    
-    // Accumulate torques
-    torque_accum[connection.cell_a_index] = vec4<f32>(
-        current_torque_a.xyz + forces[1].xyz,
-        current_torque_a.w
-    );
-    torque_accum[connection.cell_b_index] = vec4<f32>(
-        current_torque_b.xyz + forces[3].xyz,
-        current_torque_b.w
-    );
+    // Atomically accumulate forces to both cells
+    atomic_add_force(cell_a_idx, forces[0].xyz);
+    atomic_add_torque(cell_a_idx, forces[1].xyz);
+    atomic_add_force(cell_b_idx, forces[2].xyz);
+    atomic_add_torque(cell_b_idx, forces[3].xyz);
 }

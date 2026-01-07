@@ -73,13 +73,20 @@ var<storage, read_write> spatial_grid_cells: array<u32>;
 @group(1) @binding(4)
 var<storage, read> stiffnesses: array<f32>;
 
-// Force accumulation buffer (group 2)
+// Force accumulation buffers (group 2) - atomic i32 for multi-adhesion accumulation
 @group(2) @binding(0)
-var<storage, read_write> force_accum: array<vec4<f32>>;
+var<storage, read_write> force_accum_x: array<atomic<i32>>;
+
+@group(2) @binding(1)
+var<storage, read_write> force_accum_y: array<atomic<i32>>;
+
+@group(2) @binding(2)
+var<storage, read_write> force_accum_z: array<atomic<i32>>;
 
 const GRID_RESOLUTION: i32 = 64;
 const MAX_CELLS_PER_GRID: u32 = 16u;
 const PI: f32 = 3.14159265359;
+const FIXED_POINT_SCALE: f32 = 1000.0;
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     let volume = mass / 1.0;
@@ -216,11 +223,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // No gravity in this simulation (cells float in fluid)
     // force.y -= params.gravity * mass;
     
-    // Accumulate forces to force buffer (matching CPU pipeline)
+    // Accumulate forces to force buffer using atomics (matching CPU pipeline)
     // Forces will be integrated later in position_update shader using Verlet integration
     // This ensures collision and adhesion forces are combined before integration
-    let current_force = force_accum[cell_idx];
-    force_accum[cell_idx] = vec4<f32>(current_force.xyz + force, current_force.w);
+    atomicAdd(&force_accum_x[cell_idx], i32(force.x * FIXED_POINT_SCALE));
+    atomicAdd(&force_accum_y[cell_idx], i32(force.y * FIXED_POINT_SCALE));
+    atomicAdd(&force_accum_z[cell_idx], i32(force.z * FIXED_POINT_SCALE));
     
     // Copy position and velocity to output (no modification here)
     // Velocity will be updated in position_update after all forces are accumulated

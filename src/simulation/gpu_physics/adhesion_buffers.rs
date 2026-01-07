@@ -46,11 +46,23 @@ pub struct AdhesionBuffers {
     /// Angular velocities for torque calculations (triple buffered)
     pub angular_velocities: [wgpu::Buffer; 3],
     
-    /// Force accumulation buffer (for multi-adhesion cells)
-    pub force_accum: wgpu::Buffer,
+    /// Force accumulation X component (atomic i32, fixed-point scaled)
+    pub force_accum_x: wgpu::Buffer,
     
-    /// Torque accumulation buffer (for multi-adhesion cells)
-    pub torque_accum: wgpu::Buffer,
+    /// Force accumulation Y component (atomic i32, fixed-point scaled)
+    pub force_accum_y: wgpu::Buffer,
+    
+    /// Force accumulation Z component (atomic i32, fixed-point scaled)
+    pub force_accum_z: wgpu::Buffer,
+    
+    /// Torque accumulation X component (atomic i32, fixed-point scaled)
+    pub torque_accum_x: wgpu::Buffer,
+    
+    /// Torque accumulation Y component (atomic i32, fixed-point scaled)
+    pub torque_accum_y: wgpu::Buffer,
+    
+    /// Torque accumulation Z component (atomic i32, fixed-point scaled)
+    pub torque_accum_z: wgpu::Buffer,
     
     /// Maximum adhesion connections
     pub max_connections: u32,
@@ -122,18 +134,15 @@ impl AdhesionBuffers {
             Self::create_storage_buffer(device, buffer_size, "Angular Velocities 2"),
         ];
         
-        // Force/torque accumulation buffers
-        let force_accum = Self::create_storage_buffer(
-            device,
-            cell_capacity as u64 * 16,
-            "Force Accumulation",
-        );
-        
-        let torque_accum = Self::create_storage_buffer(
-            device,
-            cell_capacity as u64 * 16,
-            "Torque Accumulation",
-        );
+        // Force/torque accumulation buffers (atomic i32 per component)
+        // Each buffer is cell_capacity * 4 bytes (one i32 per cell)
+        let atomic_buffer_size = cell_capacity as u64 * 4;
+        let force_accum_x = Self::create_storage_buffer(device, atomic_buffer_size, "Force Accum X");
+        let force_accum_y = Self::create_storage_buffer(device, atomic_buffer_size, "Force Accum Y");
+        let force_accum_z = Self::create_storage_buffer(device, atomic_buffer_size, "Force Accum Z");
+        let torque_accum_x = Self::create_storage_buffer(device, atomic_buffer_size, "Torque Accum X");
+        let torque_accum_y = Self::create_storage_buffer(device, atomic_buffer_size, "Torque Accum Y");
+        let torque_accum_z = Self::create_storage_buffer(device, atomic_buffer_size, "Torque Accum Z");
         
         // Initialize CPU-side caches
         let connections_cache = vec![GpuAdhesionConnection::inactive(); max_connections as usize];
@@ -146,8 +155,12 @@ impl AdhesionBuffers {
             adhesion_counts,
             free_adhesion_slots,
             angular_velocities,
-            force_accum,
-            torque_accum,
+            force_accum_x,
+            force_accum_y,
+            force_accum_z,
+            torque_accum_x,
+            torque_accum_y,
+            torque_accum_z,
             max_connections,
             cell_capacity,
             max_modes,

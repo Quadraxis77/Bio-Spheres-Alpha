@@ -4,7 +4,7 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CellRenderer, CullingMode, HizGenerator, InstanceBuilder};
+use crate::rendering::{CellRenderer, CullingMode, GpuAdhesionLineRenderer, HizGenerator, InstanceBuilder};
 use crate::scene::Scene;
 use crate::simulation::{CanonicalState, PhysicsConfig};
 use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers};
@@ -20,6 +20,8 @@ pub struct GpuScene {
     pub canonical_state: CanonicalState,
     /// Cell renderer for visualization
     pub renderer: CellRenderer,
+    /// GPU-based adhesion line renderer (reads directly from GPU buffers)
+    pub adhesion_renderer: GpuAdhesionLineRenderer,
     /// GPU instance builder with frustum and occlusion culling
     pub instance_builder: InstanceBuilder,
     /// Hi-Z generator for occlusion culling
@@ -52,6 +54,8 @@ pub struct GpuScene {
     readbacks_enabled: bool,
     /// Time scale multiplier (1.0 = normal, 2.0 = 2x speed)
     pub time_scale: f32,
+    /// Whether to show adhesion lines
+    pub show_adhesion_lines: bool,
     /// DEBUG: Track frames since last insertion for debugging
     debug_frames_since_insertion: u32,
     /// DEBUG: Last known cell count for detecting drops
@@ -73,6 +77,10 @@ impl GpuScene {
         let config = PhysicsConfig::default();
 
         let renderer = CellRenderer::new(device, queue, surface_config, capacity as usize);
+        
+        // Create GPU adhesion line renderer
+        let max_adhesions: u32 = 100_000; // Match MAX_ADHESION_CONNECTIONS
+        let adhesion_renderer = GpuAdhesionLineRenderer::new(device, surface_config, max_adhesions);
         
         // Create instance builder - culling mode will be set per-frame in render()
         let instance_builder = InstanceBuilder::new(device, capacity as usize);
@@ -98,6 +106,7 @@ impl GpuScene {
         Self {
             canonical_state,
             renderer,
+            adhesion_renderer,
             instance_builder,
             hiz_generator,
             gpu_physics_pipelines,
@@ -114,6 +123,7 @@ impl GpuScene {
             first_frame: true,
             readbacks_enabled: true,
             time_scale: 1.0,
+            show_adhesion_lines: true, // Enable by default
             debug_frames_since_insertion: u32::MAX, // Start high so we don't log on startup
             debug_last_cell_count: 0,
             debug_frame_counter: 0,
@@ -954,6 +964,50 @@ impl Scene for GpuScene {
             self.current_time,
         );
 
+        // Render adhesion lines if enabled
+        if self.show_adhesion_lines {
+            // Create bind group with current output buffer (physics results)
+            let output_idx = self.gpu_triple_buffers.output_buffer_index();
+            let adhesion_data_bind_group = self.adhesion_renderer.create_data_bind_group(
+                device,
+                &self.gpu_triple_buffers.position_and_mass[output_idx],
+                &self.adhesion_buffers.adhesion_connections,
+                &self.adhesion_buffers.adhesion_counts,
+                &self.gpu_triple_buffers.cell_count_buffer,
+            );
+            
+            let mut adhesion_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("GPU Adhesion Lines Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // Preserve cell rendering
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.renderer.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // Use existing depth for occlusion
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            self.adhesion_renderer.render_in_pass(
+                &mut adhesion_pass,
+                queue,
+                &adhesion_data_bind_group,
+                self.camera.position(),
+                self.camera.rotation,
+            );
+        }
+
         // Generate Hi-Z from depth buffer for next frame's occlusion culling
         // Skip if no cells (nothing to cull) or culling is disabled
         if self.canonical_state.cell_count > 0 && self.instance_builder.culling_mode() != CullingMode::Disabled {
@@ -979,6 +1033,7 @@ impl Scene for GpuScene {
 
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         self.renderer.resize(device, width, height);
+        self.adhesion_renderer.resize(width, height);
         self.hiz_generator.resize(device, width, height);
         self.instance_builder.reset_hiz(); // Reset Hi-Z config so bind group is recreated with new texture
         self.first_frame = true; // Need to regenerate Hi-Z

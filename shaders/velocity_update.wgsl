@@ -41,17 +41,29 @@ var<storage, read_write> velocities_out: array<vec4<f32>>;
 @group(0) @binding(5)
 var<storage, read_write> cell_count_buffer: array<u32>;
 
-// Torque accumulation and angular velocities (group 1)
+// Torque accumulation (atomic i32, fixed-point) and angular velocities (group 1)
 @group(1) @binding(0)
-var<storage, read> torque_accum: array<vec4<f32>>;
+var<storage, read> torque_accum_x: array<i32>;
 
 @group(1) @binding(1)
-var<storage, read_write> angular_velocities: array<vec4<f32>>;
+var<storage, read> torque_accum_y: array<i32>;
 
 @group(1) @binding(2)
+var<storage, read> torque_accum_z: array<i32>;
+
+@group(1) @binding(3)
+var<storage, read_write> angular_velocities: array<vec4<f32>>;
+
+@group(1) @binding(4)
 var<storage, read_write> rotations: array<vec4<f32>>;
 
 const PI: f32 = 3.14159265359;
+const FIXED_POINT_SCALE: f32 = 1000.0;
+
+// Convert fixed-point i32 back to float
+fn fixed_to_float(v: i32) -> f32 {
+    return f32(v) / FIXED_POINT_SCALE;
+}
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     let volume = mass / 1.0;
@@ -80,8 +92,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mass = positions_out[cell_idx].w;
     let radius = calculate_radius_from_mass(mass);
     
-    // Read accumulated torque from adhesion physics
-    let torque = torque_accum[cell_idx].xyz;
+    // Read accumulated torque from adhesion physics (convert from fixed-point)
+    let torque = vec3<f32>(
+        fixed_to_float(torque_accum_x[cell_idx]),
+        fixed_to_float(torque_accum_y[cell_idx]),
+        fixed_to_float(torque_accum_z[cell_idx])
+    );
     
     // Calculate moment of inertia (solid sphere: I = 2/5 * m * r^2)
     let moment_of_inertia = 0.4 * mass * radius * radius;

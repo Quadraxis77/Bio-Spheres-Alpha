@@ -40,12 +40,24 @@ var<storage, read_write> velocities_out: array<vec4<f32>>;
 @group(0) @binding(5)
 var<storage, read_write> cell_count_buffer: array<u32>;
 
-// Force accumulation buffers (group 1)
+// Force accumulation buffers (group 1) - atomic i32 for multi-adhesion accumulation
 @group(1) @binding(0)
-var<storage, read_write> force_accum: array<vec4<f32>>;
+var<storage, read_write> force_accum_x: array<atomic<i32>>;
 
 @group(1) @binding(1)
-var<storage, read_write> torque_accum: array<vec4<f32>>;
+var<storage, read_write> force_accum_y: array<atomic<i32>>;
+
+@group(1) @binding(2)
+var<storage, read_write> force_accum_z: array<atomic<i32>>;
+
+@group(1) @binding(3)
+var<storage, read_write> torque_accum_x: array<atomic<i32>>;
+
+@group(1) @binding(4)
+var<storage, read_write> torque_accum_y: array<atomic<i32>>;
+
+@group(1) @binding(5)
+var<storage, read_write> torque_accum_z: array<atomic<i32>>;
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -57,6 +69,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Clear force and torque accumulators to zero
-    force_accum[cell_idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    torque_accum[cell_idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    atomicStore(&force_accum_x[cell_idx], 0);
+    atomicStore(&force_accum_y[cell_idx], 0);
+    atomicStore(&force_accum_z[cell_idx], 0);
+    atomicStore(&torque_accum_x[cell_idx], 0);
+    atomicStore(&torque_accum_y[cell_idx], 0);
+    atomicStore(&torque_accum_z[cell_idx], 0);
 }

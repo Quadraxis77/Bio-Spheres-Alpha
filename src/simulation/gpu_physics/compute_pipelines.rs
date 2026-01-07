@@ -1383,7 +1383,7 @@ impl GpuPhysicsPipelines {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Force Accumulation Bind Group Layout"),
             entries: &[
-                // Binding 0: Force accumulation buffer (read-write)
+                // Binding 0: Force accumulation X (atomic i32)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -1394,9 +1394,53 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 1: Torque accumulation buffer (read-write)
+                // Binding 1: Force accumulation Y (atomic i32)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Force accumulation Z (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Torque accumulation X (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 4: Torque accumulation Y (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: Torque accumulation Z (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -1522,11 +1566,27 @@ impl GpuPhysicsPipelines {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: adhesion_buffers.force_accum.as_entire_binding(),
+                    resource: adhesion_buffers.force_accum_x.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: adhesion_buffers.torque_accum.as_entire_binding(),
+                    resource: adhesion_buffers.force_accum_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: adhesion_buffers.force_accum_z.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: adhesion_buffers.torque_accum_x.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: adhesion_buffers.torque_accum_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: adhesion_buffers.torque_accum_z.as_entire_binding(),
                 },
             ],
         })
@@ -1576,7 +1636,7 @@ impl GpuPhysicsPipelines {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Clear Forces Bind Group Layout"),
             entries: &[
-                // Binding 0: Force accumulation buffer (read-write)
+                // Binding 0: Force accumulation X (atomic i32)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -1587,9 +1647,53 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 1: Torque accumulation buffer (read-write)
+                // Binding 1: Force accumulation Y (atomic i32)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Force accumulation Z (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Torque accumulation X (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 4: Torque accumulation Y (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: Torque accumulation Z (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -1607,9 +1711,31 @@ impl GpuPhysicsPipelines {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Collision Force Accum Bind Group Layout"),
             entries: &[
-                // Binding 0: Force accumulation buffer (read-write)
+                // Binding 0: Force accumulation X (atomic i32)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Force accumulation Y (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Force accumulation Z (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -1627,7 +1753,7 @@ impl GpuPhysicsPipelines {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Position Update Force Accum Bind Group Layout"),
             entries: &[
-                // Binding 0: Force accumulation buffer (read)
+                // Binding 0: Force accumulation X (read)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -1638,9 +1764,31 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 1: Previous accelerations buffer (read-write)
+                // Binding 1: Force accumulation Y (read)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Force accumulation Z (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Previous accelerations buffer (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -1658,7 +1806,7 @@ impl GpuPhysicsPipelines {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Velocity Update Angular Bind Group Layout"),
             entries: &[
-                // Binding 0: Torque accumulation buffer (read)
+                // Binding 0: Torque accumulation X (read)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -1669,9 +1817,31 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 1: Angular velocities buffer (read-write)
+                // Binding 1: Torque accumulation Y (read)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Torque accumulation Z (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Angular velocities buffer (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -1680,9 +1850,9 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 2: Rotations buffer (read-write)
+                // Binding 4: Rotations buffer (read-write)
                 wgpu::BindGroupLayoutEntry {
-                    binding: 2,
+                    binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -1707,11 +1877,27 @@ impl GpuPhysicsPipelines {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: adhesion_buffers.force_accum.as_entire_binding(),
+                    resource: adhesion_buffers.force_accum_x.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: adhesion_buffers.torque_accum.as_entire_binding(),
+                    resource: adhesion_buffers.force_accum_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: adhesion_buffers.force_accum_z.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: adhesion_buffers.torque_accum_x.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: adhesion_buffers.torque_accum_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: adhesion_buffers.torque_accum_z.as_entire_binding(),
                 },
             ],
         })
@@ -1729,7 +1915,15 @@ impl GpuPhysicsPipelines {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: adhesion_buffers.force_accum.as_entire_binding(),
+                    resource: adhesion_buffers.force_accum_x.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: adhesion_buffers.force_accum_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: adhesion_buffers.force_accum_z.as_entire_binding(),
                 },
             ],
         })
@@ -1748,10 +1942,18 @@ impl GpuPhysicsPipelines {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: adhesion_buffers.force_accum.as_entire_binding(),
+                    resource: adhesion_buffers.force_accum_x.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
+                    resource: adhesion_buffers.force_accum_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: adhesion_buffers.force_accum_z.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
                     resource: triple_buffers.prev_accelerations.as_entire_binding(),
                 },
             ],
@@ -1771,14 +1973,22 @@ impl GpuPhysicsPipelines {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: adhesion_buffers.torque_accum.as_entire_binding(),
+                    resource: adhesion_buffers.torque_accum_x.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: adhesion_buffers.angular_velocities[0].as_entire_binding(),
+                    resource: adhesion_buffers.torque_accum_y.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
+                    resource: adhesion_buffers.torque_accum_z.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: adhesion_buffers.angular_velocities[0].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
                     resource: triple_buffers.rotations[0].as_entire_binding(),
                 },
             ],

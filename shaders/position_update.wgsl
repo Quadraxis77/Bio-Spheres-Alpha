@@ -52,12 +52,25 @@ var<storage, read> rotations_in: array<vec4<f32>>;
 @group(1) @binding(1)
 var<storage, read_write> rotations_out: array<vec4<f32>>;
 
-// Force accumulation and previous accelerations (group 2)
+// Force accumulation (atomic i32, fixed-point) and previous accelerations (group 2)
 @group(2) @binding(0)
-var<storage, read> force_accum: array<vec4<f32>>;
+var<storage, read> force_accum_x: array<i32>;
 
 @group(2) @binding(1)
+var<storage, read> force_accum_y: array<i32>;
+
+@group(2) @binding(2)
+var<storage, read> force_accum_z: array<i32>;
+
+@group(2) @binding(3)
 var<storage, read_write> prev_accelerations: array<vec4<f32>>;
+
+const FIXED_POINT_SCALE: f32 = 1000.0;
+
+// Convert fixed-point i32 back to float
+fn fixed_to_float(v: i32) -> f32 {
+    return f32(v) / FIXED_POINT_SCALE;
+}
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -72,8 +85,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mass = positions_out[cell_idx].w;
     let vel = velocities_out[cell_idx].xyz;
     
-    // Read accumulated forces from collision and adhesion stages
-    let force = force_accum[cell_idx].xyz;
+    // Read accumulated forces from collision and adhesion stages (convert from fixed-point)
+    let force = vec3<f32>(
+        fixed_to_float(force_accum_x[cell_idx]),
+        fixed_to_float(force_accum_y[cell_idx]),
+        fixed_to_float(force_accum_z[cell_idx])
+    );
     
     // Read previous acceleration for Verlet integration
     let old_acceleration = prev_accelerations[cell_idx].xyz;
