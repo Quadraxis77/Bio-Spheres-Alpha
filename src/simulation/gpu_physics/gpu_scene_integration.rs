@@ -75,6 +75,12 @@ const WORKGROUP_SIZE_CELLS: u32 = 256;
 /// Workgroup size for lifecycle operations (moderate complexity)
 const WORKGROUP_SIZE_LIFECYCLE: u32 = 128;
 
+/// Workgroup size for adhesion physics (matches shader)
+const WORKGROUP_SIZE_ADHESION: u32 = 64;
+
+/// Maximum adhesion connections (matches MAX_ADHESION_CONNECTIONS in adhesion.rs)
+const MAX_ADHESION_CONNECTIONS: u32 = 100_000;
+
 /// Execute the 8-stage GPU physics pipeline
 pub fn execute_gpu_physics_step(
     _device: &wgpu::Device,
@@ -163,16 +169,16 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(2, &cached_bind_groups.collision_force_accum, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 5: Adhesion physics (64 threads - dispatch per cell)
-        // Now processes adhesions per-cell to avoid race conditions
-        // Each thread handles one cell and accumulates all its adhesion forces locally
+        // Stage 5: Adhesion physics (64 threads per workgroup)
+        // Each thread handles one adhesion and atomically accumulates forces
         compute_pass.set_pipeline(&pipelines.adhesion_physics);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
         compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
         compute_pass.set_bind_group(3, &cached_bind_groups.force_accum, &[]);
-        // Dispatch based on cell count (one thread per cell)
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        // Dispatch based on adhesion capacity, shader checks actual count
+        let adhesion_workgroups = (MAX_ADHESION_CONNECTIONS + WORKGROUP_SIZE_ADHESION - 1) / WORKGROUP_SIZE_ADHESION;
+        compute_pass.dispatch_workgroups(adhesion_workgroups, 1, 1);
         
         // Stage 6: Position integration (256 threads)
         // Now reads accumulated forces and applies them with proper integration
