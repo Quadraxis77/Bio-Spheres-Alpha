@@ -474,6 +474,9 @@ impl GpuScene {
         // Sync child keep adhesion flags for zone-based inheritance
         self.gpu_triple_buffers.sync_child_keep_adhesion_flags(queue, &self.genomes);
         
+        // Sync mode properties (nutrient_gain_rate, max_cell_size, etc.) for division
+        self.gpu_triple_buffers.sync_mode_properties(queue, &self.genomes);
+        
         // Cache parent_make_adhesion flags for quick lookup during division
         // The flags are stored sequentially: genome0_mode0, genome0_mode1, ..., genome1_mode0, genome1_mode1, ...
         // This matches the adhesion settings buffer layout and the global mode index calculation

@@ -278,6 +278,10 @@ pub struct GpuTripleBufferSystem {
     /// Total size: num_modes * 48 bytes
     pub genome_mode_data: wgpu::Buffer,
     
+    /// Child mode indices buffer (two i32 per mode: child_a_mode, child_b_mode)
+    /// Total size: num_modes * 8 bytes
+    pub child_mode_indices: wgpu::Buffer,
+    
     /// Parent make adhesion flags buffer (one u32 per mode)
     /// Stores whether each mode allows sibling adhesion creation during division
     pub parent_make_adhesion_flags: wgpu::Buffer,
@@ -289,6 +293,10 @@ pub struct GpuTripleBufferSystem {
     /// Child B keep adhesion flags buffer (one u32 per mode)
     /// Stores whether Child B should inherit adhesions during division
     pub child_b_keep_adhesion_flags: wgpu::Buffer,
+    
+    /// Mode properties buffer for division (per-mode properties)
+    /// Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, padding, padding, padding] = 32 bytes
+    pub mode_properties: wgpu::Buffer,
     
     /// Current buffer index (atomic for lock-free rotation)
     current_index: AtomicUsize,
@@ -423,6 +431,9 @@ impl GpuTripleBufferSystem {
         let max_modes = 40 * 10_000;
         let genome_mode_data = Self::create_storage_buffer(device, max_modes * 48, "Genome Mode Data");
         
+        // Child mode indices: two i32 per mode (child_a_mode, child_b_mode)
+        let child_mode_indices = Self::create_storage_buffer(device, max_modes * 8, "Child Mode Indices");
+        
         // Parent make adhesion flags: one u32 per mode
         let parent_make_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Parent Make Adhesion Flags");
         
@@ -431,6 +442,9 @@ impl GpuTripleBufferSystem {
         
         // Child B keep adhesion flags: one u32 per mode
         let child_b_keep_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Child B Keep Adhesion Flags");
+        
+        // Mode properties: 8 floats per mode (32 bytes) - nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, padding x3
+        let mode_properties = Self::create_storage_buffer(device, max_modes * 32, "Mode Properties");
         
         Self {
             position_and_mass,
@@ -462,9 +476,11 @@ impl GpuTripleBufferSystem {
             cell_count_buffer,
             cell_count_staging,
             genome_mode_data,
+            child_mode_indices,
             parent_make_adhesion_flags,
             child_a_keep_adhesion_flags,
             child_b_keep_adhesion_flags,
+            mode_properties,
             current_index: AtomicUsize::new(0),
             capacity,
             needs_sync: true,
@@ -656,6 +672,12 @@ impl GpuTripleBufferSystem {
         
         // Sync genome mode data for division (child orientations)
         self.sync_genome_mode_data(queue, genomes);
+        
+        // Sync child mode indices for division
+        self.sync_child_mode_indices(queue, genomes);
+        
+        // Sync mode properties for division (nutrient_gain_rate, max_cell_size, etc.)
+        self.sync_mode_properties(queue, genomes);
     }
     
     /// Sync genome mode data (child orientations) for division shader
@@ -683,6 +705,27 @@ impl GpuTripleBufferSystem {
         
         if !mode_data.is_empty() {
             queue.write_buffer(&self.genome_mode_data, 0, bytemuck::cast_slice(&mode_data));
+        }
+    }
+    
+    /// Sync child mode indices for division shader
+    pub fn sync_child_mode_indices(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        // Layout per mode: [child_a_mode (i32), child_b_mode (i32)] = 8 bytes
+        let mut mode_indices: Vec<[i32; 2]> = Vec::new();
+        
+        let mut global_mode_offset = 0i32;
+        for genome in genomes {
+            for mode in &genome.modes {
+                // Child mode numbers are relative to the genome, need to add global offset
+                let child_a_mode = global_mode_offset + mode.child_a.mode_number.max(0);
+                let child_b_mode = global_mode_offset + mode.child_b.mode_number.max(0);
+                mode_indices.push([child_a_mode, child_b_mode]);
+            }
+            global_mode_offset += genome.modes.len() as i32;
+        }
+        
+        if !mode_indices.is_empty() {
+            queue.write_buffer(&self.child_mode_indices, 0, bytemuck::cast_slice(&mode_indices));
         }
     }
     
@@ -716,6 +759,31 @@ impl GpuTripleBufferSystem {
         if !child_a_flags.is_empty() {
             queue.write_buffer(&self.child_a_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_a_flags));
             queue.write_buffer(&self.child_b_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_b_flags));
+        }
+    }
+    
+    /// Sync mode properties for division shader (per-mode properties like nutrient_gain_rate, max_cell_size, etc.)
+    pub fn sync_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        // Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, padding, padding, padding] = 32 bytes (8 floats)
+        let mut properties_data: Vec<[f32; 8]> = Vec::new();
+        
+        for genome in genomes {
+            for mode in &genome.modes {
+                properties_data.push([
+                    mode.nutrient_gain_rate,
+                    mode.max_cell_size,
+                    mode.membrane_stiffness,
+                    mode.split_interval,
+                    mode.split_mass,
+                    0.0, // padding
+                    0.0, // padding
+                    0.0, // padding
+                ]);
+            }
+        }
+        
+        if !properties_data.is_empty() {
+            queue.write_buffer(&self.mode_properties, 0, bytemuck::cast_slice(&properties_data));
         }
     }
     

@@ -132,6 +132,15 @@ var<storage, read> genome_mode_data: array<vec4<f32>>;
 @group(2) @binding(15)
 var<storage, read> parent_make_adhesion_flags: array<u32>;
 
+// Child mode indices: [child_a_mode, child_b_mode] per mode (stored as i32)
+@group(2) @binding(16)
+var<storage, read> child_mode_indices: array<vec2<i32>>;
+
+// Mode properties: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, padding, padding, padding] per mode
+// Total 32 bytes (8 floats) per mode, indexed by mode_index
+@group(2) @binding(17)
+var<storage, read> mode_properties: array<vec4<f32>>;
+
 // Adhesion creation buffers (group 3)
 @group(3) @binding(0)
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
@@ -254,26 +263,6 @@ fn calculate_child_anchor_direction(
     return normalize(rotate_vector_by_quat(direction_to_neighbor, inv_delta));
 }
 
-// Calculate neighbor anchor direction using relative rotation (matches reference)
-// child_pos_parent_frame: child position in parent's local frame
-// neighbor_pos_parent_frame: neighbor position in parent's local frame
-// neighbor_genome_orientation: neighbor's genome orientation
-// parent_genome_orientation: parent's genome orientation
-fn calculate_neighbor_anchor_direction(
-    child_pos_parent_frame: vec3<f32>,
-    neighbor_pos_parent_frame: vec3<f32>,
-    neighbor_genome_orientation: vec4<f32>,
-    parent_genome_orientation: vec4<f32>
-) -> vec3<f32> {
-    // Direction from neighbor to child in parent frame
-    let direction_to_child = normalize(child_pos_parent_frame - neighbor_pos_parent_frame);
-    // Calculate relative rotation: inverse(neighbor) * parent
-    let inv_neighbor = quat_inverse(neighbor_genome_orientation);
-    let relative_rotation = quat_multiply(inv_neighbor, parent_genome_orientation);
-    // Transform direction to neighbor's local space
-    return normalize(rotate_vector_by_quat(direction_to_child, relative_rotation));
-}
-
 @compute @workgroup_size(128)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
@@ -368,29 +357,60 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Update Child A state
     birth_times[cell_idx] = params.current_time;
-    split_counts[cell_idx] = split_counts[cell_idx] + 1u;
     // Assign new cell ID to Child A using atomic increment for uniqueness
     let child_a_id = atomicAdd(&next_cell_id[0], 1u);
     cell_ids[cell_idx] = child_a_id;
     // Child A keeps genome reference (genome_ids unchanged)
-    // Child A keeps mode (mode_indices unchanged)
+    // Child A gets its designated mode from genome
+    let child_modes = child_mode_indices[parent_mode_idx];
+    let child_a_mode_idx = u32(max(child_modes.x, 0));
+    let child_b_mode_idx = u32(max(child_modes.y, 0));
+    
+    // Split count: reset to 0 if mode changes, otherwise increment
+    let parent_split_count = split_counts[cell_idx];
+    if (child_a_mode_idx != parent_mode_idx) {
+        split_counts[cell_idx] = 0u;
+    } else {
+        split_counts[cell_idx] = parent_split_count + 1u;
+    }
+    mode_indices[cell_idx] = child_a_mode_idx;
+    
+    // Read Child A's properties from its mode
+    // mode_properties layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval] (vec4)
+    //                         [split_mass, padding, padding, padding] (vec4)
+    let child_a_props_0 = mode_properties[child_a_mode_idx * 2u];
+    let child_a_props_1 = mode_properties[child_a_mode_idx * 2u + 1u];
+    nutrient_gain_rates[cell_idx] = child_a_props_0.x;
+    max_cell_sizes[cell_idx] = child_a_props_0.y;
+    stiffnesses[cell_idx] = child_a_props_0.z;
+    split_intervals[cell_idx] = child_a_props_0.w;
+    split_masses[cell_idx] = child_a_props_1.x;
     
     // === Create Child B (placed in assigned free slot) ===
     positions_out[child_b_slot] = vec4<f32>(child_b_pos, child_mass);
     velocities_out[child_b_slot] = vec4<f32>(parent_vel, 0.0);
     rotations_out[child_b_slot] = child_b_rotation;
     
-    // Copy state to Child B
+    // Read Child B's properties from its mode
+    let child_b_props_0 = mode_properties[child_b_mode_idx * 2u];
+    let child_b_props_1 = mode_properties[child_b_mode_idx * 2u + 1u];
+    
+    // Set Child B state from its mode properties
     birth_times[child_b_slot] = params.current_time;
-    split_intervals[child_b_slot] = split_intervals[cell_idx];
-    split_masses[child_b_slot] = split_masses[cell_idx];
-    split_counts[child_b_slot] = 0u; // Child B starts fresh
-    max_splits[child_b_slot] = max_splits[cell_idx];
+    split_intervals[child_b_slot] = child_b_props_0.w;
+    split_masses[child_b_slot] = child_b_props_1.x;
+    // Split count: reset to 0 if mode changes from parent, otherwise inherit parent's count + 1
+    if (child_b_mode_idx != parent_mode_idx) {
+        split_counts[child_b_slot] = 0u;
+    } else {
+        split_counts[child_b_slot] = parent_split_count + 1u;
+    }
+    max_splits[child_b_slot] = max_splits[cell_idx]; // TODO: Read from mode if needed
     genome_ids[child_b_slot] = genome_ids[cell_idx]; // Copy genome reference
-    mode_indices[child_b_slot] = mode_indices[cell_idx];
-    nutrient_gain_rates[child_b_slot] = nutrient_gain_rates[cell_idx]; // Copy nutrient gain rate
-    max_cell_sizes[child_b_slot] = max_cell_sizes[cell_idx]; // Copy max cell size
-    stiffnesses[child_b_slot] = stiffnesses[cell_idx]; // Copy membrane stiffness
+    mode_indices[child_b_slot] = child_b_mode_idx; // Child B gets its designated mode
+    nutrient_gain_rates[child_b_slot] = child_b_props_0.x;
+    max_cell_sizes[child_b_slot] = child_b_props_0.y;
+    stiffnesses[child_b_slot] = child_b_props_0.z;
     
     // Assign new cell ID to Child B using atomic increment for uniqueness
     let child_b_id = atomicAdd(&next_cell_id[0], 1u);
@@ -400,13 +420,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     death_flags[child_b_slot] = 0u;
     
     // === Create Sibling Adhesion ===
-    // Check if parent mode allows adhesion creation
-    let global_mode_index = mode_indices[cell_idx]; // This is already the global mode index
-    let make_adhesion = parent_make_adhesion_flags[global_mode_index] == 1u;
+    // Check if PARENT mode allows adhesion creation (use parent_mode_idx, not the updated mode_indices)
+    let make_adhesion = parent_make_adhesion_flags[parent_mode_idx] == 1u;
     
-    // Get keep_adhesion flags for zone-based inheritance
-    let child_a_keep = child_a_keep_adhesion_flags[global_mode_index] == 1u;
-    let child_b_keep = child_b_keep_adhesion_flags[global_mode_index] == 1u;
+    // Get keep_adhesion flags for zone-based inheritance (from parent mode)
+    let child_a_keep = child_a_keep_adhesion_flags[parent_mode_idx] == 1u;
+    let child_b_keep = child_b_keep_adhesion_flags[parent_mode_idx] == 1u;
     
     if (make_adhesion) {
         // Try to allocate an adhesion slot atomically
@@ -447,7 +466,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             var connection: AdhesionConnection;
             connection.cell_a_index = cell_idx;        // Child A index
             connection.cell_b_index = child_b_slot;    // Child B index
-            connection.mode_index = global_mode_index; // Mode index for settings lookup
+            connection.mode_index = parent_mode_idx;   // Parent's mode index for settings lookup
             connection.is_active = 1u;                 // Active connection
             connection.zone_a = 1u;                    // Zone B for Child A (positive split direction)
             connection.zone_b = 0u;                    // Zone A for Child B (negative split direction)
@@ -504,7 +523,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_a_adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
     let child_b_adhesion_base = child_b_slot * MAX_ADHESIONS_PER_CELL;
     
-    // First, clear Child A's adhesion indices (parent slot) - we'll rebuild them
+    // IMPORTANT: Save parent's adhesion indices BEFORE clearing them
+    // This avoids race conditions with other dividing cells
+    var parent_adhesion_indices: array<i32, 20>;
+    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+        parent_adhesion_indices[i] = cell_adhesion_indices[parent_adhesion_base + i];
+    }
+    
+    // Now clear Child A's adhesion indices (parent slot) - we'll rebuild them
     // Note: Child B's slot was already cleared when it was a dead/new slot
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
         cell_adhesion_indices[child_a_adhesion_base + i] = -1;
@@ -534,24 +560,40 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Calculate geometric parameters for anchor calculation (matches reference)
-    // Extract split direction magnitude and normalized direction
-    let split_magnitude = length(split_dir_local);
-    let split_dir_parent = select(vec3<f32>(0.0, 0.0, 1.0), split_dir_local / split_magnitude, split_magnitude >= 0.0001);
-    let split_offset_magnitude = select(0.0, split_magnitude * 0.5, split_magnitude >= 0.0001);
+    // Use the same offset as the actual child positions
+    let child_offset = parent_radius * 0.25;
     
     // Child positions in parent frame (matches reference convention)
     // Child A at +offset, Child B at -offset
-    let child_a_pos_parent_frame = split_dir_parent * split_offset_magnitude;
-    let child_b_pos_parent_frame = -split_dir_parent * split_offset_magnitude;
+    // split_dir_local is already normalized or set to default (0,0,1) earlier
+    let split_dir_normalized = normalize(split_dir_local);
+    let child_a_pos_parent_frame = split_dir_normalized * child_offset;
+    let child_b_pos_parent_frame = -split_dir_normalized * child_offset;
     
     // Fixed radius for adhesion distance calculation (matches reference: independent of cell growth)
     let FIXED_RADIUS: f32 = 1.0;
     
-    // Process inherited adhesions from parent
-    // Iterate through all active adhesions and check if they involve the parent cell
-    let total_adhesion_count = atomicLoad(&adhesion_counts[0]);
-    
-    for (var adh_idx = 0u; adh_idx < total_adhesion_count; adh_idx++) {
+    // Process inherited adhesions from parent using saved indices
+    // This avoids race conditions with other dividing cells
+    for (var parent_slot = 0u; parent_slot < MAX_ADHESIONS_PER_CELL; parent_slot++) {
+        let adh_idx_signed = parent_adhesion_indices[parent_slot];
+        
+        // Skip empty slots
+        if (adh_idx_signed < 0) {
+            continue;
+        }
+        
+        let adh_idx = u32(adh_idx_signed);
+        
+        // Skip the sibling adhesion we just created (it's already handled)
+        // The sibling adhesion was added to parent's list before we saved it
+        if (make_adhesion) {
+            let sibling_slot = atomicLoad(&adhesion_counts[0]) - 1u;
+            if (adh_idx == sibling_slot) {
+                continue;
+            }
+        }
+        
         let conn = adhesion_connections[adh_idx];
         
         // Skip inactive connections
@@ -559,17 +601,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
         
-        // Skip the sibling adhesion we just created (it's already handled)
-        if (make_adhesion && adh_idx == total_adhesion_count - 1u) {
-            continue;
-        }
-        
-        // Check if this adhesion involves the parent cell (cell_idx)
+        // Determine which side of the connection the parent is on
+        // Note: Due to race conditions, the cell indices might have been modified
+        // by another dividing cell. We use the original parent cell_idx to check.
         let is_parent_cell_a = conn.cell_a_index == cell_idx;
         let is_parent_cell_b = conn.cell_b_index == cell_idx;
         
+        // If neither matches, another cell already processed this adhesion
+        // (race condition - the other cell changed the indices)
         if (!is_parent_cell_a && !is_parent_cell_b) {
-            continue; // This adhesion doesn't involve the parent
+            continue;
         }
         
         // Get neighbor index
@@ -615,9 +656,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
         
-        // Get neighbor's genome orientation for anchor recalculation
-        let neighbor_genome_orientation = rotations_in[neighbor_idx];
-        
         // Calculate center-to-center distance using rest length (matches reference)
         // Use fixed radius to make adhesion independent of cell growth
         let rest_length = 1.0; // Default rest length - could be read from mode settings
@@ -630,31 +668,32 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (give_to_child_a && !give_to_child_b) {
             // Only Child A inherits
             
-            // Calculate new anchor directions using geometric approach (matches reference)
+            // Calculate new anchor direction for child using geometric approach (matches reference)
             let child_anchor = calculate_child_anchor_direction(
                 child_a_pos_parent_frame,
                 neighbor_pos_parent_frame,
                 child_a_orientation
             );
-            let neighbor_anchor = calculate_neighbor_anchor_direction(
-                child_a_pos_parent_frame,
-                neighbor_pos_parent_frame,
-                neighbor_genome_orientation,
-                parent_rotation
-            );
+            
+            // IMPORTANT: Neighbor's anchor direction should NOT change!
+            // The neighbor is still pointing at the same physical location.
+            // Only the cell at that location has changed from parent to child.
+            // The neighbor's anchor was already correct - it pointed toward the parent,
+            // and now Child A is at (approximately) the same location.
             
             // Update the connection - preserve original side assignment
+            // Child A overwrites parent slot, so cell index stays the same
             if (is_parent_cell_a) {
                 // Parent was cellA, so child stays as cellA
                 adhesion_connections[adh_idx].anchor_direction_a = child_anchor;
-                adhesion_connections[adh_idx].anchor_direction_b = neighbor_anchor;
+                // Keep neighbor's anchor direction unchanged: anchor_direction_b stays the same
                 adhesion_connections[adh_idx].twist_reference_a = child_a_rotation;
                 // Zone classification for child's side
                 adhesion_connections[adh_idx].zone_a = classify_adhesion_zone(child_anchor, split_dir_local);
             } else {
                 // Parent was cellB, so child stays as cellB
                 adhesion_connections[adh_idx].anchor_direction_b = child_anchor;
-                adhesion_connections[adh_idx].anchor_direction_a = neighbor_anchor;
+                // Keep neighbor's anchor direction unchanged: anchor_direction_a stays the same
                 adhesion_connections[adh_idx].twist_reference_b = child_a_rotation;
                 // Zone classification for child's side
                 adhesion_connections[adh_idx].zone_b = classify_adhesion_zone(child_anchor, split_dir_local);
@@ -666,38 +705,37 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 child_a_adhesion_count++;
             }
             
-            // Mark original connection as inactive (we've updated it in place)
-            // Note: The connection is now owned by Child A, so we don't deactivate it
+            // Note: The connection is now owned by Child A, cell index unchanged since
+            // Child A overwrites the parent slot
             
         } else if (give_to_child_b && !give_to_child_a) {
             // Only Child B inherits
             
-            // Calculate new anchor directions using geometric approach (matches reference)
+            // Calculate new anchor direction for child using geometric approach (matches reference)
+            // Calculate new anchor direction for child using geometric approach (matches reference)
             let child_anchor = calculate_child_anchor_direction(
                 child_b_pos_parent_frame,
                 neighbor_pos_parent_frame,
                 child_b_orientation
             );
-            let neighbor_anchor = calculate_neighbor_anchor_direction(
-                child_b_pos_parent_frame,
-                neighbor_pos_parent_frame,
-                neighbor_genome_orientation,
-                parent_rotation
-            );
+            
+            // IMPORTANT: Neighbor's anchor direction should NOT change!
+            // The neighbor is still pointing at the same physical location.
+            // Only the cell at that location has changed from parent to child.
             
             // Update the connection - preserve original side assignment and update cell index
             if (is_parent_cell_a) {
                 // Parent was cellA, so child B takes cellA position
                 adhesion_connections[adh_idx].cell_a_index = child_b_slot;
                 adhesion_connections[adh_idx].anchor_direction_a = child_anchor;
-                adhesion_connections[adh_idx].anchor_direction_b = neighbor_anchor;
+                // Keep neighbor's anchor direction unchanged: anchor_direction_b stays the same
                 adhesion_connections[adh_idx].twist_reference_a = child_b_rotation;
                 adhesion_connections[adh_idx].zone_a = classify_adhesion_zone(child_anchor, split_dir_local);
             } else {
                 // Parent was cellB, so child B takes cellB position
                 adhesion_connections[adh_idx].cell_b_index = child_b_slot;
                 adhesion_connections[adh_idx].anchor_direction_b = child_anchor;
-                adhesion_connections[adh_idx].anchor_direction_a = neighbor_anchor;
+                // Keep neighbor's anchor direction unchanged: anchor_direction_a stays the same
                 adhesion_connections[adh_idx].twist_reference_b = child_b_rotation;
                 adhesion_connections[adh_idx].zone_b = classify_adhesion_zone(child_anchor, split_dir_local);
             }
@@ -717,22 +755,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 neighbor_pos_parent_frame,
                 child_a_orientation
             );
-            let neighbor_anchor_for_a = calculate_neighbor_anchor_direction(
-                child_a_pos_parent_frame,
-                neighbor_pos_parent_frame,
-                neighbor_genome_orientation,
-                parent_rotation
-            );
             
             // Update original connection for Child A
+            // IMPORTANT: Neighbor's anchor direction should NOT change!
             if (is_parent_cell_a) {
                 adhesion_connections[adh_idx].anchor_direction_a = child_a_anchor;
-                adhesion_connections[adh_idx].anchor_direction_b = neighbor_anchor_for_a;
+                // Keep neighbor's anchor direction unchanged: anchor_direction_b stays the same
                 adhesion_connections[adh_idx].twist_reference_a = child_a_rotation;
                 adhesion_connections[adh_idx].zone_a = classify_adhesion_zone(child_a_anchor, split_dir_local);
             } else {
                 adhesion_connections[adh_idx].anchor_direction_b = child_a_anchor;
-                adhesion_connections[adh_idx].anchor_direction_a = neighbor_anchor_for_a;
+                // Keep neighbor's anchor direction unchanged: anchor_direction_a stays the same
                 adhesion_connections[adh_idx].twist_reference_b = child_a_rotation;
                 adhesion_connections[adh_idx].zone_b = classify_adhesion_zone(child_a_anchor, split_dir_local);
             }
@@ -751,14 +784,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     neighbor_pos_parent_frame,
                     child_b_orientation
                 );
-                let neighbor_anchor_for_b = calculate_neighbor_anchor_direction(
-                    child_b_pos_parent_frame,
-                    neighbor_pos_parent_frame,
-                    neighbor_genome_orientation,
-                    parent_rotation
-                );
                 
                 // Create duplicate connection
+                // IMPORTANT: Copy neighbor's anchor direction from original connection!
                 var dup_conn: AdhesionConnection;
                 dup_conn.mode_index = conn.mode_index;
                 dup_conn.is_active = 1u;
@@ -769,9 +797,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     dup_conn.cell_a_index = child_b_slot;
                     dup_conn.cell_b_index = neighbor_idx;
                     dup_conn.anchor_direction_a = child_b_anchor;
-                    dup_conn.anchor_direction_b = neighbor_anchor_for_b;
+                    dup_conn.anchor_direction_b = conn.anchor_direction_b; // Copy from original!
                     dup_conn.twist_reference_a = child_b_rotation;
-                    dup_conn.twist_reference_b = neighbor_genome_orientation;
+                    dup_conn.twist_reference_b = conn.twist_reference_b; // Copy from original!
                     dup_conn.zone_a = classify_adhesion_zone(child_b_anchor, split_dir_local);
                     dup_conn.zone_b = conn.zone_b; // Keep neighbor's zone
                     dup_conn.padding_a = 0.0;
@@ -780,9 +808,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // Parent was cellB, so child B takes cellB position in duplicate
                     dup_conn.cell_a_index = neighbor_idx;
                     dup_conn.cell_b_index = child_b_slot;
-                    dup_conn.anchor_direction_a = neighbor_anchor_for_b;
+                    dup_conn.anchor_direction_a = conn.anchor_direction_a; // Copy from original!
                     dup_conn.anchor_direction_b = child_b_anchor;
-                    dup_conn.twist_reference_a = neighbor_genome_orientation;
+                    dup_conn.twist_reference_a = conn.twist_reference_a; // Copy from original!
                     dup_conn.twist_reference_b = child_b_rotation;
                     dup_conn.zone_a = conn.zone_a; // Keep neighbor's zone
                     dup_conn.zone_b = classify_adhesion_zone(child_b_anchor, split_dir_local);

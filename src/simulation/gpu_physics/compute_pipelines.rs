@@ -524,6 +524,14 @@ impl GpuPhysicsPipelines {
                     binding: 15,
                     resource: buffers.parent_make_adhesion_flags.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: buffers.child_mode_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 17,
+                    resource: buffers.mode_properties.as_entire_binding(),
+                },
             ],
         })
     }
@@ -1230,6 +1238,28 @@ impl GpuPhysicsPipelines {
                     // Parent make adhesion flags
                     wgpu::BindGroupLayoutEntry {
                         binding: 15,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Child mode indices (child_a_mode, child_b_mode per mode)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 16,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Mode properties (nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass per mode)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 17,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
