@@ -274,6 +274,10 @@ pub struct GpuTripleBufferSystem {
     /// Total size: num_modes * 48 bytes
     pub genome_mode_data: wgpu::Buffer,
     
+    /// Parent make adhesion flags buffer (one u32 per mode)
+    /// Stores whether each mode allows sibling adhesion creation during division
+    pub parent_make_adhesion_flags: wgpu::Buffer,
+    
     /// Current buffer index (atomic for lock-free rotation)
     current_index: AtomicUsize,
     
@@ -404,6 +408,9 @@ impl GpuTripleBufferSystem {
         let max_modes = 40 * 10_000;
         let genome_mode_data = Self::create_storage_buffer(device, max_modes * 48, "Genome Mode Data");
         
+        // Parent make adhesion flags: one u32 per mode
+        let parent_make_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Parent Make Adhesion Flags");
+        
         Self {
             position_and_mass,
             velocity,
@@ -433,6 +440,7 @@ impl GpuTripleBufferSystem {
             cell_count_buffer,
             cell_count_staging,
             genome_mode_data,
+            parent_make_adhesion_flags,
             current_index: AtomicUsize::new(0),
             capacity,
             needs_sync: true,
@@ -651,6 +659,21 @@ impl GpuTripleBufferSystem {
         
         if !mode_data.is_empty() {
             queue.write_buffer(&self.genome_mode_data, 0, bytemuck::cast_slice(&mode_data));
+        }
+    }
+    
+    /// Sync parent make adhesion flags for division shader
+    pub fn sync_parent_make_adhesion_flags(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let mut flags_data: Vec<u32> = Vec::new();
+        
+        for genome in genomes {
+            for mode in &genome.modes {
+                flags_data.push(if mode.parent_make_adhesion { 1 } else { 0 });
+            }
+        }
+        
+        if !flags_data.is_empty() {
+            queue.write_buffer(&self.parent_make_adhesion_flags, 0, bytemuck::cast_slice(&flags_data));
         }
     }
     

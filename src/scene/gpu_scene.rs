@@ -7,7 +7,7 @@ use crate::genome::Genome;
 use crate::rendering::{CellRenderer, CullingMode, HizGenerator, InstanceBuilder};
 use crate::scene::Scene;
 use crate::simulation::{CanonicalState, PhysicsConfig};
-use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem};
+use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers};
 use crate::ui::camera::CameraController;
 use glam::Mat4;
 
@@ -28,6 +28,8 @@ pub struct GpuScene {
     pub gpu_physics_pipelines: GpuPhysicsPipelines,
     /// Triple buffer system for GPU physics
     pub gpu_triple_buffers: GpuTripleBufferSystem,
+    /// Adhesion buffer system for GPU adhesion physics
+    pub adhesion_buffers: AdhesionBuffers,
     /// Cached bind groups (created once, not per-frame)
     pub cached_bind_groups: CachedBindGroups,
     /// Physics configuration
@@ -40,6 +42,8 @@ pub struct GpuScene {
     pub current_time: f32,
     /// Genomes for cell behavior (growth, division) - supports multiple genomes
     pub genomes: Vec<Genome>,
+    /// Cached parent_make_adhesion flags from genome modes for quick lookup during division
+    parent_make_adhesion_flags: Vec<bool>,
     /// Accumulated time for fixed timestep physics
     time_accumulator: f32,
     /// Whether this is the first frame (no Hi-Z data yet)
@@ -81,8 +85,15 @@ impl GpuScene {
         let gpu_physics_pipelines = GpuPhysicsPipelines::new(device);
         let gpu_triple_buffers = GpuTripleBufferSystem::new(device, capacity);
         
+        // Create adhesion buffer system
+        let max_modes: u32 = 256; // Maximum modes across all genomes
+        let mut adhesion_buffers = AdhesionBuffers::new(device, capacity, max_modes);
+        
+        // Initialize adhesion buffers with default values
+        adhesion_buffers.initialize(queue);
+        
         // Create cached bind groups (once, not per-frame!)
-        let cached_bind_groups = gpu_physics_pipelines.create_cached_bind_groups(device, &gpu_triple_buffers);
+        let cached_bind_groups = gpu_physics_pipelines.create_cached_bind_groups(device, &gpu_triple_buffers, &adhesion_buffers);
 
         Self {
             canonical_state,
@@ -91,12 +102,14 @@ impl GpuScene {
             hiz_generator,
             gpu_physics_pipelines,
             gpu_triple_buffers,
+            adhesion_buffers,
             cached_bind_groups,
             config,
             paused: false,
             camera: CameraController::new(),
             current_time: 0.0,
             genomes: Vec::new(),
+            parent_make_adhesion_flags: Vec::new(),
             time_accumulator: 0.0,
             first_frame: true,
             readbacks_enabled: true,
@@ -118,8 +131,12 @@ impl GpuScene {
         // Clear adhesion connections
         self.canonical_state.adhesion_connections.active_count = 0;
         self.canonical_state.adhesion_manager.reset();
+        
+        // Reset adhesion buffers
+        self.adhesion_buffers.reset(queue);
         // Clear all genomes since no cells reference them
         self.genomes.clear();
+        self.parent_make_adhesion_flags.clear();
         // Mark instance builder dirty
         self.instance_builder.mark_all_dirty();
         // Reset GPU cell count buffer to 0 immediately (don't wait for sync)
@@ -141,6 +158,7 @@ impl GpuScene {
     pub fn compact_genomes(&mut self) {
         if self.genomes.is_empty() || self.canonical_state.cell_count == 0 {
             self.genomes.clear();
+            self.parent_make_adhesion_flags.clear();
             return;
         }
         
@@ -154,6 +172,10 @@ impl GpuScene {
         // Truncate genomes to only keep those still referenced
         if max_used_genome_id + 1 < self.genomes.len() {
             self.genomes.truncate(max_used_genome_id + 1);
+            
+            // Also truncate parent_make_adhesion_flags to match
+            let total_modes: usize = self.genomes.iter().map(|g| g.modes.len()).sum();
+            self.parent_make_adhesion_flags.truncate(total_modes);
         }
     }
     
@@ -429,6 +451,44 @@ impl GpuScene {
         let id = self.genomes.len();
         self.genomes.push(genome);
         id
+    }
+    
+    /// Sync adhesion settings from genomes to GPU
+    /// Call this after adding genomes to ensure settings are uploaded to GPU
+    pub fn sync_adhesion_settings(&mut self, queue: &wgpu::Queue) {
+        self.adhesion_buffers.sync_adhesion_settings(queue, &self.genomes);
+        
+        // Sync parent_make_adhesion_flags to triple buffer system
+        self.gpu_triple_buffers.sync_parent_make_adhesion_flags(queue, &self.genomes);
+        
+        // Cache parent_make_adhesion flags for quick lookup during division
+        // The flags are stored sequentially: genome0_mode0, genome0_mode1, ..., genome1_mode0, genome1_mode1, ...
+        // This matches the adhesion settings buffer layout and the global mode index calculation
+        self.parent_make_adhesion_flags.clear();
+        for genome in &self.genomes {
+            for mode in &genome.modes {
+                self.parent_make_adhesion_flags.push(mode.parent_make_adhesion);
+            }
+        }
+    }
+    
+    /// Get parent_make_adhesion flag for a specific mode index
+    /// Returns false if mode index is out of bounds
+    pub fn get_parent_make_adhesion_flag(&self, mode_index: usize) -> bool {
+        self.parent_make_adhesion_flags.get(mode_index).copied().unwrap_or(false)
+    }
+    
+    /// Convert local mode index to global mode index for adhesion settings lookup
+    /// Returns the global mode index that can be used to access adhesion settings
+    pub fn get_global_mode_index(&self, genome_id: usize, local_mode_index: usize) -> usize {
+        let mut global_index = 0;
+        for (i, genome) in self.genomes.iter().enumerate() {
+            if i == genome_id {
+                return global_index + local_mode_index;
+            }
+            global_index += genome.modes.len();
+        }
+        global_index + local_mode_index // Fallback if genome_id is out of bounds
     }
     
     /// Insert a cell at the given world position using genome settings.
@@ -767,6 +827,9 @@ impl Scene for GpuScene {
         view: &wgpu::TextureView,
         cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
     ) {
+        // Sync adhesion settings to GPU when genomes are added or modified
+        self.sync_adhesion_settings(queue);
+        
         // Calculate view-projection matrix for culling
         let view_matrix = Mat4::look_at_rh(
             self.camera.position(),

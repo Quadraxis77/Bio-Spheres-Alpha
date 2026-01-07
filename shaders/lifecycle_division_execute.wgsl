@@ -128,6 +128,40 @@ var<storage, read_write> rotations_out: array<vec4<f32>>;
 @group(2) @binding(14)
 var<storage, read> genome_mode_data: array<vec4<f32>>;
 
+// Parent make adhesion flags: one bool per mode (stored as u32)
+@group(2) @binding(15)
+var<storage, read> parent_make_adhesion_flags: array<u32>;
+
+// Adhesion creation buffers (group 3)
+@group(3) @binding(0)
+var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
+
+@group(3) @binding(1)
+var<storage, read_write> adhesion_counts: array<atomic<u32>>;
+
+@group(3) @binding(2)
+var<storage, read_write> cell_adhesion_indices: array<i32>;
+
+@group(3) @binding(3)
+var<storage, read_write> free_adhesion_slots: array<u32>;
+
+// Adhesion connection structure (96 bytes, matching adhesion_physics.wgsl)
+struct AdhesionConnection {
+    cell_a_index: u32,
+    cell_b_index: u32,
+    mode_index: u32,
+    is_active: u32,
+    zone_a: u32,
+    zone_b: u32,
+    anchor_direction_a: vec3<f32>,
+    padding_a: f32,
+    anchor_direction_b: vec3<f32>,
+    padding_b: f32,
+    twist_reference_a: vec4<f32>,
+    twist_reference_b: vec4<f32>,
+    _padding: vec2<u32>,
+};
+
 const PI: f32 = 3.14159265359;
 
 // Rotate a vector by a quaternion
@@ -277,6 +311,81 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Clear death flag for the new slot (it's now occupied by Child B)
     death_flags[child_b_slot] = 0u;
+    
+    // === Create Sibling Adhesion ===
+    // Check if parent mode allows adhesion creation
+    let global_mode_index = mode_indices[cell_idx]; // This is already the global mode index
+    let make_adhesion = parent_make_adhesion_flags[global_mode_index] == 1u;
+    
+    if (make_adhesion) {
+        // Try to allocate an adhesion slot atomically
+        let total_adhesions = atomicAdd(&adhesion_counts[0], 1u);
+        
+        // Check if we have capacity (simplified check - in full implementation would use free slot stack)
+        if (total_adhesions < 100000u) { // MAX_ADHESION_CONNECTIONS
+            let adhesion_slot = total_adhesions;
+            
+            // Calculate anchor directions in local cell space
+            // Child A anchor points toward Child B (negative split direction)
+            // Child B anchor points toward Child A (positive split direction)
+            let anchor_a_local = -split_dir_local; // Child A points toward Child B
+            let anchor_b_local = split_dir_local;  // Child B points toward Child A
+            
+            // Normalize anchor directions
+            let anchor_a_normalized = normalize(anchor_a_local);
+            let anchor_b_normalized = normalize(anchor_b_local);
+            
+            // Store twist reference quaternions from child orientations at division time
+            let twist_ref_a = child_a_rotation;
+            let twist_ref_b = child_b_rotation;
+            
+            // Create the adhesion connection
+            var connection: AdhesionConnection;
+            connection.cell_a_index = cell_idx;        // Child A index
+            connection.cell_b_index = child_b_slot;    // Child B index
+            connection.mode_index = global_mode_index; // Mode index for settings lookup
+            connection.is_active = 1u;                 // Active connection
+            connection.zone_a = 1u;                    // Zone B for Child A (positive split direction)
+            connection.zone_b = 0u;                    // Zone A for Child B (negative split direction)
+            connection.anchor_direction_a = anchor_a_normalized;
+            connection.padding_a = 0.0;
+            connection.anchor_direction_b = anchor_b_normalized;
+            connection.padding_b = 0.0;
+            connection.twist_reference_a = twist_ref_a;
+            connection.twist_reference_b = twist_ref_b;
+            connection._padding = vec2<u32>(0u, 0u);
+            
+            // Store the connection
+            adhesion_connections[adhesion_slot] = connection;
+            
+            // Update per-cell adhesion indices (simplified - assumes first slot is free)
+            // In full implementation, would search for free slot in the 20-element array
+            let cell_a_base = cell_idx * 20u;
+            let cell_b_base = child_b_slot * 20u;
+            
+            // Find first free slot for Child A and add adhesion index
+            for (var i = 0u; i < 20u; i++) {
+                if (cell_adhesion_indices[cell_a_base + i] == -1) {
+                    cell_adhesion_indices[cell_a_base + i] = i32(adhesion_slot);
+                    break;
+                }
+            }
+            
+            // Find first free slot for Child B and add adhesion index
+            for (var i = 0u; i < 20u; i++) {
+                if (cell_adhesion_indices[cell_b_base + i] == -1) {
+                    cell_adhesion_indices[cell_b_base + i] = i32(adhesion_slot);
+                    break;
+                }
+            }
+            
+            // Update live adhesion count
+            atomicAdd(&adhesion_counts[1], 1u);
+        } else {
+            // Failed to allocate - decrement the count we just incremented
+            atomicSub(&adhesion_counts[0], 1u); // Subtract 1 atomically
+        }
+    }
     
     // Update cell count if we used a new slot (not a dead cell slot)
     // Only the first dividing cell (reservation_idx == 0) updates the count

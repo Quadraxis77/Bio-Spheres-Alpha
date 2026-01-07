@@ -7,9 +7,10 @@
 //! 2. Assign cells to grid
 //! 3. Insert cells into grid
 //! 4. Collision detection (optimized with pre-computed neighbor indices)
-//! 5. Position integration
-//! 6. Velocity integration
-//! 7. Mass accumulation - mass increase based on nutrient_gain_rate
+//! 5. Adhesion physics (spring-damper forces between adhered cells)
+//! 6. Position integration
+//! 7. Velocity integration
+//! 8. Mass accumulation - mass increase based on nutrient_gain_rate
 //! 
 //! ## Lifecycle Pipeline (128-thread workgroups)
 //! 8. Death scan - identify dead cells
@@ -73,7 +74,7 @@ const WORKGROUP_SIZE_CELLS: u32 = 256;
 /// Workgroup size for lifecycle operations (moderate complexity)
 const WORKGROUP_SIZE_LIFECYCLE: u32 = 128;
 
-/// Execute the 6-stage GPU physics pipeline
+/// Execute the 8-stage GPU physics pipeline
 pub fn execute_gpu_physics_step(
     _device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
@@ -112,7 +113,8 @@ pub fn execute_gpu_physics_step(
     // Use cached bind groups (no per-frame allocation!)
     let physics_bind_group = &cached_bind_groups.physics[current_index];
     let spatial_grid_bind_group = &cached_bind_groups.spatial_grid;
-    let rotations_bind_group = &cached_bind_groups.rotations[current_index];
+    let adhesion_rotations_bind_group = &cached_bind_groups.rotations[current_index];
+    let position_update_rotations_bind_group = &cached_bind_groups.position_update_rotations[current_index];
     let mass_accum_bind_group = &cached_bind_groups.mass_accum;
     
     // Calculate workgroup counts - dispatch for capacity, shaders check cell_count
@@ -121,7 +123,7 @@ pub fn execute_gpu_physics_step(
     let grid_workgroups = (total_grid_cells + WORKGROUP_SIZE_GRID - 1) / WORKGROUP_SIZE_GRID;
     let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
     
-    // Execute the 6 compute shader stages
+    // Execute the 8 compute shader stages
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("GPU Physics Pipeline"),
@@ -151,18 +153,28 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 5: Position integration (256 threads)
+        // Stage 5: Adhesion physics (256 threads - dispatch based on adhesion count)
+        compute_pass.set_pipeline(&pipelines.adhesion_physics);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
+        compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
+        compute_pass.set_bind_group(3, &cached_bind_groups.force_accum, &[]);
+        // Dispatch based on adhesion capacity, shader checks actual count
+        let adhesion_workgroups = (100_000 + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS; // MAX_ADHESION_CONNECTIONS from gpu_physics
+        compute_pass.dispatch_workgroups(adhesion_workgroups, 1, 1);
+        
+        // Stage 6: Position integration (256 threads)
         compute_pass.set_pipeline(&pipelines.position_update);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, rotations_bind_group, &[]);
+        compute_pass.set_bind_group(1, position_update_rotations_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 6: Velocity integration (256 threads)
+        // Stage 7: Velocity integration (256 threads)
         compute_pass.set_pipeline(&pipelines.velocity_update);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 7: Mass accumulation (256 threads)
+        // Stage 8: Mass accumulation (256 threads)
         compute_pass.set_pipeline(&pipelines.mass_accum);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, mass_accum_bind_group, &[]);
@@ -224,6 +236,7 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.set_bind_group(2, cell_state_write_bind_group, &[]);
+        compute_pass.set_bind_group(3, &cached_bind_groups.lifecycle_adhesion, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
     }
 }
