@@ -168,6 +168,12 @@ pub struct CellRenderer {
     /// which can improve performance by enabling early depth testing.
     depth_only_pipeline: wgpu::RenderPipeline,
     
+    /// Ultra-simple point cloud pipeline for maximum performance
+    /// 
+    /// Renders cells as flat colored circles without lighting, noise, or sphere intersection.
+    /// Significantly faster than billboard rendering for large cell counts.
+    point_cloud_pipeline: wgpu::RenderPipeline,
+    
     // === Shared Resources ===
     
     /// Bind group layout for camera data (shared across all pipelines)
@@ -588,10 +594,53 @@ impl CellRenderer {
             cache: None,
         });
 
+        // Create point cloud pipeline for ultra-fast rendering
+        let point_cloud_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Cell Point Cloud Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cell_point_cloud.wgsl").into()),
+        });
+
+        let point_cloud_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Cell Point Cloud Pipeline"),
+            layout: Some(&cell_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &point_cloud_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[vertex_layout.clone(), instance_layout.clone()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &point_cloud_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         Self {
             opaque_pipeline,
             opaque_no_depth_write_pipeline,
             depth_only_pipeline,
+            point_cloud_pipeline,
             camera_bind_group_layout,
             camera_bind_group,
             camera_buffer,
@@ -992,6 +1041,7 @@ impl CellRenderer {
 
     /// Render cells using a pre-built instance buffer from InstanceBuilder (with GPU culling).
     /// Uses an external encoder to allow batching with other GPU work.
+    /// If `point_cloud_mode` is true, uses ultra-simple point cloud rendering for maximum performance.
     pub fn render_with_encoder(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1002,6 +1052,7 @@ impl CellRenderer {
         camera_pos: Vec3,
         camera_rotation: Quat,
         time: f32,
+        point_cloud_mode: bool,
     ) {
         if instance_count == 0 {
             return;
@@ -1024,7 +1075,7 @@ impl CellRenderer {
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
 
-        // Update lighting uniform
+        // Update lighting uniform (still needed for point cloud mode for consistency)
         let light_dir = Vec3::new(0.5, 1.0, 0.3).normalize();
         let lighting_uniform = LightingUniform {
             light_direction: light_dir.to_array(),
@@ -1036,34 +1087,10 @@ impl CellRenderer {
         };
         queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
 
-        // Pass 1: Depth pre-pass for all GPU-culled instances
-        {
-            let mut depth_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Cell GPU Culled Depth Pre-Pass"),
-                color_attachments: &[], // No color output
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // Preserve existing depth from clear pass
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            depth_pass.set_pipeline(&self.depth_only_pipeline);
-            depth_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            depth_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
-            depth_pass.set_vertex_buffer(1, instance_builder.get_instance_buffer().slice(..));
-            depth_pass.draw_indirect(instance_builder.get_indirect_buffer(), 0);
-        }
-
-        // Pass 2: Color pass with depth testing (no depth writing)
-        {
+        if point_cloud_mode {
+            // Single-pass point cloud rendering - no depth pre-pass needed
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Cell GPU Culled Color Pass"),
+                label: Some("Cell Point Cloud Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
                     resolve_target: None,
@@ -1085,12 +1112,68 @@ impl CellRenderer {
                 occlusion_query_set: None,
             });
 
-            render_pass.set_pipeline(&self.opaque_no_depth_write_pipeline);
+            render_pass.set_pipeline(&self.point_cloud_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
             render_pass.set_vertex_buffer(1, instance_builder.get_instance_buffer().slice(..));
-            // Use indirect draw to get instance count from GPU buffer
             render_pass.draw_indirect(instance_builder.get_indirect_buffer(), 0);
+        } else {
+            // Pass 1: Depth pre-pass for all GPU-culled instances
+            {
+                let mut depth_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Cell GPU Culled Depth Pre-Pass"),
+                    color_attachments: &[], // No color output
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load, // Preserve existing depth from clear pass
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+                depth_pass.set_pipeline(&self.depth_only_pipeline);
+                depth_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                depth_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+                depth_pass.set_vertex_buffer(1, instance_builder.get_instance_buffer().slice(..));
+                depth_pass.draw_indirect(instance_builder.get_indirect_buffer(), 0);
+            }
+
+            // Pass 2: Color pass with depth testing (no depth writing)
+            {
+                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Cell GPU Culled Color Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+                render_pass.set_pipeline(&self.opaque_no_depth_write_pipeline);
+                render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+                render_pass.set_vertex_buffer(1, instance_builder.get_instance_buffer().slice(..));
+                // Use indirect draw to get instance count from GPU buffer
+                render_pass.draw_indirect(instance_builder.get_indirect_buffer(), 0);
+            }
         }
     }
 

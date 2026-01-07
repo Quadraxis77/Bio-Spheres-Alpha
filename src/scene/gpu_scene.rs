@@ -56,6 +56,8 @@ pub struct GpuScene {
     pub time_scale: f32,
     /// Whether to show adhesion lines
     pub show_adhesion_lines: bool,
+    /// Point cloud rendering mode for maximum performance
+    pub point_cloud_mode: bool,
     /// DEBUG: Track frames since last insertion for debugging
     debug_frames_since_insertion: u32,
     /// DEBUG: Last known cell count for detecting drops
@@ -124,6 +126,7 @@ impl GpuScene {
             readbacks_enabled: true,
             time_scale: 1.0,
             show_adhesion_lines: true, // Enable by default
+            point_cloud_mode: false,
             debug_frames_since_insertion: u32::MAX, // Start high so we don't log on startup
             debug_last_cell_count: 0,
             debug_frame_counter: 0,
@@ -235,6 +238,12 @@ impl GpuScene {
     /// Disabling this can improve performance by avoiding CPU-GPU sync overhead.
     pub fn set_readbacks_enabled(&mut self, enabled: bool) {
         self.readbacks_enabled = enabled;
+    }
+    
+    /// Set point cloud rendering mode for maximum performance.
+    /// When enabled, cells are rendered as simple colored circles without lighting.
+    pub fn set_point_cloud_mode(&mut self, enabled: bool) {
+        self.point_cloud_mode = enabled;
     }
     
     /// Read culling statistics from GPU (blocking).
@@ -965,6 +974,7 @@ impl Scene for GpuScene {
             self.camera.position(),
             self.camera.rotation,
             self.current_time,
+            self.point_cloud_mode,
         );
 
         // Render adhesion lines if enabled

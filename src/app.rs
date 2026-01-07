@@ -418,6 +418,7 @@ impl App {
             gpu_scene.set_occlusion_min_screen_size(self.ui.state.occlusion_min_screen_size);
             gpu_scene.set_occlusion_min_distance(self.ui.state.occlusion_min_distance);
             gpu_scene.set_readbacks_enabled(self.ui.state.gpu_readbacks_enabled);
+            gpu_scene.set_point_cloud_mode(self.ui.state.point_cloud_mode);
             
             // Set culling mode based on enabled flags
             let culling_mode = match (self.ui.state.frustum_enabled, self.ui.state.occlusion_enabled) {

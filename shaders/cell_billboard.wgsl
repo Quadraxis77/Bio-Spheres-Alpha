@@ -338,7 +338,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     
     // ============== MEMBRANE LIGHTING ==============
     let ndot_l = max(0.0, dot(perturbed_normal, light_dir));
-    let ambient = 0.12;
+    let ambient = 0.20;
     let diffuse = ndot_l;
     
     // Specular (Blinn-Phong)
@@ -354,7 +354,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let base_color = in.color.rgb;
     let inner_glow = base_color * 1.2 * subsurface;
     
-    let membrane_color = base_color * (ambient + diffuse * 0.8)
+    let membrane_color = base_color * (ambient + diffuse)
         + vec3<f32>(specular)
         + base_color * fresnel * 1.5
         + inner_glow
@@ -370,7 +370,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     
     // ============== COMPOSITE ==============
     // Layer 1: Background (cytoplasm) - always opaque
-    let bg_color = in.color.rgb * 0.3;
+    let bg_color = in.color.rgb * 0.65;
     
     // Layer 2: Nucleus over background - always opaque
     var cell_color = bg_color;

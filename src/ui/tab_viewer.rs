@@ -547,8 +547,14 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
         // Culling section (GPU mode only)
         if context.current_mode == crate::ui::types::SimulationMode::Gpu {
             ui.add_space(8.0);
-            ui.heading("GPU Culling");
+            ui.heading("GPU Rendering");
             ui.separator();
+            
+            // Point cloud mode toggle for maximum performance
+            ui.checkbox(&mut state.point_cloud_mode, "Point Cloud Mode")
+                .on_hover_text("Ultra-fast rendering: flat circles without lighting or sphere effects");
+            
+            ui.add_space(4.0);
             
             let (total, visible, frustum_culled, occluded) = perf.culling_stats();
             
