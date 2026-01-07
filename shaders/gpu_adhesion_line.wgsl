@@ -8,21 +8,22 @@ struct CameraUniform {
     _padding: f32,
 }
 
-// Adhesion connection structure (must match Rust/compute shader)
+// Adhesion connection structure (104 bytes matching Rust GpuAdhesionConnection)
+// IMPORTANT: Use vec4 for anchor directions because vec3 has 16-byte alignment in WGSL
+// which would cause layout mismatch with Rust's [f32; 3] + f32 padding
 struct AdhesionConnection {
-    cell_a_index: u32,
-    cell_b_index: u32,
-    mode_index: u32,
-    is_active: u32,
-    zone_a: u32,
-    zone_b: u32,
-    anchor_direction_a: vec3<f32>,
-    padding_a: f32,
-    anchor_direction_b: vec3<f32>,
-    padding_b: f32,
-    twist_reference_a: vec4<f32>,
-    twist_reference_b: vec4<f32>,
-    _padding: vec2<u32>,
+    cell_a_index: u32,          // offset 0
+    cell_b_index: u32,          // offset 4
+    mode_index: u32,            // offset 8
+    is_active: u32,             // offset 12
+    zone_a: u32,                // offset 16
+    zone_b: u32,                // offset 20
+    _align_pad: vec2<u32>,      // offset 24-31 (8 bytes)
+    anchor_direction_a: vec4<f32>,  // offset 32-47 (xyz = direction, w = padding)
+    anchor_direction_b: vec4<f32>,  // offset 48-63 (xyz = direction, w = padding)
+    twist_reference_a: vec4<f32>,   // offset 64-79
+    twist_reference_b: vec4<f32>,   // offset 80-95
+    _padding: vec2<u32>,            // offset 96-103
 }
 
 @group(0) @binding(0)

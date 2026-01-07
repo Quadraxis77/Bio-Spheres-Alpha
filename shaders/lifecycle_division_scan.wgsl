@@ -86,6 +86,38 @@ var<storage, read> split_counts: array<u32>;
 @group(2) @binding(4)
 var<storage, read> max_splits: array<u32>;
 
+// Adhesion bind group (group 3) - for checking neighbor division status
+@group(3) @binding(0)
+var<storage, read> adhesion_connections: array<AdhesionConnection>;
+
+@group(3) @binding(1)
+var<storage, read> cell_adhesion_indices: array<i32>;
+
+// Adhesion connection structure (104 bytes matching Rust GpuAdhesionConnection)
+// IMPORTANT: Use vec4 for anchor directions because vec3 has 16-byte alignment in WGSL
+// which would cause layout mismatch with Rust's [f32; 3] + f32 padding
+struct AdhesionConnection {
+    cell_a_index: u32,          // offset 0
+    cell_b_index: u32,          // offset 4
+    mode_index: u32,            // offset 8
+    is_active: u32,             // offset 12
+    zone_a: u32,                // offset 16
+    zone_b: u32,                // offset 20
+    _align_pad: vec2<u32>,      // offset 24-31 (8 bytes)
+    anchor_direction_a: vec4<f32>,  // offset 32-47 (xyz = direction, w = padding)
+    anchor_direction_b: vec4<f32>,  // offset 48-63 (xyz = direction, w = padding)
+    twist_reference_a: vec4<f32>,   // offset 64-79
+    twist_reference_b: vec4<f32>,   // offset 80-95
+    _padding: vec2<u32>,            // offset 96-103
+};
+
+const MAX_ADHESIONS_PER_CELL: u32 = 20u;
+
+// Temporary storage for division candidates (before deferral check)
+// We use division_flags as a two-pass system:
+// Pass 1: Mark all cells that WANT to divide (wants_to_divide)
+// Pass 2: Check neighbors and defer if needed
+
 @compute @workgroup_size(128)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
@@ -129,12 +161,90 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     let wants_to_divide = mass_ready && time_ready && splits_remaining;
     
-    // Write division flag
-    division_flags[cell_idx] = select(0u, 1u, wants_to_divide);
-    
-    // If this cell wants to divide, atomically get a reservation index
-    if (wants_to_divide) {
-        let reservation_idx = atomicAdd(&lifecycle_counts[1], 1u);
-        division_slot_assignments[cell_idx] = reservation_idx;
+    // If this cell doesn't want to divide, we're done
+    if (!wants_to_divide) {
+        division_flags[cell_idx] = 0u;
+        return;
     }
+    
+    // === DEFERRAL CHECK ===
+    // Check if any neighbor (via adhesion) also wants to divide.
+    // If so, the cell with the HIGHER index defers to avoid race conditions
+    // during adhesion inheritance in division_execute.
+    //
+    // This ensures deterministic behavior: when two connected cells both want
+    // to divide, only the one with the lower index divides this frame.
+    // The other will divide next frame after the adhesion inheritance is complete.
+    
+    var should_defer = false;
+    let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
+    
+    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+        let adh_idx_signed = cell_adhesion_indices[adhesion_base + i];
+        
+        // Skip empty slots
+        if (adh_idx_signed < 0) {
+            continue;
+        }
+        
+        let adh_idx = u32(adh_idx_signed);
+        let conn = adhesion_connections[adh_idx];
+        
+        // Skip inactive connections
+        if (conn.is_active == 0u) {
+            continue;
+        }
+        
+        // Get the neighbor's index
+        var neighbor_idx: u32;
+        if (conn.cell_a_index == cell_idx) {
+            neighbor_idx = conn.cell_b_index;
+        } else if (conn.cell_b_index == cell_idx) {
+            neighbor_idx = conn.cell_a_index;
+        } else {
+            // Connection doesn't involve this cell (shouldn't happen)
+            continue;
+        }
+        
+        // Skip if neighbor is out of bounds or dead
+        if (neighbor_idx >= cell_count || death_flags[neighbor_idx] == 1u) {
+            continue;
+        }
+        
+        // Check if neighbor also wants to divide
+        // We need to check the same criteria we used for ourselves
+        let neighbor_mass = positions_out[neighbor_idx].w;
+        let neighbor_birth_time = birth_times[neighbor_idx];
+        let neighbor_split_interval = split_intervals[neighbor_idx];
+        let neighbor_split_mass = split_masses[neighbor_idx];
+        let neighbor_current_splits = split_counts[neighbor_idx];
+        let neighbor_max_split = max_splits[neighbor_idx];
+        
+        let neighbor_age = params.current_time - neighbor_birth_time;
+        let neighbor_mass_ready = neighbor_mass >= neighbor_split_mass;
+        let neighbor_time_ready = neighbor_age >= neighbor_split_interval;
+        let neighbor_splits_remaining = neighbor_current_splits < neighbor_max_split || neighbor_max_split == 0u;
+        
+        let neighbor_wants_to_divide = neighbor_mass_ready && neighbor_time_ready && neighbor_splits_remaining;
+        
+        // If neighbor wants to divide AND has a lower index, we defer
+        // Lower index wins - this is deterministic and ensures one cell always proceeds
+        if (neighbor_wants_to_divide && neighbor_idx < cell_idx) {
+            should_defer = true;
+            break;
+        }
+    }
+    
+    // If we should defer, don't divide this frame
+    if (should_defer) {
+        division_flags[cell_idx] = 0u;
+        return;
+    }
+    
+    // This cell can divide - write division flag and get reservation
+    division_flags[cell_idx] = 1u;
+    
+    // Atomically get a reservation index
+    let reservation_idx = atomicAdd(&lifecycle_counts[1], 1u);
+    division_slot_assignments[cell_idx] = reservation_idx;
 }

@@ -162,21 +162,22 @@ var<storage, read> child_a_keep_adhesion_flags: array<u32>;
 @group(3) @binding(5)
 var<storage, read> child_b_keep_adhesion_flags: array<u32>;
 
-// Adhesion connection structure (96 bytes, matching adhesion_physics.wgsl)
+// Adhesion connection structure (104 bytes matching Rust GpuAdhesionConnection)
+// IMPORTANT: Use vec4 for anchor directions because vec3 has 16-byte alignment in WGSL
+// which would cause layout mismatch with Rust's [f32; 3] + f32 padding
 struct AdhesionConnection {
-    cell_a_index: u32,
-    cell_b_index: u32,
-    mode_index: u32,
-    is_active: u32,
-    zone_a: u32,
-    zone_b: u32,
-    anchor_direction_a: vec3<f32>,
-    padding_a: f32,
-    anchor_direction_b: vec3<f32>,
-    padding_b: f32,
-    twist_reference_a: vec4<f32>,
-    twist_reference_b: vec4<f32>,
-    _padding: vec2<u32>,
+    cell_a_index: u32,          // offset 0
+    cell_b_index: u32,          // offset 4
+    mode_index: u32,            // offset 8
+    is_active: u32,             // offset 12
+    zone_a: u32,                // offset 16
+    zone_b: u32,                // offset 20
+    _align_pad: vec2<u32>,      // offset 24-31 (8 bytes)
+    anchor_direction_a: vec4<f32>,  // offset 32-47 (xyz = direction, w = padding)
+    anchor_direction_b: vec4<f32>,  // offset 48-63 (xyz = direction, w = padding)
+    twist_reference_a: vec4<f32>,   // offset 64-79
+    twist_reference_b: vec4<f32>,   // offset 80-95
+    _padding: vec2<u32>,            // offset 96-103
 };
 
 const PI: f32 = 3.14159265359;
@@ -427,6 +428,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_a_keep = child_a_keep_adhesion_flags[parent_mode_idx] == 1u;
     let child_b_keep = child_b_keep_adhesion_flags[parent_mode_idx] == 1u;
     
+    // Track the sibling adhesion slot (if created) to skip it during inheritance
+    var sibling_adhesion_slot: u32 = 0xFFFFFFFFu; // Invalid slot by default
+    
     if (make_adhesion) {
         // Try to allocate an adhesion slot atomically
         let total_adhesions = atomicAdd(&adhesion_counts[0], 1u);
@@ -434,6 +438,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Check if we have capacity (simplified check - in full implementation would use free slot stack)
         if (total_adhesions < 100000u) { // MAX_ADHESION_CONNECTIONS
             let adhesion_slot = total_adhesions;
+            sibling_adhesion_slot = adhesion_slot; // Save for later skip check
             
             // Calculate anchor directions in each child's LOCAL space
             // CRITICAL: Must transform by child orientation inverse (matches CPU exactly)
@@ -470,10 +475,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             connection.is_active = 1u;                 // Active connection
             connection.zone_a = 1u;                    // Zone B for Child A (positive split direction)
             connection.zone_b = 0u;                    // Zone A for Child B (negative split direction)
-            connection.anchor_direction_a = anchor_a_local;
-            connection.padding_a = 0.0;
-            connection.anchor_direction_b = anchor_b_local;
-            connection.padding_b = 0.0;
+            connection._align_pad = vec2<u32>(0u, 0u);
+            connection.anchor_direction_a = vec4<f32>(anchor_a_local, 0.0);
+            connection.anchor_direction_b = vec4<f32>(anchor_b_local, 0.0);
             connection.twist_reference_a = twist_ref_a;
             connection.twist_reference_b = twist_ref_b;
             connection._padding = vec2<u32>(0u, 0u);
@@ -541,11 +545,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var child_a_adhesion_count = 0u;
     var child_b_adhesion_count = 0u;
     
-    // Re-add the sibling adhesion we just created (if make_adhesion was true)
-    if (make_adhesion) {
-        // Find the sibling adhesion slot (it was the last one allocated)
-        let sibling_adhesion_slot = atomicLoad(&adhesion_counts[0]) - 1u;
-        
+    // Re-add the sibling adhesion we just created (if it was created successfully)
+    if (sibling_adhesion_slot != 0xFFFFFFFFu) {
         // Add to Child A
         if (child_a_adhesion_count < MAX_ADHESIONS_PER_CELL) {
             cell_adhesion_indices[child_a_adhesion_base + child_a_adhesion_count] = i32(sibling_adhesion_slot);
@@ -586,12 +587,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let adh_idx = u32(adh_idx_signed);
         
         // Skip the sibling adhesion we just created (it's already handled)
-        // The sibling adhesion was added to parent's list before we saved it
-        if (make_adhesion) {
-            let sibling_slot = atomicLoad(&adhesion_counts[0]) - 1u;
-            if (adh_idx == sibling_slot) {
-                continue;
-            }
+        // Use the saved sibling_adhesion_slot to avoid race conditions with other dividing cells
+        if (adh_idx == sibling_adhesion_slot) {
+            continue;
         }
         
         let conn = adhesion_connections[adh_idx];
@@ -620,9 +618,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // This is already in parent's local frame (matches reference)
         var parent_anchor_dir_local: vec3<f32>;
         if (is_parent_cell_a) {
-            parent_anchor_dir_local = conn.anchor_direction_a;
+            parent_anchor_dir_local = conn.anchor_direction_a.xyz;
         } else {
-            parent_anchor_dir_local = conn.anchor_direction_b;
+            parent_anchor_dir_local = conn.anchor_direction_b.xyz;
         }
         
         // Classify the zone based on LOCAL anchor direction relative to LOCAL split direction
@@ -685,14 +683,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Child A overwrites parent slot, so cell index stays the same
             if (is_parent_cell_a) {
                 // Parent was cellA, so child stays as cellA
-                adhesion_connections[adh_idx].anchor_direction_a = child_anchor;
+                adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_anchor, 0.0);
                 // Keep neighbor's anchor direction unchanged: anchor_direction_b stays the same
                 adhesion_connections[adh_idx].twist_reference_a = child_a_rotation;
                 // Zone classification for child's side
                 adhesion_connections[adh_idx].zone_a = classify_adhesion_zone(child_anchor, split_dir_local);
             } else {
                 // Parent was cellB, so child stays as cellB
-                adhesion_connections[adh_idx].anchor_direction_b = child_anchor;
+                adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_anchor, 0.0);
                 // Keep neighbor's anchor direction unchanged: anchor_direction_a stays the same
                 adhesion_connections[adh_idx].twist_reference_b = child_a_rotation;
                 // Zone classification for child's side
@@ -727,14 +725,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (is_parent_cell_a) {
                 // Parent was cellA, so child B takes cellA position
                 adhesion_connections[adh_idx].cell_a_index = child_b_slot;
-                adhesion_connections[adh_idx].anchor_direction_a = child_anchor;
+                adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_anchor, 0.0);
                 // Keep neighbor's anchor direction unchanged: anchor_direction_b stays the same
                 adhesion_connections[adh_idx].twist_reference_a = child_b_rotation;
                 adhesion_connections[adh_idx].zone_a = classify_adhesion_zone(child_anchor, split_dir_local);
             } else {
                 // Parent was cellB, so child B takes cellB position
                 adhesion_connections[adh_idx].cell_b_index = child_b_slot;
-                adhesion_connections[adh_idx].anchor_direction_b = child_anchor;
+                adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_anchor, 0.0);
                 // Keep neighbor's anchor direction unchanged: anchor_direction_a stays the same
                 adhesion_connections[adh_idx].twist_reference_b = child_b_rotation;
                 adhesion_connections[adh_idx].zone_b = classify_adhesion_zone(child_anchor, split_dir_local);
@@ -759,12 +757,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Update original connection for Child A
             // IMPORTANT: Neighbor's anchor direction should NOT change!
             if (is_parent_cell_a) {
-                adhesion_connections[adh_idx].anchor_direction_a = child_a_anchor;
+                adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_a_anchor, 0.0);
                 // Keep neighbor's anchor direction unchanged: anchor_direction_b stays the same
                 adhesion_connections[adh_idx].twist_reference_a = child_a_rotation;
                 adhesion_connections[adh_idx].zone_a = classify_adhesion_zone(child_a_anchor, split_dir_local);
             } else {
-                adhesion_connections[adh_idx].anchor_direction_b = child_a_anchor;
+                adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_a_anchor, 0.0);
                 // Keep neighbor's anchor direction unchanged: anchor_direction_a stays the same
                 adhesion_connections[adh_idx].twist_reference_b = child_a_rotation;
                 adhesion_connections[adh_idx].zone_b = classify_adhesion_zone(child_a_anchor, split_dir_local);
@@ -790,32 +788,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 var dup_conn: AdhesionConnection;
                 dup_conn.mode_index = conn.mode_index;
                 dup_conn.is_active = 1u;
+                dup_conn._align_pad = vec2<u32>(0u, 0u);
                 dup_conn._padding = vec2<u32>(0u, 0u);
                 
                 if (is_parent_cell_a) {
                     // Parent was cellA, so child B takes cellA position in duplicate
                     dup_conn.cell_a_index = child_b_slot;
                     dup_conn.cell_b_index = neighbor_idx;
-                    dup_conn.anchor_direction_a = child_b_anchor;
-                    dup_conn.anchor_direction_b = conn.anchor_direction_b; // Copy from original!
+                    dup_conn.anchor_direction_a = vec4<f32>(child_b_anchor, 0.0);
+                    dup_conn.anchor_direction_b = conn.anchor_direction_b; // Copy from original (already vec4)
                     dup_conn.twist_reference_a = child_b_rotation;
                     dup_conn.twist_reference_b = conn.twist_reference_b; // Copy from original!
                     dup_conn.zone_a = classify_adhesion_zone(child_b_anchor, split_dir_local);
                     dup_conn.zone_b = conn.zone_b; // Keep neighbor's zone
-                    dup_conn.padding_a = 0.0;
-                    dup_conn.padding_b = 0.0;
                 } else {
                     // Parent was cellB, so child B takes cellB position in duplicate
                     dup_conn.cell_a_index = neighbor_idx;
                     dup_conn.cell_b_index = child_b_slot;
-                    dup_conn.anchor_direction_a = conn.anchor_direction_a; // Copy from original!
-                    dup_conn.anchor_direction_b = child_b_anchor;
+                    dup_conn.anchor_direction_a = conn.anchor_direction_a; // Copy from original (already vec4)
+                    dup_conn.anchor_direction_b = vec4<f32>(child_b_anchor, 0.0);
                     dup_conn.twist_reference_a = conn.twist_reference_a; // Copy from original!
                     dup_conn.twist_reference_b = child_b_rotation;
                     dup_conn.zone_a = conn.zone_a; // Keep neighbor's zone
                     dup_conn.zone_b = classify_adhesion_zone(child_b_anchor, split_dir_local);
-                    dup_conn.padding_a = 0.0;
-                    dup_conn.padding_b = 0.0;
                 }
                 
                 // Store the duplicate

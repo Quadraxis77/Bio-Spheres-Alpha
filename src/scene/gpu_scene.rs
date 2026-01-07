@@ -1025,6 +1025,15 @@ impl Scene for GpuScene {
         // Single submit for all GPU work
         queue.submit(std::iter::once(encoder.finish()));
         
+        // DEBUG: Read back adhesion data only when cell count increases (division happened)
+        let current_cell_count = self.gpu_triple_buffers.gpu_cell_count();
+        if current_cell_count > self.debug_last_cell_count as u32 && self.debug_last_cell_count > 0 {
+            println!("[DIVISION] Cell count increased: {} -> {}", self.debug_last_cell_count, current_cell_count);
+            self.adhesion_buffers.debug_sync_readback_adhesion_counts(device, queue);
+            self.adhesion_buffers.debug_sync_readback_connections(device, queue, 10);
+        }
+        self.debug_last_cell_count = current_cell_count as usize;
+        
         // Poll for async GPU cell count read completion (if enabled)
         if self.readbacks_enabled {
             self.poll_gpu_cell_count(device);

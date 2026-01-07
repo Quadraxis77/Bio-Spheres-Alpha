@@ -91,10 +91,10 @@ impl AdhesionBuffers {
     pub fn new(device: &wgpu::Device, cell_capacity: u32, max_modes: u32) -> Self {
         let max_connections = MAX_ADHESION_CONNECTIONS;
         
-        // Adhesion connections: 96 bytes each
+        // Adhesion connections: 104 bytes each (WGSL struct with implicit padding)
         let adhesion_connections = Self::create_storage_buffer(
             device,
-            max_connections as u64 * 96,
+            max_connections as u64 * 104,
             "Adhesion Connections",
         );
         
@@ -405,5 +405,112 @@ impl AdhesionBuffers {
         } else {
             None
         }
+    }
+    
+    /// DEBUG: Synchronous readback of adhesion counts from GPU
+    /// This is slow and should only be used for debugging!
+    pub fn debug_sync_readback_adhesion_counts(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) {
+        // Create a staging buffer for readback
+        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Adhesion Counts Staging"),
+            size: 16, // 4 u32s
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
+        // Create encoder and copy
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Debug Adhesion Readback"),
+        });
+        encoder.copy_buffer_to_buffer(&self.adhesion_counts, 0, &staging_buffer, 0, 16);
+        queue.submit(std::iter::once(encoder.finish()));
+        
+        // Map the staging buffer and read the data
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        
+        if let Ok(Ok(())) = rx.recv() {
+            let data = buffer_slice.get_mapped_range();
+            let counts: &[u32] = bytemuck::cast_slice(&data);
+            println!("[GPU ADHESION] total={}, live={}, free_top={}", 
+                counts[0], counts[1], counts[2]);
+            drop(data);
+        }
+        
+        staging_buffer.unmap();
+    }
+    
+    /// DEBUG: Synchronous readback of first N adhesion connections from GPU
+    pub fn debug_sync_readback_connections(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        count: u32,
+    ) {
+        let count = count.min(10); // Limit to 10 for readability
+        let size = count as u64 * 104; // 104 bytes per connection
+        
+        // Create a staging buffer for readback
+        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Adhesion Connections Staging"),
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
+        // Create encoder and copy
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Debug Connections Readback"),
+        });
+        encoder.copy_buffer_to_buffer(&self.adhesion_connections, 0, &staging_buffer, 0, size);
+        queue.submit(std::iter::once(encoder.finish()));
+        
+        // Map the staging buffer and read the data
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        
+        if let Ok(Ok(())) = rx.recv() {
+            let data = buffer_slice.get_mapped_range();
+            
+            // Print raw u32s for first 2 connections to debug alignment
+            let raw_u32s: &[u32] = bytemuck::cast_slice(&data);
+            println!("[RAW] First 52 u32s (2 connections @ 104 bytes = 26 u32s each):");
+            for i in 0..52.min(raw_u32s.len()) {
+                if i % 26 == 0 {
+                    println!("  --- Connection {} ---", i / 26);
+                }
+                let offset = (i % 26) * 4;
+                println!("  [{}] offset {}: {} (0x{:08x})", i % 26, offset, raw_u32s[i], raw_u32s[i]);
+            }
+            
+            let connections: &[GpuAdhesionConnection] = bytemuck::cast_slice(&data);
+            for (i, conn) in connections.iter().enumerate() {
+                println!("[GPU CONN {}] cell_a={}, cell_b={}, mode={}, active={}", 
+                    i, conn.cell_a_index, conn.cell_b_index, conn.mode_index, conn.is_active);
+            }
+            drop(data);
+        }
+        
+        staging_buffer.unmap();
     }
 }

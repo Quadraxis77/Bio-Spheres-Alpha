@@ -48,21 +48,22 @@ struct AdhesionSettings {
     _padding: i32,
 }
 
-// Adhesion connection structure (96 bytes)
+// Adhesion connection structure (104 bytes matching Rust GpuAdhesionConnection)
+// IMPORTANT: Use vec4 for anchor directions because vec3 has 16-byte alignment in WGSL
+// which would cause layout mismatch with Rust's [f32; 3] + f32 padding
 struct AdhesionConnection {
-    cell_a_index: u32,
-    cell_b_index: u32,
-    mode_index: u32,
-    is_active: u32,
-    zone_a: u32,
-    zone_b: u32,
-    anchor_direction_a: vec3<f32>,
-    padding_a: f32,
-    anchor_direction_b: vec3<f32>,
-    padding_b: f32,
-    twist_reference_a: vec4<f32>,
-    twist_reference_b: vec4<f32>,
-    _padding: vec2<u32>,
+    cell_a_index: u32,          // offset 0
+    cell_b_index: u32,          // offset 4
+    mode_index: u32,            // offset 8
+    is_active: u32,             // offset 12
+    zone_a: u32,                // offset 16
+    zone_b: u32,                // offset 20
+    _align_pad: vec2<u32>,      // offset 24-31 (8 bytes)
+    anchor_direction_a: vec4<f32>,  // offset 32-47 (xyz = direction, w = padding)
+    anchor_direction_b: vec4<f32>,  // offset 48-63 (xyz = direction, w = padding)
+    twist_reference_a: vec4<f32>,   // offset 64-79
+    twist_reference_b: vec4<f32>,   // offset 80-95
+    _padding: vec2<u32>,            // offset 96-103
 }
 
 @group(0) @binding(0)
@@ -256,13 +257,13 @@ fn compute_adhesion_forces(
     var anchor_a: vec3<f32>;
     var anchor_b: vec3<f32>;
     
-    if (length(connection.anchor_direction_a) < 0.001 && length(connection.anchor_direction_b) < 0.001) {
+    if (length(connection.anchor_direction_a.xyz) < 0.001 && length(connection.anchor_direction_b.xyz) < 0.001) {
         // Fallback: use default directions
         anchor_a = vec3<f32>(1.0, 0.0, 0.0);
         anchor_b = vec3<f32>(-1.0, 0.0, 0.0);
     } else {
-        anchor_a = rotate_vector_by_quat(connection.anchor_direction_a, rot_a);
-        anchor_b = rotate_vector_by_quat(connection.anchor_direction_b, rot_b);
+        anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
+        anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
     }
     
     // Orientation spring for cell A
@@ -297,8 +298,8 @@ fn compute_adhesion_forces(
         let adhesion_axis = normalize(delta_pos);
         
         // Calculate target orientations
-        let current_anchor_a = rotate_vector_by_quat(connection.anchor_direction_a, rot_a);
-        let current_anchor_b = rotate_vector_by_quat(connection.anchor_direction_b, rot_b);
+        let current_anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
+        let current_anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
         
         let target_anchor_a = adhesion_axis;
         let target_anchor_b = -adhesion_axis;
