@@ -1,6 +1,6 @@
 // Adhesion Cleanup Shader
 // Runs after death_scan to clean up adhesion connections for dead cells
-// Workgroup size: 128 threads for adhesion operations
+// Workgroup size: 256 threads for optimal GPU occupancy
 //
 // This shader:
 // 1. Iterates through all adhesion connections in index order (deterministic)
@@ -54,8 +54,8 @@ struct AdhesionConnection {
     _padding: vec2<u32>,            // offset 96-103
 };
 
-// Maximum adhesions per cell (matching reference)
-const MAX_ADHESIONS_PER_CELL: u32 = 20u;
+// Maximum adhesions per cell (reduced for 200K cell support)
+const MAX_ADHESIONS_PER_CELL: u32 = 10u;
 
 @group(0) @binding(0)
 var<uniform> params: PhysicsParams;
@@ -124,7 +124,7 @@ fn remove_adhesion_from_cell(cell_idx: u32, adhesion_idx: u32) {
     }
 }
 
-@compute @workgroup_size(128)
+@compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let adhesion_idx = global_id.x;
     

@@ -61,8 +61,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     
     out.clip_position = camera.view_proj * vec4<f32>(world_pos, 1.0);
     out.world_position = world_pos;
-    // Invert normal for inside rendering (front-face culling)
-    out.world_normal = -normalize(in.normal);
+    // Use outward-facing normal (not inverted) so lighting appears from outside
+    out.world_normal = normalize(in.normal);
     
     return out;
 }
@@ -72,8 +72,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let normal = normalize(in.world_normal);
     let view_dir = normalize(camera.camera_pos - in.world_position);
     
-    // Use scene lighting (same as cell renderer)
-    let light_dir = normalize(lighting.light_direction);
+    // Use scene lighting but negate direction so light hits opposite side of sphere
+    // This makes the sphere appear lit from inside (matching how we view it from inside)
+    let light_dir = -normalize(lighting.light_direction);
     let light_color = lighting.light_color;
     let ambient_color = lighting.ambient_color;
     

@@ -1,7 +1,7 @@
 use glam::{Vec3, Quat};
 
-/// Maximum adhesions per cell (matches C++ implementation)
-pub const MAX_ADHESIONS_PER_CELL: usize = 20;
+/// Maximum adhesions per cell (reduced from 20 for 200K cell support)
+pub const MAX_ADHESIONS_PER_CELL: usize = 10;
 
 /// Maximum total adhesion connections (20 × max cells)
 pub const MAX_ADHESION_CONNECTIONS: usize = 5120;

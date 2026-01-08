@@ -192,7 +192,7 @@ const ZONE_C: u32 = 2u; // Equatorial - duplicated for both children
 const EQUATORIAL_THRESHOLD_DEG: f32 = 2.0;
 
 // Maximum adhesions per cell
-const MAX_ADHESIONS_PER_CELL: u32 = 20u;
+const MAX_ADHESIONS_PER_CELL: u32 = 10u;
 
 // Rotate a vector by a quaternion
 fn rotate_vector_by_quat(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
@@ -526,7 +526,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // IMPORTANT: Save parent's adhesion indices BEFORE clearing them
     // This avoids race conditions with other dividing cells
-    var parent_adhesion_indices: array<i32, 20>;
+    var parent_adhesion_indices: array<i32, 10>;
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
         parent_adhesion_indices[i] = cell_adhesion_indices[parent_adhesion_base + i];
     }

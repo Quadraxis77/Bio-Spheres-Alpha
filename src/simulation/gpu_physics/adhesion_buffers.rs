@@ -5,11 +5,11 @@
 //!
 //! ## Buffer Layout
 //!
-//! ### Adhesion Connections (96 bytes each)
+//! ### Adhesion Connections (104 bytes each with WGSL padding)
 //! - `adhesion_connections`: Array of GpuAdhesionConnection structs
 //!
-//! ### Per-Cell Adhesion Indices (80 bytes each = 20 * i32)
-//! - `cell_adhesion_indices`: Array of 20 adhesion indices per cell (-1 = no connection)
+//! ### Per-Cell Adhesion Indices (40 bytes each = 10 * i32)
+//! - `cell_adhesion_indices`: Array of 10 adhesion indices per cell (-1 = no connection)
 //!
 //! ### Adhesion Settings (48 bytes each)
 //! - `adhesion_settings`: Per-mode adhesion settings from genome

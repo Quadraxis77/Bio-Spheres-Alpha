@@ -29,6 +29,7 @@
 //! - 64³ spatial grid for collision acceleration
 
 use super::{CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem};
+use super::adhesion::MAX_ADHESION_CONNECTIONS;
 
 /// Physics parameters for GPU uniform buffer (256-byte aligned)
 /// 
@@ -74,6 +75,9 @@ const WORKGROUP_SIZE_CELLS: u32 = 256;
 
 /// Workgroup size for lifecycle operations (moderate complexity)
 const WORKGROUP_SIZE_LIFECYCLE: u32 = 128;
+
+/// Workgroup size for adhesion cleanup (256 for optimal GPU occupancy)
+const WORKGROUP_SIZE_ADHESION: u32 = 256;
 
 /// Execute the 8-stage GPU physics pipeline
 pub fn execute_gpu_physics_step(
@@ -234,15 +238,15 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
         
-        // Stage 1.5: Adhesion cleanup - remove adhesions for dead cells (128 threads)
+        // Stage 1.5: Adhesion cleanup - remove adhesions for dead cells (256 threads)
         // This must run after death scan so we know which cells are dead
         // and before prefix sum so freed adhesion slots can be reused
         compute_pass.set_pipeline(&pipelines.adhesion_cleanup);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.lifecycle_adhesion, &[]);
-        // Dispatch based on adhesion capacity, shader checks actual count
-        let adhesion_workgroups = (100_000 + WORKGROUP_SIZE_LIFECYCLE - 1) / WORKGROUP_SIZE_LIFECYCLE;
+        // Dispatch based on adhesion capacity (500K for 200K cells)
+        let adhesion_workgroups = (MAX_ADHESION_CONNECTIONS + WORKGROUP_SIZE_ADHESION - 1) / WORKGROUP_SIZE_ADHESION;
         compute_pass.dispatch_workgroups(adhesion_workgroups, 1, 1);
         
         // Stage 2: Prefix sum - compact free slots (128 threads)

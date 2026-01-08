@@ -85,7 +85,8 @@ impl GpuScene {
         let renderer = CellRenderer::new(device, queue, surface_config, capacity as usize);
         
         // Create GPU adhesion line renderer
-        let max_adhesions: u32 = 100_000; // Match MAX_ADHESION_CONNECTIONS
+        // For 200K cells with ~5 adhesions average = 500K max adhesions
+        let max_adhesions: u32 = 500_000; // Match MAX_ADHESION_CONNECTIONS
         let adhesion_renderer = GpuAdhesionLineRenderer::new(device, surface_config, max_adhesions);
         
         // Create world sphere renderer for boundary visualization

@@ -123,7 +123,7 @@ var<storage, read_write> torque_accum_z: array<atomic<i32>>;
 const FIXED_POINT_SCALE: f32 = 1000.0;
 
 const PI: f32 = 3.14159265359;
-const MAX_ADHESIONS_PER_CELL: u32 = 20u;
+const MAX_ADHESIONS_PER_CELL: u32 = 10u;
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     let volume = mass / 1.0;
@@ -371,7 +371,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var total_force = vec3<f32>(0.0);
     var total_torque = vec3<f32>(0.0);
     
-    // Iterate through this cell's adhesion indices (up to 20)
+    // Iterate through this cell's adhesion indices (up to 10)
     let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
     let total_adhesion_count = adhesion_counts[0];
     

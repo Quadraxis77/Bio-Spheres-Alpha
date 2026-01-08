@@ -111,7 +111,7 @@ struct AdhesionConnection {
     _padding: vec2<u32>,            // offset 96-103
 };
 
-const MAX_ADHESIONS_PER_CELL: u32 = 20u;
+const MAX_ADHESIONS_PER_CELL: u32 = 10u;
 
 // Temporary storage for division candidates (before deferral check)
 // We use division_flags as a two-pass system:

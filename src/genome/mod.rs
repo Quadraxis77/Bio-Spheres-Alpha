@@ -154,7 +154,7 @@ impl Default for ModeSettings {
             nutrient_priority: 1.0, // Default: neutral priority
             prioritize_when_low: true, // Default: protect cells from death
             parent_split_direction: Vec2::ZERO,
-            max_adhesions: 20,
+            max_adhesions: 10,
             min_adhesions: 0, // No minimum by default
             enable_parent_angle_snapping: true,
             max_splits: -1, // Infinite by default

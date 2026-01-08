@@ -24,11 +24,13 @@
 
 use bytemuck::{Pod, Zeroable};
 
-/// Maximum adhesions per cell (matching reference)
-pub const MAX_ADHESIONS_PER_CELL: usize = 20;
+/// Maximum adhesions per cell (reduced from 20 for 200K cell support)
+pub const MAX_ADHESIONS_PER_CELL: usize = 10;
 
 /// Maximum total adhesion connections
-pub const MAX_ADHESION_CONNECTIONS: u32 = 100_000;
+/// For 200K cells with up to 20 adhesions each, theoretical max is 2M
+/// Using 500K as practical limit (average ~5 adhesions per cell at max capacity)
+pub const MAX_ADHESION_CONNECTIONS: u32 = 500_000;
 
 /// Adhesion connection structure (exactly 96 bytes)
 /// Matches the reference implementation for GPU compatibility

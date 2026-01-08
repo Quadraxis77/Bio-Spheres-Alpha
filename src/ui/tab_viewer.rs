@@ -936,7 +936,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     nutrient_priority: 1.0,
                     prioritize_when_low: true,
                     parent_split_direction: glam::Vec2::ZERO,
-                    max_adhesions: 20,
+                    max_adhesions: 10,
                     min_adhesions: 0,
                     enable_parent_angle_snapping: true,
                     max_splits: -1, // -1 means infinite
@@ -1352,8 +1352,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                     ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.max_adhesions, 0..=20).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.max_adhesions).speed(1).range(0..=20));
+                    ui.add(egui::Slider::new(&mut mode.max_adhesions, 0..=10).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.max_adhesions).speed(1).range(0..=10));
                 });
 
                 ui.label("Min Connections:");
@@ -1361,8 +1361,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                     ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.min_adhesions, 0..=20).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.min_adhesions).speed(1).range(0..=20));
+                    ui.add(egui::Slider::new(&mut mode.min_adhesions, 0..=10).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.min_adhesions).speed(1).range(0..=10));
                 });
 
                 ui.label("Max Splits:");
