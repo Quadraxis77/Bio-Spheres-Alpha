@@ -57,9 +57,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
     
-    // Simple shading: darken edges slightly for depth perception
-    let edge_factor = 1.0 - dist_sq * 0.3;
-    let final_color = in.color.rgb * edge_factor;
+    // Fast sphere normal calculation (very cheap)
+    let z = sqrt(1.0 - dist_sq);  // Only 1 sqrt per pixel
+    let normal = vec3<f32>(in.uv.x, in.uv.y, z);  // Already normalized
+    
+    // Simple directional lighting (hardcoded for performance)
+    let light_dir = vec3<f32>(0.577, 0.577, 0.577);  // Normalized (1,1,1)
+    let ndot_l = max(0.0, dot(normal, light_dir));    // 1 dot product
+    let lighting = 0.3 + 0.7 * ndot_l;               // Ambient + diffuse
+    
+    // Nucleus calculation - branchless (much smaller nucleus)
+    let nucleus_threshold = 0.09;  // 0.3^2 = 30% of cell radius (was 55%)
+    let nucleus_factor = step(dist_sq, nucleus_threshold);
+    
+    // Apply lighting to both nucleus and membrane
+    let nucleus_color = in.color.rgb * 0.4 * lighting;
+    let membrane_color = in.color.rgb * lighting;
+    let final_color = mix(membrane_color, nucleus_color, nucleus_factor);
     
     return vec4<f32>(final_color, in.color.a);
 }
