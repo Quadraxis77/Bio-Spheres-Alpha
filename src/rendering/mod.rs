@@ -134,6 +134,7 @@ pub mod orientation_gizmo;
 pub mod skybox;
 pub mod split_rings;
 pub mod volumetric_fog;
+pub mod world_sphere;
 
 pub use adhesion_lines::AdhesionLineRenderer;
 pub use cells::CellRenderer;
@@ -142,3 +143,4 @@ pub use hiz_generator::HizGenerator;
 pub use instance_builder::{CellInstance, CullingMode, CullingStats, InstanceBuilder};
 pub use orientation_gizmo::OrientationGizmoRenderer;
 pub use split_rings::SplitRingRenderer;
+pub use world_sphere::{WorldSphereRenderer, WorldSphereParams};

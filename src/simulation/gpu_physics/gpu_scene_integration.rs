@@ -91,7 +91,8 @@ pub fn execute_gpu_physics_step(
     
     // Update physics params uniform buffer
     // Note: cell_count is now read from cell_count_buffer by shaders
-    let world_size = 100.0_f32;
+    // world_size is the diameter (200.0), boundary_radius = world_size * 0.5 = 100.0
+    let world_size = 200.0_f32;
     let params = PhysicsParams {
         delta_time,
         current_time,

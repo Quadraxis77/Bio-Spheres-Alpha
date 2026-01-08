@@ -4,7 +4,7 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CellRenderer, CullingMode, GpuAdhesionLineRenderer, HizGenerator, InstanceBuilder};
+use crate::rendering::{CellRenderer, CullingMode, GpuAdhesionLineRenderer, HizGenerator, InstanceBuilder, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{CanonicalState, PhysicsConfig};
 use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers};
@@ -22,6 +22,8 @@ pub struct GpuScene {
     pub renderer: CellRenderer,
     /// GPU-based adhesion line renderer (reads directly from GPU buffers)
     pub adhesion_renderer: GpuAdhesionLineRenderer,
+    /// World sphere renderer for boundary visualization
+    pub world_sphere_renderer: WorldSphereRenderer,
     /// GPU instance builder with frustum and occlusion culling
     pub instance_builder: InstanceBuilder,
     /// Hi-Z generator for occlusion culling
@@ -58,6 +60,8 @@ pub struct GpuScene {
     pub show_adhesion_lines: bool,
     /// Point cloud rendering mode for maximum performance
     pub point_cloud_mode: bool,
+    /// Whether to show the world boundary sphere
+    pub show_world_sphere: bool,
     /// DEBUG: Track frames since last insertion for debugging
     debug_frames_since_insertion: u32,
     /// DEBUG: Last known cell count for detecting drops
@@ -84,6 +88,16 @@ impl GpuScene {
         let max_adhesions: u32 = 100_000; // Match MAX_ADHESION_CONNECTIONS
         let adhesion_renderer = GpuAdhesionLineRenderer::new(device, surface_config, max_adhesions);
         
+        // Create world sphere renderer for boundary visualization
+        // Radius matches physics config sphere_radius
+        let mut world_sphere_renderer = WorldSphereRenderer::new(
+            device,
+            surface_config,
+            wgpu::TextureFormat::Depth32Float,
+        );
+        // Sync world sphere radius with physics boundary
+        world_sphere_renderer.set_radius(queue, config.sphere_radius);
+        
         // Create instance builder - culling mode will be set per-frame in render()
         let instance_builder = InstanceBuilder::new(device, capacity as usize);
         
@@ -109,6 +123,7 @@ impl GpuScene {
             canonical_state,
             renderer,
             adhesion_renderer,
+            world_sphere_renderer,
             instance_builder,
             hiz_generator,
             gpu_physics_pipelines,
@@ -127,6 +142,7 @@ impl GpuScene {
             time_scale: 1.0,
             show_adhesion_lines: true,
             point_cloud_mode: false,
+            show_world_sphere: true,
             debug_frames_since_insertion: u32::MAX,
             debug_last_cell_count: 0,
             debug_frame_counter: 0,
@@ -258,6 +274,21 @@ impl GpuScene {
     /// When enabled, cells are rendered as simple colored circles without lighting.
     pub fn set_point_cloud_mode(&mut self, enabled: bool) {
         self.point_cloud_mode = enabled;
+    }
+    
+    /// Set whether to show the world boundary sphere.
+    pub fn set_show_world_sphere(&mut self, enabled: bool) {
+        self.show_world_sphere = enabled;
+    }
+    
+    /// Get the world sphere renderer for customization.
+    pub fn world_sphere_renderer(&self) -> &WorldSphereRenderer {
+        &self.world_sphere_renderer
+    }
+    
+    /// Get mutable access to the world sphere renderer for customization.
+    pub fn world_sphere_renderer_mut(&mut self) -> &mut WorldSphereRenderer {
+        &mut self.world_sphere_renderer
     }
     
     /// Read culling statistics from GPU (blocking).
@@ -991,6 +1022,18 @@ impl Scene for GpuScene {
             self.point_cloud_mode,
         );
 
+        // Render world boundary sphere if enabled
+        if self.show_world_sphere {
+            self.world_sphere_renderer.render(
+                &mut encoder,
+                queue,
+                view,
+                &self.renderer.depth_view,
+                self.camera.position(),
+                self.camera.rotation,
+            );
+        }
+
         // Render adhesion lines if enabled
         if self.show_adhesion_lines {
             // Create bind group with current output buffer (physics results)
@@ -1070,6 +1113,7 @@ impl Scene for GpuScene {
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         self.renderer.resize(device, width, height);
         self.adhesion_renderer.resize(width, height);
+        self.world_sphere_renderer.resize(width, height);
         self.hiz_generator.resize(device, width, height);
         self.instance_builder.reset_hiz(); // Reset Hi-Z config so bind group is recreated with new texture
         self.first_frame = true; // Need to regenerate Hi-Z
