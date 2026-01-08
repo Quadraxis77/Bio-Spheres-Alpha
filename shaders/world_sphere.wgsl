@@ -1,7 +1,6 @@
 // World Sphere Shader
-// Renders a transparent boundary sphere with proper lighting
-// Uses front-face culling to render the inside of the sphere
-// Uses the same directional lighting as the cell renderer
+// Matches reference implementation from Biospheres-Master
+// Simple lighting with ambient + diffuse, distance fade
 
 struct CameraUniform {
     view_proj: mat4x4<f32>,
@@ -9,34 +8,20 @@ struct CameraUniform {
     _padding: f32,
 };
 
-struct LightingUniform {
-    light_direction: vec3<f32>,  // Direction TO the light (normalized)
-    _padding1: f32,
-    light_color: vec3<f32>,
-    _padding2: f32,
-    ambient_color: vec3<f32>,
-    _padding3: f32,
-};
-
 struct WorldSphereParams {
-    // Base color (RGBA) - sRGB color space
-    base_color: vec4<f32>,
-    // Emissive color (RGB, linear) + unused
-    emissive: vec4<f32>,
-    // Material properties
+    // Sphere color (RGB)
+    sphere_color: vec3<f32>,
+    transparency: f32,
+    // Sphere radius
     radius: f32,
-    metallic: f32,
-    perceptual_roughness: f32,
-    reflectance: f32,
-    // Padding
-    _padding: vec4<f32>,
+    // Distance fade
+    fade_start_distance: f32,
+    fade_end_distance: f32,
+    _padding: f32,
 };
 
 @group(0) @binding(0)
 var<uniform> camera: CameraUniform;
-
-@group(0) @binding(1)
-var<uniform> lighting: LightingUniform;
 
 @group(1) @binding(0)
 var<uniform> params: WorldSphereParams;
@@ -48,8 +33,8 @@ struct VertexInput {
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) world_position: vec3<f32>,
-    @location(1) world_normal: vec3<f32>,
+    @location(0) frag_pos: vec3<f32>,
+    @location(1) normal: vec3<f32>,
 };
 
 @vertex
@@ -60,60 +45,41 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let world_pos = in.position * params.radius;
     
     out.clip_position = camera.view_proj * vec4<f32>(world_pos, 1.0);
-    out.world_position = world_pos;
-    // Use outward-facing normal (not inverted) so lighting appears from outside
-    out.world_normal = normalize(in.normal);
+    out.frag_pos = world_pos;
+    out.normal = in.normal;
     
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let normal = normalize(in.world_normal);
-    let view_dir = normalize(camera.camera_pos - in.world_position);
+    // Calculate distance-based fade (matching reference)
+    let distance_from_camera = length(in.frag_pos - camera.camera_pos);
+    var fade_factor = 1.0;
     
-    // Use scene lighting but negate direction so light hits opposite side of sphere
-    // This makes the sphere appear lit from inside (matching how we view it from inside)
-    let light_dir = -normalize(lighting.light_direction);
-    let light_color = lighting.light_color;
-    let ambient_color = lighting.ambient_color;
+    if (distance_from_camera > params.fade_start_distance) {
+        fade_factor = 1.0 - clamp(
+            (distance_from_camera - params.fade_start_distance) / 
+            (params.fade_end_distance - params.fade_start_distance), 
+            0.0, 1.0
+        );
+    }
     
-    // Base color (already in sRGB, keep as-is for now)
-    let base_color = params.base_color.rgb;
-    let alpha = params.base_color.a;
+    // Simple lighting - opposite direction from cells so sphere glows toward light source
+    // Cells use light_dir (0.5, 1.0, 0.3), so sphere uses (-0.5, -1.0, -0.3)
+    // Flip normal since we're viewing from inside the sphere (back faces)
+    let norm = normalize(-in.normal);
+    let light_dir = normalize(vec3<f32>(-0.5, -1.0, -0.3));
     
-    // Diffuse lighting (Lambert) - same as cell shader
-    let n_dot_l = max(0.0, dot(normal, light_dir));
-    let diffuse = n_dot_l;
+    // Ambient + diffuse lighting
+    let ambient = 0.3;
+    let diffuse = max(dot(norm, light_dir), 0.0);
+    let light_factor = ambient + diffuse * 0.7;
     
-    // Specular (Blinn-Phong)
-    let half_vec = normalize(light_dir + view_dir);
-    let n_dot_h = max(0.0, dot(normal, half_vec));
-    let roughness = params.perceptual_roughness;
-    let specular_power = mix(128.0, 8.0, roughness); // Higher power = sharper highlights
-    let specular = pow(n_dot_h, specular_power) * (1.0 - roughness) * 0.5;
+    let result = light_factor * params.sphere_color;
     
-    // Fresnel rim effect (view-dependent)
-    let n_dot_v = max(0.0, dot(normal, view_dir));
-    let fresnel = pow(1.0 - n_dot_v, 3.0) * params.reflectance;
+    // Apply distance fade and transparency
+    let final_alpha = params.transparency * fade_factor;
     
-    // Combine lighting
-    var color = base_color * ambient_color; // Ambient
-    color += base_color * diffuse * light_color; // Diffuse
-    color += light_color * specular; // Specular
-    color += base_color * fresnel * 0.5; // Fresnel rim
-    
-    // Add emissive
-    color += params.emissive.rgb;
-    
-    // Edge glow - stronger emissive at grazing angles
-    let edge_factor = 1.0 - n_dot_v;
-    color += params.emissive.rgb * edge_factor * edge_factor * 2.0;
-    
-    // Alpha with edge enhancement
-    var final_alpha = alpha;
-    final_alpha += edge_factor * edge_factor * 0.3;
-    final_alpha = clamp(final_alpha, 0.0, 0.85);
-    
-    return vec4<f32>(color, final_alpha);
+    return vec4<f32>(result, final_alpha);
 }

@@ -1,45 +1,40 @@
 //! World Sphere Renderer
 //!
-//! Renders a transparent boundary sphere with proper PBR lighting.
-//! The sphere is rendered from the inside using front-face culling, creating
-//! a containment boundary visual for the simulation.
-//! Uses the same lighting as the cell renderer for visual consistency.
+//! Renders a transparent boundary sphere matching the reference implementation.
+//! Simple lighting with ambient + diffuse, distance-based fade.
 
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
-/// Parameters for the world sphere appearance
+/// Parameters for the world sphere appearance (matches reference)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct WorldSphereParams {
-    /// Base color (RGBA) - sRGB color space, default: dark blue-gray with 35% opacity
-    pub base_color: [f32; 4],
-    /// Emissive color (RGB, linear space) + unused
-    pub emissive: [f32; 4],
+    /// Sphere color (RGB) - default: light blue (0.2, 0.4, 0.8)
+    pub sphere_color: [f32; 3],
+    /// Transparency (0.0 = invisible, 1.0 = opaque) - default: 0.99
+    pub transparency: f32,
     /// Sphere radius
     pub radius: f32,
-    /// Metallic factor (0.0 for non-metallic)
-    pub metallic: f32,
-    /// Perceptual roughness (0.2 for slightly glossy)
-    pub perceptual_roughness: f32,
-    /// Reflectance factor (0.95 for high reflectance)
-    pub reflectance: f32,
+    /// Distance fade start
+    pub fade_start_distance: f32,
+    /// Distance fade end
+    pub fade_end_distance: f32,
     /// Padding for 16-byte alignment
-    pub _padding: [f32; 4],
+    pub _padding: f32,
 }
 
 impl Default for WorldSphereParams {
     fn default() -> Self {
         Self {
-            // Match reference: Color::srgba(0.2, 0.25, 0.35, 0.35)
-            base_color: [0.2, 0.25, 0.35, 0.35],
-            // Match reference: LinearRgba::rgb(0.05, 0.08, 0.12)
-            emissive: [0.05, 0.08, 0.12, 0.0],
+            // Deep mystical blue - darker and more saturated
+            sphere_color: [0.05, 0.12, 0.35],
+            // More transparent than reference (0.99) - use 0.15 for subtle visibility
+            transparency: 0.15,
             radius: 100.0,
-            metallic: 0.0,
-            perceptual_roughness: 0.2,
-            reflectance: 0.95,
-            _padding: [0.0; 4],
+            fade_start_distance: 150.0,
+            fade_end_distance: 300.0,
+            _padding: 0.0,
         }
     }
 }
@@ -53,21 +48,6 @@ struct CameraUniform {
     _padding: f32,
 }
 
-/// Lighting uniform - matches the cell renderer's lighting
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct LightingUniform {
-    /// Direction of primary light source (normalized)
-    light_direction: [f32; 3],
-    _padding1: f32,
-    /// Color of primary light source
-    light_color: [f32; 3],
-    _padding2: f32,
-    /// Ambient light color
-    ambient_color: [f32; 3],
-    _padding3: f32,
-}
-
 /// World sphere renderer for the GPU scene
 pub struct WorldSphereRenderer {
     render_pipeline: wgpu::RenderPipeline,
@@ -75,7 +55,6 @@ pub struct WorldSphereRenderer {
     index_buffer: wgpu::Buffer,
     index_count: u32,
     camera_buffer: wgpu::Buffer,
-    lighting_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     params_buffer: wgpu::Buffer,
     params_bind_group: wgpu::BindGroup,
@@ -98,23 +77,13 @@ impl WorldSphereRenderer {
             source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/world_sphere.wgsl").into()),
         });
 
-        // Create camera bind group layout (camera + lighting)
+        // Create camera bind group layout (camera only)
         let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("World Sphere Camera Layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -147,7 +116,7 @@ impl WorldSphereRenderer {
             push_constant_ranges: &[],
         });
 
-        // Create render pipeline with front-face culling (render inside of sphere)
+        // Create render pipeline
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("World Sphere Pipeline"),
             layout: Some(&pipeline_layout),
@@ -198,8 +167,9 @@ impl WorldSphereRenderer {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
-                // Front-face culling to render inside of sphere
                 front_face: wgpu::FrontFace::Ccw,
+                // Cull front faces to show the inside of the sphere (matching reference)
+                // When camera is inside the sphere, we want to see the back faces
                 cull_mode: Some(wgpu::Face::Front),
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
@@ -207,23 +177,18 @@ impl WorldSphereRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth_format,
-                // Read depth but don't write (so cells render in front)
-                depth_write_enabled: false,
+                depth_write_enabled: true,
                 depth_compare: wgpu::CompareFunction::Less,
                 stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState {
-                    constant: 1, // Push sphere back slightly in depth
-                    slope_scale: 0.0,
-                    clamp: 0.0,
-                },
+                bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
         });
 
-        // Generate icosphere mesh (subdivision level 5 for smooth appearance)
-        let (vertices, indices) = generate_icosphere(5);
+        // Generate icosphere mesh (subdivision level 4 matching reference)
+        let (vertices, indices) = generate_icosphere(4);
         
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("World Sphere Vertex Buffer"),
@@ -245,14 +210,6 @@ impl WorldSphereRenderer {
             mapped_at_creation: false,
         });
 
-        // Create lighting uniform buffer
-        let lighting_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("World Sphere Lighting Buffer"),
-            size: std::mem::size_of::<LightingUniform>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("World Sphere Camera Bind Group"),
             layout: &camera_bind_group_layout,
@@ -260,10 +217,6 @@ impl WorldSphereRenderer {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: camera_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: lighting_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -291,7 +244,6 @@ impl WorldSphereRenderer {
             index_buffer,
             index_count: indices.len() as u32,
             camera_buffer,
-            lighting_buffer,
             camera_bind_group,
             params_buffer,
             params_bind_group,
@@ -313,27 +265,15 @@ impl WorldSphereRenderer {
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[self.params]));
     }
 
-    /// Set the base color (RGBA)
-    pub fn set_color(&mut self, queue: &wgpu::Queue, color: Vec4) {
-        self.params.base_color = color.to_array();
+    /// Set the sphere color (RGB)
+    pub fn set_color(&mut self, queue: &wgpu::Queue, color: Vec3) {
+        self.params.sphere_color = color.to_array();
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[self.params]));
     }
 
-    /// Set the opacity (alpha channel)
-    pub fn set_opacity(&mut self, queue: &wgpu::Queue, opacity: f32) {
-        self.params.base_color[3] = opacity;
-        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[self.params]));
-    }
-
-    /// Set the emissive color (linear RGB)
-    pub fn set_emissive(&mut self, queue: &wgpu::Queue, emissive: Vec3) {
-        self.params.emissive = [emissive.x, emissive.y, emissive.z, 0.0];
-        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[self.params]));
-    }
-
-    /// Set the perceptual roughness (0.0 = mirror, 1.0 = rough)
-    pub fn set_roughness(&mut self, queue: &wgpu::Queue, roughness: f32) {
-        self.params.perceptual_roughness = roughness;
+    /// Set the transparency (0.0 = invisible, 1.0 = opaque)
+    pub fn set_transparency(&mut self, queue: &wgpu::Queue, transparency: f32) {
+        self.params.transparency = transparency;
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[self.params]));
     }
 
@@ -370,18 +310,6 @@ impl WorldSphereRenderer {
             _padding: 0.0,
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
-
-        // Update lighting uniform - match the cell renderer's lighting
-        let light_dir = Vec3::new(0.5, 1.0, 0.3).normalize();
-        let lighting_uniform = LightingUniform {
-            light_direction: light_dir.to_array(),
-            _padding1: 0.0,
-            light_color: [0.8, 0.8, 0.8],
-            _padding2: 0.0,
-            ambient_color: [0.15, 0.15, 0.2],
-            _padding3: 0.0,
-        };
-        queue.write_buffer(&self.lighting_buffer, 0, bytemuck::cast_slice(&[lighting_uniform]));
 
         // Begin render pass
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -492,7 +420,7 @@ fn generate_icosphere(subdivisions: u32) -> (Vec<Vertex>, Vec<u32>) {
             let b = get_midpoint(&mut vertices, &mut midpoint_cache, v1, v2);
             let c = get_midpoint(&mut vertices, &mut midpoint_cache, v2, v0);
             
-            // Create 4 new triangles
+            // Create 4 new triangles (matching reference: v1,a,c, v2,b,a, v3,c,b, a,b,c)
             new_indices.push([v0, a, c]);
             new_indices.push([v1, b, a]);
             new_indices.push([v2, c, b]);
@@ -502,12 +430,12 @@ fn generate_icosphere(subdivisions: u32) -> (Vec<Vertex>, Vec<u32>) {
         indices = new_indices;
     }
     
-    // Convert to vertex format with normals (normal = position for unit sphere)
+    // Convert to vertex format with outward-facing normals (matching reference)
     let output_vertices: Vec<Vertex> = vertices
         .iter()
         .map(|v| Vertex {
             position: v.to_array(),
-            normal: v.normalize().to_array(),
+            normal: v.normalize().to_array(), // Outward-facing normals
         })
         .collect();
     
