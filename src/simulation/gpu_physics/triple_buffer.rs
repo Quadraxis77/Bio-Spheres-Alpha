@@ -215,6 +215,9 @@ pub struct GpuTripleBufferSystem {
     /// Death flags: 1 = dead (free slot), 0 = alive
     pub death_flags: wgpu::Buffer,
     
+    /// Mass deltas for nutrient transport (accumulates mass changes)
+    pub mass_deltas_buffer: wgpu::Buffer,
+    
     /// Division flags: 1 = wants to divide, 0 = not dividing
     pub division_flags: wgpu::Buffer,
     
@@ -394,6 +397,7 @@ impl GpuTripleBufferSystem {
         let f32_per_cell = capacity as u64 * 4; // f32 = 4 bytes
         
         let death_flags = Self::create_storage_buffer(device, u32_per_cell, "Death Flags");
+        let mass_deltas_buffer = Self::create_storage_buffer(device, f32_per_cell, "Mass Deltas Buffer"); // i32 = 4 bytes, same as f32
         let division_flags = Self::create_storage_buffer(device, u32_per_cell, "Division Flags");
         let free_slot_indices = Self::create_storage_buffer(device, u32_per_cell, "Free Slot Indices");
         let division_slot_assignments = Self::create_storage_buffer(device, u32_per_cell, "Division Slot Assignments");
@@ -457,6 +461,7 @@ impl GpuTripleBufferSystem {
             cell_grid_indices,
             physics_params,
             death_flags,
+            mass_deltas_buffer,
             division_flags,
             free_slot_indices,
             division_slot_assignments,
@@ -665,6 +670,10 @@ impl GpuTripleBufferSystem {
         // Initialize death flags to 0 (all alive)
         let death_flags: Vec<u32> = vec![0u32; state.cell_count];
         queue.write_buffer(&self.death_flags, 0, bytemuck::cast_slice(&death_flags));
+        
+        // Initialize mass deltas to 0 (no transfers)
+        let mass_deltas: Vec<f32> = vec![0.0f32; state.cell_count];
+        queue.write_buffer(&self.mass_deltas_buffer, 0, bytemuck::cast_slice(&mass_deltas));
         
         // Initialize division flags to 0
         let division_flags: Vec<u32> = vec![0u32; state.cell_count];

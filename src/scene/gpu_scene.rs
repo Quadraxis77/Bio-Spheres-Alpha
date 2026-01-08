@@ -298,7 +298,7 @@ impl GpuScene {
     }
 
     /// Run physics step using GPU compute shaders with zero CPU involvement.
-    fn run_physics(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, delta_time: f32) {
+    fn run_physics(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, delta_time: f32, world_diameter: f32) {
         // Process pending cell additions first (deterministic order)
         if self.gpu_triple_buffers.pending_cell_addition_count() > 0 {
             let added_cells = self.gpu_triple_buffers.process_pending_cell_additions(
@@ -368,6 +368,7 @@ impl GpuScene {
             &self.cached_bind_groups,
             delta_time,
             self.current_time,
+            world_diameter,
         );
         
         // Execute lifecycle pipeline for cell division (4 compute shader stages)
@@ -799,8 +800,11 @@ impl GpuScene {
         let ray_origin = self.camera.position();
         let ray_dir = self.camera.rotation * ray_view;
         
+        println!("RAYCAST DEBUG: origin={:?}, dir={:?}, checking {} cells", ray_origin, ray_dir, self.canonical_state.cell_count);
+        
         // Find closest cell that intersects the ray
         let mut closest_hit: Option<(usize, f32)> = None;
+        let mut hits_found = 0;
         
         for i in 0..self.canonical_state.cell_count {
             let cell_pos = self.canonical_state.positions[i];
@@ -809,15 +813,21 @@ impl GpuScene {
             // Ray-sphere intersection
             if let Some(t) = ray_sphere_intersect(ray_origin, ray_dir, cell_pos, cell_radius) {
                 if t > 0.0 {
+                    hits_found += 1;
+                    println!("RAYCAST DEBUG: hit cell {} at distance {} (pos={:?}, radius={})", i, t, cell_pos, cell_radius);
                     match closest_hit {
                         None => closest_hit = Some((i, t)),
-                        Some((_, closest_t)) if t < closest_t => closest_hit = Some((i, t)),
+                        Some((_, closest_t)) if t < closest_t => {
+                            println!("RAYCAST DEBUG: cell {} is closer than previous hit", i);
+                            closest_hit = Some((i, t));
+                        },
                         _ => {}
                     }
                 }
             }
         }
         
+        println!("RAYCAST DEBUG: found {} hits, closest={:?}", hits_found, closest_hit);
         closest_hit
     }
     
@@ -897,6 +907,7 @@ impl Scene for GpuScene {
         queue: &wgpu::Queue,
         view: &wgpu::TextureView,
         cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
+        world_diameter: f32,
     ) {
         // Sync adhesion settings to GPU when genomes are added or modified
         self.sync_adhesion_settings(queue);
@@ -948,7 +959,7 @@ impl Scene for GpuScene {
             let mut steps = 0;
             
             while self.time_accumulator >= fixed_dt && steps < max_steps {
-                self.run_physics(device, &mut encoder, queue, fixed_dt);
+                self.run_physics(device, &mut encoder, queue, fixed_dt, world_diameter);
                 self.current_time += fixed_dt;
                 self.time_accumulator -= fixed_dt;
                 steps += 1;
@@ -1025,6 +1036,9 @@ impl Scene for GpuScene {
 
         // Render world boundary sphere if enabled
         if self.show_world_sphere {
+            // Update world sphere radius to match current world diameter
+            self.world_sphere_renderer.set_radius(queue, world_diameter * 0.5);
+            
             self.world_sphere_renderer.render(
                 &mut encoder,
                 queue,

@@ -233,6 +233,10 @@ pub struct GlobalUiState {
     #[serde(default = "default_cell_capacity")]
     pub cell_capacity: u32,
 
+    /// World diameter in simulation units (applied on scene reset)
+    #[serde(default = "default_world_diameter")]
+    pub world_diameter: f32,
+
     /// Whether the low FPS warning dialog is shown
     #[serde(skip)]
     pub show_low_fps_dialog: bool,
@@ -256,6 +260,10 @@ fn default_occlusion_bias() -> f32 {
 
 fn default_cell_capacity() -> u32 {
     20_000
+}
+
+fn default_world_diameter() -> f32 {
+    200.0
 }
 
 fn default_true() -> bool {
@@ -287,6 +295,7 @@ impl Default for GlobalUiState {
             point_cloud_mode: false,
             show_adhesion_lines: true,
             cell_capacity: 20_000,
+            world_diameter: 200.0,
             show_low_fps_dialog: false,
             show_reset_dialog: false,
             mode_request: None,

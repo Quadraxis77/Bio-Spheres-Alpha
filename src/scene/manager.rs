@@ -184,8 +184,8 @@ impl SceneManager {
     }
 
     /// Render the active scene.
-    pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView, cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>) {
-        self.active_scene_mut().render(device, queue, view, cell_type_visuals);
+    pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView, cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>, world_diameter: f32) {
+        self.active_scene_mut().render(device, queue, view, cell_type_visuals, world_diameter);
     }
 
     /// Update gizmo configuration for all existing scenes.

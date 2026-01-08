@@ -75,6 +75,8 @@ pub struct RadialMenuState {
     pub alt_held: bool,
     /// Cell index being dragged (for Drag tool)
     pub dragging_cell: Option<usize>,
+    /// Timestamp when dragging started (for timeout detection)
+    pub drag_start_time: Option<std::time::Instant>,
     /// Cell index being inspected (for Inspect tool)
     pub inspected_cell: Option<usize>,
 }
@@ -144,6 +146,27 @@ impl RadialMenuState {
         // Determine which segment this angle falls into
         let segment_idx = (normalized / segment_angle) as usize % segment_count;
         self.hovered_segment = Some(segment_idx);
+    }
+    
+    /// Clear drag state and reset menu state.
+    /// Used when drag operation needs to be cancelled (focus loss, mode switch, etc.)
+    pub fn clear_drag_state(&mut self) {
+        self.dragging_cell = None;
+        self.visible = false;
+        self.alt_held = false;
+        self.hovered_segment = None;
+    }
+
+    /// Start dragging a cell with the given index.
+    pub fn start_dragging(&mut self, cell_idx: usize) {
+        self.dragging_cell = Some(cell_idx);
+        self.drag_start_time = Some(std::time::Instant::now());
+    }
+
+    /// Stop dragging the current cell.
+    pub fn stop_dragging(&mut self) {
+        self.dragging_cell = None;
+        self.drag_start_time = None;
     }
 }
 

@@ -566,17 +566,30 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             
             ui.add_space(4.0);
             
+            // World diameter slider
+            ui.label("World Diameter:");
+            if ui.add(egui::Slider::new(&mut state.world_diameter, 50.0..=200.0).suffix(" units")).changed() {
+                // World diameter change requires scene reset
+            }
+            
+            // Show reset required message if world diameter changed from default
+            if (state.world_diameter - 200.0).abs() > 0.1 {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("⚠ Scene reset required").color(egui::Color32::YELLOW));
+                });
+            }
+            
+            ui.add_space(4.0);
+            
             // Cell capacity slider
             let current_capacity = context.gpu_capacity().unwrap_or(state.cell_capacity);
             let capacity_k = state.cell_capacity / 1000;
             
-            ui.horizontal(|ui| {
-                ui.label("Cell Capacity:");
-                let mut capacity_k_mut = capacity_k;
-                if ui.add(egui::Slider::new(&mut capacity_k_mut, 10..=200).suffix("k")).changed() {
-                    state.cell_capacity = capacity_k_mut * 1000;
-                }
-            });
+            ui.label("Cell Capacity:");
+            let mut capacity_k_mut = capacity_k;
+            if ui.add(egui::Slider::new(&mut capacity_k_mut, 10..=200).suffix("k")).changed() {
+                state.cell_capacity = capacity_k_mut * 1000;
+            }
             
             // Show reset required message if capacity changed
             if state.cell_capacity != current_capacity {
@@ -1300,6 +1313,20 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 return;
             }
             let mode = &mut context.genome.modes[selected_idx];
+
+            // Special Functions Group (Purple) - at the top for test cells
+            if mode.cell_type == 0 { // Only show for test cells (cell_type == 0)
+                group_container(ui, "Special Functions", egui::Color32::from_rgb(180, 140, 200), |ui| {
+                    ui.label("Nutrient Generation Rate:");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.nutrient_gain_rate, 0.0..=2.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.nutrient_gain_rate).speed(0.01).range(0.0..=2.0).suffix("/s"));
+                    });
+                });
+            }
 
             // Division Settings Group (Yellow)
             group_container(ui, "Division Settings", egui::Color32::from_rgb(200, 180, 80), |ui| {

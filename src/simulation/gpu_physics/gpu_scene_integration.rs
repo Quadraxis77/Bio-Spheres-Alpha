@@ -10,7 +10,8 @@
 //! 5. Adhesion physics (spring-damper forces between adhered cells)
 //! 6. Position integration
 //! 7. Velocity integration
-//! 8. Mass accumulation - mass increase based on nutrient_gain_rate
+//! 8. Mass accumulation - nutrient growth based on nutrient_gain_rate
+//! 9. Nutrient transport - consumption, transport between cells, death detection
 //! 
 //! ## Lifecycle Pipeline (128-thread workgroups)
 //! 1. Death scan - identify dead cells
@@ -79,7 +80,7 @@ const WORKGROUP_SIZE_LIFECYCLE: u32 = 128;
 /// Workgroup size for adhesion cleanup (256 for optimal GPU occupancy)
 const WORKGROUP_SIZE_ADHESION: u32 = 256;
 
-/// Execute the 8-stage GPU physics pipeline
+/// Execute the 9-stage GPU physics pipeline (added nutrient transport)
 pub fn execute_gpu_physics_step(
     _device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
@@ -89,14 +90,15 @@ pub fn execute_gpu_physics_step(
     cached_bind_groups: &CachedBindGroups,
     delta_time: f32,
     current_time: f32,
+    world_diameter: f32,
 ) {
     // Rotate to next buffer set
     let current_index = triple_buffers.rotate_buffers();
     
     // Update physics params uniform buffer
     // Note: cell_count is now read from cell_count_buffer by shaders
-    // world_size is the diameter (200.0), boundary_radius = world_size * 0.5 = 100.0
-    let world_size = 200.0_f32;
+    // world_size is the diameter, boundary_radius = world_size * 0.5
+    let world_size = world_diameter;
     let params = PhysicsParams {
         delta_time,
         current_time,
@@ -194,10 +196,18 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(1, &cached_bind_groups.velocity_update_angular, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 8: Mass accumulation (256 threads)
+        // Stage 8: Mass accumulation (256 threads) - nutrient growth only
         compute_pass.set_pipeline(&pipelines.mass_accum);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, mass_accum_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        
+        // Stage 9: Nutrient transport (256 threads) - consumption, transport, death detection
+        compute_pass.set_pipeline(&pipelines.nutrient_transport);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.nutrient_system, &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.adhesion, &[]);
+        compute_pass.set_bind_group(3, &cached_bind_groups.nutrient_transport, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
     }
 }

@@ -161,7 +161,7 @@ impl Scene for PreviewScene {
         // No automatic time advancement - time is controlled entirely by the slider
     }
 
-    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView, cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>) {
+    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView, cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>, _world_diameter: f32) {
         // Calculate view-projection matrix (same as used by cell renderer)
         let view_matrix = glam::Mat4::look_at_rh(
             self.camera.position(),

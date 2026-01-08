@@ -1,16 +1,16 @@
 // Mass Accumulation Shader
-// Phase 7: Energy & Mass Transfer - mass_accum stage
+// Phase 6: Chemical & Nutrient Systems - mass_accum stage (nutrient growth only)
 // Workgroup size: 256 threads for optimal GPU occupancy
 //
-// This shader increases cell mass over time based on the nutrient_gain_rate
-// from the cell's genome mode. This is the proper implementation that reads
-// per-cell nutrient gain rates rather than using a hardcoded value.
+// This shader handles ONLY nutrient growth based on nutrient_gain_rate.
+// Nutrient consumption and transport are handled by the nutrient_transport shader.
 //
 // Mass growth formula:
 //   new_mass = old_mass + nutrient_gain_rate * delta_time
+//   capped at max_cell_size (storage capacity = 2x split_mass)
 //
 // The nutrient_gain_rate is set per-cell from the genome mode's nutrient_gain_rate
-// field (default: 0.2 mass per second).
+// field (default: 0.2 mass per second for Test cells, 0.0 for others).
 
 struct PhysicsParams {
     delta_time: f32,
@@ -75,6 +75,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Read per-cell nutrient gain rate and max size from genome mode
     let nutrient_gain_rate = nutrient_gain_rates[cell_idx];
     let max_mass = max_cell_sizes[cell_idx];
+    
+    // Nutrient storage cap: 2x split_mass (allows storage for division plus buffer)
+    // This matches the reference implementation's storage capacity logic
     
     // Only grow if below max size
     var new_mass = current_mass;

@@ -144,6 +144,9 @@ impl App {
                     let menu_visible = self.editor_state.radial_menu.visible;
                     let active_tool = self.editor_state.radial_menu.active_tool;
                     
+                    println!("MOUSE DEBUG: button={:?}, state={:?}, menu_visible={}, active_tool={:?}", 
+                        button, state, menu_visible, active_tool);
+                    
                     if menu_visible && *button == MouseButton::Left && *state == ElementState::Pressed {
                         // Click while menu is open selects the hovered tool
                         self.editor_state.radial_menu.close(true);
@@ -237,23 +240,36 @@ impl App {
                     }
                     
                     // Handle Drag tool - mouse press starts drag
-                    if !menu_visible 
-                        && active_tool == crate::ui::radial_menu::RadialTool::Drag
+                    if active_tool == crate::ui::radial_menu::RadialTool::Drag
                         && *button == MouseButton::Left 
                         && *state == ElementState::Pressed
-                        && !self.ui.wants_pointer_input()
                     {
-                        if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
-                            // Use raycast to find cell under cursor
-                            if let Some((cell_idx, hit_distance)) = gpu_scene.raycast_cell(
-                                self.mouse_position.0,
-                                self.mouse_position.1,
-                            ) {
-                                // Store the cell index and hit distance for dragging
-                                self.editor_state.radial_menu.dragging_cell = Some(cell_idx);
-                                self.editor_state.drag_distance = hit_distance;
-                                log::info!("Started dragging cell {}", cell_idx);
+                        println!("DRAG DEBUG: Left mouse pressed. menu_visible={}, ui_wants_input={}", 
+                            menu_visible, self.ui.wants_pointer_input());
+                        
+                        if !menu_visible && !self.ui.wants_pointer_input() {
+                            if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                                println!("DRAG DEBUG: Attempting raycast at ({}, {}) with {} cells", 
+                                    self.mouse_position.0, self.mouse_position.1, gpu_scene.canonical_state.cell_count);
+                                
+                                // Use raycast to find cell under cursor
+                                if let Some((cell_idx, hit_distance)) = gpu_scene.raycast_cell(
+                                    self.mouse_position.0,
+                                    self.mouse_position.1,
+                                ) {
+                                    // Store the cell index and hit distance for dragging
+                                    self.editor_state.radial_menu.start_dragging(cell_idx);
+                                    self.editor_state.drag_distance = hit_distance;
+                                    println!("DRAG DEBUG: Started dragging cell {} at distance {}", cell_idx, hit_distance);
+                                } else {
+                                    println!("DRAG DEBUG: No cell hit by raycast");
+                                }
+                            } else {
+                                println!("DRAG DEBUG: GPU scene not available");
                             }
+                        } else {
+                            println!("DRAG DEBUG: Conditions not met - menu_visible={}, ui_wants_input={}", 
+                                menu_visible, self.ui.wants_pointer_input());
                         }
                         self.window.request_redraw();
                         return true;
@@ -266,7 +282,8 @@ impl App {
                         && self.editor_state.radial_menu.dragging_cell.is_some()
                     {
                         log::info!("Stopped dragging cell {:?}", self.editor_state.radial_menu.dragging_cell);
-                        self.editor_state.radial_menu.dragging_cell = None;
+                        println!("DRAG DEBUG: Stopped dragging cell {:?}", self.editor_state.radial_menu.dragging_cell);
+                        self.editor_state.radial_menu.stop_dragging();
                         self.window.request_redraw();
                         return true;
                     }
@@ -291,16 +308,30 @@ impl App {
                     
                     // Handle Drag tool - update cell position while dragging
                     if let Some(cell_idx) = self.editor_state.radial_menu.dragging_cell {
+                        println!("DRAG UPDATE: moving cell {} to mouse position ({}, {})", 
+                            cell_idx, position.x, position.y);
+                        
                         if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
-                            // Move cell to new position at the same distance from camera
-                            let new_pos = gpu_scene.screen_to_world_at_distance(
-                                position.x as f32,
-                                position.y as f32,
-                                self.editor_state.drag_distance,
-                            );
+                            // Validate that the cell still exists
                             if cell_idx < gpu_scene.canonical_state.cell_count {
+                                // Move cell to new position at the same distance from camera
+                                let new_pos = gpu_scene.screen_to_world_at_distance(
+                                    position.x as f32,
+                                    position.y as f32,
+                                    self.editor_state.drag_distance,
+                                );
+                                println!("DRAG UPDATE: setting cell {} position to {:?}", cell_idx, new_pos);
                                 gpu_scene.set_cell_position(&self.queue, cell_idx, new_pos);
+                            } else {
+                                // Cell no longer exists - clear drag state
+                                println!("DRAG ERROR: Dragged cell {} no longer exists (count={}), clearing drag state", 
+                                    cell_idx, gpu_scene.canonical_state.cell_count);
+                                self.editor_state.radial_menu.dragging_cell = None;
                             }
+                        } else {
+                            // GPU scene no longer available - clear drag state
+                            println!("DRAG ERROR: GPU scene no longer available, clearing drag state");
+                            self.editor_state.radial_menu.dragging_cell = None;
                         }
                         self.window.request_redraw();
                     }
@@ -348,6 +379,19 @@ impl App {
                             return true;
                         }
                     }
+                    
+                    // Clear drag state on Escape key
+                    if let PhysicalKey::Code(KeyCode::Escape) = event.physical_key {
+                        if event.state == ElementState::Pressed {
+                            let menu = &mut self.editor_state.radial_menu;
+                            if menu.dragging_cell.is_some() {
+                                log::info!("Drag cancelled by Escape key");
+                                menu.dragging_cell = None;
+                                self.window.request_redraw();
+                                return true;
+                            }
+                        }
+                    }
                 }
                 
                 // Test performance spike detection with F12 key
@@ -368,6 +412,14 @@ impl App {
             }
             WindowEvent::RedrawRequested => {
                 self.render();
+            }
+            WindowEvent::Focused(focused) => {
+                // Clear drag state when window loses focus
+                if !focused && self.editor_state.radial_menu.dragging_cell.is_some() {
+                    log::info!("Clearing drag state due to window focus loss");
+                    self.editor_state.radial_menu.clear_drag_state();
+                    self.window.request_redraw();
+                }
             }
             _ => {}
         }
@@ -443,7 +495,7 @@ impl App {
         
         // Render 3D scene first (pass cell type visuals from editor state)
         let cell_type_visuals = &self.editor_state.cell_type_visuals;
-        self.scene_manager.render(&self.device, &self.queue, &view, Some(cell_type_visuals));
+        self.scene_manager.render(&self.device, &self.queue, &view, Some(cell_type_visuals), self.ui.state.world_diameter);
         
         // Update culling stats from GPU scene using non-blocking async read
         // Only if GPU readbacks are enabled (can be disabled to avoid CPU-GPU sync overhead)
@@ -596,6 +648,12 @@ impl App {
                 self.scene_manager.switch_mode(requested_mode, &self.device, &self.queue, &self.config);
                 self.dock_manager.switch_mode(requested_mode);
                 // Reset cursor visibility and radial menu state when switching modes
+                
+                // Clear any active drag state when switching modes
+                if self.editor_state.radial_menu.dragging_cell.is_some() {
+                    log::info!("Clearing drag state due to mode switch");
+                    self.editor_state.radial_menu.clear_drag_state();
+                }
                 self.window.set_cursor_visible(true);
                 self.editor_state.radial_menu.active_tool = crate::ui::radial_menu::RadialTool::None;
                 self.editor_state.radial_menu.visible = false;

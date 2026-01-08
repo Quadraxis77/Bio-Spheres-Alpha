@@ -87,6 +87,10 @@ pub struct CachedBindGroups {
     pub position_update_force_accum: wgpu::BindGroup,
     /// Velocity update angular bind group (same for all frames)
     pub velocity_update_angular: wgpu::BindGroup,
+    /// Nutrient system bind group (same for all frames)
+    pub nutrient_system: wgpu::BindGroup,
+    /// Nutrient transport bind group (same for all frames, includes mode properties)
+    pub nutrient_transport: wgpu::BindGroup,
 }
 
 /// GPU physics compute pipelines
@@ -99,6 +103,9 @@ pub struct GpuPhysicsPipelines {
     pub position_update: wgpu::ComputePipeline,
     pub velocity_update: wgpu::ComputePipeline,
     pub mass_accum: wgpu::ComputePipeline,
+    
+    // Nutrient system pipeline
+    pub nutrient_transport: wgpu::ComputePipeline,
     
     // Adhesion physics pipeline
     pub adhesion_physics: wgpu::ComputePipeline,
@@ -139,6 +146,10 @@ pub struct GpuPhysicsPipelines {
     
     // Velocity update angular bind group layout (for velocity_update group 1)
     pub velocity_update_angular_layout: wgpu::BindGroupLayout,
+    
+    // Nutrient transport bind group layouts
+    pub nutrient_system_layout: wgpu::BindGroupLayout,
+    pub nutrient_transport_layout: wgpu::BindGroupLayout,
 }
 
 impl GpuPhysicsPipelines {
@@ -165,6 +176,10 @@ impl GpuPhysicsPipelines {
         let collision_force_accum_layout = Self::create_collision_force_accum_bind_group_layout(device);
         let position_update_force_accum_layout = Self::create_position_update_force_accum_bind_group_layout(device);
         let velocity_update_angular_layout = Self::create_velocity_update_angular_bind_group_layout(device);
+        
+        // Create nutrient transport bind group layouts
+        let nutrient_system_layout = Self::create_nutrient_system_bind_group_layout(device);
+        let nutrient_transport_layout = Self::create_nutrient_transport_bind_group_layout(device);
         
         // Create compute pipelines
         let spatial_grid_clear = Self::create_compute_pipeline(
@@ -232,6 +247,15 @@ impl GpuPhysicsPipelines {
             "Mass Accumulation",
         );
         
+        // Create nutrient transport pipeline
+        let nutrient_transport = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/nutrient_transport.wgsl"),
+            "main",
+            &[&physics_layout, &nutrient_system_layout, &adhesion_layout, &nutrient_transport_layout],
+            "Nutrient Transport",
+        );
+        
         // Create adhesion physics pipeline (per-cell processing, accumulates to force buffers)
         let adhesion_physics = Self::create_compute_pipeline(
             device,
@@ -292,6 +316,7 @@ impl GpuPhysicsPipelines {
             position_update,
             velocity_update,
             mass_accum,
+            nutrient_transport,
             adhesion_physics,
             lifecycle_death_scan,
             lifecycle_prefix_sum,
@@ -314,6 +339,8 @@ impl GpuPhysicsPipelines {
             collision_force_accum_layout,
             position_update_force_accum_layout,
             velocity_update_angular_layout,
+            nutrient_system_layout,
+            nutrient_transport_layout,
         }
     }
     
@@ -693,6 +720,10 @@ impl GpuPhysicsPipelines {
         // Velocity update angular bind group (same for all frames)
         let velocity_update_angular = self.create_velocity_update_angular_bind_group(device, adhesion_buffers, buffers);
         
+        // Nutrient transport bind groups (same for all frames)
+        let nutrient_system = self.create_nutrient_system_bind_group(device, buffers);
+        let nutrient_transport = self.create_nutrient_transport_bind_group(device, buffers);
+        
         CachedBindGroups {
             physics,
             spatial_grid,
@@ -710,6 +741,8 @@ impl GpuPhysicsPipelines {
             collision_force_accum,
             position_update_force_accum,
             velocity_update_angular,
+            nutrient_system,
+            nutrient_transport,
         }
     }
     
@@ -2133,6 +2166,158 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: triple_buffers.rotations[0].as_entire_binding(),
+                },
+            ],
+        })
+    }
+    
+    /// Create nutrient system bind group layout (Group 1 in nutrient transport shader)
+    fn create_nutrient_system_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Nutrient System Bind Group Layout"),
+            entries: &[
+                // Binding 0: Nutrient gain rates (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Max cell sizes (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Mode indices (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Genome IDs (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create nutrient transport bind group layout (Group 3 in nutrient transport shader)
+    fn create_nutrient_transport_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Nutrient Transport Bind Group Layout"),
+            entries: &[
+                // Binding 0: Mass deltas (read-write, for accumulating transfers)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Death flags (read-write, for marking starved cells)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Mode properties (read-only, nutrient priorities and swim forces)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create mode properties bind group layout (Group 4 in nutrient transport shader)
+    /// Create nutrient system bind group (Group 1 in nutrient transport shader)
+    fn create_nutrient_system_bind_group(
+        &self,
+        device: &wgpu::Device,
+        buffers: &GpuTripleBufferSystem,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Nutrient System Bind Group"),
+            layout: &self.nutrient_system_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.nutrient_gain_rates.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.max_cell_sizes.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.mode_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffers.genome_ids.as_entire_binding(),
+                },
+            ],
+        })
+    }
+    
+    /// Create nutrient transport bind group (Group 3 in nutrient transport shader)
+    fn create_nutrient_transport_bind_group(
+        &self,
+        device: &wgpu::Device,
+        buffers: &GpuTripleBufferSystem,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Nutrient Transport Bind Group"),
+            layout: &self.nutrient_transport_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.mass_deltas_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.death_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.mode_properties.as_entire_binding(),
                 },
             ],
         })
