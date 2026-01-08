@@ -47,6 +47,18 @@ impl SceneManager {
         queue: &wgpu::Queue,
         config: &wgpu::SurfaceConfiguration,
     ) {
+        self.switch_mode_with_capacity(mode, device, queue, config, 20_000);
+    }
+    
+    /// Switch to a different simulation mode with specified GPU scene capacity.
+    pub fn switch_mode_with_capacity(
+        &mut self,
+        mode: SimulationMode,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        config: &wgpu::SurfaceConfiguration,
+        gpu_capacity: u32,
+    ) {
         if mode == self.current_mode {
             return;
         }
@@ -66,12 +78,32 @@ impl SceneManager {
             }
             SimulationMode::Gpu => {
                 if self.gpu_scene.is_none() {
-                    self.gpu_scene = Some(GpuScene::new(device, queue, config));
+                    self.gpu_scene = Some(GpuScene::with_capacity(device, queue, config, gpu_capacity));
                 }
             }
         }
 
         self.current_mode = mode;
+    }
+    
+    /// Recreate the GPU scene with a new capacity.
+    /// Used when switching between normal and point cloud mode.
+    pub fn recreate_gpu_scene_with_capacity(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        config: &wgpu::SurfaceConfiguration,
+        capacity: u32,
+    ) {
+        // Only recreate if capacity actually changed
+        if let Some(ref scene) = self.gpu_scene {
+            if scene.capacity() == capacity {
+                return;
+            }
+        }
+        
+        log::info!("Recreating GPU scene with capacity: {}", capacity);
+        self.gpu_scene = Some(GpuScene::with_capacity(device, queue, config, capacity));
     }
 
     /// Get a reference to the active scene.

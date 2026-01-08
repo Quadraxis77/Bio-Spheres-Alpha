@@ -67,13 +67,13 @@ pub struct GpuScene {
 }
 
 impl GpuScene {
-    /// Create a new GPU scene.
-    pub fn new(
+    /// Create a new GPU scene with the specified capacity.
+    pub fn with_capacity(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_config: &wgpu::SurfaceConfiguration,
+        capacity: u32,
     ) -> Self {
-        let capacity: u32 = 100_000; // 100k cell cap for GPU scene
         // Use 64x64x64 grid for spatial partitioning
         let canonical_state = CanonicalState::with_grid_density(capacity as usize, 64);
         let config = PhysicsConfig::default();
@@ -125,12 +125,26 @@ impl GpuScene {
             first_frame: true,
             readbacks_enabled: true,
             time_scale: 1.0,
-            show_adhesion_lines: true, // Enable by default
+            show_adhesion_lines: true,
             point_cloud_mode: false,
-            debug_frames_since_insertion: u32::MAX, // Start high so we don't log on startup
+            debug_frames_since_insertion: u32::MAX,
             debug_last_cell_count: 0,
             debug_frame_counter: 0,
         }
+    }
+    
+    /// Create a new GPU scene with default capacity (100k).
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_config: &wgpu::SurfaceConfiguration,
+    ) -> Self {
+        Self::with_capacity(device, queue, surface_config, 20_000)
+    }
+    
+    /// Get the current cell capacity.
+    pub fn capacity(&self) -> u32 {
+        self.gpu_triple_buffers.capacity
     }
 
     /// Reset the simulation to initial state.

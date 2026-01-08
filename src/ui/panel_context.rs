@@ -14,7 +14,7 @@ use crate::ui::types::SimulationMode;
 ///
 /// Panels can request a scene mode change by setting this value.
 /// The main application loop will process the request and switch scenes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum SceneModeRequest {
     /// No change requested
     #[default]
@@ -29,6 +29,10 @@ pub enum SceneModeRequest {
     Reset,
     /// Request to toggle fast forward mode (2x speed)
     ToggleFastForward,
+    /// Request to set simulation speed
+    SetSpeed(f32),
+    /// Request to set simulation speed and unpause
+    SetSpeedAndUnpause(f32),
 }
 
 impl SceneModeRequest {
@@ -292,6 +296,20 @@ impl<'a> PanelContext<'a> {
             false
         }
     }
+    
+    /// Get the current simulation speed (time_scale).
+    pub fn simulation_speed(&self) -> f32 {
+        if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
+            gpu_scene.time_scale
+        } else {
+            1.0
+        }
+    }
+    
+    /// Set the simulation speed (time_scale).
+    pub fn set_simulation_speed(&mut self, speed: f32) {
+        *self.scene_request = SceneModeRequest::SetSpeed(speed);
+    }
 
     /// Get the current cell count from the active scene.
     pub fn cell_count(&self) -> usize {
@@ -302,6 +320,12 @@ impl<'a> PanelContext<'a> {
     /// Returns None if not in GPU mode.
     pub fn gpu_cell_count(&self) -> Option<u32> {
         self.scene_manager.gpu_scene().map(|s| s.gpu_cell_count())
+    }
+    
+    /// Get the GPU scene capacity.
+    /// Returns None if not in GPU mode.
+    pub fn gpu_capacity(&self) -> Option<u32> {
+        self.scene_manager.gpu_scene().map(|s| s.capacity())
     }
 
     /// Get the current simulation time from the active scene.

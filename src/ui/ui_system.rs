@@ -357,6 +357,66 @@ impl UiSystem {
         if current_mode == crate::ui::types::SimulationMode::Gpu {
             crate::ui::radial_menu::show_radial_menu(&self.ctx, &mut editor_state.radial_menu);
             crate::ui::radial_menu::show_tool_cursor(&self.ctx, &editor_state.radial_menu);
+            
+            // Check for low FPS and show warning dialog
+            let fps = performance.fps();
+            let sim_speed = scene_manager.gpu_scene().map(|s| s.time_scale).unwrap_or(1.0);
+            
+            // Only show dialog if FPS < 15 and speed > 1x and dialog not already shown
+            if fps < 15.0 && sim_speed > 1.0 && !ui_state_copy.show_low_fps_dialog {
+                ui_state_copy.show_low_fps_dialog = true;
+                // Pause simulation while dialog is shown
+                *scene_request = crate::ui::panel_context::SceneModeRequest::TogglePause;
+            }
+            
+            // Render low FPS dialog
+            if ui_state_copy.show_low_fps_dialog {
+                egui::Window::new("⚠ Low Frame Rate")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(&self.ctx, |ui| {
+                        ui.label(format!("Frame rate dropped to {:.0} FPS at {:.1}x speed.", fps, sim_speed));
+                        ui.add_space(8.0);
+                        ui.label("Simulation paused. What would you like to do?");
+                        ui.add_space(12.0);
+                        
+                        ui.horizontal(|ui| {
+                            if ui.button("Set to 1x & Resume").clicked() {
+                                *scene_request = crate::ui::panel_context::SceneModeRequest::SetSpeedAndUnpause(1.0);
+                                ui_state_copy.show_low_fps_dialog = false;
+                            }
+                            if ui.button("Resume at Current Speed").clicked() {
+                                *scene_request = crate::ui::panel_context::SceneModeRequest::TogglePause;
+                                ui_state_copy.show_low_fps_dialog = false;
+                            }
+                        });
+                    });
+            }
+            
+            // Render reset confirmation dialog
+            if ui_state_copy.show_reset_dialog {
+                egui::Window::new("⟲ Reset Simulation")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(&self.ctx, |ui| {
+                        ui.label("Are you sure you want to reset the simulation?");
+                        ui.add_space(8.0);
+                        ui.label("All cells will be removed.");
+                        ui.add_space(12.0);
+                        
+                        ui.horizontal(|ui| {
+                            if ui.button("Reset").clicked() {
+                                *scene_request = crate::ui::panel_context::SceneModeRequest::Reset;
+                                ui_state_copy.show_reset_dialog = false;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                ui_state_copy.show_reset_dialog = false;
+                            }
+                        });
+                    });
+            }
         }
         
         // Apply any changes back to the original state

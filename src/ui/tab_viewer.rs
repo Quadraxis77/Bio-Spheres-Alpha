@@ -214,7 +214,7 @@ fn render_viewport(ui: &mut Ui, viewport_rect: &mut Option<egui::Rect>) {
 }
 
 /// Render the SceneManager panel.
-fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, _state: &GlobalUiState) {
+fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
     // Single button that switches between scenes
     let (button_text, button_color) = if context.is_preview_mode() {
         ("Live Simulation", egui::Color32::from_rgb(200, 100, 100)) // Red for live simulation
@@ -286,33 +286,38 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, _state: &Global
                 context.request_toggle_pause();
             }
             
-            // Fast forward toggle button
-            let is_fast = context.is_fast_forward();
-            let fast_button = egui::Button::new(egui::RichText::new("⏩").size(20.0))
-                .selected(is_fast);
-            let fast_tooltip = if is_fast { "Normal speed" } else { "Fast forward (3x)" };
-            
-            if ui.add_sized([40.0, 40.0], fast_button)
-                .on_hover_text(fast_tooltip)
-                .clicked() 
-            {
-                context.request_toggle_fast_forward();
-            }
-            
             // Reset button with symbol
             if ui.add_sized(
                 [40.0, 40.0],
                 egui::Button::new(egui::RichText::new("⟲").size(20.0))
             ).on_hover_text("Reset").clicked() {
-                context.request_reset();
+                state.show_reset_dialog = true;
             }
             
             // Add some spacing between buttons and time
             ui.add_space(20.0);
             
-            // Show only simulation time
-            ui.label(format!("{:.1}s", context.current_time()));
+            // Show simulation time in HH:MM:SS format
+            let total_seconds = context.current_time() as u64;
+            let hours = total_seconds / 3600;
+            let minutes = (total_seconds % 3600) / 60;
+            let seconds = total_seconds % 60;
+            ui.label(format!("{:02}:{:02}:{:02}", hours, minutes, seconds));
         });
+        
+        // Simulation speed slider (GPU mode only)
+        if context.current_mode == crate::ui::types::SimulationMode::Gpu {
+            ui.horizontal(|ui| {
+                ui.label("Speed:");
+                let speed = context.simulation_speed();
+                // Round to nearest 0.5 for display
+                let display_speed = (speed * 2.0).round() / 2.0;
+                let mut slider_speed = display_speed;
+                if ui.add(egui::Slider::new(&mut slider_speed, 0.5..=10.0).step_by(0.5).suffix("x")).changed() {
+                    context.set_simulation_speed(slider_speed);
+                }
+            });
+        }
         
         ui.add_space(5.0);
     }
@@ -474,10 +479,11 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             ui.label(format!("{:.2} / {:.2} ms", perf.min_frame_time_ms(), perf.max_frame_time_ms()));
         });
         
-        // Frame time graph
+        // FPS graph (converted from frame times)
         let frame_times: Vec<f32> = perf.frame_time_history().collect();
         if !frame_times.is_empty() {
-            let max_time = frame_times.iter().cloned().fold(16.67, f32::max);
+            // Fixed scale: 0-60 FPS
+            let max_fps = 60.0_f32;
             ui.add_space(4.0);
             
             let plot_height = 40.0;
@@ -490,24 +496,24 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             // Background
             painter.rect_filled(rect, 2.0, egui::Color32::from_gray(30));
             
-            // 16.67ms line (60 FPS target)
-            let target_y = rect.bottom() - (16.67 / max_time) * rect.height();
-            painter.line_segment(
-                [egui::pos2(rect.left(), target_y), egui::pos2(rect.right(), target_y)],
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 100, 50)),
-            );
-            
-            // Frame time bars
+            // FPS bars
             let bar_width = rect.width() / frame_times.len() as f32;
             for (i, &time) in frame_times.iter().enumerate() {
+                // Convert frame time (ms) to FPS
+                let fps = if time > 0.0 { 1000.0 / time } else { 0.0 };
+                let fps_clamped = fps.min(max_fps);
+                
                 let x = rect.left() + i as f32 * bar_width;
-                let height = (time / max_time) * rect.height();
+                let height = (fps_clamped / max_fps) * rect.height();
                 let y = rect.bottom() - height;
                 
-                let color = if time > 16.67 {
-                    egui::Color32::from_rgb(200, 80, 80)
+                // Color based on FPS: red < 20, yellow < 40, green >= 40
+                let color = if fps < 20.0 {
+                    egui::Color32::from_rgb(200, 80, 80)   // Red
+                } else if fps < 40.0 {
+                    egui::Color32::from_rgb(200, 180, 80)  // Yellow
                 } else {
-                    egui::Color32::from_rgb(80, 200, 80)
+                    egui::Color32::from_rgb(80, 200, 80)   // Green
                 };
                 
                 painter.rect_filled(
@@ -552,7 +558,32 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             
             // Point cloud mode toggle for maximum performance
             ui.checkbox(&mut state.point_cloud_mode, "Point Cloud Mode")
-                .on_hover_text("Ultra-fast rendering: flat circles without lighting or sphere effects");
+                .on_hover_text("Ultra-fast rendering: flat circles without lighting.");
+            
+            // Adhesion lines toggle
+            ui.checkbox(&mut state.show_adhesion_lines, "Show Adhesion Lines")
+                .on_hover_text("Show connection lines between adhered cells.");
+            
+            ui.add_space(4.0);
+            
+            // Cell capacity slider
+            let current_capacity = context.gpu_capacity().unwrap_or(state.cell_capacity);
+            let capacity_k = state.cell_capacity / 1000;
+            
+            ui.horizontal(|ui| {
+                ui.label("Cell Capacity:");
+                let mut capacity_k_mut = capacity_k;
+                if ui.add(egui::Slider::new(&mut capacity_k_mut, 10..=200).suffix("k")).changed() {
+                    state.cell_capacity = capacity_k_mut * 1000;
+                }
+            });
+            
+            // Show reset required message if capacity changed
+            if state.cell_capacity != current_capacity {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("⚠ Scene reset required").color(egui::Color32::YELLOW));
+                });
+            }
             
             ui.add_space(4.0);
             

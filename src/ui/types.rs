@@ -225,6 +225,22 @@ pub struct GlobalUiState {
     #[serde(default)]
     pub point_cloud_mode: bool,
 
+    /// Whether to show adhesion lines between cells
+    #[serde(default = "default_true")]
+    pub show_adhesion_lines: bool,
+
+    /// Target cell capacity (applied on scene reset)
+    #[serde(default = "default_cell_capacity")]
+    pub cell_capacity: u32,
+
+    /// Whether the low FPS warning dialog is shown
+    #[serde(skip)]
+    pub show_low_fps_dialog: bool,
+
+    /// Whether the reset confirmation dialog is shown
+    #[serde(skip)]
+    pub show_reset_dialog: bool,
+
     /// Requested mode change (processed by main app loop)
     #[serde(skip)]
     pub mode_request: Option<SimulationMode>,
@@ -236,6 +252,10 @@ fn default_mip_override() -> i32 {
 
 fn default_occlusion_bias() -> f32 {
     0.005 // Small positive bias to prevent self-occlusion from temporal jitter
+}
+
+fn default_cell_capacity() -> u32 {
+    20_000
 }
 
 fn default_true() -> bool {
@@ -265,6 +285,10 @@ impl Default for GlobalUiState {
             frustum_enabled: true,
             gpu_readbacks_enabled: true,
             point_cloud_mode: false,
+            show_adhesion_lines: true,
+            cell_capacity: 20_000,
+            show_low_fps_dialog: false,
+            show_reset_dialog: false,
             mode_request: None,
         }
     }

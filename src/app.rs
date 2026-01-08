@@ -74,6 +74,8 @@ pub struct App {
     working_genome: crate::genome::Genome,
     /// Performance metrics tracker
     performance: PerformanceMetrics,
+    /// Next frame time for 60fps limiting
+    next_frame_time: std::time::Instant,
 }
 
 impl App {
@@ -103,6 +105,7 @@ impl App {
             mouse_position: (0.0, 0.0),
             working_genome: crate::genome::Genome::default(),
             performance: PerformanceMetrics::new(),
+            next_frame_time: std::time::Instant::now(),
         }
     }
     
@@ -112,7 +115,7 @@ impl App {
     
     pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
         // First, let egui handle the event
-        let egui_response = self.ui.handle_event(&self.window, event);
+        let _egui_response = self.ui.handle_event(&self.window, event);
         
         match event {
             WindowEvent::CloseRequested => {
@@ -369,10 +372,8 @@ impl App {
             _ => {}
         }
         
-        // Request repaint if egui needs it
-        if egui_response.repaint {
-            self.window.request_redraw();
-        }
+        // Don't request repaint here - let about_to_wait handle frame timing
+        // egui repaints will happen on the next scheduled frame
         
         true
     }
@@ -384,8 +385,17 @@ impl App {
         }
         
         let now = std::time::Instant::now();
+        
+        // Skip render if we haven't reached the next frame time (60fps limiter)
+        if now < self.next_frame_time {
+            return;
+        }
+        
         let dt = now.duration_since(self.last_render_time).as_secs_f32();
         self.last_render_time = now;
+        
+        // Schedule next frame for 60fps (16.67ms)
+        self.next_frame_time = now + std::time::Duration::from_micros(16_667);
         
         // Update performance metrics (includes automatic spike detection)
         self.performance.update(dt);
@@ -419,6 +429,7 @@ impl App {
             gpu_scene.set_occlusion_min_distance(self.ui.state.occlusion_min_distance);
             gpu_scene.set_readbacks_enabled(self.ui.state.gpu_readbacks_enabled);
             gpu_scene.set_point_cloud_mode(self.ui.state.point_cloud_mode);
+            gpu_scene.show_adhesion_lines = self.ui.state.show_adhesion_lines;
             
             // Set culling mode based on enabled flags
             let culling_mode = match (self.ui.state.frustum_enabled, self.ui.state.occlusion_enabled) {
@@ -535,21 +546,32 @@ impl App {
                     scene.set_paused(!current_paused);
                 }
                 crate::ui::panel_context::SceneModeRequest::Reset => {
+                    // Use capacity from UI slider
+                    let capacity = self.ui.state.cell_capacity;
+                    
+                    // Recreate GPU scene with appropriate capacity if needed
+                    self.scene_manager.recreate_gpu_scene_with_capacity(
+                        &self.device,
+                        &self.queue,
+                        &self.config,
+                        capacity,
+                    );
+                    
                     // Reset the GPU scene
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                         gpu_scene.reset(&self.queue);
+                        gpu_scene.set_point_cloud_mode(self.ui.state.point_cloud_mode);
                     }
                 }
-                crate::ui::panel_context::SceneModeRequest::ToggleFastForward => {
-                    // Toggle between normal (1x) and fast forward (3x) speed
+                crate::ui::panel_context::SceneModeRequest::SetSpeed(speed) => {
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
-                        if gpu_scene.time_scale > 1.5 {
-                            gpu_scene.time_scale = 1.0;
-                            log::info!("Normal speed (1x)");
-                        } else {
-                            gpu_scene.time_scale = 3.0;
-                            log::info!("Fast forward (3x)");
-                        }
+                        gpu_scene.time_scale = speed;
+                    }
+                }
+                crate::ui::panel_context::SceneModeRequest::SetSpeedAndUnpause(speed) => {
+                    if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                        gpu_scene.time_scale = speed;
+                        gpu_scene.paused = false;
                     }
                 }
                 _ => {
@@ -630,6 +652,11 @@ impl App {
     
     pub fn request_redraw(&self) {
         self.window.request_redraw();
+    }
+    
+    /// Get the next scheduled frame time for 60fps limiting
+    pub fn next_frame_time(&self) -> std::time::Instant {
+        self.next_frame_time
     }
     
 
@@ -734,9 +761,21 @@ impl ApplicationHandler for AppState {
     }
     
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        event_loop.set_control_flow(ControlFlow::Poll);
         if let Some(app) = &self.app {
-            app.request_redraw();
+            // Limit to 60fps by waiting until next frame time
+            let next_frame = app.next_frame_time();
+            let now = std::time::Instant::now();
+            
+            if now >= next_frame {
+                // Time to render - request redraw immediately
+                app.request_redraw();
+                event_loop.set_control_flow(ControlFlow::Poll);
+            } else {
+                // Wait until next frame time
+                event_loop.set_control_flow(ControlFlow::WaitUntil(next_frame));
+            }
+        } else {
+            event_loop.set_control_flow(ControlFlow::Poll);
         }
     }
 }

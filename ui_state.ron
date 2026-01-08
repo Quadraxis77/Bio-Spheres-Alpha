@@ -6,37 +6,6 @@
     lock_tabs: false,
     lock_close_buttons: false,
     scene_configs: {
-        Preview: (
-            visibility: (
-                show_cell_inspector: false,
-                show_genome_editor: true,
-                show_scene_manager: false,
-                show_performance_monitor: false,
-                show_rendering_controls: false,
-                show_time_scrubber: false,
-                show_theme_editor: false,
-                show_camera_settings: false,
-                show_lighting_settings: false,
-            ),
-            locked_windows: [
-                "QuaternionBall",
-                "LeftPanel",
-                "SceneManager",
-                "Viewport",
-                "TimeSlider",
-                "CircleSliders",
-                "RightPanel",
-                "ModeGraph",
-                "Modes",
-                "BottomPanel",
-                "NameTypeEditor",
-            ],
-            lock_settings: (
-                lock_tab_bar: false,
-                lock_tabs: false,
-                lock_close_buttons: false,
-            ),
-        ),
         Gpu: (
             visibility: (
                 show_cell_inspector: true,
@@ -51,8 +20,39 @@
             ),
             locked_windows: [
                 "RightPanel",
-                "SceneManager",
                 "Viewport",
+                "SceneManager",
+            ],
+            lock_settings: (
+                lock_tab_bar: false,
+                lock_tabs: false,
+                lock_close_buttons: false,
+            ),
+        ),
+        Preview: (
+            visibility: (
+                show_cell_inspector: false,
+                show_genome_editor: true,
+                show_scene_manager: false,
+                show_performance_monitor: false,
+                show_rendering_controls: false,
+                show_time_scrubber: false,
+                show_theme_editor: false,
+                show_camera_settings: false,
+                show_lighting_settings: false,
+            ),
+            locked_windows: [
+                "SceneManager",
+                "CircleSliders",
+                "TimeSlider",
+                "NameTypeEditor",
+                "ModeGraph",
+                "BottomPanel",
+                "Modes",
+                "Viewport",
+                "LeftPanel",
+                "RightPanel",
+                "QuaternionBall",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -69,4 +69,6 @@
     frustum_enabled: true,
     gpu_readbacks_enabled: true,
     point_cloud_mode: true,
+    show_adhesion_lines: true,
+    cell_capacity: 20000,
 )
