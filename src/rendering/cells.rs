@@ -1,8 +1,7 @@
-//! # Cell Rendering - GPU Instanced Billboards with Transparency
+//! # Cell Rendering - GPU Instanced Billboards with Opaque Rendering
 //!
-//! This module implements high-performance cell rendering using GPU instancing and
-//! Weighted Blended Order-Independent Transparency (WBOIT). Cells are rendered as
-//! camera-facing billboards with realistic sphere-like shading.
+//! This module implements high-performance cell rendering using GPU instancing.
+//! Cells are rendered as camera-facing billboards with realistic sphere-like shading.
 //! 
 //! ## Rendering Technique
 //! 
@@ -18,23 +17,18 @@
 //! - **Fragment Shader**: Applies sphere-like shading with depth testing
 //! - **Benefits**: Consistent appearance from any viewing angle
 //! 
-//! ### Weighted Blended Order-Independent Transparency (WBOIT)
-//! Handles transparent cell rendering without depth sorting:
+//! ### Opaque Rendering with Depth Pre-pass
+//! Handles cell rendering efficiently with proper depth testing:
 //! 
-//! **Traditional Alpha Blending Problems:**
-//! - Requires depth sorting (expensive for many objects)
-//! - Incorrect blending when objects intersect
-//! - Poor performance with overlapping geometry
+//! **Depth Pre-pass Benefits:**
+//! - Optimal depth buffer population for early-Z rejection
+//! - Proper occlusion between overlapping cells
+//! - High performance with large numbers of cells
 //! 
-//! **WBOIT Solution:**
-//! 1. **Accumulation Pass**: Render to accumulation buffer with weighted colors
-//! 2. **Revealage Pass**: Track transparency coverage
-//! 3. **Composite Pass**: Combine accumulated colors with background
-//! 
-//! **Benefits:**
-//! - No depth sorting required
-//! - Handles overlapping transparent objects correctly
-//! - Single-pass rendering for all transparent geometry
+//! **Opaque Rendering:**
+//! 1. **Depth Pass**: Populate depth buffer with sphere surfaces
+//! 2. **Color Pass**: Render final colors with early-Z optimization
+//! 3. **Result**: Correct depth ordering without transparency complexity
 //! 
 //! ## Pipeline Architecture
 //! 
@@ -50,24 +44,19 @@
 //! - **Features**: Only writes depth, no color output
 //! - **Benefits**: Improves depth testing efficiency
 //! 
-//! ### 3. OIT Accumulation Pipeline
-//! - **Use**: Transparent cells (alpha < 1.0)
-//! - **Features**: Weighted color accumulation, no depth writing
-//! - **Output**: Accumulation and revealage textures
-//! 
-//! ### 4. OIT Composite Pipeline
-//! - **Use**: Final composition of transparent layers
-//! - **Features**: Combines OIT textures with background
-//! - **Output**: Final composited image
+//! ### 3. Color-Only Pipeline
+//! - **Use**: Final color rendering after depth pre-pass
+//! - **Features**: Uses existing depth buffer for early-Z optimization
+//! - **Output**: Final cell colors with proper depth ordering
 //! 
 //! ## Instance Data Structure
 //! 
 //! Each cell instance contains:
 //! - **Position**: 3D world position
 //! - **Radius**: Visual and collision radius
-//! - **Color**: RGBA color with transparency
+//! - **Color**: RGB color (always opaque)
 //! - **Visual Parameters**: Specular strength, power, fresnel, emissive
-//! - **Membrane Parameters**: Noise scale, strength, animation speed
+//! - **Membrane Parameters**: Reserved for future use (currently unused)
 //! - **Rotation**: Quaternion for cell orientation
 //! 
 //! ## Shader Features
@@ -79,10 +68,9 @@
 //! 
 //! ### Fragment Shader
 //! - Sphere intersection testing for realistic depth
-//! - Physically-based lighting (Blinn-Phong)
-//! - Procedural membrane noise for organic appearance
-//! - Fresnel effects for realistic transparency
-//! - WBOIT weight calculation for proper blending
+//! - Simple diffuse lighting for performance
+//! - Nucleus rendering for biological appearance
+//! - Clean, noise-free surfaces for clarity
 //! 
 //! ## Performance Optimizations
 //! 
@@ -123,29 +111,28 @@ use crate::simulation::CanonicalState;
 use glam::{Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
 
-/// High-performance cell renderer using GPU instancing and Order-Independent Transparency
+/// High-performance cell renderer using GPU instancing and opaque rendering
 ///
 /// This renderer can handle thousands of cells efficiently by using GPU instancing
-/// to render all cells in a single draw call. Transparency is handled using Weighted
-/// Blended Order-Independent Transparency (WBOIT) to avoid expensive depth sorting.
+/// to render all cells in a single draw call. Uses depth pre-pass optimization
+/// for maximum performance with overlapping cells.
 /// 
 /// ## Architecture
 /// 
 /// The renderer maintains multiple render pipelines:
 /// - **Opaque Pipeline**: For fully opaque cells (fastest path)
 /// - **Depth-Only Pipeline**: For depth pre-pass optimization
-/// - **OIT Pipeline**: For transparent cells using WBOIT
-/// - **Composite Pipeline**: Final composition of transparent layers
+/// - **Color-Only Pipeline**: For final color rendering after depth pre-pass
 /// 
 /// ## Memory Management
 /// 
 /// - **Instance Buffers**: Pre-allocated to avoid runtime allocations
 /// - **Uniform Buffers**: Camera and lighting data updated each frame
-/// - **Texture Resources**: Depth and OIT textures managed automatically
+/// - **Texture Resources**: Depth textures managed automatically
 /// 
 /// ## Performance Characteristics
 /// 
-/// - **Draw Calls**: Single draw call for all cells (opaque + transparent)
+/// - **Draw Calls**: Single draw call for all cells
 /// - **GPU Memory**: Efficient instance data layout for cache performance
 /// - **Culling**: CPU-side culling reduces GPU workload
 /// - **Scalability**: Tested with 100k+ cells at 60+ FPS
@@ -1199,29 +1186,29 @@ impl CellRenderer {
             // Use genome_id as cell type for now (cell type 0 = default)
             let cell_type = state.genome_ids[i];
 
-            // Get color and opacity from genome mode
-            let (color, opacity, emissive) = if let Some(genome) = genome {
+            // Get color and emissive from genome mode (no opacity needed - cells are opaque)
+            let (color, emissive) = if let Some(genome) = genome {
                 if mode_index < genome.modes.len() {
                     let mode = &genome.modes[mode_index];
-                    (mode.color.to_array(), mode.opacity, mode.emissive)
+                    (mode.color.to_array(), mode.emissive)
                 } else {
-                    ([0.5, 0.5, 0.5], 1.0, 0.0)
+                    ([0.5, 0.5, 0.5], 0.0)
                 }
             } else {
-                ([0.5, 0.5, 0.5], 1.0, 0.0)
+                ([0.5, 0.5, 0.5], 0.0)
             };
 
             // Get visual params from cell type visuals
-            let (specular_strength, specular_power, fresnel_strength, membrane_noise_scale, membrane_noise_strength, membrane_noise_speed) =
+            let (specular_strength, specular_power, fresnel_strength, _membrane_noise_scale, _membrane_noise_strength, _membrane_noise_speed) =
                 if let Some(visuals) = cell_type_visuals {
                     if cell_type < visuals.len() {
                         let v = &visuals[cell_type];
-                        (v.specular_strength, v.specular_power, v.fresnel_strength, v.membrane_noise_scale, v.membrane_noise_strength, v.membrane_noise_speed)
+                        (v.specular_strength, v.specular_power, v.fresnel_strength, 0.0, 0.0, 0.0) // Noise disabled
                     } else {
-                        (0.5, 32.0, 0.3, 8.0, 0.15, 0.0)
+                        (0.5, 32.0, 0.3, 0.0, 0.0, 0.0) // Noise disabled
                     }
                 } else {
-                    (0.5, 32.0, 0.3, 8.0, 0.15, 0.0)
+                    (0.5, 32.0, 0.3, 0.0, 0.0, 0.0) // Noise disabled
                 };
 
             // Create stable animation offset from cell ID (doesn't change on split)
@@ -1230,9 +1217,9 @@ impl CellRenderer {
             let instance = CellInstance {
                 position: position.to_array(),
                 radius,
-                color: [color[0], color[1], color[2], opacity], // opacity used for internal membrane blending
+                color: [color[0], color[1], color[2], 1.0], // Always fully opaque
                 visual_params: [specular_strength, specular_power, fresnel_strength, emissive],
-                membrane_params: [membrane_noise_scale, membrane_noise_strength, membrane_noise_speed, anim_offset],
+                membrane_params: [0.0, 0.0, 0.0, anim_offset], // Noise disabled
                 rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
             };
 

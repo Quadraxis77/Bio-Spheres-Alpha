@@ -21,9 +21,9 @@ struct CellInstance {
 
 // Mode visual data (from genome)
 // Note: Using vec4 for color to ensure consistent 32-byte struct size
-// that matches Rust layout (avoids vec3 alignment issues)
+// that matches Rust layout (w component always 1.0 for opaque cells)
 struct ModeVisuals {
-    color: vec4<f32>,      // xyz = color, w = opacity
+    color: vec4<f32>,      // xyz = color, w = 1.0 (always opaque)
     emissive_pad: vec4<f32>, // x = emissive, yzw = padding
 }
 
@@ -306,12 +306,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Look up mode visuals (with bounds check)
     var color = vec3<f32>(0.5, 0.5, 0.5);
-    var opacity = 1.0;
     var emissive = 0.0;
     if (mode_index < params.mode_count) {
         let mode = mode_visuals[mode_index];
         color = mode.color.xyz;
-        opacity = mode.color.w;
+        // Skip opacity - cells are always opaque
         emissive = mode.emissive_pad.x;
     }
     
@@ -327,9 +326,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         specular_strength = visuals.specular_strength;
         specular_power = visuals.specular_power;
         fresnel_strength = visuals.fresnel_strength;
-        noise_scale = visuals.membrane_noise_scale;
-        noise_strength = visuals.membrane_noise_strength;
-        noise_speed = visuals.membrane_noise_speed;
+        noise_scale = 0.0;        // Noise disabled
+        noise_strength = 0.0;     // Noise disabled  
+        noise_speed = 0.0;        // Noise disabled
     }
     
     // Calculate stable animation offset from cell ID
@@ -339,7 +338,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var instance: CellInstance;
     instance.position = position;
     instance.radius = radius;
-    instance.color = vec4<f32>(color, opacity);
+    instance.color = vec4<f32>(color, 1.0);  // Always fully opaque
     instance.visual_params = vec4<f32>(specular_strength, specular_power, fresnel_strength, emissive);
     instance.membrane_params = vec4<f32>(noise_scale, noise_strength, noise_speed, anim_offset);
     instance.rotation = rotation;

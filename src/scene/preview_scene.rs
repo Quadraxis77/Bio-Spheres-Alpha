@@ -212,8 +212,8 @@ impl Scene for PreviewScene {
             queue.submit(std::iter::once(encoder.finish()));
         }
 
-        // Pass 2: Render cells with OIT (handles its own render passes)
-        self.renderer.render_oit(
+        // Pass 2: Render cells with depth pre-pass (opaque rendering)
+        self.renderer.render_with_depth_prepass(
             device,
             queue,
             view,
@@ -222,7 +222,7 @@ impl Scene for PreviewScene {
             cell_type_visuals,
             self.camera.position(),
             self.camera.rotation,
-            self.state.current_time,  // Use simulation time for noise animation
+            self.state.current_time,  // Use simulation time for animation
         );
 
         // Pass 3: Render overlays (adhesion lines, gizmos, split rings)
@@ -246,7 +246,7 @@ impl Scene for PreviewScene {
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: &self.renderer.depth_view,
                         depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Load, // Preserve depth from OIT
+                            load: wgpu::LoadOp::Load, // Preserve depth from cell rendering
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: None,

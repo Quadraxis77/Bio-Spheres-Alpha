@@ -168,7 +168,7 @@ struct BuildParams {
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct ModeVisuals {
-    color: [f32; 4],      // xyz = color, w = opacity
+    color: [f32; 4],      // xyz = color, w = 1.0 (always opaque)
     emissive_pad: [f32; 4], // x = emissive, yzw = padding
 }
 
@@ -854,7 +854,7 @@ impl InstanceBuilder {
                 hash = hash.wrapping_mul(31).wrapping_add((mode.color.x * 1000.0) as u64);
                 hash = hash.wrapping_mul(31).wrapping_add((mode.color.y * 1000.0) as u64);
                 hash = hash.wrapping_mul(31).wrapping_add((mode.color.z * 1000.0) as u64);
-                hash = hash.wrapping_mul(31).wrapping_add((mode.opacity * 1000.0) as u64);
+                // Skip opacity since cells are always opaque
                 hash = hash.wrapping_mul(31).wrapping_add((mode.emissive * 1000.0) as u64);
             }
         }
@@ -865,7 +865,7 @@ impl InstanceBuilder {
         let mut hash = visuals.len() as u64;
         for v in visuals {
             hash = hash.wrapping_mul(31).wrapping_add((v.specular_strength * 1000.0) as u64);
-            hash = hash.wrapping_mul(31).wrapping_add((v.membrane_noise_scale * 1000.0) as u64);
+            // Skip noise parameters since they're disabled
         }
         hash
     }
@@ -893,7 +893,7 @@ impl InstanceBuilder {
             .flat_map(|genome| {
                 genome.modes.iter().map(|mode| {
                     ModeVisuals {
-                        color: [mode.color.x, mode.color.y, mode.color.z, mode.opacity],
+                        color: [mode.color.x, mode.color.y, mode.color.z, 1.0], // Always opaque
                         emissive_pad: [mode.emissive, 0.0, 0.0, 0.0],
                     }
                 })
@@ -924,9 +924,9 @@ impl InstanceBuilder {
                 specular_strength: v.specular_strength,
                 specular_power: v.specular_power,
                 fresnel_strength: v.fresnel_strength,
-                membrane_noise_scale: v.membrane_noise_scale,
-                membrane_noise_strength: v.membrane_noise_strength,
-                membrane_noise_speed: v.membrane_noise_speed,
+                membrane_noise_scale: 0.0,        // Noise disabled
+                membrane_noise_strength: 0.0,     // Noise disabled
+                membrane_noise_speed: 0.0,        // Noise disabled
                 _pad: [0.0; 2],
             })
             .collect();

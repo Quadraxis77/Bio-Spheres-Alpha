@@ -26,9 +26,9 @@ impl Default for CellTypeVisuals {
             specular_strength: 0.3,
             specular_power: 32.0,
             fresnel_strength: 0.2,
-            membrane_noise_scale: 8.0,
-            membrane_noise_strength: 0.15,
-            membrane_noise_speed: 0.0,
+            membrane_noise_scale: 0.0,        // Disabled by default
+            membrane_noise_strength: 0.0,     // Disabled by default
+            membrane_noise_speed: 0.0,        // Disabled by default
         }
     }
 }
