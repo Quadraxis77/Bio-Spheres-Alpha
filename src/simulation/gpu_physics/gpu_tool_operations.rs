@@ -350,12 +350,8 @@ impl GpuToolOperations {
         max_distance: f32,
         cell_count: u32,
     ) {
-        println!("TOOL_OPS: find_cell_with_ray - ray_origin={:?}, ray_direction={:?}, max_distance={}, cell_count={}", 
-            ray_origin, ray_direction, max_distance, cell_count);
-        
         // Skip if readback already in progress
         if self.readback_in_progress {
-            println!("TOOL_OPS: find_cell_with_ray - skipping, readback already in progress");
             return;
         }
         
@@ -420,8 +416,6 @@ impl GpuToolOperations {
         // Clear cached results
         self.cached_query_position = None;
         self.cached_query_result = None;
-        
-        println!("TOOL_OPS: find_cell_with_ray - dispatched {} workgroups, readback_in_progress=true", (cell_count + 63) / 64);
     }
     
     /// Poll for spatial query completion and return result if available
@@ -477,9 +471,6 @@ impl GpuToolOperations {
                 if data_bytes.len() >= std::mem::size_of::<SpatialQueryResult>() {
                     let result: SpatialQueryResult = *bytemuck::from_bytes(&data_bytes[..std::mem::size_of::<SpatialQueryResult>()]);
                     
-                    println!("TOOL_OPS: poll_spatial_query got result - found={}, cell_index={}, distance_fixed={}", 
-                        result.found, result.found_cell_index, result.distance_fixed);
-                    
                     drop(view);
                     self.spatial_query_readback_buffer.unmap();
                     self.readback_in_progress = false;
@@ -488,7 +479,6 @@ impl GpuToolOperations {
                     
                     return Some(result);
                 } else {
-                    println!("TOOL_OPS: poll_spatial_query - invalid data size: {}", data_bytes.len());
                     drop(view);
                     self.spatial_query_readback_buffer.unmap();
                     self.readback_in_progress = false;
@@ -496,9 +486,8 @@ impl GpuToolOperations {
                     return None;
                 }
             }
-            Ok(Err(e)) => {
+            Ok(Err(_e)) => {
                 // Mapping failed
-                println!("TOOL_OPS: poll_spatial_query - mapping failed: {:?}", e);
                 self.readback_in_progress = false;
                 self.map_receiver = None;
                 return None;
@@ -506,7 +495,6 @@ impl GpuToolOperations {
             Err(_) => {
                 // Mapping is still pending - GPU work not done yet
                 // Keep map_receiver so we don't call map_async again
-                println!("TOOL_OPS: poll_spatial_query - mapping still pending after wait");
                 return None;
             }
         }
@@ -523,9 +511,6 @@ impl GpuToolOperations {
         cell_index: u32,
         new_pos: Vec3,
     ) {
-        println!("TOOL_OPS: update_cell_position - cell {} to ({}, {}, {})", 
-            cell_index, new_pos.x, new_pos.y, new_pos.z);
-        
         // Update position update parameters (requirement 10.5)
         let update_params = PositionUpdateParams {
             cell_index,
@@ -536,16 +521,11 @@ impl GpuToolOperations {
             _padding: 0.0,
         };
         
-        println!("TOOL_OPS: writing params buffer - cell_index={}, new_position=[{}, {}, {}]", 
-            update_params.cell_index, update_params.new_position[0], update_params.new_position[1], update_params.new_position[2]);
-        
         self.queue.write_buffer(
             &self.position_update_params_buffer,
             0,
             bytemuck::cast_slice(&[update_params]),
         );
-        
-        println!("TOOL_OPS: dispatching compute shader");
         
         // Dispatch position update compute shader (requirement 10.4: single workgroup)
         // Uses position_update_physics_bind_group which has all 3 buffer sets
@@ -562,8 +542,6 @@ impl GpuToolOperations {
             // Single workgroup dispatch as required by 10.4
             compute_pass.dispatch_workgroups(1, 1, 1);
         }
-        
-        println!("TOOL_OPS: compute pass dispatched for cell {}", cell_index);
         
         // Clear cached query results since scene state changed
         self.clear_cache();
@@ -607,8 +585,6 @@ impl GpuToolOperations {
         encoder: &mut wgpu::CommandEncoder,
         cell_index: u32,
     ) {
-        println!("TOOL_OPS: remove_cell - marking cell {} for removal (setting mass to 0)", cell_index);
-        
         // Update cell removal parameters
         let removal_params = CellRemovalParams {
             cell_index,
@@ -639,8 +615,6 @@ impl GpuToolOperations {
             compute_pass.dispatch_workgroups(1, 1, 1);
         }
         
-        println!("TOOL_OPS: cell removal compute pass dispatched for cell {}", cell_index);
-        
         // Clear cached query results since scene state changed
         self.clear_cache();
     }
@@ -657,8 +631,6 @@ impl GpuToolOperations {
         encoder: &mut wgpu::CommandEncoder,
         cell_index: u32,
     ) {
-        println!("TOOL_OPS: boost_cell - boosting cell {} mass to maximum cap", cell_index);
-        
         // Update cell boost parameters
         let boost_params = CellBoostParams {
             cell_index,
@@ -688,8 +660,6 @@ impl GpuToolOperations {
             // Single workgroup dispatch
             compute_pass.dispatch_workgroups(1, 1, 1);
         }
-        
-        println!("TOOL_OPS: cell boost compute pass dispatched for cell {}", cell_index);
         
         // Clear cached query results since scene state changed
         self.clear_cache();

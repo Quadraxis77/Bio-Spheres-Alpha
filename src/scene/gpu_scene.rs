@@ -436,7 +436,6 @@ impl GpuScene {
         // For cell insertion, we write to ALL 3 buffer sets, so any buffer index works
         // For physics output, we use output_buffer_index which is where physics wrote
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
-        println!("COPY_BUFFERS: output_idx={}", output_idx);
         let vec4_copy_size = (self.gpu_triple_buffers.capacity as usize * 16) as u64; // Vec4<f32> = 16 bytes
         let u32_copy_size = (self.gpu_triple_buffers.capacity as usize * 4) as u64; // u32 = 4 bytes
         
@@ -566,6 +565,12 @@ impl GpuScene {
         // Sync mode properties (nutrient_gain_rate, max_cell_size, etc.) for division
         self.gpu_triple_buffers.sync_mode_properties(queue, &self.genomes);
         
+        // Sync child mode indices for division (CRITICAL: determines what mode children get)
+        self.gpu_triple_buffers.sync_child_mode_indices(queue, &self.genomes);
+        
+        // Sync genome mode data (child orientations, split direction) for division
+        self.gpu_triple_buffers.sync_genome_mode_data(queue, &self.genomes);
+        
         // Cache parent_make_adhesion flags for quick lookup during division
         // The flags are stored sequentially: genome0_mode0, genome0_mode1, ..., genome1_mode0, genome1_mode1, ...
         // This matches the adhesion settings buffer layout and the global mode index calculation
@@ -634,8 +639,15 @@ impl GpuScene {
         }
         
         // Find or add the genome
+        let genome_count_before = self.genomes.len();
         let genome_id = self.add_genome(genome.clone());
+        let genome_was_added = self.genomes.len() > genome_count_before;
         let mode_idx = genome.initial_mode.max(0) as usize;
+        
+        // If a new genome was added, sync settings to GPU
+        if genome_was_added {
+            self.sync_adhesion_settings(queue);
+        }
         
         // Calculate initial radius from mass (mass = 4/3 * pi * r^3 for unit density)
         let initial_mass = 1.0_f32;
@@ -685,12 +697,9 @@ impl GpuScene {
         // Note: We don't check bounds here because the GPU cell count may be higher than
         // current_cell_count due to cell division. The shader will validate bounds using
         // the actual GPU cell_count_buffer value.
-        println!("GPU_SCENE: update_cell_position_gpu called, cell_index={}, new_position={:?}, current_cell_count={}", 
-            cell_index, new_position, self.current_cell_count);
         
         // Queue the position update to be executed during render
         // The shader will validate cell_index against the GPU cell count
-        println!("GPU_SCENE: queuing position update for cell {}", cell_index);
         self.pending_position_update = Some((cell_index, new_position));
     }
     
@@ -733,12 +742,9 @@ impl GpuScene {
         // Note: We don't check bounds here because the GPU cell count may be higher than
         // current_cell_count due to cell division. The shader will validate bounds using
         // the actual GPU cell_count_buffer value.
-        println!("GPU_SCENE: remove_cell called, cell_idx={}, current_cell_count={}", 
-            cell_idx, self.current_cell_count);
         
         // Queue the cell removal to be executed during render
         // The shader will validate cell_idx against the GPU cell count
-        println!("GPU_SCENE: queuing cell removal for cell {}", cell_idx);
         self.pending_cell_removal = Some(cell_idx as u32);
         
         // Mark instance builder dirty
@@ -790,9 +796,7 @@ impl GpuScene {
     /// The result can be polled later using poll_inspect_tool_results().
     pub fn start_cell_selection_query(&mut self, screen_x: f32, screen_y: f32) {
         // Store screen coordinates for ray computation during render
-        println!("GPU_SCENE: start_cell_selection_query - screen=({}, {})", screen_x, screen_y);
         self.pending_query_position = Some((screen_x, screen_y, ToolQueryType::Inspect));
-        println!("GPU_SCENE: start_cell_selection_query - pending_query_position set");
     }
     
     /// Start a GPU spatial query for drag tool cell selection
@@ -802,9 +806,7 @@ impl GpuScene {
     /// The result can be polled later using poll_drag_tool_results().
     pub fn start_drag_selection_query(&mut self, screen_x: f32, screen_y: f32) {
         // Store screen coordinates for ray computation during render
-        println!("GPU_SCENE: start_drag_selection_query - screen=({}, {})", screen_x, screen_y);
         self.pending_query_position = Some((screen_x, screen_y, ToolQueryType::Drag));
-        println!("GPU_SCENE: start_drag_selection_query - pending_query_position set");
     }
     
     /// Start a GPU spatial query for cell removal (remove tool)
@@ -847,7 +849,6 @@ impl GpuScene {
         // Check for pending result from GPU spatial query
         if let Some(cell_idx) = self.pending_boost_result.take() {
             // Queue the cell boost to be executed during render
-            println!("GPU_SCENE: poll_boost_tool_results - queuing boost for cell {}", cell_idx);
             self.pending_cell_boost = Some(cell_idx as u32);
         }
     }
@@ -860,11 +861,9 @@ impl GpuScene {
     pub fn poll_inspect_tool_results(&mut self, radial_menu: &mut crate::ui::radial_menu::RadialMenuState) {
         // Check for pending result from GPU spatial query
         if let Some(cell_idx) = self.pending_inspect_result.take() {
-            println!("GPU_SCENE: poll_inspect_tool_results - setting inspected_cell to {}", cell_idx);
             radial_menu.inspected_cell = Some(cell_idx);
             // Queue cell data extraction to be executed during render phase
             self.pending_cell_extraction = Some(cell_idx as u32);
-            println!("GPU_SCENE: poll_inspect_tool_results - queued cell extraction for cell {}", cell_idx);
             log::info!("Inspecting cell {}", cell_idx);
         }
     }
@@ -876,10 +875,8 @@ impl GpuScene {
     pub fn poll_drag_tool_results(&mut self, radial_menu: &mut crate::ui::radial_menu::RadialMenuState, drag_distance: &mut f32) {
         // Check for pending result from GPU spatial query
         if let Some((cell_idx, distance)) = self.pending_drag_result.take() {
-            println!("POLL_DRAG: starting drag for cell {} at distance {}", cell_idx, distance);
             radial_menu.start_dragging(cell_idx);
             *drag_distance = distance;
-            println!("POLL_DRAG: drag_distance set to {}, radial_menu.dragging_cell={:?}", distance, radial_menu.dragging_cell);
             log::info!("Started dragging cell {} at distance {}", cell_idx, distance);
         }
     }
@@ -901,14 +898,12 @@ impl GpuScene {
         }
         
         let (screen_x, screen_y, query_type) = pending.unwrap();
-        println!("GPU_SCENE: execute_pending_tool_queries - screen=({}, {}), query_type={:?}", screen_x, screen_y, query_type);
         
         // Initialize GPU systems if needed
         self.initialize_gpu_systems(device, queue);
         
         // Compute ray from screen coordinates
         let (ray_origin, ray_direction) = self.screen_to_ray(screen_x, screen_y);
-        println!("GPU_SCENE: execute_pending_tool_queries - ray_origin={:?}, ray_direction={:?}", ray_origin, ray_direction);
         
         // Execute GPU spatial query with ray-sphere intersection
         if let Some(ref mut tool_ops) = self.tool_operations {
@@ -918,7 +913,6 @@ impl GpuScene {
             // Use capacity for dispatch - the shader reads actual cell_count from cell_count_buffer
             // This ensures all cells are checked even if current_cell_count is out of sync with GPU
             let dispatch_count = self.gpu_triple_buffers.capacity;
-            println!("GPU_SCENE: execute_pending_tool_queries - calling find_cell_with_ray, dispatch_count={}", dispatch_count);
             tool_ops.find_cell_with_ray(
                 encoder,
                 physics_bind_group,
@@ -930,9 +924,6 @@ impl GpuScene {
             
             // Store the query type for result routing
             self.active_query_type = Some(query_type);
-            println!("GPU_SCENE: execute_pending_tool_queries - active_query_type set to {:?}", query_type);
-        } else {
-            println!("GPU_SCENE: execute_pending_tool_queries - ERROR: tool_operations is None!");
         }
     }
     
@@ -977,51 +968,37 @@ impl GpuScene {
             None => return,
         };
         
-        println!("GPU_SCENE: poll_spatial_query_results - polling for query_type={:?}", query_type);
-        
         // Poll for spatial query completion
         if let Some(ref mut tool_ops) = self.tool_operations {
             if let Some(result) = tool_ops.poll_spatial_query() {
-                println!("POLL_SPATIAL: got result - found={}, cell_index={}, distance_fixed={}", 
-                    result.found, result.found_cell_index, result.distance_fixed);
                 if result.found != 0 {
                     let cell_idx = result.found_cell_index as usize;
                     let distance = result.distance();
                     
-                    println!("POLL_SPATIAL: routing to {:?} - cell_idx={}, distance={}", query_type, cell_idx, distance);
-                    
                     // Route result to appropriate pending field
                     match query_type {
                         ToolQueryType::Inspect => {
-                            println!("POLL_SPATIAL: setting pending_inspect_result to {}", cell_idx);
                             self.pending_inspect_result = Some(cell_idx);
                         }
                         ToolQueryType::Drag => {
-                            println!("POLL_SPATIAL: setting pending_drag_result to ({}, {})", cell_idx, distance);
                             self.pending_drag_result = Some((cell_idx, distance));
                         }
                         ToolQueryType::Remove => {
-                            println!("POLL_SPATIAL: setting pending_remove_result to {}", cell_idx);
                             self.pending_remove_result = Some(cell_idx);
                         }
                         ToolQueryType::Boost => {
-                            println!("POLL_SPATIAL: setting pending_boost_result to {}", cell_idx);
                             self.pending_boost_result = Some(cell_idx);
                         }
                     }
                     
                     log::info!("Spatial query found cell {} at distance {}", cell_idx, distance);
                 } else {
-                    println!("POLL_SPATIAL: no cells found");
                     log::info!("Spatial query found no cells");
                 }
             } else {
                 // Query still in progress, put the query type back
-                println!("GPU_SCENE: poll_spatial_query_results - query still in progress, putting query_type back");
                 self.active_query_type = Some(query_type);
             }
-        } else {
-            println!("GPU_SCENE: poll_spatial_query_results - ERROR: tool_operations is None!");
         }
     }
     
@@ -1044,29 +1021,23 @@ impl GpuScene {
         
         let (cell_index, new_position) = pending.unwrap();
         
-        println!("EXECUTE_POS_UPDATE: cell_index={}, new_position={:?}", cell_index, new_position);
-        
         // Initialize GPU systems if needed
         self.initialize_gpu_systems(device, queue);
         
         // Update physics params buffer with world_size for boundary clamping
         // This is needed because the position update shader reads params.world_size
         self.update_physics_params_for_position_update(queue);
-        println!("EXECUTE_POS_UPDATE: physics params updated");
         
         // Execute GPU position update
         if let Some(ref mut tool_ops) = self.tool_operations {
-            println!("EXECUTE_POS_UPDATE: calling tool_ops.update_cell_position");
             tool_ops.update_cell_position(
                 encoder,
                 cell_index,
                 new_position,
             );
-            println!("EXECUTE_POS_UPDATE: position update dispatched for cell {}", cell_index);
             return true;
         }
         
-        println!("EXECUTE_POS_UPDATE: ERROR - tool_operations is None!");
         false
     }
     
@@ -1133,27 +1104,21 @@ impl GpuScene {
         
         let cell_index = pending.unwrap();
         
-        println!("EXECUTE_CELL_REMOVAL: cell_index={}", cell_index);
-        
         // Initialize GPU systems if needed
         self.initialize_gpu_systems(device, queue);
         
         // Update physics params buffer (needed for cell count validation in shader)
         self.update_physics_params_for_position_update(queue);
-        println!("EXECUTE_CELL_REMOVAL: physics params updated");
         
         // Execute GPU cell removal
         if let Some(ref mut tool_ops) = self.tool_operations {
-            println!("EXECUTE_CELL_REMOVAL: calling tool_ops.remove_cell");
             tool_ops.remove_cell(
                 encoder,
                 cell_index,
             );
-            println!("EXECUTE_CELL_REMOVAL: cell removal dispatched for cell {}", cell_index);
             return true;
         }
         
-        println!("EXECUTE_CELL_REMOVAL: ERROR - tool_operations is None!");
         false
     }
     
@@ -1176,27 +1141,21 @@ impl GpuScene {
         
         let cell_index = pending.unwrap();
         
-        println!("EXECUTE_CELL_BOOST: cell_index={}", cell_index);
-        
         // Initialize GPU systems if needed
         self.initialize_gpu_systems(device, queue);
         
         // Update physics params buffer (needed for cell count validation in shader)
         self.update_physics_params_for_position_update(queue);
-        println!("EXECUTE_CELL_BOOST: physics params updated");
         
         // Execute GPU cell boost
         if let Some(ref mut tool_ops) = self.tool_operations {
-            println!("EXECUTE_CELL_BOOST: calling tool_ops.boost_cell");
             tool_ops.boost_cell(
                 encoder,
                 cell_index,
             );
-            println!("EXECUTE_CELL_BOOST: cell boost dispatched for cell {}", cell_index);
             return true;
         }
         
-        println!("EXECUTE_CELL_BOOST: ERROR - tool_operations is None!");
         false
     }
 
@@ -1219,14 +1178,11 @@ impl GpuScene {
         
         let cell_index = pending.unwrap();
         
-        println!("EXECUTE_CELL_EXTRACTION: cell_index={}", cell_index);
-        
         // Initialize GPU systems if needed
         self.initialize_gpu_systems(device, queue);
         
         // Execute GPU cell data extraction
         self.extract_cell_data(device, queue, encoder, cell_index);
-        println!("EXECUTE_CELL_EXTRACTION: cell extraction dispatched for cell {}", cell_index);
         
         true
     }
@@ -1565,7 +1521,6 @@ impl Scene for GpuScene {
         
         // Copy buffers to instance builder after position update, cell removal, or cell boost
         if position_updated || cell_removed || cell_boosted {
-            println!("RENDER: position_updated={}, cell_removed={}, cell_boosted={}, copying buffers to instance builder", position_updated, cell_removed, cell_boosted);
             self.copy_buffers_to_instance_builder(&mut encoder);
         }
 
@@ -1735,14 +1690,8 @@ impl Scene for GpuScene {
             self.current_cell_count = count;
         }
         
-        // DEBUG: Track cell count changes
-        let current_cell_count = self.current_cell_count;
-        if current_cell_count > self.debug_last_cell_count as u32 && self.debug_last_cell_count > 0 {
-            println!("[DIVISION] Cell count increased: {} -> {}", self.debug_last_cell_count, current_cell_count);
-            self.adhesion_buffers.debug_sync_readback_adhesion_counts(device, queue);
-            self.adhesion_buffers.debug_sync_readback_connections(device, queue, 10);
-        }
-        self.debug_last_cell_count = current_cell_count as usize;
+        // Track cell count changes
+        self.debug_last_cell_count = self.current_cell_count as usize;
         
         // Mark that we now have Hi-Z data for next frame
         self.first_frame = false;

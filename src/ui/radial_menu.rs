@@ -159,15 +159,12 @@ impl RadialMenuState {
 
     /// Start dragging a cell with the given index.
     pub fn start_dragging(&mut self, cell_idx: usize) {
-        println!("RADIAL_MENU: start_dragging called with cell_idx={}", cell_idx);
         self.dragging_cell = Some(cell_idx);
         self.drag_start_time = Some(std::time::Instant::now());
-        println!("RADIAL_MENU: dragging_cell is now {:?}", self.dragging_cell);
     }
 
     /// Stop dragging the current cell.
     pub fn stop_dragging(&mut self) {
-        println!("RADIAL_MENU: stop_dragging called, was dragging {:?}", self.dragging_cell);
         self.dragging_cell = None;
         self.drag_start_time = None;
     }

@@ -209,7 +209,6 @@ impl App {
                         && !self.ui.wants_pointer_input()
                     {
                         // Initiate GPU spatial query for cell selection via scene manager
-                        println!("APP: Inspect tool - starting spatial query at ({}, {})", self.mouse_position.0, self.mouse_position.1);
                         self.scene_manager.start_cell_selection_query(self.mouse_position.0, self.mouse_position.1);
                         self.window.request_redraw();
                         return true;
@@ -222,7 +221,6 @@ impl App {
                     {
                         if !menu_visible && !self.ui.wants_pointer_input() {
                             // Start GPU spatial query for drag tool via scene manager
-                            println!("APP: Drag tool - starting spatial query at ({}, {})", self.mouse_position.0, self.mouse_position.1);
                             self.scene_manager.start_drag_selection_query(self.mouse_position.0, self.mouse_position.1);
                         }
                         self.window.request_redraw();
@@ -267,8 +265,6 @@ impl App {
                             position.y as f32,
                             self.editor_state.drag_distance,
                         );
-                        
-                        println!("DRAG: cell_idx={}, new_pos={:?}, drag_distance={}", cell_idx, new_pos, self.editor_state.drag_distance);
                         
                         // Use GPU position update via scene manager
                         self.scene_manager.update_cell_position_gpu(cell_idx as u32, new_pos);

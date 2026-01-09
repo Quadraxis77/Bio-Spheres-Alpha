@@ -781,24 +781,10 @@ impl InstanceBuilder {
                 offsets
             };
         
-            println!("Instance Builder - Updating mode indices:");
-            println!("  Genome mode offsets: {:?}", genome_mode_offsets);
-            
             // Reuse temporary buffer to avoid allocations
             self.temp_mode_indices.clear();
             self.temp_mode_indices.reserve(cell_count);
-            for i in 0..cell_count.min(5) { // Debug first 5 cells
-                let mode_idx = state.mode_indices[i];
-                let genome_id = state.genome_ids[i];
-                let offset = genome_mode_offsets.get(genome_id).copied().unwrap_or(0);
-                let final_mode_index = (offset + mode_idx) as u32;
-                println!("  Cell {}: mode_idx={}, genome_id={}, offset={}, final={}", 
-                    i, mode_idx, genome_id, offset, final_mode_index);
-                self.temp_mode_indices.push(final_mode_index);
-            }
-            
-            // Process remaining cells without debug output
-            for i in 5..cell_count {
+            for i in 0..cell_count {
                 let mode_idx = state.mode_indices[i];
                 let genome_id = state.genome_ids[i];
                 let offset = genome_mode_offsets.get(genome_id).copied().unwrap_or(0);

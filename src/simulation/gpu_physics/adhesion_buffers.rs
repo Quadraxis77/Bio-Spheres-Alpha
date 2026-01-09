@@ -444,7 +444,7 @@ impl AdhesionBuffers {
         if let Ok(Ok(())) = rx.recv() {
             let data = buffer_slice.get_mapped_range();
             let counts: &[u32] = bytemuck::cast_slice(&data);
-            println!("[GPU ADHESION] total={}, live={}, free_top={}", 
+            log::debug!("[GPU ADHESION] total={}, live={}, free_top={}", 
                 counts[0], counts[1], counts[2]);
             drop(data);
         }
@@ -492,20 +492,9 @@ impl AdhesionBuffers {
         if let Ok(Ok(())) = rx.recv() {
             let data = buffer_slice.get_mapped_range();
             
-            // Print raw u32s for first 2 connections to debug alignment
-            let raw_u32s: &[u32] = bytemuck::cast_slice(&data);
-            println!("[RAW] First 52 u32s (2 connections @ 104 bytes = 26 u32s each):");
-            for i in 0..52.min(raw_u32s.len()) {
-                if i % 26 == 0 {
-                    println!("  --- Connection {} ---", i / 26);
-                }
-                let offset = (i % 26) * 4;
-                println!("  [{}] offset {}: {} (0x{:08x})", i % 26, offset, raw_u32s[i], raw_u32s[i]);
-            }
-            
             let connections: &[GpuAdhesionConnection] = bytemuck::cast_slice(&data);
             for (i, conn) in connections.iter().enumerate() {
-                println!("[GPU CONN {}] cell_a={}, cell_b={}, mode={}, active={}", 
+                log::debug!("[GPU CONN {}] cell_a={}, cell_b={}, mode={}, active={}", 
                     i, conn.cell_a_index, conn.cell_b_index, conn.mode_index, conn.is_active);
             }
             drop(data);
