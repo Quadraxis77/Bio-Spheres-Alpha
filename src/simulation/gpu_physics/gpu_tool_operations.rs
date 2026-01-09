@@ -11,7 +11,7 @@
 //! - No CPU canonical state reads for tool operations (4.4, 4.5)
 //! - Async readback for tool operation feedback (4.6)
 
-use super::{GpuTripleBufferSystem, PositionUpdateParams, SpatialQueryParams, SpatialQueryResult};
+use super::{GpuTripleBufferSystem, CellBoostParams, CellRemovalParams, PositionUpdateParams, SpatialQueryParams, SpatialQueryResult};
 use glam::Vec3;
 use std::sync::Arc;
 
@@ -36,6 +36,18 @@ pub struct GpuToolOperations {
     position_update_params_buffer: wgpu::Buffer,
     position_update_params_bind_group: wgpu::BindGroup,
     position_update_physics_bind_group: wgpu::BindGroup,  // All 3 buffer sets
+    
+    // Cell removal pipeline and resources
+    cell_removal_pipeline: wgpu::ComputePipeline,
+    cell_removal_params_buffer: wgpu::Buffer,
+    cell_removal_params_bind_group: wgpu::BindGroup,
+    cell_removal_physics_bind_group: wgpu::BindGroup,  // All 3 buffer sets
+    
+    // Cell boost pipeline and resources
+    cell_boost_pipeline: wgpu::ComputePipeline,
+    cell_boost_params_buffer: wgpu::Buffer,
+    cell_boost_params_bind_group: wgpu::BindGroup,
+    cell_boost_physics_bind_group: wgpu::BindGroup,  // All 3 buffer sets
     
     // Result caching to avoid redundant GPU queries (requirement 4.6)
     cached_query_result: Option<SpatialQueryResult>,
@@ -170,6 +182,132 @@ impl GpuToolOperations {
             ],
         });
         
+        // Create cell removal parameters buffer
+        let cell_removal_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Cell Removal Params Buffer"),
+            size: std::mem::size_of::<CellRemovalParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
+        let cell_removal_params_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cell Removal Params Bind Group"),
+            layout: &pipelines.cell_removal_params_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: cell_removal_params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        
+        // Create physics bind group for cell removal (all 3 buffer sets)
+        // Uses cell_insertion_physics_layout which has all 3 position and velocity buffers
+        let cell_removal_physics_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cell Removal Physics Bind Group"),
+            layout: &pipelines.cell_insertion_physics_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.physics_params.as_entire_binding(),
+                },
+                // All 3 position buffers
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.position_and_mass[0].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.position_and_mass[1].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffers.position_and_mass[2].as_entire_binding(),
+                },
+                // All 3 velocity buffers
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.velocity[0].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.velocity[1].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: buffers.velocity[2].as_entire_binding(),
+                },
+                // Cell count buffer
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: buffers.cell_count_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        
+        // Create cell boost parameters buffer
+        let cell_boost_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Cell Boost Params Buffer"),
+            size: std::mem::size_of::<CellBoostParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
+        let cell_boost_params_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cell Boost Params Bind Group"),
+            layout: &pipelines.cell_boost_params_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: cell_boost_params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        
+        // Create physics bind group for cell boost (all 3 buffer sets)
+        // Uses cell_insertion_physics_layout which has all 3 position and velocity buffers
+        let cell_boost_physics_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cell Boost Physics Bind Group"),
+            layout: &pipelines.cell_insertion_physics_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.physics_params.as_entire_binding(),
+                },
+                // All 3 position buffers
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.position_and_mass[0].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.position_and_mass[1].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffers.position_and_mass[2].as_entire_binding(),
+                },
+                // All 3 velocity buffers
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.velocity[0].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.velocity[1].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: buffers.velocity[2].as_entire_binding(),
+                },
+                // Cell count buffer
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: buffers.cell_count_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        
         Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -183,6 +321,14 @@ impl GpuToolOperations {
             position_update_params_buffer,
             position_update_params_bind_group,
             position_update_physics_bind_group,
+            cell_removal_pipeline: pipelines.cell_removal.clone(),
+            cell_removal_params_buffer,
+            cell_removal_params_bind_group,
+            cell_removal_physics_bind_group,
+            cell_boost_pipeline: pipelines.cell_boost.clone(),
+            cell_boost_params_buffer,
+            cell_boost_params_bind_group,
+            cell_boost_physics_bind_group,
             cached_query_result: None,
             cached_query_position: None,
             cache_tolerance: 0.001, // 1mm tolerance for position caching
@@ -447,5 +593,105 @@ impl GpuToolOperations {
     /// Use poll_spatial_query() to check for new results.
     pub fn get_cached_result(&self) -> Option<SpatialQueryResult> {
         self.cached_query_result
+    }
+    
+    /// Remove a cell by setting its mass to 0 in GPU buffers
+    /// 
+    /// This method marks a cell for removal by setting its mass to 0 in all three
+    /// triple buffer sets. The lifecycle death scan shader will detect this and
+    /// handle the actual removal through the lifecycle pipeline.
+    /// 
+    /// Updates ALL THREE triple buffer sets to ensure the removal persists.
+    pub fn remove_cell(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        cell_index: u32,
+    ) {
+        println!("TOOL_OPS: remove_cell - marking cell {} for removal (setting mass to 0)", cell_index);
+        
+        // Update cell removal parameters
+        let removal_params = CellRemovalParams {
+            cell_index,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+        
+        self.queue.write_buffer(
+            &self.cell_removal_params_buffer,
+            0,
+            bytemuck::cast_slice(&[removal_params]),
+        );
+        
+        // Dispatch cell removal compute shader (single workgroup)
+        // Uses cell_removal_physics_bind_group which has all 3 buffer sets
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Cell Removal Pass"),
+                timestamp_writes: None,
+            });
+            
+            compute_pass.set_pipeline(&self.cell_removal_pipeline);
+            compute_pass.set_bind_group(0, &self.cell_removal_physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &self.cell_removal_params_bind_group, &[]);
+            
+            // Single workgroup dispatch
+            compute_pass.dispatch_workgroups(1, 1, 1);
+        }
+        
+        println!("TOOL_OPS: cell removal compute pass dispatched for cell {}", cell_index);
+        
+        // Clear cached query results since scene state changed
+        self.clear_cache();
+    }
+    
+    /// Boost a cell's mass to the maximum cap in GPU buffers
+    /// 
+    /// This method sets a cell's mass to a high value (10.0) to trigger division.
+    /// The lifecycle division scan shader will detect mass >= split_mass and
+    /// initiate cell division.
+    /// 
+    /// Updates ALL THREE triple buffer sets to ensure the boost persists.
+    pub fn boost_cell(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        cell_index: u32,
+    ) {
+        println!("TOOL_OPS: boost_cell - boosting cell {} mass to maximum cap", cell_index);
+        
+        // Update cell boost parameters
+        let boost_params = CellBoostParams {
+            cell_index,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+        
+        self.queue.write_buffer(
+            &self.cell_boost_params_buffer,
+            0,
+            bytemuck::cast_slice(&[boost_params]),
+        );
+        
+        // Dispatch cell boost compute shader (single workgroup)
+        // Uses cell_boost_physics_bind_group which has all 3 buffer sets
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Cell Boost Pass"),
+                timestamp_writes: None,
+            });
+            
+            compute_pass.set_pipeline(&self.cell_boost_pipeline);
+            compute_pass.set_bind_group(0, &self.cell_boost_physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &self.cell_boost_params_bind_group, &[]);
+            
+            // Single workgroup dispatch
+            compute_pass.dispatch_workgroups(1, 1, 1);
+        }
+        
+        println!("TOOL_OPS: cell boost compute pass dispatched for cell {}", cell_index);
+        
+        // Clear cached query results since scene state changed
+        self.clear_cache();
     }
 }

@@ -602,30 +602,6 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
         
         ui.add_space(8.0);
         
-        // Simulation section
-        ui.heading("Simulation");
-        ui.separator();
-        
-        ui.horizontal(|ui| {
-            ui.label("Cells:");
-            // Show GPU cell count (from canonical state, no async readback)
-            if let Some(gpu_count) = context.gpu_cell_count() {
-                ui.label(format!("{} (GPU)", gpu_count));
-            } else {
-                ui.label(format!("{}", context.cell_count()));
-            }
-        });
-        
-        ui.horizontal(|ui| {
-            ui.label("Time:");
-            ui.label(format!("{:.2}s", context.current_time()));
-        });
-        
-        ui.horizontal(|ui| {
-            ui.label("Mode:");
-            ui.label(format!("{:?}", context.current_mode));
-        });
-        
         // Culling section (GPU mode only)
         if context.current_mode == crate::ui::types::SimulationMode::Gpu {
             ui.add_space(8.0);
@@ -644,16 +620,7 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             
             // World diameter slider
             ui.label("World Diameter:");
-            if ui.add(egui::Slider::new(&mut state.world_diameter, 50.0..=200.0).suffix(" units")).changed() {
-                // World diameter change requires scene reset
-            }
-            
-            // Show reset required message if world diameter changed from default
-            if (state.world_diameter - 200.0).abs() > 0.1 {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("⚠ Scene reset required").color(egui::Color32::YELLOW));
-                });
-            }
+            ui.add(egui::Slider::new(&mut state.world_diameter, 50.0..=200.0).suffix(" units"));
             
             ui.add_space(4.0);
             

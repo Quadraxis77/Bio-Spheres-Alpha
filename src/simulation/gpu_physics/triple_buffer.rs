@@ -319,6 +319,18 @@ pub struct GpuTripleBufferSystem {
     
     /// Deterministic cell addition pipeline
     cell_addition_pipeline: DeterministicCellAddition,
+    
+    /// Cell count readback buffer for async GPU-to-CPU transfer
+    cell_count_readback_buffer: wgpu::Buffer,
+    
+    /// Whether a cell count readback is pending
+    cell_count_map_pending: bool,
+    
+    /// Channel receiver for cell count map completion
+    cell_count_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    
+    /// Last known cell count from GPU readback
+    last_cell_count: u32,
 }
 
 impl GpuTripleBufferSystem {
@@ -414,6 +426,13 @@ impl GpuTripleBufferSystem {
         // GPU-side cell count: [0] = total cells, [1] = live cells
         let cell_count_buffer = Self::create_storage_buffer(device, 8, "Cell Count Buffer");
         
+        // Cell count readback buffer for async GPU-to-CPU transfer
+        let cell_count_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Cell Count Readback Buffer"),
+            size: 8, // 2 x u32
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
 
         
         // Genome mode data: 40 modes per genome * 10,000 genomes max = 400,000 modes
@@ -477,6 +496,10 @@ impl GpuTripleBufferSystem {
             pending_cell_insertions: Vec::new(),
             slot_allocator: DeterministicSlotAllocator::new(capacity),
             cell_addition_pipeline: DeterministicCellAddition::new(),
+            cell_count_readback_buffer,
+            cell_count_map_pending: false,
+            cell_count_receiver: None,
+            last_cell_count: 0,
         }
     }
     
@@ -903,6 +926,107 @@ impl GpuTripleBufferSystem {
     pub fn update_gpu_cell_count(&self, queue: &wgpu::Queue, new_count: u32) {
         let cell_counts: [u32; 2] = [new_count, new_count];
         queue.write_buffer(&self.cell_count_buffer, 0, bytemuck::cast_slice(&cell_counts));
+    }
+    
+    /// Start an async read of cell count from GPU.
+    /// Call poll_cell_count() to check if the read is complete.
+    /// This is non-blocking and won't cause frame spikes.
+    pub fn start_cell_count_read(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        // Don't start a new read if one is already pending
+        if self.cell_count_map_pending {
+            return;
+        }
+        
+        // Copy cell count buffer to readback buffer
+        encoder.copy_buffer_to_buffer(
+            &self.cell_count_buffer,
+            0,
+            &self.cell_count_readback_buffer,
+            0,
+            8, // 2 x u32
+        );
+    }
+    
+    /// Initiate the async map operation after command buffer submission.
+    /// Call this after queue.submit() to start the async readback.
+    pub fn initiate_cell_count_map(&mut self) {
+        // Don't start a new read if one is already pending
+        if self.cell_count_map_pending {
+            return;
+        }
+        
+        let buffer_slice = self.cell_count_readback_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        
+        self.cell_count_map_pending = true;
+        self.cell_count_receiver = Some(rx);
+    }
+    
+    /// Poll for async cell count read completion.
+    /// Returns Some(count) if new count is available, None if still pending or no read started.
+    /// This is non-blocking.
+    pub fn poll_cell_count(&mut self, device: &wgpu::Device) -> Option<u32> {
+        if !self.cell_count_map_pending {
+            return None;
+        }
+        
+        // Do a non-blocking poll to push GPU work forward
+        let _ = device.poll(wgpu::PollType::Poll);
+        
+        // Check if the map operation completed
+        if let Some(ref rx) = self.cell_count_receiver {
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    // Map succeeded, read the data
+                    let buffer_slice = self.cell_count_readback_buffer.slice(..);
+                    let data = buffer_slice.get_mapped_range();
+                    let counts: &[u32] = bytemuck::cast_slice(&data);
+                    
+                    // counts[0] = total cells, counts[1] = live cells
+                    // Use live cells count for display
+                    self.last_cell_count = counts[1];
+                    
+                    drop(data);
+                    self.cell_count_readback_buffer.unmap();
+                    
+                    self.cell_count_map_pending = false;
+                    self.cell_count_receiver = None;
+                    return Some(self.last_cell_count);
+                }
+                Ok(Err(_)) => {
+                    // Map failed, reset state
+                    self.cell_count_map_pending = false;
+                    self.cell_count_receiver = None;
+                    return None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // Still pending
+                    return None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // Channel closed unexpectedly
+                    self.cell_count_map_pending = false;
+                    self.cell_count_receiver = None;
+                    return None;
+                }
+            }
+        }
+        
+        None
+    }
+    
+    /// Get the last known cell count from GPU readback.
+    pub fn last_cell_count(&self) -> u32 {
+        self.last_cell_count
+    }
+    
+    /// Check if a cell count readback is pending.
+    pub fn is_cell_count_read_pending(&self) -> bool {
+        self.cell_count_map_pending
     }
     
     /// Free a cell slot (for cell death)

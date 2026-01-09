@@ -209,6 +209,7 @@ impl App {
                         && !self.ui.wants_pointer_input()
                     {
                         // Initiate GPU spatial query for cell selection via scene manager
+                        println!("APP: Inspect tool - starting spatial query at ({}, {})", self.mouse_position.0, self.mouse_position.1);
                         self.scene_manager.start_cell_selection_query(self.mouse_position.0, self.mouse_position.1);
                         self.window.request_redraw();
                         return true;

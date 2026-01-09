@@ -102,6 +102,12 @@ pub struct GpuScene {
     active_query_type: Option<ToolQueryType>,
     /// Pending position update for drag tool (cell_index, new_position)
     pending_position_update: Option<(u32, glam::Vec3)>,
+    /// Pending cell removal for remove tool (cell_index)
+    pending_cell_removal: Option<u32>,
+    /// Pending cell boost for boost tool (cell_index)
+    pending_cell_boost: Option<u32>,
+    /// Pending cell extraction for inspect tool (cell_index)
+    pending_cell_extraction: Option<u32>,
     /// Whether to show adhesion lines
     pub show_adhesion_lines: bool,
     /// Point cloud rendering mode for maximum performance
@@ -222,6 +228,9 @@ impl GpuScene {
             pending_query_position: None,
             active_query_type: None,
             pending_position_update: None,
+            pending_cell_removal: None,
+            pending_cell_boost: None,
+            pending_cell_extraction: None,
             show_adhesion_lines: true,
             point_cloud_mode: false,
             show_world_sphere: true,
@@ -718,22 +727,19 @@ impl GpuScene {
     
     /// Remove a cell at the given index using GPU operations.
     /// Uses GPU-based cell removal without CPU state management.
-    /// Also removes all adhesion connections involving this cell.
+    /// The cell's mass is set to 0, which causes the lifecycle death scan shader
+    /// to mark it as dead and handle the actual removal through the lifecycle pipeline.
     pub fn remove_cell(&mut self, cell_idx: usize) -> bool {
-        if cell_idx >= self.current_cell_count as usize {
-            return false;
-        }
+        // Note: We don't check bounds here because the GPU cell count may be higher than
+        // current_cell_count due to cell division. The shader will validate bounds using
+        // the actual GPU cell_count_buffer value.
+        println!("GPU_SCENE: remove_cell called, cell_idx={}, current_cell_count={}", 
+            cell_idx, self.current_cell_count);
         
-        // Update local tracking
-        // Note: Actual GPU cell removal would require a compute shader to compact the arrays
-        // For now, we just decrement the count - the cell data remains but won't be processed
-        if self.current_cell_count > 0 {
-            self.current_cell_count -= 1;
-            log::info!("Removed cell {} (cell count now {})", cell_idx, self.current_cell_count);
-        }
-        
-        // Compact genomes to free unused slots
-        self.compact_genomes();
+        // Queue the cell removal to be executed during render
+        // The shader will validate cell_idx against the GPU cell count
+        println!("GPU_SCENE: queuing cell removal for cell {}", cell_idx);
+        self.pending_cell_removal = Some(cell_idx as u32);
         
         // Mark instance builder dirty
         self.instance_builder.mark_all_dirty();
@@ -784,7 +790,9 @@ impl GpuScene {
     /// The result can be polled later using poll_inspect_tool_results().
     pub fn start_cell_selection_query(&mut self, screen_x: f32, screen_y: f32) {
         // Store screen coordinates for ray computation during render
+        println!("GPU_SCENE: start_cell_selection_query - screen=({}, {})", screen_x, screen_y);
         self.pending_query_position = Some((screen_x, screen_y, ToolQueryType::Inspect));
+        println!("GPU_SCENE: start_cell_selection_query - pending_query_position set");
     }
     
     /// Start a GPU spatial query for drag tool cell selection
@@ -833,17 +841,14 @@ impl GpuScene {
     
     /// Poll for boost tool spatial query results
     /// 
-    /// This method checks for completed spatial query results and boosts the selected cell.
+    /// This method checks for completed spatial query results and queues the cell for boosting.
     /// Uses the GPU spatial query system for cell selection.
-    pub fn poll_boost_tool_results(&mut self, _queue: &wgpu::Queue) {
+    pub fn poll_boost_tool_results(&mut self) {
         // Check for pending result from GPU spatial query
         if let Some(cell_idx) = self.pending_boost_result.take() {
-            if cell_idx < self.current_cell_count as usize {
-                // Boost the cell by setting its mass to a high value (triggers division)
-                // Note: Actual mass update requires a compute shader to modify the mass in place
-                // For now, just log the boost action
-                log::info!("Boosted cell {} (mass update requires compute shader)", cell_idx);
-            }
+            // Queue the cell boost to be executed during render
+            println!("GPU_SCENE: poll_boost_tool_results - queuing boost for cell {}", cell_idx);
+            self.pending_cell_boost = Some(cell_idx as u32);
         }
     }
 
@@ -851,10 +856,15 @@ impl GpuScene {
     /// 
     /// This method checks for completed spatial query results and updates the radial menu state.
     /// Uses the GPU spatial query system for cell selection.
+    /// Also queues cell data extraction to be executed during the next render phase.
     pub fn poll_inspect_tool_results(&mut self, radial_menu: &mut crate::ui::radial_menu::RadialMenuState) {
         // Check for pending result from GPU spatial query
         if let Some(cell_idx) = self.pending_inspect_result.take() {
+            println!("GPU_SCENE: poll_inspect_tool_results - setting inspected_cell to {}", cell_idx);
             radial_menu.inspected_cell = Some(cell_idx);
+            // Queue cell data extraction to be executed during render phase
+            self.pending_cell_extraction = Some(cell_idx as u32);
+            println!("GPU_SCENE: poll_inspect_tool_results - queued cell extraction for cell {}", cell_idx);
             log::info!("Inspecting cell {}", cell_idx);
         }
     }
@@ -983,6 +993,7 @@ impl GpuScene {
                     // Route result to appropriate pending field
                     match query_type {
                         ToolQueryType::Inspect => {
+                            println!("POLL_SPATIAL: setting pending_inspect_result to {}", cell_idx);
                             self.pending_inspect_result = Some(cell_idx);
                         }
                         ToolQueryType::Drag => {
@@ -990,9 +1001,11 @@ impl GpuScene {
                             self.pending_drag_result = Some((cell_idx, distance));
                         }
                         ToolQueryType::Remove => {
+                            println!("POLL_SPATIAL: setting pending_remove_result to {}", cell_idx);
                             self.pending_remove_result = Some(cell_idx);
                         }
                         ToolQueryType::Boost => {
+                            println!("POLL_SPATIAL: setting pending_boost_result to {}", cell_idx);
                             self.pending_boost_result = Some(cell_idx);
                         }
                     }
@@ -1099,6 +1112,123 @@ impl GpuScene {
         };
         
         queue.write_buffer(&self.gpu_triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
+    }
+    
+    /// Execute pending cell removals using GPU compute shader
+    /// 
+    /// This method should be called during render when device/encoder/queue are available.
+    /// It dispatches the GPU cell removal compute shader to mark cells for death.
+    /// Returns true if a cell removal was executed.
+    pub fn execute_pending_cell_removals(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+    ) -> bool {
+        // Check if there's a pending cell removal
+        let pending = self.pending_cell_removal.take();
+        if pending.is_none() {
+            return false;
+        }
+        
+        let cell_index = pending.unwrap();
+        
+        println!("EXECUTE_CELL_REMOVAL: cell_index={}", cell_index);
+        
+        // Initialize GPU systems if needed
+        self.initialize_gpu_systems(device, queue);
+        
+        // Update physics params buffer (needed for cell count validation in shader)
+        self.update_physics_params_for_position_update(queue);
+        println!("EXECUTE_CELL_REMOVAL: physics params updated");
+        
+        // Execute GPU cell removal
+        if let Some(ref mut tool_ops) = self.tool_operations {
+            println!("EXECUTE_CELL_REMOVAL: calling tool_ops.remove_cell");
+            tool_ops.remove_cell(
+                encoder,
+                cell_index,
+            );
+            println!("EXECUTE_CELL_REMOVAL: cell removal dispatched for cell {}", cell_index);
+            return true;
+        }
+        
+        println!("EXECUTE_CELL_REMOVAL: ERROR - tool_operations is None!");
+        false
+    }
+    
+    /// Execute pending cell boosts using GPU compute shader
+    /// 
+    /// This method should be called during render when device/encoder/queue are available.
+    /// It dispatches the GPU cell boost compute shader to set cell mass to maximum.
+    /// Returns true if a cell boost was executed.
+    pub fn execute_pending_cell_boosts(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+    ) -> bool {
+        // Check if there's a pending cell boost
+        let pending = self.pending_cell_boost.take();
+        if pending.is_none() {
+            return false;
+        }
+        
+        let cell_index = pending.unwrap();
+        
+        println!("EXECUTE_CELL_BOOST: cell_index={}", cell_index);
+        
+        // Initialize GPU systems if needed
+        self.initialize_gpu_systems(device, queue);
+        
+        // Update physics params buffer (needed for cell count validation in shader)
+        self.update_physics_params_for_position_update(queue);
+        println!("EXECUTE_CELL_BOOST: physics params updated");
+        
+        // Execute GPU cell boost
+        if let Some(ref mut tool_ops) = self.tool_operations {
+            println!("EXECUTE_CELL_BOOST: calling tool_ops.boost_cell");
+            tool_ops.boost_cell(
+                encoder,
+                cell_index,
+            );
+            println!("EXECUTE_CELL_BOOST: cell boost dispatched for cell {}", cell_index);
+            return true;
+        }
+        
+        println!("EXECUTE_CELL_BOOST: ERROR - tool_operations is None!");
+        false
+    }
+
+    /// Execute pending cell extraction using GPU compute shader
+    /// 
+    /// This method should be called during render when device/encoder/queue are available.
+    /// It dispatches the GPU cell data extraction compute shader for the inspect tool.
+    /// Returns true if a cell extraction was executed.
+    pub fn execute_pending_cell_extraction(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+    ) -> bool {
+        // Check if there's a pending cell extraction
+        let pending = self.pending_cell_extraction.take();
+        if pending.is_none() {
+            return false;
+        }
+        
+        let cell_index = pending.unwrap();
+        
+        println!("EXECUTE_CELL_EXTRACTION: cell_index={}", cell_index);
+        
+        // Initialize GPU systems if needed
+        self.initialize_gpu_systems(device, queue);
+        
+        // Execute GPU cell data extraction
+        self.extract_cell_data(device, queue, encoder, cell_index);
+        println!("EXECUTE_CELL_EXTRACTION: cell extraction dispatched for cell {}", cell_index);
+        
+        true
     }
 
     /// Extract cell data using GPU compute shader with async readback management
@@ -1379,6 +1509,12 @@ impl Scene for GpuScene {
 
         // Execute any pending tool queries (spatial queries for inspect/drag/remove/boost)
         self.execute_pending_tool_queries(device, &mut encoder, queue);
+        
+        // Poll for cell extraction completion (inspect tool async readback)
+        // This needs to be called each frame to check for completed async readbacks
+        if let Some(ref mut inspector) = self.cell_inspector {
+            inspector.poll_extraction(Some(device));
+        }
 
         // If a cell was inserted, copy buffers to instance builder before physics
         // The Hi-Z buffer doesn't have valid depth data for the new cell's position yet
@@ -1414,9 +1550,22 @@ impl Scene for GpuScene {
         // so physics doesn't overwrite the user's drag position
         let position_updated = self.execute_pending_position_updates(device, &mut encoder, queue);
         
-        // Copy buffers to instance builder after position update
-        if position_updated {
-            println!("RENDER: position_updated=true, copying buffers to instance builder");
+        // Execute any pending cell removals (remove tool) AFTER physics
+        // This marks cells for death by setting their mass to 0
+        // The lifecycle pipeline will handle the actual removal on the next physics step
+        let cell_removed = self.execute_pending_cell_removals(device, &mut encoder, queue);
+        
+        // Execute any pending cell boosts (boost tool) AFTER physics
+        // This sets cell mass to maximum to trigger division
+        let cell_boosted = self.execute_pending_cell_boosts(device, &mut encoder, queue);
+        
+        // Execute any pending cell extractions (inspect tool) AFTER physics
+        // This extracts detailed cell data for the Cell Inspector panel
+        let _cell_extracted = self.execute_pending_cell_extraction(device, &mut encoder, queue);
+        
+        // Copy buffers to instance builder after position update, cell removal, or cell boost
+        if position_updated || cell_removed || cell_boosted {
+            println!("RENDER: position_updated={}, cell_removed={}, cell_boosted={}, copying buffers to instance builder", position_updated, cell_removed, cell_boosted);
             self.copy_buffers_to_instance_builder(&mut encoder);
         }
 
@@ -1565,9 +1714,26 @@ impl Scene for GpuScene {
                 &self.renderer.depth_view,
             );
         }
+        
+        // Start async cell count readback (copy to readback buffer)
+        // Only start if no readback is pending
+        let should_start_readback = !self.gpu_triple_buffers.is_cell_count_read_pending();
+        if should_start_readback {
+            self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
+        }
 
         // Single submit for all GPU work
         queue.submit(std::iter::once(encoder.finish()));
+        
+        // Initiate the async map operation after submit (if we started a readback)
+        if should_start_readback {
+            self.gpu_triple_buffers.initiate_cell_count_map();
+        }
+        
+        // Poll for cell count readback completion and update current_cell_count
+        if let Some(count) = self.gpu_triple_buffers.poll_cell_count(device) {
+            self.current_cell_count = count;
+        }
         
         // DEBUG: Track cell count changes
         let current_cell_count = self.current_cell_count;

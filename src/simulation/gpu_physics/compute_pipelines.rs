@@ -140,6 +140,34 @@ pub struct PositionUpdateParams {
 // Compile-time assertion to verify struct size matches WGSL
 const _: () = assert!(std::mem::size_of::<PositionUpdateParams>() == 32, "PositionUpdateParams must be 32 bytes");
 
+/// Cell removal parameters for GPU cell removal compute shader
+/// Size: 16 bytes (must match WGSL struct layout)
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CellRemovalParams {
+    pub cell_index: u32,        // 4 bytes at offset 0
+    pub _pad0: u32,             // 4 bytes at offset 4
+    pub _pad1: u32,             // 4 bytes at offset 8
+    pub _pad2: u32,             // 4 bytes at offset 12
+}                               // Total: 16 bytes
+
+// Compile-time assertion to verify struct size matches WGSL
+const _: () = assert!(std::mem::size_of::<CellRemovalParams>() == 16, "CellRemovalParams must be 16 bytes");
+
+/// Cell boost parameters for GPU cell boost compute shader
+/// Size: 16 bytes (must match WGSL struct layout)
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CellBoostParams {
+    pub cell_index: u32,        // 4 bytes at offset 0
+    pub _pad0: u32,             // 4 bytes at offset 4
+    pub _pad1: u32,             // 4 bytes at offset 8
+    pub _pad2: u32,             // 4 bytes at offset 12
+}                               // Total: 16 bytes
+
+// Compile-time assertion to verify struct size matches WGSL
+const _: () = assert!(std::mem::size_of::<CellBoostParams>() == 16, "CellBoostParams must be 16 bytes");
+
 /// Cached bind groups for GPU physics pipeline
 /// Pre-created for all 3 buffer indices to avoid per-frame allocation
 pub struct CachedBindGroups {
@@ -204,6 +232,12 @@ pub struct GpuPhysicsPipelines {
     // Position update pipeline
     pub position_update_tool: wgpu::ComputePipeline,
     
+    // Cell removal pipeline
+    pub cell_removal: wgpu::ComputePipeline,
+    
+    // Cell boost pipeline
+    pub cell_boost: wgpu::ComputePipeline,
+    
     // Nutrient system pipeline
     pub nutrient_transport: wgpu::ComputePipeline,
     
@@ -245,6 +279,12 @@ pub struct GpuPhysicsPipelines {
     
     // Position update bind group layouts
     pub position_update_params_layout: wgpu::BindGroupLayout,
+    
+    // Cell removal bind group layouts
+    pub cell_removal_params_layout: wgpu::BindGroupLayout,
+    
+    // Cell boost bind group layouts
+    pub cell_boost_params_layout: wgpu::BindGroupLayout,
     
     // Adhesion bind group layouts
     pub adhesion_layout: wgpu::BindGroupLayout,
@@ -314,6 +354,12 @@ impl GpuPhysicsPipelines {
         
         // Create position update bind group layouts
         let position_update_params_layout = Self::create_position_update_params_bind_group_layout(device);
+        
+        // Create cell removal bind group layouts
+        let cell_removal_params_layout = Self::create_cell_removal_params_bind_group_layout(device);
+        
+        // Create cell boost bind group layouts
+        let cell_boost_params_layout = Self::create_cell_boost_params_bind_group_layout(device);
         
         // Create compute pipelines
         let spatial_grid_clear = Self::create_compute_pipeline(
@@ -418,6 +464,26 @@ impl GpuPhysicsPipelines {
             "Position Update Tool",
         );
         
+        // Create cell removal pipeline
+        // Uses cell_insertion_physics_layout to access all 3 triple-buffered position/velocity sets
+        let cell_removal = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/cell_removal.wgsl"),
+            "main",
+            &[&cell_insertion_physics_layout, &cell_removal_params_layout],
+            "Cell Removal",
+        );
+        
+        // Create cell boost pipeline
+        // Uses cell_insertion_physics_layout to access all 3 triple-buffered position/velocity sets
+        let cell_boost = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/cell_boost.wgsl"),
+            "main",
+            &[&cell_insertion_physics_layout, &cell_boost_params_layout],
+            "Cell Boost",
+        );
+        
         // Create nutrient transport pipeline
         let nutrient_transport = Self::create_compute_pipeline(
             device,
@@ -491,6 +557,8 @@ impl GpuPhysicsPipelines {
             cell_data_extraction,
             spatial_query,
             position_update_tool,
+            cell_removal,
+            cell_boost,
             nutrient_transport,
             adhesion_physics,
             lifecycle_death_scan,
@@ -515,6 +583,8 @@ impl GpuPhysicsPipelines {
             spatial_query_params_layout,
             spatial_query_result_layout,
             position_update_params_layout,
+            cell_removal_params_layout,
+            cell_boost_params_layout,
             adhesion_layout,
             force_accum_layout,
             lifecycle_adhesion_layout,
@@ -3038,6 +3108,46 @@ impl GpuPhysicsPipelines {
             label: Some("Position Update Params Bind Group Layout"),
             entries: &[
                 // Position update parameters (uniform)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create cell removal params bind group layout (Group 1 in cell_removal shader)
+    fn create_cell_removal_params_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cell Removal Params Bind Group Layout"),
+            entries: &[
+                // Cell removal parameters (uniform)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create cell boost params bind group layout (Group 1 in cell_boost shader)
+    fn create_cell_boost_params_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cell Boost Params Bind Group Layout"),
+            entries: &[
+                // Cell boost parameters (uniform)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,

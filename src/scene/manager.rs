@@ -316,7 +316,7 @@ impl SceneManager {
     /// This method checks for completed spatial query results and updates tool states.
     /// It should be called each frame to process async tool operation completions.
     /// For preview scene, this method does nothing.
-    pub fn poll_tool_operation_results(&mut self, radial_menu: &mut crate::ui::radial_menu::RadialMenuState, drag_distance: &mut f32, queue: &wgpu::Queue) {
+    pub fn poll_tool_operation_results(&mut self, radial_menu: &mut crate::ui::radial_menu::RadialMenuState, drag_distance: &mut f32, _queue: &wgpu::Queue) {
         if self.current_mode == crate::ui::SimulationMode::Gpu {
             if let Some(gpu_scene) = self.gpu_scene.as_mut() {
                 // First poll for spatial query results from GPU
@@ -326,7 +326,7 @@ impl SceneManager {
                 gpu_scene.poll_inspect_tool_results(radial_menu);
                 gpu_scene.poll_drag_tool_results(radial_menu, drag_distance);
                 gpu_scene.poll_remove_tool_results();
-                gpu_scene.poll_boost_tool_results(queue);
+                gpu_scene.poll_boost_tool_results();
                 
                 // Debug: log dragging state
                 if radial_menu.dragging_cell.is_some() {
