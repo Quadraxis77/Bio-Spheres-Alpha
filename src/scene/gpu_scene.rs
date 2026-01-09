@@ -427,6 +427,7 @@ impl GpuScene {
         // For cell insertion, we write to ALL 3 buffer sets, so any buffer index works
         // For physics output, we use output_buffer_index which is where physics wrote
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
+        println!("COPY_BUFFERS: output_idx={}", output_idx);
         let vec4_copy_size = (self.gpu_triple_buffers.capacity as usize * 16) as u64; // Vec4<f32> = 16 bytes
         let u32_copy_size = (self.gpu_triple_buffers.capacity as usize * 4) as u64; // u32 = 4 bytes
         
@@ -672,22 +673,22 @@ impl GpuScene {
     /// This method queues a position update to be executed during the next render phase.
     /// It replaces the canonical state-based position updates.
     pub fn update_cell_position_gpu(&mut self, cell_index: u32, new_position: glam::Vec3) {
-        if cell_index >= self.current_cell_count {
-            return;
-        }
+        // Note: We don't check bounds here because the GPU cell count may be higher than
+        // current_cell_count due to cell division. The shader will validate bounds using
+        // the actual GPU cell_count_buffer value.
+        println!("GPU_SCENE: update_cell_position_gpu called, cell_index={}, new_position={:?}, current_cell_count={}", 
+            cell_index, new_position, self.current_cell_count);
         
         // Queue the position update to be executed during render
+        // The shader will validate cell_index against the GPU cell count
+        println!("GPU_SCENE: queuing position update for cell {}", cell_index);
         self.pending_position_update = Some((cell_index, new_position));
     }
     
     /// Update a cell's position using GPU operations.
     /// Used by the drag tool to move cells.
     pub fn set_cell_position(&mut self, cell_idx: usize, new_position: glam::Vec3) {
-        if cell_idx >= self.current_cell_count as usize {
-            return;
-        }
-        
-        // Queue the position update
+        // Queue the position update - shader will validate bounds
         self.pending_position_update = Some((cell_idx as u32, new_position));
     }
     
@@ -793,7 +794,9 @@ impl GpuScene {
     /// The result can be polled later using poll_drag_tool_results().
     pub fn start_drag_selection_query(&mut self, screen_x: f32, screen_y: f32) {
         // Store screen coordinates for ray computation during render
+        println!("GPU_SCENE: start_drag_selection_query - screen=({}, {})", screen_x, screen_y);
         self.pending_query_position = Some((screen_x, screen_y, ToolQueryType::Drag));
+        println!("GPU_SCENE: start_drag_selection_query - pending_query_position set");
     }
     
     /// Start a GPU spatial query for cell removal (remove tool)
@@ -863,8 +866,10 @@ impl GpuScene {
     pub fn poll_drag_tool_results(&mut self, radial_menu: &mut crate::ui::radial_menu::RadialMenuState, drag_distance: &mut f32) {
         // Check for pending result from GPU spatial query
         if let Some((cell_idx, distance)) = self.pending_drag_result.take() {
+            println!("POLL_DRAG: starting drag for cell {} at distance {}", cell_idx, distance);
             radial_menu.start_dragging(cell_idx);
             *drag_distance = distance;
+            println!("POLL_DRAG: drag_distance set to {}, radial_menu.dragging_cell={:?}", distance, radial_menu.dragging_cell);
             log::info!("Started dragging cell {} at distance {}", cell_idx, distance);
         }
     }
@@ -886,29 +891,38 @@ impl GpuScene {
         }
         
         let (screen_x, screen_y, query_type) = pending.unwrap();
+        println!("GPU_SCENE: execute_pending_tool_queries - screen=({}, {}), query_type={:?}", screen_x, screen_y, query_type);
         
         // Initialize GPU systems if needed
         self.initialize_gpu_systems(device, queue);
         
         // Compute ray from screen coordinates
         let (ray_origin, ray_direction) = self.screen_to_ray(screen_x, screen_y);
+        println!("GPU_SCENE: execute_pending_tool_queries - ray_origin={:?}, ray_direction={:?}", ray_origin, ray_direction);
         
         // Execute GPU spatial query with ray-sphere intersection
         if let Some(ref mut tool_ops) = self.tool_operations {
             let output_idx = self.gpu_triple_buffers.output_buffer_index();
             let physics_bind_group = &self.cached_bind_groups.physics[output_idx];
             
+            // Use capacity for dispatch - the shader reads actual cell_count from cell_count_buffer
+            // This ensures all cells are checked even if current_cell_count is out of sync with GPU
+            let dispatch_count = self.gpu_triple_buffers.capacity;
+            println!("GPU_SCENE: execute_pending_tool_queries - calling find_cell_with_ray, dispatch_count={}", dispatch_count);
             tool_ops.find_cell_with_ray(
                 encoder,
                 physics_bind_group,
                 ray_origin,
                 ray_direction,
                 1000.0, // max_distance - raycast up to 1000 units
-                self.current_cell_count,
+                dispatch_count,
             );
             
             // Store the query type for result routing
             self.active_query_type = Some(query_type);
+            println!("GPU_SCENE: execute_pending_tool_queries - active_query_type set to {:?}", query_type);
+        } else {
+            println!("GPU_SCENE: execute_pending_tool_queries - ERROR: tool_operations is None!");
         }
     }
     
@@ -953,12 +967,18 @@ impl GpuScene {
             None => return,
         };
         
+        println!("GPU_SCENE: poll_spatial_query_results - polling for query_type={:?}", query_type);
+        
         // Poll for spatial query completion
         if let Some(ref mut tool_ops) = self.tool_operations {
             if let Some(result) = tool_ops.poll_spatial_query() {
+                println!("POLL_SPATIAL: got result - found={}, cell_index={}, distance_fixed={}", 
+                    result.found, result.found_cell_index, result.distance_fixed);
                 if result.found != 0 {
                     let cell_idx = result.found_cell_index as usize;
                     let distance = result.distance();
+                    
+                    println!("POLL_SPATIAL: routing to {:?} - cell_idx={}, distance={}", query_type, cell_idx, distance);
                     
                     // Route result to appropriate pending field
                     match query_type {
@@ -966,6 +986,7 @@ impl GpuScene {
                             self.pending_inspect_result = Some(cell_idx);
                         }
                         ToolQueryType::Drag => {
+                            println!("POLL_SPATIAL: setting pending_drag_result to ({}, {})", cell_idx, distance);
                             self.pending_drag_result = Some((cell_idx, distance));
                         }
                         ToolQueryType::Remove => {
@@ -978,12 +999,16 @@ impl GpuScene {
                     
                     log::info!("Spatial query found cell {} at distance {}", cell_idx, distance);
                 } else {
+                    println!("POLL_SPATIAL: no cells found");
                     log::info!("Spatial query found no cells");
                 }
             } else {
                 // Query still in progress, put the query type back
+                println!("GPU_SCENE: poll_spatial_query_results - query still in progress, putting query_type back");
                 self.active_query_type = Some(query_type);
             }
+        } else {
+            println!("GPU_SCENE: poll_spatial_query_results - ERROR: tool_operations is None!");
         }
     }
     
@@ -991,35 +1016,89 @@ impl GpuScene {
     /// 
     /// This method should be called during render when device/encoder/queue are available.
     /// It dispatches the GPU position update compute shader for drag tool operations.
+    /// Returns true if a position update was executed.
     pub fn execute_pending_position_updates(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
-    ) {
+    ) -> bool {
         // Check if there's a pending position update
         let pending = self.pending_position_update.take();
         if pending.is_none() {
-            return;
+            return false;
         }
         
         let (cell_index, new_position) = pending.unwrap();
         
+        println!("EXECUTE_POS_UPDATE: cell_index={}, new_position={:?}", cell_index, new_position);
+        
         // Initialize GPU systems if needed
         self.initialize_gpu_systems(device, queue);
         
+        // Update physics params buffer with world_size for boundary clamping
+        // This is needed because the position update shader reads params.world_size
+        self.update_physics_params_for_position_update(queue);
+        println!("EXECUTE_POS_UPDATE: physics params updated");
+        
         // Execute GPU position update
         if let Some(ref mut tool_ops) = self.tool_operations {
-            let output_idx = self.gpu_triple_buffers.output_buffer_index();
-            let physics_bind_group = &self.cached_bind_groups.physics[output_idx];
-            
+            println!("EXECUTE_POS_UPDATE: calling tool_ops.update_cell_position");
             tool_ops.update_cell_position(
                 encoder,
-                physics_bind_group,
                 cell_index,
                 new_position,
             );
+            println!("EXECUTE_POS_UPDATE: position update dispatched for cell {}", cell_index);
+            return true;
         }
+        
+        println!("EXECUTE_POS_UPDATE: ERROR - tool_operations is None!");
+        false
+    }
+    
+    /// Update physics params buffer for position update operations
+    fn update_physics_params_for_position_update(&self, queue: &wgpu::Queue) {
+        #[repr(C)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+        struct PhysicsParams {
+            delta_time: f32,
+            current_time: f32,
+            current_frame: i32,
+            cell_count: u32,
+            world_size: f32,
+            boundary_stiffness: f32,
+            gravity: f32,
+            acceleration_damping: f32,
+            grid_resolution: i32,
+            grid_cell_size: f32,
+            max_cells_per_grid: i32,
+            enable_thrust_force: i32,
+            cell_capacity: u32,
+            _padding2: [f32; 3],
+            _padding: [f32; 48],
+        }
+        
+        let world_diameter = self.config.sphere_radius * 2.0;
+        let params = PhysicsParams {
+            delta_time: 0.0,
+            current_time: self.current_time,
+            current_frame: 0,
+            cell_count: self.current_cell_count,
+            world_size: world_diameter,
+            boundary_stiffness: 500.0,
+            gravity: 0.0,
+            acceleration_damping: 0.98,
+            grid_resolution: 64,
+            grid_cell_size: world_diameter / 64.0,
+            max_cells_per_grid: 16,
+            enable_thrust_force: 0,
+            cell_capacity: self.gpu_triple_buffers.capacity,
+            _padding2: [0.0; 3],
+            _padding: [0.0; 48],
+        };
+        
+        queue.write_buffer(&self.gpu_triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
     }
 
     /// Extract cell data using GPU compute shader with async readback management
@@ -1300,11 +1379,8 @@ impl Scene for GpuScene {
 
         // Execute any pending tool queries (spatial queries for inspect/drag/remove/boost)
         self.execute_pending_tool_queries(device, &mut encoder, queue);
-        
-        // Execute any pending position updates (drag tool)
-        self.execute_pending_position_updates(device, &mut encoder, queue);
 
-        // If a cell was inserted, temporarily use frustum-only culling for this frame
+        // If a cell was inserted, copy buffers to instance builder before physics
         // The Hi-Z buffer doesn't have valid depth data for the new cell's position yet
         // (Hi-Z is generated at end of frame from the depth buffer)
         if cell_inserted {
@@ -1331,6 +1407,17 @@ impl Scene for GpuScene {
             if steps >= max_steps {
                 self.time_accumulator = 0.0;
             }
+        }
+        
+        // Execute any pending position updates (drag tool) AFTER physics
+        // This ensures the dragged cell's position is set after physics has run,
+        // so physics doesn't overwrite the user's drag position
+        let position_updated = self.execute_pending_position_updates(device, &mut encoder, queue);
+        
+        // Copy buffers to instance builder after position update
+        if position_updated {
+            println!("RENDER: position_updated=true, copying buffers to instance builder");
+            self.copy_buffers_to_instance_builder(&mut encoder);
         }
 
         // Build instances with GPU culling (compute pass)

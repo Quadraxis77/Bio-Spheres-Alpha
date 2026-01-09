@@ -45,6 +45,9 @@ pub struct GpuToolOperations {
     
     // Async readback state
     readback_in_progress: bool,
+    
+    // Channel for async map callback - persists across poll calls
+    map_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
 
 impl GpuToolOperations {
@@ -184,6 +187,7 @@ impl GpuToolOperations {
             cached_query_position: None,
             cache_tolerance: 0.001, // 1mm tolerance for position caching
             readback_in_progress: false,
+            map_receiver: None,
         }
     }
     
@@ -200,8 +204,12 @@ impl GpuToolOperations {
         max_distance: f32,
         cell_count: u32,
     ) {
+        println!("TOOL_OPS: find_cell_with_ray - ray_origin={:?}, ray_direction={:?}, max_distance={}, cell_count={}", 
+            ray_origin, ray_direction, max_distance, cell_count);
+        
         // Skip if readback already in progress
         if self.readback_in_progress {
+            println!("TOOL_OPS: find_cell_with_ray - skipping, readback already in progress");
             return;
         }
         
@@ -259,12 +267,15 @@ impl GpuToolOperations {
             std::mem::size_of::<SpatialQueryResult>() as u64,
         );
         
-        // Mark readback as in progress
+        // Mark readback as in progress and clear any previous map receiver
         self.readback_in_progress = true;
+        self.map_receiver = None;
         
         // Clear cached results
         self.cached_query_position = None;
         self.cached_query_result = None;
+        
+        println!("TOOL_OPS: find_cell_with_ray - dispatched {} workgroups, readback_in_progress=true", (cell_count + 63) / 64);
     }
     
     /// Poll for spatial query completion and return result if available
@@ -283,49 +294,76 @@ impl GpuToolOperations {
             return None;
         }
         
-        // Start async mapping if not already started
-        let slice = self.spatial_query_readback_buffer.slice(..);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            sender.send(result).ok();
+        // Poll the device to process GPU work
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_millis(5)),
         });
         
-        // Poll device to process pending async operations (requirement 11.3)
-        let _ = self.device.poll(wgpu::PollType::Poll);
+        // Check if we already have a pending map request
+        if self.map_receiver.is_none() {
+            // Start the map request
+            let slice = self.spatial_query_readback_buffer.slice(..);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                sender.send(result).ok();
+            });
+            
+            self.map_receiver = Some(receiver);
+            
+            // Poll again to process the map request
+            let _ = self.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_millis(5)),
+            });
+        }
         
         // Check if mapping completed
-        if let Ok(Ok(())) = receiver.try_recv() {
-            // Mapping completed, read the data
-            let view = slice.get_mapped_range();
-            let data_bytes: &[u8] = &view;
-            
-            if data_bytes.len() >= std::mem::size_of::<SpatialQueryResult>() {
-                // Parse the result data
-                let result: SpatialQueryResult = *bytemuck::from_bytes(&data_bytes[..std::mem::size_of::<SpatialQueryResult>()]);
+        let receiver = self.map_receiver.as_ref().unwrap();
+        match receiver.try_recv() {
+            Ok(Ok(())) => {
+                // Mapping completed, read the data
+                let slice = self.spatial_query_readback_buffer.slice(..);
+                let view = slice.get_mapped_range();
+                let data_bytes: &[u8] = &view;
                 
-                // Unmap the buffer
-                drop(view);
-                self.spatial_query_readback_buffer.unmap();
-                
-                // Mark readback as complete
+                if data_bytes.len() >= std::mem::size_of::<SpatialQueryResult>() {
+                    let result: SpatialQueryResult = *bytemuck::from_bytes(&data_bytes[..std::mem::size_of::<SpatialQueryResult>()]);
+                    
+                    println!("TOOL_OPS: poll_spatial_query got result - found={}, cell_index={}, distance_fixed={}", 
+                        result.found, result.found_cell_index, result.distance_fixed);
+                    
+                    drop(view);
+                    self.spatial_query_readback_buffer.unmap();
+                    self.readback_in_progress = false;
+                    self.map_receiver = None;
+                    self.cached_query_result = Some(result);
+                    
+                    return Some(result);
+                } else {
+                    println!("TOOL_OPS: poll_spatial_query - invalid data size: {}", data_bytes.len());
+                    drop(view);
+                    self.spatial_query_readback_buffer.unmap();
+                    self.readback_in_progress = false;
+                    self.map_receiver = None;
+                    return None;
+                }
+            }
+            Ok(Err(e)) => {
+                // Mapping failed
+                println!("TOOL_OPS: poll_spatial_query - mapping failed: {:?}", e);
                 self.readback_in_progress = false;
-                
-                // Cache the result (requirement 11.4)
-                self.cached_query_result = Some(result);
-                
-                return Some(result);
-            } else {
-                // Invalid data size
-                drop(view);
-                self.spatial_query_readback_buffer.unmap();
-                self.readback_in_progress = false;
+                self.map_receiver = None;
+                return None;
+            }
+            Err(_) => {
+                // Mapping is still pending - GPU work not done yet
+                // Keep map_receiver so we don't call map_async again
+                println!("TOOL_OPS: poll_spatial_query - mapping still pending after wait");
                 return None;
             }
         }
-        
-        // Mapping is still pending or failed
-        None
     }
     
     /// Update a cell's position directly in GPU buffers using compute shader
@@ -336,10 +374,12 @@ impl GpuToolOperations {
     pub fn update_cell_position(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
-        _physics_bind_group: &wgpu::BindGroup,  // Unused - we use our own bind group with all 3 buffer sets
         cell_index: u32,
         new_pos: Vec3,
     ) {
+        println!("TOOL_OPS: update_cell_position - cell {} to ({}, {}, {})", 
+            cell_index, new_pos.x, new_pos.y, new_pos.z);
+        
         // Update position update parameters (requirement 10.5)
         let update_params = PositionUpdateParams {
             cell_index,
@@ -350,11 +390,16 @@ impl GpuToolOperations {
             _padding: 0.0,
         };
         
+        println!("TOOL_OPS: writing params buffer - cell_index={}, new_position=[{}, {}, {}]", 
+            update_params.cell_index, update_params.new_position[0], update_params.new_position[1], update_params.new_position[2]);
+        
         self.queue.write_buffer(
             &self.position_update_params_buffer,
             0,
             bytemuck::cast_slice(&[update_params]),
         );
+        
+        println!("TOOL_OPS: dispatching compute shader");
         
         // Dispatch position update compute shader (requirement 10.4: single workgroup)
         // Uses position_update_physics_bind_group which has all 3 buffer sets
@@ -372,6 +417,8 @@ impl GpuToolOperations {
             compute_pass.dispatch_workgroups(1, 1, 1);
         }
         
+        println!("TOOL_OPS: compute pass dispatched for cell {}", cell_index);
+        
         // Clear cached query results since scene state changed
         self.clear_cache();
     }
@@ -384,6 +431,9 @@ impl GpuToolOperations {
         self.cached_query_result = None;
         self.cached_query_position = None;
         self.readback_in_progress = false;
+        // Note: We don't clear map_receiver here because if a map is in progress,
+        // we need to let it complete and unmap the buffer before starting a new one.
+        // The next find_cell_with_ray call will handle this.
     }
     
     /// Check if a spatial query is currently in progress

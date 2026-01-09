@@ -241,10 +241,17 @@ impl SceneManager {
     /// directly on GPU buffers without CPU canonical state involvement.
     /// For preview scene, this method does nothing.
     pub fn update_cell_position_gpu(&mut self, cell_index: u32, new_position: glam::Vec3) {
+        println!("MANAGER: update_cell_position_gpu called, cell_index={}, new_position={:?}, mode={:?}", 
+            cell_index, new_position, self.current_mode);
         if self.current_mode == crate::ui::SimulationMode::Gpu {
             if let Some(gpu_scene) = self.gpu_scene.as_mut() {
+                println!("MANAGER: forwarding to gpu_scene");
                 gpu_scene.update_cell_position_gpu(cell_index, new_position);
+            } else {
+                println!("MANAGER: ERROR - gpu_scene is None!");
             }
+        } else {
+            println!("MANAGER: not in GPU mode, ignoring");
         }
     }
 
@@ -267,9 +274,13 @@ impl SceneManager {
     /// The query will be executed during the next render phase when GPU resources are available.
     /// For preview scene, this method does nothing.
     pub fn start_drag_selection_query(&mut self, screen_x: f32, screen_y: f32) {
+        println!("MANAGER: start_drag_selection_query called, screen=({}, {}), mode={:?}", screen_x, screen_y, self.current_mode);
         if self.current_mode == crate::ui::SimulationMode::Gpu {
             if let Some(gpu_scene) = self.gpu_scene.as_mut() {
+                println!("MANAGER: forwarding to gpu_scene.start_drag_selection_query");
                 gpu_scene.start_drag_selection_query(screen_x, screen_y);
+            } else {
+                println!("MANAGER: ERROR - gpu_scene is None!");
             }
         }
     }
@@ -316,6 +327,11 @@ impl SceneManager {
                 gpu_scene.poll_drag_tool_results(radial_menu, drag_distance);
                 gpu_scene.poll_remove_tool_results();
                 gpu_scene.poll_boost_tool_results(queue);
+                
+                // Debug: log dragging state
+                if radial_menu.dragging_cell.is_some() {
+                    println!("MANAGER: poll_tool_operation_results - dragging_cell={:?}, drag_distance={}", radial_menu.dragging_cell, drag_distance);
+                }
             }
         }
     }

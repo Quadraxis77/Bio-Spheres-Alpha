@@ -88,9 +88,27 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Read current cell mass from any buffer (they should all have the same value)
-    let current_pos_mass = positions_0[cell_index];
-    let mass = current_pos_mass.w;  // Preserve mass (requirement 10.2)
+    // Read current cell mass from all buffers
+    // Division cells might only have data in one buffer, so we need to find the valid one
+    // A valid mass is > 0 (cells always have positive mass)
+    let mass_0 = positions_0[cell_index].w;
+    let mass_1 = positions_1[cell_index].w;
+    let mass_2 = positions_2[cell_index].w;
+    
+    // Find the first valid mass (> 0)
+    var mass = 0.0;
+    if (mass_0 > 0.0) {
+        mass = mass_0;
+    } else if (mass_1 > 0.0) {
+        mass = mass_1;
+    } else if (mass_2 > 0.0) {
+        mass = mass_2;
+    }
+    
+    // Skip if no valid mass found (cell doesn't exist in any buffer)
+    if (mass <= 0.0) {
+        return;
+    }
     
     // Clamp new position to world boundary
     let boundary_radius = params.world_size * 0.5;
