@@ -110,8 +110,6 @@ pub struct GpuScene {
     pending_cell_extraction: Option<u32>,
     /// Whether to show adhesion lines
     pub show_adhesion_lines: bool,
-    /// Point cloud rendering mode for maximum performance
-    pub point_cloud_mode: bool,
     /// Whether to show the world boundary sphere
     pub show_world_sphere: bool,
     /// DEBUG: Track frames since last insertion for debugging
@@ -232,7 +230,6 @@ impl GpuScene {
             pending_cell_boost: None,
             pending_cell_extraction: None,
             show_adhesion_lines: true,
-            point_cloud_mode: false,
             show_world_sphere: true,
             debug_frames_since_insertion: u32::MAX,
             debug_last_cell_count: 0,
@@ -345,12 +342,6 @@ impl GpuScene {
     /// Disabling this can improve performance by avoiding CPU-GPU sync overhead.
     pub fn set_readbacks_enabled(&mut self, enabled: bool) {
         self.readbacks_enabled = enabled;
-    }
-    
-    /// Set point cloud rendering mode for maximum performance.
-    /// When enabled, cells are rendered as simple colored circles without lighting.
-    pub fn set_point_cloud_mode(&mut self, enabled: bool) {
-        self.point_cloud_mode = enabled;
     }
     
     /// Set whether to show the world boundary sphere.
@@ -1597,7 +1588,6 @@ impl Scene for GpuScene {
             self.camera.position(),
             self.camera.rotation,
             self.current_time,
-            self.point_cloud_mode,
         );
 
         // Render world boundary sphere if enabled

@@ -220,10 +220,7 @@ pub struct GlobalUiState {
     #[serde(default = "default_true")]
     pub gpu_readbacks_enabled: bool,
 
-    /// Point cloud rendering mode for maximum performance
-    /// When enabled, cells are rendered as simple colored circles without lighting
-    #[serde(default)]
-    pub point_cloud_mode: bool,
+
 
     /// Whether to show adhesion lines between cells
     #[serde(default = "default_true")]
@@ -292,7 +289,6 @@ impl Default for GlobalUiState {
             occlusion_enabled: true,
             frustum_enabled: true,
             gpu_readbacks_enabled: true,
-            point_cloud_mode: false,
             show_adhesion_lines: true,
             cell_capacity: 20_000,
             world_diameter: 200.0,

@@ -67,7 +67,6 @@
     occlusion_enabled: false,
     frustum_enabled: true,
     gpu_readbacks_enabled: true,
-    point_cloud_mode: false,
     show_adhesion_lines: false,
     cell_capacity: 20000,
     world_diameter: 90.0,

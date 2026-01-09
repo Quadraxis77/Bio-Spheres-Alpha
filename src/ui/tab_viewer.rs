@@ -608,10 +608,6 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             ui.heading("GPU Rendering");
             ui.separator();
             
-            // Point cloud mode toggle for maximum performance
-            ui.checkbox(&mut state.point_cloud_mode, "Point Cloud Mode")
-                .on_hover_text("Ultra-fast rendering: flat circles without lighting.");
-            
             // Adhesion lines toggle
             ui.checkbox(&mut state.show_adhesion_lines, "Show Adhesion Lines")
                 .on_hover_text("Show connection lines between adhered cells.");

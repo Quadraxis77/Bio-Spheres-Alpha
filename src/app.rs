@@ -421,7 +421,6 @@ impl App {
             gpu_scene.set_occlusion_min_screen_size(self.ui.state.occlusion_min_screen_size);
             gpu_scene.set_occlusion_min_distance(self.ui.state.occlusion_min_distance);
             gpu_scene.set_readbacks_enabled(self.ui.state.gpu_readbacks_enabled);
-            gpu_scene.set_point_cloud_mode(self.ui.state.point_cloud_mode);
             gpu_scene.show_adhesion_lines = self.ui.state.show_adhesion_lines;
             
             // Set culling mode based on enabled flags
@@ -553,7 +552,6 @@ impl App {
                     // Reset the GPU scene
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                         gpu_scene.reset(&self.queue);
-                        gpu_scene.set_point_cloud_mode(self.ui.state.point_cloud_mode);
                     }
                 }
                 crate::ui::panel_context::SceneModeRequest::SetSpeed(speed) => {
