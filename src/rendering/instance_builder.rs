@@ -781,10 +781,24 @@ impl InstanceBuilder {
                 offsets
             };
         
+            println!("Instance Builder - Updating mode indices:");
+            println!("  Genome mode offsets: {:?}", genome_mode_offsets);
+            
             // Reuse temporary buffer to avoid allocations
             self.temp_mode_indices.clear();
             self.temp_mode_indices.reserve(cell_count);
-            for i in 0..cell_count {
+            for i in 0..cell_count.min(5) { // Debug first 5 cells
+                let mode_idx = state.mode_indices[i];
+                let genome_id = state.genome_ids[i];
+                let offset = genome_mode_offsets.get(genome_id).copied().unwrap_or(0);
+                let final_mode_index = (offset + mode_idx) as u32;
+                println!("  Cell {}: mode_idx={}, genome_id={}, offset={}, final={}", 
+                    i, mode_idx, genome_id, offset, final_mode_index);
+                self.temp_mode_indices.push(final_mode_index);
+            }
+            
+            // Process remaining cells without debug output
+            for i in 5..cell_count {
                 let mode_idx = state.mode_indices[i];
                 let genome_id = state.genome_ids[i];
                 let offset = genome_mode_offsets.get(genome_id).copied().unwrap_or(0);
@@ -870,7 +884,7 @@ impl InstanceBuilder {
         hash
     }
 
-    fn update_mode_visuals_from_genomes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, genomes: &[Genome]) {
+    pub fn update_mode_visuals_from_genomes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, genomes: &[Genome]) {
         // Calculate total mode count across all genomes
         let total_mode_count: usize = genomes.iter().map(|g| g.modes.len()).sum();
         
@@ -891,9 +905,11 @@ impl InstanceBuilder {
         let mode_visuals: Vec<ModeVisuals> = genomes
             .iter()
             .flat_map(|genome| {
-                genome.modes.iter().map(|mode| ModeVisuals {
-                    color: [mode.color.x, mode.color.y, mode.color.z, mode.opacity],
-                    emissive_pad: [mode.emissive, 0.0, 0.0, 0.0],
+                genome.modes.iter().map(|mode| {
+                    ModeVisuals {
+                        color: [mode.color.x, mode.color.y, mode.color.z, mode.opacity],
+                        emissive_pad: [mode.emissive, 0.0, 0.0, 0.0],
+                    }
                 })
             })
             .collect();
@@ -932,6 +948,11 @@ impl InstanceBuilder {
         if !gpu_visuals.is_empty() {
             queue.write_buffer(&self.cell_type_visuals_buffer, 0, bytemuck::cast_slice(&gpu_visuals));
         }
+    }
+    
+    /// Update cell type visuals directly (public version for GPU scene).
+    pub fn update_cell_type_visuals_direct(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, visuals: &[CellTypeVisuals]) {
+        self.update_cell_type_visuals(device, queue, visuals);
     }
 
     fn resize_cell_buffers(&mut self, device: &wgpu::Device, new_capacity: usize) {
@@ -1379,5 +1400,44 @@ impl InstanceBuilder {
     /// Clear rotations dirty flag (call after GPU-to-GPU copy).
     pub fn clear_rotations_dirty(&mut self) {
         self.rotations_dirty = false;
+    }
+    
+    /// DEBUG: Blocking readback of counters buffer [visible, total, frustum_culled, occluded].
+    pub fn debug_read_counters_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> [u32; 4] {
+        let read_size = 16u64; // 4 x u32
+        
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Debug Counters Staging"),
+            size: read_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Debug Counters Readback"),
+        });
+        encoder.copy_buffer_to_buffer(&self.counters_buffer, 0, &staging, 0, read_size);
+        queue.submit(std::iter::once(encoder.finish()));
+        
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        
+        if rx.recv().ok().and_then(|r| r.ok()).is_some() {
+            let view = slice.get_mapped_range();
+            let data: &[u32] = bytemuck::cast_slice(&view);
+            let result = [data[0], data[1], data[2], data[3]];
+            drop(view);
+            staging.unmap();
+            result
+        } else {
+            [0, 0, 0, 0]
+        }
     }
 }

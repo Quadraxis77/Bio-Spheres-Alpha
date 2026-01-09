@@ -188,6 +188,178 @@ impl SceneManager {
         self.active_scene_mut().render(device, queue, view, cell_type_visuals, world_diameter);
     }
 
+    /// Insert a cell from genome using GPU operations (GPU scene only).
+    /// 
+    /// This method provides access to GPU-specific cell insertion that requires
+    /// device, encoder, and queue parameters for direct GPU buffer operations.
+    /// For preview scene, this method does nothing and returns None.
+    pub fn insert_cell_from_genome_gpu(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        world_position: glam::Vec3,
+        genome: &crate::genome::Genome,
+    ) -> Option<usize> {
+        match self.current_mode {
+            crate::ui::SimulationMode::Gpu => {
+                if let Some(gpu_scene) = self.gpu_scene.as_mut() {
+                    gpu_scene.insert_cell_from_genome(device, encoder, queue, world_position, genome)
+                } else {
+                    None
+                }
+            }
+            crate::ui::SimulationMode::Preview => {
+                // Preview scene doesn't support GPU operations
+                None
+            }
+        }
+    }
+
+    /// Extract cell data using GPU operations (GPU scene only).
+    /// 
+    /// This method provides access to GPU-specific cell data extraction that requires
+    /// device, encoder, and queue parameters for GPU compute shader execution.
+    /// For preview scene, this method does nothing.
+    pub fn extract_cell_data_gpu(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        cell_index: u32,
+    ) {
+        if self.current_mode == crate::ui::SimulationMode::Gpu {
+            if let Some(gpu_scene) = self.gpu_scene.as_mut() {
+                gpu_scene.extract_cell_data(device, queue, encoder, cell_index);
+            }
+        }
+    }
+
+    /// Update cell position using GPU operations (GPU scene only).
+    /// 
+    /// This method provides access to GPU-specific position updates that operate
+    /// directly on GPU buffers without CPU canonical state involvement.
+    /// For preview scene, this method does nothing.
+    pub fn update_cell_position_gpu(&mut self, cell_index: u32, new_position: glam::Vec3) {
+        if self.current_mode == crate::ui::SimulationMode::Gpu {
+            if let Some(gpu_scene) = self.gpu_scene.as_mut() {
+                gpu_scene.update_cell_position_gpu(cell_index, new_position);
+            }
+        }
+    }
+
+    /// Start GPU spatial query for cell selection (GPU scene only).
+    /// 
+    /// This method queues a GPU spatial query to find the closest cell to the given screen position.
+    /// The query will be executed during the next render phase when GPU resources are available.
+    /// For preview scene, this method does nothing.
+    pub fn start_cell_selection_query(&mut self, screen_x: f32, screen_y: f32) {
+        if self.current_mode == crate::ui::SimulationMode::Gpu {
+            if let Some(gpu_scene) = self.gpu_scene.as_mut() {
+                gpu_scene.start_cell_selection_query(screen_x, screen_y);
+            }
+        }
+    }
+
+    /// Start GPU spatial query for drag tool (GPU scene only).
+    /// 
+    /// This method queues a GPU spatial query to find the closest cell for dragging.
+    /// The query will be executed during the next render phase when GPU resources are available.
+    /// For preview scene, this method does nothing.
+    pub fn start_drag_selection_query(&mut self, screen_x: f32, screen_y: f32) {
+        if self.current_mode == crate::ui::SimulationMode::Gpu {
+            if let Some(gpu_scene) = self.gpu_scene.as_mut() {
+                gpu_scene.start_drag_selection_query(screen_x, screen_y);
+            }
+        }
+    }
+
+    /// Start GPU spatial query for remove tool (GPU scene only).
+    /// 
+    /// This method queues a GPU spatial query to find the closest cell for removal.
+    /// The query will be executed during the next render phase when GPU resources are available.
+    /// For preview scene, this method does nothing.
+    pub fn start_remove_tool_query(&mut self, screen_x: f32, screen_y: f32) {
+        if self.current_mode == crate::ui::SimulationMode::Gpu {
+            if let Some(gpu_scene) = self.gpu_scene.as_mut() {
+                gpu_scene.start_remove_tool_query(screen_x, screen_y);
+            }
+        }
+    }
+
+    /// Start GPU spatial query for boost tool (GPU scene only).
+    /// 
+    /// This method queues a GPU spatial query to find the closest cell for boosting.
+    /// The query will be executed during the next render phase when GPU resources are available.
+    /// For preview scene, this method does nothing.
+    pub fn start_boost_tool_query(&mut self, screen_x: f32, screen_y: f32) {
+        if self.current_mode == crate::ui::SimulationMode::Gpu {
+            if let Some(gpu_scene) = self.gpu_scene.as_mut() {
+                gpu_scene.start_boost_tool_query(screen_x, screen_y);
+            }
+        }
+    }
+
+    /// Poll for tool operation results (GPU scene only).
+    /// 
+    /// This method checks for completed spatial query results and updates tool states.
+    /// It should be called each frame to process async tool operation completions.
+    /// For preview scene, this method does nothing.
+    pub fn poll_tool_operation_results(&mut self, radial_menu: &mut crate::ui::radial_menu::RadialMenuState, drag_distance: &mut f32, queue: &wgpu::Queue) {
+        if self.current_mode == crate::ui::SimulationMode::Gpu {
+            if let Some(gpu_scene) = self.gpu_scene.as_mut() {
+                // First poll for spatial query results from GPU
+                gpu_scene.poll_spatial_query_results();
+                
+                // Then process the results for each tool
+                gpu_scene.poll_inspect_tool_results(radial_menu);
+                gpu_scene.poll_drag_tool_results(radial_menu, drag_distance);
+                gpu_scene.poll_remove_tool_results();
+                gpu_scene.poll_boost_tool_results(queue);
+            }
+        }
+    }
+
+    /// Convert screen coordinates to world position (GPU scene only).
+    /// 
+    /// This method provides access to GPU scene's screen-to-world conversion for tool operations.
+    /// For preview scene, returns a default position.
+    pub fn screen_to_world(&self, screen_x: f32, screen_y: f32) -> glam::Vec3 {
+        match self.current_mode {
+            crate::ui::SimulationMode::Gpu => {
+                if let Some(gpu_scene) = self.gpu_scene.as_ref() {
+                    gpu_scene.screen_to_world(screen_x, screen_y)
+                } else {
+                    glam::Vec3::ZERO
+                }
+            }
+            crate::ui::SimulationMode::Preview => {
+                // Preview scene doesn't have screen-to-world conversion for tools
+                glam::Vec3::ZERO
+            }
+        }
+    }
+
+    /// Convert screen coordinates to world position at distance (GPU scene only).
+    /// 
+    /// This method provides access to GPU scene's screen-to-world conversion at a specific distance.
+    /// For preview scene, returns a default position.
+    pub fn screen_to_world_at_distance(&self, screen_x: f32, screen_y: f32, distance: f32) -> glam::Vec3 {
+        match self.current_mode {
+            crate::ui::SimulationMode::Gpu => {
+                if let Some(gpu_scene) = self.gpu_scene.as_ref() {
+                    gpu_scene.screen_to_world_at_distance(screen_x, screen_y, distance)
+                } else {
+                    glam::Vec3::ZERO
+                }
+            }
+            crate::ui::SimulationMode::Preview => {
+                // Preview scene doesn't have screen-to-world conversion for tools
+                glam::Vec3::ZERO
+            }
+        }
+    }
+
     /// Update gizmo configuration for all existing scenes.
     pub fn update_gizmo_config(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
         // Only preview scene has gizmos

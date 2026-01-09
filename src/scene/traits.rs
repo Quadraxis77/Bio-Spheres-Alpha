@@ -14,6 +14,9 @@ pub trait Scene {
     fn update(&mut self, dt: f32);
 
     /// Render the scene to the given texture view.
+    /// 
+    /// For GPU scenes, this method also processes pending GPU queries and operations
+    /// that require access to the command encoder during the render phase.
     fn render(
         &mut self,
         device: &wgpu::Device,

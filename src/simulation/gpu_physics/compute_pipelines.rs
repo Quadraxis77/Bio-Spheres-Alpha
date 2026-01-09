@@ -52,6 +52,94 @@
 
 use super::GpuTripleBufferSystem;
 
+/// Cell insertion parameters for GPU cell insertion compute shader
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CellInsertionParams {
+    // Cell position and physics properties (16 bytes)
+    pub position: [f32; 3],
+    pub mass: f32,
+    
+    // Cell velocity (16 bytes)
+    pub velocity: [f32; 3],
+    pub _pad0: f32,
+    
+    // Cell rotation quaternion (16 bytes)
+    pub rotation: [f32; 4],
+    
+    // Cell genome and mode info (16 bytes)
+    pub genome_id: u32,
+    pub mode_index: u32,
+    pub birth_time: f32,
+    pub _pad1: f32,
+    
+    // Cell division properties (16 bytes)
+    pub split_interval: f32,
+    pub split_mass: f32,
+    pub stiffness: f32,
+    pub radius: f32,
+    
+    // Cell state properties (16 bytes)
+    pub nutrient_gain_rate: f32,
+    pub max_cell_size: f32,
+    pub max_splits: u32,
+    pub cell_id: u32,
+}
+
+/// Spatial query parameters for GPU spatial query compute shader
+/// Size: 32 bytes (must match WGSL struct layout)
+/// Uses ray origin and direction for ray-sphere intersection testing
+#[repr(C, align(4))]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SpatialQueryParams {
+    pub ray_origin: [f32; 3],       // 12 bytes - camera position
+    pub max_distance: f32,          // 4 bytes - maximum ray distance
+    pub ray_direction: [f32; 3],    // 12 bytes - normalized ray direction
+    pub _pad0: u32,                 // 4 bytes - padding
+}                                   // Total: 32 bytes
+
+// Compile-time assertion to verify struct size matches WGSL
+const _: () = assert!(std::mem::size_of::<SpatialQueryParams>() == 32, "SpatialQueryParams must be 32 bytes");
+
+/// Spatial query result from GPU spatial query compute shader
+/// Size: 16 bytes (must match WGSL struct layout)
+/// Note: distance_fixed is stored as fixed-point u32 (multiply by 1000) for atomic operations
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SpatialQueryResult {
+    pub found_cell_index: u32,  // 4 bytes
+    pub distance_fixed: u32,    // 4 bytes - fixed-point distance (actual = distance_fixed / 1000.0)
+    pub found: u32,             // 4 bytes
+    pub _padding: u32,          // 4 bytes
+}                               // Total: 16 bytes
+
+impl SpatialQueryResult {
+    /// Get the distance as f32 (converts from fixed-point)
+    pub fn distance(&self) -> f32 {
+        self.distance_fixed as f32 / 1000.0
+    }
+}
+
+// Compile-time assertion to verify struct size matches WGSL
+const _: () = assert!(std::mem::size_of::<SpatialQueryResult>() == 16, "SpatialQueryResult must be 16 bytes");
+
+/// Position update parameters for GPU position update compute shader
+/// Size: 32 bytes (must match WGSL struct layout with vec3 alignment)
+/// WGSL vec3<f32> has 16-byte alignment, so there's padding after cell_index
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PositionUpdateParams {
+    pub cell_index: u32,        // 4 bytes at offset 0
+    pub _pad0: u32,             // 4 bytes at offset 4 (padding for vec3 alignment)
+    pub _pad1: u32,             // 4 bytes at offset 8
+    pub _pad2: u32,             // 4 bytes at offset 12
+    pub new_position: [f32; 3], // 12 bytes at offset 16
+    pub _padding: f32,          // 4 bytes at offset 28
+}                               // Total: 32 bytes
+
+// Compile-time assertion to verify struct size matches WGSL
+const _: () = assert!(std::mem::size_of::<PositionUpdateParams>() == 32, "PositionUpdateParams must be 32 bytes");
+
 /// Cached bind groups for GPU physics pipeline
 /// Pre-created for all 3 buffer indices to avoid per-frame allocation
 pub struct CachedBindGroups {
@@ -104,6 +192,18 @@ pub struct GpuPhysicsPipelines {
     pub velocity_update: wgpu::ComputePipeline,
     pub mass_accum: wgpu::ComputePipeline,
     
+    // Cell insertion pipeline
+    pub cell_insertion: wgpu::ComputePipeline,
+    
+    // Cell data extraction pipeline
+    pub cell_data_extraction: wgpu::ComputePipeline,
+    
+    // Spatial query pipeline
+    pub spatial_query: wgpu::ComputePipeline,
+    
+    // Position update pipeline
+    pub position_update_tool: wgpu::ComputePipeline,
+    
     // Nutrient system pipeline
     pub nutrient_transport: wgpu::ComputePipeline,
     
@@ -128,6 +228,23 @@ pub struct GpuPhysicsPipelines {
     pub mass_accum_layout: wgpu::BindGroupLayout,
     pub rotations_layout: wgpu::BindGroupLayout,
     pub position_update_rotations_layout: wgpu::BindGroupLayout,
+    
+    // Cell insertion bind group layouts
+    pub cell_insertion_physics_layout: wgpu::BindGroupLayout,
+    pub cell_insertion_params_layout: wgpu::BindGroupLayout,
+    pub cell_insertion_state_layout: wgpu::BindGroupLayout,
+    
+    // Cell data extraction bind group layouts
+    pub cell_extraction_params_layout: wgpu::BindGroupLayout,
+    pub cell_extraction_state_layout: wgpu::BindGroupLayout,
+    pub cell_extraction_output_layout: wgpu::BindGroupLayout,
+    
+    // Spatial query bind group layouts
+    pub spatial_query_params_layout: wgpu::BindGroupLayout,
+    pub spatial_query_result_layout: wgpu::BindGroupLayout,
+    
+    // Position update bind group layouts
+    pub position_update_params_layout: wgpu::BindGroupLayout,
     
     // Adhesion bind group layouts
     pub adhesion_layout: wgpu::BindGroupLayout,
@@ -180,6 +297,23 @@ impl GpuPhysicsPipelines {
         // Create nutrient transport bind group layouts
         let nutrient_system_layout = Self::create_nutrient_system_bind_group_layout(device);
         let nutrient_transport_layout = Self::create_nutrient_transport_bind_group_layout(device);
+        
+        // Create cell insertion bind group layouts
+        let cell_insertion_physics_layout = Self::create_cell_insertion_physics_bind_group_layout(device);
+        let cell_insertion_params_layout = Self::create_cell_insertion_params_bind_group_layout(device);
+        let cell_insertion_state_layout = Self::create_cell_insertion_state_bind_group_layout(device);
+        
+        // Create cell data extraction bind group layouts
+        let cell_extraction_params_layout = Self::create_cell_extraction_params_bind_group_layout(device);
+        let cell_extraction_state_layout = Self::create_cell_extraction_state_bind_group_layout(device);
+        let cell_extraction_output_layout = Self::create_cell_extraction_output_bind_group_layout(device);
+        
+        // Create spatial query bind group layouts
+        let spatial_query_params_layout = Self::create_spatial_query_params_bind_group_layout(device);
+        let spatial_query_result_layout = Self::create_spatial_query_result_bind_group_layout(device);
+        
+        // Create position update bind group layouts
+        let position_update_params_layout = Self::create_position_update_params_bind_group_layout(device);
         
         // Create compute pipelines
         let spatial_grid_clear = Self::create_compute_pipeline(
@@ -245,6 +379,43 @@ impl GpuPhysicsPipelines {
             "main",
             &[&physics_layout, &mass_accum_layout],
             "Mass Accumulation",
+        );
+        
+        // Create cell insertion pipeline
+        let cell_insertion = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/cell_insertion.wgsl"),
+            "main",
+            &[&cell_insertion_physics_layout, &cell_insertion_params_layout, &cell_insertion_state_layout],
+            "Cell Insertion",
+        );
+        
+        // Create cell data extraction pipeline
+        let cell_data_extraction = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/extract_cell_data.wgsl"),
+            "main",
+            &[&physics_layout, &cell_extraction_params_layout, &cell_extraction_state_layout, &cell_extraction_output_layout],
+            "Cell Data Extraction",
+        );
+        
+        // Create spatial query pipeline
+        let spatial_query = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/spatial_query.wgsl"),
+            "main",
+            &[&physics_layout, &spatial_query_params_layout, &spatial_query_result_layout],
+            "Spatial Query",
+        );
+        
+        // Create position update pipeline
+        // Uses cell_insertion_physics_layout to access all 3 triple-buffered position/velocity sets
+        let position_update_tool = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/update_position.wgsl"),
+            "main",
+            &[&cell_insertion_physics_layout, &position_update_params_layout],
+            "Position Update Tool",
         );
         
         // Create nutrient transport pipeline
@@ -316,6 +487,10 @@ impl GpuPhysicsPipelines {
             position_update,
             velocity_update,
             mass_accum,
+            cell_insertion,
+            cell_data_extraction,
+            spatial_query,
+            position_update_tool,
             nutrient_transport,
             adhesion_physics,
             lifecycle_death_scan,
@@ -331,6 +506,15 @@ impl GpuPhysicsPipelines {
             mass_accum_layout,
             rotations_layout,
             position_update_rotations_layout,
+            cell_insertion_physics_layout,
+            cell_insertion_params_layout,
+            cell_insertion_state_layout,
+            cell_extraction_params_layout,
+            cell_extraction_state_layout,
+            cell_extraction_output_layout,
+            spatial_query_params_layout,
+            spatial_query_result_layout,
+            position_update_params_layout,
             adhesion_layout,
             force_accum_layout,
             lifecycle_adhesion_layout,
@@ -2322,4 +2506,572 @@ impl GpuPhysicsPipelines {
             ],
         })
     }
+    
+    /// Create cell insertion physics bind group layout (Group 0 in cell_insertion shader)
+    /// Contains all 3 triple-buffered position and velocity buffers for writing to all sets
+    fn create_cell_insertion_physics_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cell Insertion Physics Bind Group Layout"),
+            entries: &[
+                // Binding 0: Physics parameters uniform buffer
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Positions buffer 0 (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Positions buffer 1 (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Positions buffer 2 (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 4: Velocities buffer 0 (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: Velocities buffer 1 (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 6: Velocities buffer 2 (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 7: Cell count buffer (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create cell insertion params bind group layout (Group 1 in cell_insertion shader)
+    /// Contains insertion params uniform and all 3 rotation buffers
+    fn create_cell_insertion_params_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cell Insertion Params Bind Group Layout"),
+            entries: &[
+                // Binding 0: Cell insertion parameters uniform buffer
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Rotations buffer 0 (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Rotations buffer 1 (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Rotations buffer 2 (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create cell insertion state bind group layout (Group 2 in cell_insertion shader)
+    fn create_cell_insertion_state_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cell Insertion State Bind Group Layout"),
+            entries: &[
+                // Binding 0: Birth times
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Split intervals
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Split masses
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Split counts
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 4: Max splits
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: Genome IDs
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 6: Mode indices
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 7: Cell IDs
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 8: Next cell ID (atomic)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 9: Nutrient gain rates
+                wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 10: Max cell sizes
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 11: Stiffnesses
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 12: Death flags
+                wgpu::BindGroupLayoutEntry {
+                    binding: 12,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 13: Division flags
+                wgpu::BindGroupLayoutEntry {
+                    binding: 13,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create cell extraction params bind group layout (Group 1 in extract_cell_data shader)
+    fn create_cell_extraction_params_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cell Extraction Params Bind Group Layout"),
+            entries: &[
+                // Cell extraction parameters uniform buffer
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create cell extraction state bind group layout (Group 2 in extract_cell_data shader)
+    fn create_cell_extraction_state_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cell Extraction State Bind Group Layout"),
+            entries: &[
+                // Binding 0: Birth times (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Split intervals (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Split masses (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Split counts (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 4: Max splits (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: Genome IDs (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 6: Mode indices (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 7: Cell IDs (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 8: Nutrient gain rates (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 9: Max cell sizes (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 10: Stiffnesses (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create cell extraction output bind group layout (Group 3 in extract_cell_data shader)
+    fn create_cell_extraction_output_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cell Extraction Output Bind Group Layout"),
+            entries: &[
+                // Output buffer for extracted cell data
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create spatial query params bind group layout (Group 1 in spatial_query shader)
+    fn create_spatial_query_params_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Spatial Query Params Bind Group Layout"),
+            entries: &[
+                // Spatial query parameters (uniform)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create spatial query result bind group layout (Group 2 in spatial_query shader)
+    fn create_spatial_query_result_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Spatial Query Result Bind Group Layout"),
+            entries: &[
+                // Output buffer for spatial query result
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create position update params bind group layout (Group 1 in update_position shader)
+    fn create_position_update_params_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Position Update Params Bind Group Layout"),
+            entries: &[
+                // Position update parameters (uniform)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Get the cell data extraction compute pipeline
+    pub fn get_cell_data_extraction_pipeline(&self) -> Option<wgpu::ComputePipeline> {
+        Some(self.cell_data_extraction.clone())
+    }
+    
+    /// Get the cell data extraction bind group layouts
+    pub fn get_cell_data_extraction_layouts(&self) -> CellDataExtractionLayouts {
+        CellDataExtractionLayouts {
+            physics_layout: self.physics_layout.clone(),
+            params_layout: self.cell_extraction_params_layout.clone(),
+            state_layout: self.cell_extraction_state_layout.clone(),
+            output_layout: self.cell_extraction_output_layout.clone(),
+        }
+    }
+}
+
+/// Cell data extraction bind group layouts
+pub struct CellDataExtractionLayouts {
+    pub physics_layout: wgpu::BindGroupLayout,
+    pub params_layout: wgpu::BindGroupLayout,
+    pub state_layout: wgpu::BindGroupLayout,
+    pub output_layout: wgpu::BindGroupLayout,
 }

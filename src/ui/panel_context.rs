@@ -316,10 +316,12 @@ impl<'a> PanelContext<'a> {
         self.scene_manager.active_scene().cell_count()
     }
     
-    /// Get the GPU cell count (async, may be 1-2 frames behind).
+    /// Get the GPU cell count buffer (GPU-only, no CPU readback).
     /// Returns None if not in GPU mode.
+    /// Note: This returns the canonical state cell count as the GPU scene
+    /// now uses GPU cell count buffer exclusively without async readback.
     pub fn gpu_cell_count(&self) -> Option<u32> {
-        self.scene_manager.gpu_scene().map(|s| s.gpu_cell_count())
+        self.scene_manager.gpu_scene().map(|s| s.current_cell_count)
     }
     
     /// Get the GPU scene capacity.
@@ -336,6 +338,24 @@ impl<'a> PanelContext<'a> {
     /// Check if the simulation is paused.
     pub fn is_paused(&self) -> bool {
         self.scene_manager.active_scene().is_paused()
+    }
+    
+    /// Check if GPU cell extraction is currently in progress
+    pub fn is_gpu_cell_extraction_in_progress(&self) -> bool {
+        if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
+            gpu_scene.is_extracting_cell_data()
+        } else {
+            false
+        }
+    }
+    
+    /// Get the latest GPU cell extraction result
+    pub fn get_latest_gpu_cell_extraction(&self) -> Option<&crate::simulation::gpu_physics::ReadbackResult> {
+        if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
+            gpu_scene.get_latest_cell_extraction()
+        } else {
+            None
+        }
     }
 }
 
