@@ -83,6 +83,20 @@ var<storage, read_write> force_accum_y: array<atomic<i32>>;
 @group(2) @binding(2)
 var<storage, read_write> force_accum_z: array<atomic<i32>>;
 
+// Torque accumulation buffers - atomic i32 for boundary rotation force
+@group(2) @binding(3)
+var<storage, read_write> torque_accum_x: array<atomic<i32>>;
+
+@group(2) @binding(4)
+var<storage, read_write> torque_accum_y: array<atomic<i32>>;
+
+@group(2) @binding(5)
+var<storage, read_write> torque_accum_z: array<atomic<i32>>;
+
+// Cell rotations for boundary torque calculation
+@group(2) @binding(6)
+var<storage, read> rotations: array<vec4<f32>>;
+
 const GRID_RESOLUTION: i32 = 64;
 const MAX_CELLS_PER_GRID: u32 = 16u;
 const PI: f32 = 3.14159265359;
@@ -90,6 +104,14 @@ const FIXED_POINT_SCALE: f32 = 1000.0;
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     return clamp(mass, 0.5, 2.0);
+}
+
+// Rotate a vector by a quaternion
+fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
+    let qv = vec3<f32>(q.x, q.y, q.z);
+    let uv = cross(qv, v);
+    let uuv = cross(qv, uv);
+    return v + ((uv * q.w) + uuv) * 2.0;
 }
 
 fn grid_coords_to_index(x: i32, y: i32, z: i32) -> u32 {
@@ -122,8 +144,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let my_grid_coords = grid_index_to_coords(my_grid_idx);
     
     var force = vec3<f32>(0.0);
+    var torque = vec3<f32>(0.0);
     
     // Boundary forces - soft spherical boundary (branchless)
+    // Also applies torque to rotate cells to face inward (matching BioSpheres-Q reference)
     let dist_from_center = length(pos);
     let boundary_radius = params.world_size * 0.5;
     let soft_zone = 5.0;
@@ -132,9 +156,41 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let clamped_pen = clamp(penetration, 0.0, 1.0);
     // Use select to avoid branch - safe_dist avoids division by zero
     let safe_dist = max(dist_from_center, 0.001);
-    let normal = -pos / safe_dist;
+    let r_hat = pos / safe_dist;  // Outward radial direction
+    let normal = -r_hat;  // Inward direction
     // Only apply force when penetration > 0 (clamped_pen handles this naturally)
     force += normal * clamped_pen * clamped_pen * 500.0;
+    
+    // Apply torque to rotate cell to face inward (matching BioSpheres-Q reference)
+    // Only apply when in the soft zone (clamped_pen > 0)
+    if (clamped_pen > 0.0) {
+        // Get the cell's forward direction (local +Z axis)
+        let rotation = rotations[cell_idx];
+        let forward = quat_rotate(rotation, vec3<f32>(0.0, 0.0, 1.0));
+        
+        // Calculate desired direction (toward center)
+        let desired_direction = -r_hat;
+        
+        // Calculate rotation axis (cross product of current forward and desired direction)
+        let rotation_axis = cross(forward, desired_direction);
+        let rotation_axis_length = length(rotation_axis);
+        
+        // Only apply torque if there's a meaningful rotation needed
+        if (rotation_axis_length > 0.001) {
+            let normalized_axis = rotation_axis / rotation_axis_length;
+            
+            // Calculate angle between current and desired direction
+            let dot_product = clamp(dot(forward, desired_direction), -1.0, 1.0);
+            let angle = acos(dot_product);
+            
+            // Torque magnitude increases with penetration and angle
+            // Matching BioSpheres-Q: torque_strength = 50.0 * penetration * angle
+            let torque_strength = 50.0 * clamped_pen * angle;
+            
+            // Apply torque to rotate toward center
+            torque += normalized_axis * torque_strength;
+        }
+    }
     
     // Pre-compute all 27 neighbor grid indices and counts to reduce redundant calculations
     // and improve memory access patterns
@@ -228,6 +284,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     atomicAdd(&force_accum_x[cell_idx], i32(force.x * FIXED_POINT_SCALE));
     atomicAdd(&force_accum_y[cell_idx], i32(force.y * FIXED_POINT_SCALE));
     atomicAdd(&force_accum_z[cell_idx], i32(force.z * FIXED_POINT_SCALE));
+    
+    // Accumulate torques to torque buffer (for boundary rotation force)
+    // Torques will be integrated in velocity_update shader
+    atomicAdd(&torque_accum_x[cell_idx], i32(torque.x * FIXED_POINT_SCALE));
+    atomicAdd(&torque_accum_y[cell_idx], i32(torque.y * FIXED_POINT_SCALE));
+    atomicAdd(&torque_accum_z[cell_idx], i32(torque.z * FIXED_POINT_SCALE));
     
     // Copy position and velocity to output (no modification here)
     // Velocity will be updated in position_update after all forces are accumulated

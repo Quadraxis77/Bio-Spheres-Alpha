@@ -66,7 +66,8 @@ var<storage, read_write> division_slot_assignments: array<u32>;
 var<storage, read_write> lifecycle_counts: array<atomic<u32>>;
 
 // Death threshold - cells with mass below this are considered dead
-const DEATH_MASS_THRESHOLD: f32 = 0.1;
+// Must match MIN_CELL_MASS in nutrient_transport.wgsl (0.5)
+const DEATH_MASS_THRESHOLD: f32 = 0.5;
 
 @compute @workgroup_size(128)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {

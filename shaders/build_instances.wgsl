@@ -67,16 +67,16 @@ struct CellTypeVisuals {
 }
 
 // Mode properties (per-mode settings from genome)
-// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, swim_force, padding, padding]
+// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low]
 struct ModeProperties {
     nutrient_gain_rate: f32,
     max_cell_size: f32,
     membrane_stiffness: f32,
     split_interval: f32,
     split_mass: f32,
+    nutrient_priority: f32,
     swim_force: f32,
-    _pad0: f32,
-    _pad1: f32,
+    prioritize_when_low: f32,
 }
 
 // Frustum plane (normal.xyz, distance)
@@ -328,7 +328,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Skip dead cells (mass below death threshold)
     // This handles cells marked for removal before the lifecycle pipeline runs
-    const DEATH_MASS_THRESHOLD: f32 = 0.1;
+    const DEATH_MASS_THRESHOLD: f32 = 0.5;
     if (mass < DEATH_MASS_THRESHOLD) {
         return;
     }

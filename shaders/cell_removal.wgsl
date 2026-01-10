@@ -88,7 +88,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let current_pos = positions_0[cell_index].xyz;
     
     // Set mass to 0 to mark cell for death
-    // The lifecycle death scan shader will detect mass < DEATH_MASS_THRESHOLD (0.1)
+    // The lifecycle death scan shader will detect mass < DEATH_MASS_THRESHOLD (0.5)
     // and mark this cell as dead, triggering proper removal through the lifecycle pipeline
     let position_zero_mass = vec4<f32>(current_pos, 0.0);
     

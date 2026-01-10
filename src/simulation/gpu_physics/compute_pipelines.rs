@@ -203,8 +203,8 @@ pub struct CachedBindGroups {
     pub division_scan_adhesion: wgpu::BindGroup,
     /// Clear forces bind group (same for all frames)
     pub clear_forces: wgpu::BindGroup,
-    /// Collision force accum bind group (same for all frames)
-    pub collision_force_accum: wgpu::BindGroup,
+    /// Collision force accum bind groups for each buffer index [0, 1, 2]
+    pub collision_force_accum: [wgpu::BindGroup; 3],
     /// Position update force accum bind group (same for all frames)
     pub position_update_force_accum: wgpu::BindGroup,
     /// Velocity update angular bind group (same for all frames)
@@ -1002,8 +1002,12 @@ impl GpuPhysicsPipelines {
         // Clear forces bind group (same for all frames)
         let clear_forces = self.create_clear_forces_bind_group(device, adhesion_buffers);
         
-        // Collision force accum bind group (same for all frames)
-        let collision_force_accum = self.create_collision_force_accum_bind_group(device, adhesion_buffers);
+        // Collision force accum bind groups (one for each buffer index)
+        let collision_force_accum = [
+            self.create_collision_force_accum_bind_group(device, adhesion_buffers, buffers, 0),
+            self.create_collision_force_accum_bind_group(device, adhesion_buffers, buffers, 1),
+            self.create_collision_force_accum_bind_group(device, adhesion_buffers, buffers, 2),
+        ];
         
         // Position update force accum bind group (same for all frames)
         let position_update_force_accum = self.create_position_update_force_accum_bind_group(device, adhesion_buffers, buffers);
@@ -2232,6 +2236,50 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 3: Torque accumulation X (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 4: Torque accumulation Y (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: Torque accumulation Z (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 6: Rotations (read-only for boundary torque calculation)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -2396,9 +2444,11 @@ impl GpuPhysicsPipelines {
         &self,
         device: &wgpu::Device,
         adhesion_buffers: &super::AdhesionBuffers,
+        triple_buffers: &GpuTripleBufferSystem,
+        buffer_index: usize,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Collision Force Accum Bind Group"),
+            label: Some(&format!("Collision Force Accum Bind Group {}", buffer_index)),
             layout: &self.collision_force_accum_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -2412,6 +2462,22 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: adhesion_buffers.force_accum_z.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: adhesion_buffers.torque_accum_x.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: adhesion_buffers.torque_accum_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: adhesion_buffers.torque_accum_z.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: triple_buffers.rotations[buffer_index].as_entire_binding(),
                 },
             ],
         })

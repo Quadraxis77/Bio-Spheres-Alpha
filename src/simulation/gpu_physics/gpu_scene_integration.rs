@@ -165,10 +165,11 @@ pub fn execute_gpu_physics_step(
         
         // Stage 4: Collision detection (256 threads - optimized with pre-computed neighbors)
         // Now accumulates forces to force_accum instead of applying directly
+        // Also applies boundary torque to rotate cells toward center
         compute_pass.set_pipeline(&pipelines.collision_detection);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
-        compute_pass.set_bind_group(2, &cached_bind_groups.collision_force_accum, &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.collision_force_accum[current_index], &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
         // Stage 5: Adhesion physics (256 threads per workgroup, per-cell processing)

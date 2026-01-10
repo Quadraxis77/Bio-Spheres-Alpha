@@ -163,6 +163,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     if (preliminary_final_mass < MIN_CELL_MASS) {
         death_flags[cell_idx] = 1u;  // Mark for death
+        // CRITICAL: Write the reduced mass before returning so lifecycle_death_scan sees it
+        let pos = positions_out[cell_idx].xyz;
+        positions_out[cell_idx] = vec4<f32>(pos, max(preliminary_final_mass, 0.0));
         return;  // Skip nutrient transport for dying cells
     } else {
         death_flags[cell_idx] = 0u;  // Still alive (preliminary)
