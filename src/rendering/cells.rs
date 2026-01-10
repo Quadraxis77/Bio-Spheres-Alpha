@@ -1,308 +1,111 @@
-//! # Cell Rendering - GPU Instanced Billboards with Opaque Rendering
+//! # Cell Rendering - GPU Instanced Billboards
 //!
 //! This module implements high-performance cell rendering using GPU instancing.
 //! Cells are rendered as camera-facing billboards with realistic sphere-like shading.
-//! 
-//! ## Rendering Technique
-//! 
-//! ### GPU Instancing
-//! All cells are rendered in a single draw call using GPU instancing:
-//! - **Shared Geometry**: One quad (6 vertices) used for all cells
-//! - **Instance Data**: Per-cell position, radius, color, and visual parameters
-//! - **Performance**: Scales to 100k+ cells with minimal CPU overhead
-//! 
-//! ### Billboard Rendering
-//! Cells are rendered as camera-facing quads that always face the viewer:
-//! - **Vertex Shader**: Transforms quad vertices to face camera
-//! - **Fragment Shader**: Applies sphere-like shading with depth testing
-//! - **Benefits**: Consistent appearance from any viewing angle
-//! 
-//! ### Opaque Rendering with Depth Pre-pass
-//! Handles cell rendering efficiently with proper depth testing:
-//! 
-//! **Depth Pre-pass Benefits:**
-//! - Optimal depth buffer population for early-Z rejection
-//! - Proper occlusion between overlapping cells
-//! - High performance with large numbers of cells
-//! 
-//! **Opaque Rendering:**
-//! 1. **Depth Pass**: Populate depth buffer with sphere surfaces
-//! 2. **Color Pass**: Render final colors with early-Z optimization
-//! 3. **Result**: Correct depth ordering without transparency complexity
-//! 
-//! ## Pipeline Architecture
-//! 
-//! The renderer uses multiple render pipelines for different rendering modes:
-//! 
-//! ### 1. Opaque Pipeline
-//! - **Use**: Fully opaque cells (alpha = 1.0)
-//! - **Features**: Standard depth testing and writing
-//! - **Performance**: Fastest rendering path
-//! 
-//! ### 2. Depth-Only Pipeline  
-//! - **Use**: Pre-pass for depth buffer population
-//! - **Features**: Only writes depth, no color output
-//! - **Benefits**: Improves depth testing efficiency
-//! 
-//! ### 3. Color-Only Pipeline
-//! - **Use**: Final color rendering after depth pre-pass
-//! - **Features**: Uses existing depth buffer for early-Z optimization
-//! - **Output**: Final cell colors with proper depth ordering
-//! 
-//! ## Instance Data Structure
-//! 
-//! Each cell instance contains:
-//! - **Position**: 3D world position
-//! - **Radius**: Visual and collision radius
-//! - **Color**: RGB color (always opaque)
-//! - **Visual Parameters**: Specular strength, power, fresnel, emissive
-//! - **Membrane Parameters**: Reserved for future use (currently unused)
-//! - **Rotation**: Quaternion for cell orientation
-//! 
-//! ## Shader Features
-//! 
-//! ### Vertex Shader
-//! - Transforms quad vertices to world space
-//! - Applies camera-facing billboard transformation
-//! - Passes instance data to fragment shader
-//! 
-//! ### Fragment Shader
-//! - Sphere intersection testing for realistic depth
-//! - Simple diffuse lighting for performance
-//! - Nucleus rendering for biological appearance
-//! - Clean, noise-free surfaces for clarity
-//! 
-//! ## Performance Optimizations
-//! 
-//! ### CPU-Side Culling
-//! - Frustum culling removes off-screen cells
-//! - Distance culling removes cells too far to see
-//! - Occlusion culling removes hidden cells (Hi-Z)
-//! 
-//! ### GPU Memory Layout
-//! - Instance data packed for cache efficiency
-//! - Uniform buffers aligned to 256-byte boundaries
-//! - Texture formats chosen for optimal bandwidth
-//! 
-//! ### Render State Management
-//! - Pipelines created once, reused every frame
-//! - Bind groups cached and shared where possible
-//! - Buffer updates batched to minimize GPU stalls
-//! 
-//! ## Usage Example
-//! 
-//! ```rust
-//! // Create renderer (once at startup)
-//! let renderer = CellRenderer::new(&device, surface_format, &camera_layout);
-//! 
-//! // Update camera and lighting
-//! renderer.update_camera(&queue, view_proj_matrix, camera_position);
-//! renderer.update_lighting(&queue, light_direction, light_color, ambient_color, time);
-//! 
-//! // Render cells
-//! let mut render_pass = encoder.begin_render_pass(&render_pass_desc);
-//! renderer.render_cells(&mut render_pass, &canonical_state, &cell_visuals, &genome);
-//! ```
+//!
+//! ## Architecture
+//!
+//! The cell renderer supports multiple cell types with distinct shaders:
+//! - CellTypeRegistry manages per-type render pipelines
+//! - Shared depth pass across all cell types for early-Z optimization
+//! - Type-specific color passes with grouped draw calls
+//!
+//! See `.kiro/specs/cell-rendering-pipeline/` for full design documentation.
 
-use crate::cell::types::CellTypeVisuals;
-use crate::genome::Genome;
-use crate::rendering::instance_builder::InstanceBuilder;
+use crate::cell::types::{CellType, CellTypeVisuals};
+use crate::cell::type_registry::CellTypeRegistry;
+use crate::cell::behaviors::{create_behavior, CellBehavior};
+use crate::genome::{Genome, ModeSettings};
+use crate::rendering::instance_builder::{CellInstance, InstanceBuilder};
 use crate::simulation::CanonicalState;
+use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec3};
-use wgpu::util::DeviceExt;
+use std::ops::Range;
 
-/// High-performance cell renderer using GPU instancing and opaque rendering
+/// Camera uniform data for shaders.
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct CameraUniform {
+    view_proj: [[f32; 4]; 4],
+    camera_pos: [f32; 3],
+    _padding: f32,
+}
+
+/// Lighting uniform data for shaders.
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct LightingUniform {
+    light_dir: [f32; 3],
+    ambient: f32,
+    light_color: [f32; 3],
+    _padding: f32,
+}
+
+/// Cell group for batched rendering by type.
+#[derive(Debug, Clone)]
+pub struct CellGroup {
+    pub cell_type: CellType,
+    pub range: Range<u32>,
+}
+
+/// High-performance cell renderer using GPU instancing.
 ///
-/// This renderer can handle thousands of cells efficiently by using GPU instancing
-/// to render all cells in a single draw call. Uses depth pre-pass optimization
-/// for maximum performance with overlapping cells.
-/// 
-/// ## Architecture
-/// 
-/// The renderer maintains multiple render pipelines:
-/// - **Opaque Pipeline**: For fully opaque cells (fastest path)
-/// - **Depth-Only Pipeline**: For depth pre-pass optimization
-/// - **Color-Only Pipeline**: For final color rendering after depth pre-pass
-/// 
-/// ## Memory Management
-/// 
-/// - **Instance Buffers**: Pre-allocated to avoid runtime allocations
-/// - **Uniform Buffers**: Camera and lighting data updated each frame
-/// - **Texture Resources**: Depth textures managed automatically
-/// 
-/// ## Performance Characteristics
-/// 
-/// - **Draw Calls**: Single draw call for all cells
-/// - **GPU Memory**: Efficient instance data layout for cache performance
-/// - **Culling**: CPU-side culling reduces GPU workload
-/// - **Scalability**: Tested with 100k+ cells at 60+ FPS
+/// Supports multiple cell types with distinct appearance shaders.
+/// Uses a shared depth pass for early-Z optimization and type-specific
+/// color passes for visual variety.
 pub struct CellRenderer {
-    /// Render pipeline for fully opaque cells (alpha = 1.0)
-    /// 
-    /// This is the fastest rendering path as it uses standard depth testing
-    /// and writing without any transparency complications.
-    opaque_pipeline: wgpu::RenderPipeline,
+    /// Current render target width
+    pub width: u32,
     
-    /// Render pipeline for opaque cells after depth pre-pass (no depth writing)
-    /// 
-    /// Used when depth pre-pass has already populated the depth buffer.
-    /// Uses Equal depth comparison for maximum early rejection.
-    opaque_no_depth_write_pipeline: wgpu::RenderPipeline,
-    
-    /// Render pipeline for depth-only pre-pass
-    /// 
-    /// Used to populate the depth buffer before transparent rendering,
-    /// which can improve performance by enabling early depth testing.
-    depth_only_pipeline: wgpu::RenderPipeline,
-    
-    // === Shared Resources ===
-    
-    /// Bind group layout for camera data (shared across all pipelines)
-    #[allow(dead_code)]
-    camera_bind_group_layout: wgpu::BindGroupLayout,
-    
-    /// Bind group containing camera uniform buffer
-    /// 
-    /// Contains view-projection matrix and camera position.
-    /// Updated each frame when camera moves.
-    camera_bind_group: wgpu::BindGroup,
-    
-    /// Uniform buffer for camera data (view-projection matrix, position)
-    camera_buffer: wgpu::Buffer,
-    
-    /// Uniform buffer for lighting parameters (direction, color, ambient)
-    lighting_buffer: wgpu::Buffer,
-    
-    /// Vertex buffer containing quad geometry for billboard rendering
-    /// 
-    /// Contains 6 vertices forming 2 triangles for a screen-aligned quad.
-    /// This geometry is shared by all cell instances.
-    quad_vertex_buffer: wgpu::Buffer,
-    
-    /// Instance buffer for opaque cells
-    /// 
-    /// Contains per-cell data: position, radius, color, visual parameters.
-    /// Updated each frame with visible opaque cells.
-    instance_buffer: wgpu::Buffer,
-    
-    /// Maximum number of instances that can be stored in buffers
-    instance_capacity: usize,
-    
-    // === Depth Resources ===
-    
-    /// Depth texture for depth testing and writing
-    #[allow(dead_code)]
-    depth_texture: wgpu::Texture,
+    /// Current render target height
+    pub height: u32,
     
     /// Depth texture view for render pass attachment
     pub depth_view: wgpu::TextureView,
     
-    // === Order-Independent Transparency Resources ===
+    /// Depth texture for depth testing
+    depth_texture: wgpu::Texture,
     
-    // === Configuration ===
+    /// Cell type registry with per-type pipelines
+    type_registry: CellTypeRegistry,
     
-    /// Surface format for texture recreation on resize
+    /// Shared depth-only pipeline for all cell types.
+    /// Currently unused - depth pre-pass is skipped for ray-marched billboards.
+    /// Kept for future optimization with proper depth shader.
     #[allow(dead_code)]
-    surface_format: wgpu::TextureFormat,
+    depth_pipeline: wgpu::RenderPipeline,
     
-    /// Current render target width (for resize handling)
-    pub width: u32,
+    /// Camera uniform buffer
+    camera_buffer: wgpu::Buffer,
     
-    /// Current render target height (for resize handling)
-    pub height: u32,
+    /// Lighting uniform buffer
+    lighting_buffer: wgpu::Buffer,
+    
+    /// Bind group for camera and lighting uniforms
+    bind_group: wgpu::BindGroup,
+    
+    /// Instance buffer for cell data
+    instance_buffer: wgpu::Buffer,
+    
+    /// Current instance buffer capacity
+    instance_capacity: usize,
+    
+    /// Behavior handlers indexed by CellType
+    behaviors: Vec<Box<dyn CellBehavior>>,
 }
-
-/// Camera uniform data sent to GPU
-/// 
-/// Contains the view-projection matrix and camera position needed for
-/// billboard transformation and lighting calculations.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct CameraUniform {
-    /// Combined view-projection matrix for vertex transformation
-    view_proj: [[f32; 4]; 4],
-    
-    /// Camera world position for lighting calculations
-    camera_pos: [f32; 3],
-    
-    /// Padding to align to 16-byte boundary (WGSL requirement)
-    _padding: f32,
-}
-
-/// Lighting uniform data sent to GPU
-/// 
-/// Contains lighting parameters for realistic cell shading including
-/// directional light, ambient light, and animation time.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct LightingUniform {
-    /// Direction of primary light source (normalized)
-    light_direction: [f32; 3],
-    _padding1: f32,
-    
-    /// Color and intensity of primary light
-    light_color: [f32; 3],
-    _padding2: f32,
-    
-    /// Ambient light color (fills shadows)
-    ambient_color: [f32; 3],
-    
-    /// Elapsed time for procedural animations (membrane noise, etc.)
-    time: f32,
-}
-
-/// Per-cell instance data sent to GPU
-/// 
-/// Contains all the data needed to render one cell instance, including
-/// position, appearance, and visual effects parameters.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct CellInstance {
-    /// World space position of cell center
-    position: [f32; 3],
-    
-    /// Visual radius (affects billboard size and sphere intersection)
-    radius: f32,
-    
-    /// RGBA color with alpha for transparency
-    color: [f32; 4],
-    
-    /// Visual effect parameters:
-    /// - x: specular_strength (how shiny the surface is)
-    /// - y: specular_power (sharpness of specular highlights)  
-    /// - z: fresnel_strength (edge transparency effect)
-    /// - w: emissive (self-illumination amount)
-    visual_params: [f32; 4],
-    
-    /// Membrane texture parameters:
-    /// - x: noise_scale (size of membrane texture features)
-    /// - y: noise_strength (intensity of membrane displacement)
-    /// - z: noise_anim_speed (speed of membrane animation)
-    /// - w: unused (reserved for future use)
-    membrane_params: [f32; 4],
-    
-    /// Cell orientation as quaternion (x, y, z, w)
-    /// 
-    /// Used for oriented membrane textures and asymmetric cell shapes.
-    rotation: [f32; 4],
-}
-
-
-/// Quad vertices for billboard rendering
-/// 
-/// Defines a screen-aligned quad made of 2 triangles (6 vertices total).
-/// Each vertex is a 2D coordinate that will be transformed to face the camera.
-const QUAD_VERTICES: [[f32; 2]; 6] = [
-    [-1.0, -1.0],  // Bottom-left
-    [1.0, -1.0],   // Bottom-right  
-    [1.0, 1.0],    // Top-right
-    [-1.0, -1.0],  // Bottom-left (second triangle)
-    [1.0, 1.0],    // Top-right
-    [-1.0, 1.0],   // Top-left
-];
 
 impl CellRenderer {
-    /// Create a new cell renderer with OIT support.
+    /// Depth texture format used by the renderer.
+    pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+    
+    /// Create a new cell renderer.
+    ///
+    /// # Arguments
+    ///
+    /// * `device` - The wgpu device for creating GPU resources
+    /// * `queue` - The wgpu queue for buffer uploads
+    /// * `config` - Surface configuration for format and dimensions
+    /// * `capacity` - Initial instance buffer capacity
     pub fn new(
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
@@ -311,56 +114,36 @@ impl CellRenderer {
     ) -> Self {
         let width = config.width;
         let height = config.height;
-        let surface_format = config.format;
-
+        
+        // Create depth texture
+        let (depth_texture, depth_view) = Self::create_depth_texture(device, width, height);
+        
+        // Create cell type registry with per-type pipelines
+        let type_registry = CellTypeRegistry::new(device, config.format, Self::DEPTH_FORMAT);
+        
+        // Create shared depth pipeline
+        let depth_pipeline = Self::create_depth_pipeline(device, &type_registry.bind_group_layout);
+        
         // Create camera uniform buffer
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Cell Camera Buffer"),
+            label: Some("Cell Renderer Camera Buffer"),
             size: std::mem::size_of::<CameraUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
+        
         // Create lighting uniform buffer
         let lighting_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Cell Lighting Buffer"),
+            label: Some("Cell Renderer Lighting Buffer"),
             size: std::mem::size_of::<LightingUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
-        // Create camera bind group layout
-        let camera_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Cell Camera Bind Group Layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-
-        // Create camera bind group
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Cell Camera Bind Group"),
-            layout: &camera_bind_group_layout,
+        
+        // Create bind group
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cell Renderer Bind Group"),
+            layout: &type_registry.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -372,228 +155,37 @@ impl CellRenderer {
                 },
             ],
         });
-
-        // Create quad vertex buffer
-        let quad_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Cell Quad Vertex Buffer"),
-            contents: bytemuck::cast_slice(&QUAD_VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        // Create instance buffer for opaque cells
+        
+        // Create instance buffer
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Cell Instance Buffer"),
+            label: Some("Cell Renderer Instance Buffer"),
             size: (capacity * std::mem::size_of::<CellInstance>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
-        // Create depth texture
-        let (depth_texture, depth_view) = Self::create_depth_texture(device, width, height);
-
-        // Vertex buffer layouts
-        let vertex_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[wgpu::VertexAttribute {
-                offset: 0,
-                shader_location: 0,
-                format: wgpu::VertexFormat::Float32x2,
-            }],
-        };
-
-        let instance_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<CellInstance>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3, // position
-                },
-                wgpu::VertexAttribute {
-                    offset: 12,
-                    shader_location: 2,
-                    format: wgpu::VertexFormat::Float32, // radius
-                },
-                wgpu::VertexAttribute {
-                    offset: 16,
-                    shader_location: 3,
-                    format: wgpu::VertexFormat::Float32x4, // color
-                },
-                wgpu::VertexAttribute {
-                    offset: 32,
-                    shader_location: 4,
-                    format: wgpu::VertexFormat::Float32x4, // visual_params
-                },
-                wgpu::VertexAttribute {
-                    offset: 48,
-                    shader_location: 5,
-                    format: wgpu::VertexFormat::Float32x4, // membrane_params
-                },
-                wgpu::VertexAttribute {
-                    offset: 64,
-                    shader_location: 6,
-                    format: wgpu::VertexFormat::Float32x4, // rotation (quaternion)
-                },
-            ],
-        };
-
-        // Create pipeline layout for opaque and OIT passes
-        let cell_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Cell Pipeline Layout"),
-                bind_group_layouts: &[&camera_bind_group_layout],
-                push_constant_ranges: &[],
-            });
-
-        // Load shaders - separate shaders for depth pre-pass and color pass
-        // This enables early-Z optimization by avoiding discard in the color pass
-        let opaque_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Cell Billboard Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cell_billboard.wgsl").into()),
-        });
         
-        // Minimal depth-only shader - only calculates depth, no lighting/noise
-        let depth_only_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Cell Billboard Depth-Only Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cell_billboard_depth_only.wgsl").into()),
-        });
+        // Create behavior handlers for all cell types
+        let mut behaviors: Vec<Box<dyn CellBehavior>> = Vec::with_capacity(CellType::COUNT);
+        for cell_type in CellType::iter() {
+            behaviors.push(create_behavior(cell_type));
+        }
         
-        // Color-only shader - no discard, relies on depth buffer for rejection
-        let color_only_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Cell Billboard Color-Only Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cell_billboard_color_only.wgsl").into()),
-        });
-
-        // Create opaque pipeline (with depth writing for single-pass rendering)
-        let opaque_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Cell Opaque Pipeline"),
-            layout: Some(&cell_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &opaque_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[vertex_layout.clone(), instance_layout.clone()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &opaque_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
-        // Create color-only pipeline for post-depth-prepass (no depth writing, no discard)
-        // Uses LessEqual to handle floating-point precision issues with depth comparison
-        // The color shader writes explicit frag_depth to match the depth pre-pass exactly
-        let opaque_no_depth_write_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Cell Color-Only Pipeline (Post Depth Pre-Pass)"),
-            layout: Some(&cell_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &color_only_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[vertex_layout.clone(), instance_layout.clone()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &color_only_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false, // No depth writing - depth prepass handles this
-                depth_compare: wgpu::CompareFunction::LessEqual, // LessEqual for precision tolerance
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
-        // Create depth-only pipeline for pre-pass - minimal shader, only depth calculation
-        let depth_only_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Cell Depth-Only Pipeline"),
-            layout: Some(&cell_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &depth_only_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[vertex_layout.clone(), instance_layout.clone()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &depth_only_shader,
-                entry_point: Some("fs_main"),
-                targets: &[], // No color targets - depth only
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
         Self {
-            opaque_pipeline,
-            opaque_no_depth_write_pipeline,
-            depth_only_pipeline,
-            camera_bind_group_layout,
-            camera_bind_group,
-            camera_buffer,
-            lighting_buffer,
-            quad_vertex_buffer,
-            instance_buffer,
-            instance_capacity: capacity,
-            depth_texture,
-            depth_view,
-            surface_format,
             width,
             height,
+            depth_view,
+            depth_texture,
+            type_registry,
+            depth_pipeline,
+            camera_buffer,
+            lighting_buffer,
+            bind_group,
+            instance_buffer,
+            instance_capacity: capacity,
+            behaviors,
         }
     }
-
+    
     fn create_depth_texture(
         device: &wgpu::Device,
         width: u32,
@@ -609,12 +201,115 @@ impl CellRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
+            format: Self::DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         (texture, view)
+    }
+    
+    /// Create the shared depth-only pipeline.
+    fn create_depth_pipeline(
+        device: &wgpu::Device,
+        bind_group_layout: &wgpu::BindGroupLayout,
+    ) -> wgpu::RenderPipeline {
+        // Load depth shader
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Cell Depth Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cells/test_cell.wgsl").into()),
+        });
+        
+        // Create pipeline layout
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Cell Depth Pipeline Layout"),
+            bind_group_layouts: &[bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        
+        // Create depth-only render pipeline
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Cell Depth Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[Self::instance_buffer_layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: None, // Depth-only, no fragment shader
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: Self::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+    
+    /// Get the vertex buffer layout for cell instances.
+    fn instance_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: 96, // 96 bytes per instance
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                // Position (vec3)
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                // Radius (f32)
+                wgpu::VertexAttribute {
+                    offset: 12,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                // Color (vec4)
+                wgpu::VertexAttribute {
+                    offset: 16,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // Visual params (vec4: specular, power, fresnel, emissive)
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // Rotation (vec4: quaternion)
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // Type data 0-3 (vec4)
+                wgpu::VertexAttribute {
+                    offset: 64,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // Type data 4-7 (vec4)
+                wgpu::VertexAttribute {
+                    offset: 80,
+                    shader_location: 6,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        }
     }
 
     /// Resize the renderer textures.
@@ -631,233 +326,210 @@ impl CellRenderer {
         self.depth_view = depth_view;
     }
 
-    /// Render cells within an existing render pass.
-    /// Uses OIT for proper transparency handling.
-    pub fn render_in_pass<'a>(
-        &'a self,
-        render_pass: &mut wgpu::RenderPass<'a>,
+    
+    /// Ensure instance buffer has sufficient capacity.
+    fn ensure_capacity(&mut self, device: &wgpu::Device, required: usize) {
+        if required > self.instance_capacity {
+            let new_capacity = required.max(self.instance_capacity * 2);
+            self.instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Cell Renderer Instance Buffer"),
+                size: (new_capacity * std::mem::size_of::<CellInstance>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.instance_capacity = new_capacity;
+        }
+    }
+    
+    /// Update camera uniform buffer.
+    fn update_camera(
+        &self,
         queue: &wgpu::Queue,
-        state: &CanonicalState,
-        genome: Option<&Genome>,
-        cell_type_visuals: Option<&[CellTypeVisuals]>,
         camera_pos: Vec3,
         camera_rotation: Quat,
-        time: f32,
     ) {
-        if state.cell_count == 0 {
-            return;
-        }
-
-        // Update camera uniform
-        let view_matrix = Mat4::look_at_rh(
-            camera_pos,
-            camera_pos + camera_rotation * Vec3::NEG_Z,
-            camera_rotation * Vec3::Y,
-        );
-        let aspect = self.width as f32 / self.height as f32;
-        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
-        let view_proj = proj_matrix * view_matrix;
-
-        let camera_uniform = CameraUniform {
-            view_proj: view_proj.to_cols_array_2d(),
-            camera_pos: camera_pos.to_array(),
-            _padding: 0.0,
-        };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
-
-        // Update lighting uniform
-        let light_dir = Vec3::new(0.5, 1.0, 0.3).normalize();
-        let lighting_uniform = LightingUniform {
-            light_direction: light_dir.to_array(),
-            _padding1: 0.0,
-            light_color: [0.8, 0.8, 0.8],
-            _padding2: 0.0,
-            ambient_color: [0.3, 0.3, 0.35],
-            time,
-        };
-        queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
-
-        // Build instance data - all cells are opaque (transparency handled in shader)
-        let instances = self.build_instances(state, genome, cell_type_visuals);
+        // Calculate view matrix from camera position and rotation
+        let view = Mat4::from_rotation_translation(camera_rotation, camera_pos).inverse();
         
-        if instances.is_empty() {
-            return;
-        }
-
-        // Update instance buffer
-        if instances.len() <= self.instance_capacity {
-            queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
-        }
-
-        // Render all cells as opaque (no transparency separation needed)
-        render_pass.set_pipeline(&self.opaque_pipeline);
-        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        render_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
-        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-        render_pass.draw(0..6, 0..instances.len() as u32);
-    }
-
-    /// Full render with optimized depth pre-pass and GPU culling.
-    /// This is the most efficient rendering path with maximum overdraw reduction.
-    #[allow(dead_code)]
-    pub fn render_optimized(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        view: &wgpu::TextureView,
-        instance_builder: &mut crate::rendering::instance_builder::InstanceBuilder,
-        state: &CanonicalState,
-        genome: Option<&Genome>,
-        cell_type_visuals: Option<&[CellTypeVisuals]>,
-        camera_pos: Vec3,
-        camera_rotation: Quat,
-        time: f32,
-        cell_count_buffer: &wgpu::Buffer,
-        cell_capacity: usize,
-    ) {
-        if state.cell_count == 0 {
-            return;
-        }
-
-        // Update camera uniform
-        let view_matrix = Mat4::look_at_rh(
-            camera_pos,
-            camera_pos + camera_rotation * Vec3::NEG_Z,
-            camera_rotation * Vec3::Y,
-        );
+        // Calculate projection matrix (perspective)
         let aspect = self.width as f32 / self.height as f32;
-        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
-        let view_proj = proj_matrix * view_matrix;
-
+        let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 1000.0);
+        
+        let view_proj = proj * view;
+        
         let camera_uniform = CameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),
             _padding: 0.0,
         };
+        
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
-
-        // Update lighting uniform
-        let light_dir = Vec3::new(0.5, 1.0, 0.3).normalize();
-        let lighting_uniform = LightingUniform {
-            light_direction: light_dir.to_array(),
-            _padding1: 0.0,
-            light_color: [0.8, 0.8, 0.8],
-            _padding2: 0.0,
-            ambient_color: [0.3, 0.3, 0.35],
-            time,
-        };
-        queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Cell Optimized Render Encoder"),
-        });
-
-        // Use GPU culling to build instances with frustum and occlusion culling
-        instance_builder.build_instances_with_encoder(
-            device,
-            &mut encoder,
-            queue,
-            cell_capacity,
-            genome.map_or(1, |g| g.modes.len()),
-            cell_type_visuals.map_or(1, |v| v.len()),
-            view_proj,
-            camera_pos,
-            self.width,
-            self.height,
-            cell_count_buffer,
-        );
-
-        let visible_count = instance_builder.visible_count();
-
-        if visible_count == 0 {
-            queue.submit(std::iter::once(encoder.finish()));
-            return;
-        }
-
-        // Pass 1: Depth pre-pass using GPU-culled instances
-        {
-            let mut depth_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Cell GPU Culled Depth Pre-Pass"),
-                color_attachments: &[], // No color output
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // Preserve existing depth
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            depth_pass.set_pipeline(&self.depth_only_pipeline);
-            depth_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            depth_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
-            depth_pass.set_vertex_buffer(1, instance_builder.instance_buffer.slice(..));
-            depth_pass.draw_indirect(&instance_builder.indirect_buffer, 0);
-        }
-
-        // Pass 2: Color pass with GPU-culled instances
-        {
-            let mut color_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Cell GPU Culled Color Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // Preserve background
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            color_pass.set_pipeline(&self.opaque_no_depth_write_pipeline);
-            color_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            color_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
-            color_pass.set_vertex_buffer(1, instance_builder.instance_buffer.slice(..));
-            color_pass.draw_indirect(&instance_builder.indirect_buffer, 0);
-        }
-
-        queue.submit(std::iter::once(encoder.finish()));
     }
-
-    /// Compatibility method - redirects to optimized depth pre-pass rendering.
-    /// Use render_optimized() with InstanceBuilder for best performance.
-    pub fn render_oit(
+    
+    /// Update lighting uniform buffer.
+    fn update_lighting(&self, queue: &wgpu::Queue) {
+        let lighting_uniform = LightingUniform {
+            light_dir: [-0.5, -0.7, -0.5], // Normalized in shader
+            ambient: 0.15,
+            light_color: [1.0, 0.98, 0.95],
+            _padding: 0.0,
+        };
+        
+        queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
+    }
+    
+    /// Group cells by type for batched rendering.
+    ///
+    /// Returns a list of cell groups, each containing a cell type and the
+    /// range of instances in the buffer for that type. Empty groups are excluded.
+    pub fn group_cells_by_type(
         &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        view: &wgpu::TextureView,
+        state: &CanonicalState,
+        genome: Option<&Genome>,
+    ) -> Vec<CellGroup> {
+        if state.cell_count == 0 {
+            return Vec::new();
+        }
+        
+        // Count cells per type
+        let mut type_counts = [0u32; CellType::COUNT];
+        
+        for i in 0..state.cell_count {
+            let mode_index = state.mode_indices[i];
+            let cell_type_index = if let Some(g) = genome {
+                if let Some(mode) = g.modes.get(mode_index) {
+                    mode.cell_type as usize
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            
+            let cell_type_index = cell_type_index.min(CellType::COUNT - 1);
+            type_counts[cell_type_index] += 1;
+        }
+        
+        // Build groups with ranges
+        let mut groups = Vec::new();
+        let mut offset = 0u32;
+        
+        for (type_index, &count) in type_counts.iter().enumerate() {
+            if count > 0 {
+                if let Some(cell_type) = CellType::from_index(type_index as u32) {
+                    groups.push(CellGroup {
+                        cell_type,
+                        range: offset..(offset + count),
+                    });
+                    offset += count;
+                }
+            }
+        }
+        
+        groups
+    }
+    
+    /// Build instance data for all cells.
+    ///
+    /// Reads cell_type from mode settings and populates type_data from
+    /// the appropriate behavior module. Cells are sorted by type for
+    /// efficient batched rendering.
+    pub fn build_instances(
+        &self,
         state: &CanonicalState,
         genome: Option<&Genome>,
         cell_type_visuals: Option<&[CellTypeVisuals]>,
-        camera_pos: Vec3,
-        camera_rotation: Quat,
-        time: f32,
-    ) {
-        // Use the optimized depth pre-pass method
-        self.render_with_depth_prepass(
-            device, queue, view, state, genome, cell_type_visuals,
-            camera_pos, camera_rotation, time
-        );
+    ) -> Vec<CellInstance> {
+        if state.cell_count == 0 {
+            return Vec::new();
+        }
+        
+        // First pass: collect cells with their types for sorting
+        let mut cells_with_types: Vec<(usize, usize)> = Vec::with_capacity(state.cell_count);
+        
+        for i in 0..state.cell_count {
+            let mode_index = state.mode_indices[i];
+            let cell_type_index = if let Some(g) = genome {
+                if let Some(mode) = g.modes.get(mode_index) {
+                    mode.cell_type as usize
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            
+            let cell_type_index = cell_type_index.min(CellType::COUNT - 1);
+            cells_with_types.push((i, cell_type_index));
+        }
+        
+        // Sort by cell type for batched rendering
+        cells_with_types.sort_by_key(|&(_, type_idx)| type_idx);
+        
+        // Second pass: build instance data
+        let mut instances = Vec::with_capacity(state.cell_count);
+        
+        for (cell_index, cell_type_index) in cells_with_types {
+            let position = state.positions[cell_index];
+            let rotation = state.rotations[cell_index];
+            let radius = state.radii[cell_index];
+            let mode_index = state.mode_indices[cell_index];
+            
+            // Get mode settings
+            let mode_settings = if let Some(g) = genome {
+                g.modes.get(mode_index).cloned().unwrap_or_default()
+            } else {
+                ModeSettings::default()
+            };
+            
+            // Get cell type visuals
+            let visuals = cell_type_visuals
+                .and_then(|v| v.get(cell_type_index))
+                .copied()
+                .unwrap_or_default();
+            
+            // Get type-specific instance data from behavior module
+            let type_data = if cell_type_index < self.behaviors.len() {
+                self.behaviors[cell_type_index].build_instance_data(&mode_settings)
+            } else {
+                crate::cell::behaviors::TypeSpecificInstanceData::empty()
+            };
+            
+            // Build instance
+            let instance = CellInstance {
+                position: position.to_array(),
+                radius,
+                color: [
+                    mode_settings.color.x,
+                    mode_settings.color.y,
+                    mode_settings.color.z,
+                    mode_settings.opacity,
+                ],
+                visual_params: [
+                    visuals.specular_strength,
+                    visuals.specular_power,
+                    visuals.fresnel_strength,
+                    mode_settings.emissive,
+                ],
+                rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
+                type_data: type_data.data,
+            };
+            
+            instances.push(instance);
+        }
+        
+        instances
     }
-
-    /// Legacy render method with manual depth pre-pass (for compatibility).
-    /// Use render_optimized() for better performance with GPU culling.
+    
+    /// Render cells with depth pre-pass for PreviewScene.
+    ///
+    /// This method handles the complete render pipeline:
+    /// 1. Build instance data from canonical state
+    /// 2. Upload instances to GPU
+    /// 3. Render depth pre-pass (all cells, shared shader)
+    /// 4. Render color passes (grouped by cell type)
     pub fn render_with_depth_prepass(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         view: &wgpu::TextureView,
@@ -866,83 +538,48 @@ impl CellRenderer {
         cell_type_visuals: Option<&[CellTypeVisuals]>,
         camera_pos: Vec3,
         camera_rotation: Quat,
-        time: f32,
+        _current_time: f32,
     ) {
         if state.cell_count == 0 {
             return;
         }
-
-        // Update camera uniform
-        let view_matrix = Mat4::look_at_rh(
-            camera_pos,
-            camera_pos + camera_rotation * Vec3::NEG_Z,
-            camera_rotation * Vec3::Y,
-        );
-        let aspect = self.width as f32 / self.height as f32;
-        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
-        let view_proj = proj_matrix * view_matrix;
-
-        let camera_uniform = CameraUniform {
-            view_proj: view_proj.to_cols_array_2d(),
-            camera_pos: camera_pos.to_array(),
-            _padding: 0.0,
-        };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
-
-        // Update lighting uniform
-        let light_dir = Vec3::new(0.5, 1.0, 0.3).normalize();
-        let lighting_uniform = LightingUniform {
-            light_direction: light_dir.to_array(),
-            _padding1: 0.0,
-            light_color: [0.8, 0.8, 0.8],
-            _padding2: 0.0,
-            ambient_color: [0.3, 0.3, 0.35],
-            time,
-        };
-        queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
-
-        // Build instance data - all cells are opaque (transparency handled in shader)
-        let instances = self.build_instances(state, genome, cell_type_visuals);
         
-        if instances.is_empty() {
+        // Build instance data
+        let instances = self.build_instances(state, genome, cell_type_visuals);
+        let instance_count = instances.len() as u32;
+        
+        if instance_count == 0 {
             return;
         }
-
-        // Update instance buffer
-        if instances.len() <= self.instance_capacity {
-            queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
-        }
-
+        
+        // Ensure buffer capacity
+        self.ensure_capacity(device, instances.len());
+        
+        // Upload instance data
+        queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
+        
+        // Update uniforms
+        self.update_camera(queue, camera_pos, camera_rotation);
+        self.update_lighting(queue);
+        
+        // Get cell groups for batched rendering
+        let groups = self.group_cells_by_type(state, genome);
+        
+        // Create command encoder
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Cell Optimized Render Encoder"),
+            label: Some("Cell Renderer Encoder"),
         });
-
-        // Pass 1: Depth pre-pass for all cells - populates depth buffer for early rejection
-        {
-            let mut depth_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Cell Depth Pre-Pass"),
-                color_attachments: &[], // No color output
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // Preserve existing depth (skybox, etc.)
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            depth_pass.set_pipeline(&self.depth_only_pipeline);
-            depth_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            depth_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
-            depth_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-            depth_pass.draw(0..6, 0..instances.len() as u32);
-        }
-
-        // Pass 2: Color pass with depth testing (no depth writing)
-        // Uses Equal depth comparison for maximum early fragment rejection
+        
+        // Note: Depth pre-pass is skipped for ray-marched billboards because the
+        // fragment shader discards pixels outside the sphere. A depth-only pass
+        // would write depth for the full quad, causing the color pass to fail
+        // depth tests for valid sphere pixels.
+        //
+        // For proper depth pre-pass with ray-marched spheres, we would need a
+        // depth shader that also performs ray-sphere intersection and writes
+        // the correct sphere depth. For now, we render directly with depth write.
+        
+        // Single pass: Color with depth write (grouped by cell type)
         {
             let mut color_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Cell Color Pass"),
@@ -958,7 +595,7 @@ impl CellRenderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: wgpu::LoadOp::Clear(1.0), // Clear depth at start
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -966,176 +603,55 @@ impl CellRenderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-
-            color_pass.set_pipeline(&self.opaque_no_depth_write_pipeline);
-            color_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            color_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
-            color_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-            color_pass.draw(0..6, 0..instances.len() as u32);
+            
+            color_pass.set_bind_group(0, &self.bind_group, &[]);
+            color_pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
+            
+            // Render each cell type group with its specific pipeline
+            for group in &groups {
+                if group.range.is_empty() {
+                    continue;
+                }
+                
+                let pipeline = self.type_registry.get_pipeline(group.cell_type);
+                color_pass.set_pipeline(pipeline);
+                color_pass.draw(0..4, group.range.clone());
+            }
         }
-
+        
         queue.submit(std::iter::once(encoder.finish()));
     }
-
-    /// Render cells using a pre-built instance buffer from InstanceBuilder (with GPU culling).
-    /// Uses an external encoder to allow batching with other GPU work.
+    
+    /// Render cells using pre-built instance buffer from InstanceBuilder (for GpuScene).
+    ///
+    /// This method is used when instance data is built on the GPU via compute shaders.
+    /// It skips the CPU-side instance building and uses the GPU-generated buffer directly.
+    /// Uses indirect drawing to read the actual visible count from the GPU buffer.
     pub fn render_with_encoder(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         view: &wgpu::TextureView,
         instance_builder: &InstanceBuilder,
-        instance_count: u32,
+        _visible_count: u32, // Deprecated: use indirect buffer instead
         camera_pos: Vec3,
         camera_rotation: Quat,
-        time: f32,
+        _current_time: f32,
     ) {
-        if instance_count == 0 {
-            return;
-        }
-
-        // Update camera uniform
-        let view_matrix = Mat4::look_at_rh(
-            camera_pos,
-            camera_pos + camera_rotation * Vec3::NEG_Z,
-            camera_rotation * Vec3::Y,
-        );
-        let aspect = self.width as f32 / self.height as f32;
-        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
-        let view_proj = proj_matrix * view_matrix;
-
-        let camera_uniform = CameraUniform {
-            view_proj: view_proj.to_cols_array_2d(),
-            camera_pos: camera_pos.to_array(),
-            _padding: 0.0,
-        };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
-
-        // Update lighting uniform (still needed for point cloud mode for consistency)
-        let light_dir = Vec3::new(0.5, 1.0, 0.3).normalize();
-        let lighting_uniform = LightingUniform {
-            light_direction: light_dir.to_array(),
-            _padding1: 0.0,
-            light_color: [0.8, 0.8, 0.8],
-            _padding2: 0.0,
-            ambient_color: [0.3, 0.3, 0.35],
-            time,
-        };
-        queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
-
-        // Pass 1: Depth pre-pass for all GPU-culled instances
+        // Update uniforms
+        self.update_camera(queue, camera_pos, camera_rotation);
+        self.update_lighting(queue);
+        
+        // Note: Depth pre-pass is skipped for ray-marched billboards because the
+        // fragment shader discards pixels outside the sphere. See render_with_depth_prepass
+        // for detailed explanation.
+        
+        // Single pass: Color with depth write (all cells with Test shader for now)
+        // Note: GPU-built instances don't have type grouping yet,
+        // so we render all cells with the Test cell shader.
         {
-            let mut depth_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Cell GPU Culled Depth Pre-Pass"),
-                color_attachments: &[], // No color output
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // Preserve existing depth from clear pass
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            depth_pass.set_pipeline(&self.depth_only_pipeline);
-            depth_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            depth_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
-            depth_pass.set_vertex_buffer(1, instance_builder.get_instance_buffer().slice(..));
-                depth_pass.draw_indirect(instance_builder.get_indirect_buffer(), 0);
-            }
-
-            // Pass 2: Color pass with depth testing (no depth writing)
-            {
-                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Cell GPU Culled Color Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.depth_view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-
-                render_pass.set_pipeline(&self.opaque_no_depth_write_pipeline);
-                render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                render_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
-                render_pass.set_vertex_buffer(1, instance_builder.get_instance_buffer().slice(..));
-                // Use indirect draw to get instance count from GPU buffer
-                render_pass.draw_indirect(instance_builder.get_indirect_buffer(), 0);
-            }
-    }
-
-    /// Render cells using a pre-built instance buffer from InstanceBuilder (with GPU culling).
-    /// Creates its own encoder and submits - use render_with_encoder for batching.
-    #[allow(dead_code)]
-    pub fn render_with_instance_builder(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        view: &wgpu::TextureView,
-        instance_builder: &InstanceBuilder,
-        instance_count: u32,
-        camera_pos: Vec3,
-        camera_rotation: Quat,
-        time: f32,
-    ) {
-        if instance_count == 0 {
-            return;
-        }
-
-        // Update camera uniform
-        let view_matrix = Mat4::look_at_rh(
-            camera_pos,
-            camera_pos + camera_rotation * Vec3::NEG_Z,
-            camera_rotation * Vec3::Y,
-        );
-        let aspect = self.width as f32 / self.height as f32;
-        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
-        let view_proj = proj_matrix * view_matrix;
-
-        let camera_uniform = CameraUniform {
-            view_proj: view_proj.to_cols_array_2d(),
-            camera_pos: camera_pos.to_array(),
-            _padding: 0.0,
-        };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
-
-        // Update lighting uniform
-        let light_dir = Vec3::new(0.5, 1.0, 0.3).normalize();
-        let lighting_uniform = LightingUniform {
-            light_direction: light_dir.to_array(),
-            _padding1: 0.0,
-            light_color: [0.8, 0.8, 0.8],
-            _padding2: 0.0,
-            ambient_color: [0.3, 0.3, 0.35],
-            time,
-        };
-        queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Cell Culled Render Encoder"),
-        });
-
-        // Render all cells as opaque (GPU culling doesn't separate opaque/transparent yet)
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Cell Culled Render Pass"),
+            let mut color_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Cell Color Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
                     resolve_target: None,
@@ -1148,7 +664,7 @@ impl CellRenderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: wgpu::LoadOp::Clear(1.0), // Clear depth at start
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -1156,76 +672,16 @@ impl CellRenderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-
-            render_pass.set_pipeline(&self.opaque_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
-            render_pass.set_vertex_buffer(1, instance_builder.get_instance_buffer().slice(..));
-            // Use indirect draw to get instance count from GPU buffer
-            render_pass.draw_indirect(instance_builder.get_indirect_buffer(), 0);
+            
+            // Use Test cell pipeline for all GPU-built instances
+            let pipeline = self.type_registry.get_pipeline(CellType::Test);
+            color_pass.set_pipeline(pipeline);
+            color_pass.set_bind_group(0, &self.bind_group, &[]);
+            color_pass.set_vertex_buffer(0, instance_builder.instance_buffer.slice(..));
+            // Use indirect drawing to read actual visible count from GPU buffer
+            // This ensures we only draw the cells that passed culling, and handles
+            // reset correctly (0 cells when cell_count_buffer is 0)
+            color_pass.draw_indirect(instance_builder.get_indirect_buffer(), 0);
         }
-
-        queue.submit(std::iter::once(encoder.finish()));
-    }
-
-    /// Build instance data from simulation state. All cells are opaque since transparency
-    /// is handled internally via shader compositing (membrane over nucleus/cytoplasm).
-    fn build_instances(
-        &self,
-        state: &CanonicalState,
-        genome: Option<&Genome>,
-        cell_type_visuals: Option<&[CellTypeVisuals]>,
-    ) -> Vec<CellInstance> {
-        let mut instances = Vec::with_capacity(state.cell_count);
-
-        for i in 0..state.cell_count {
-            let position = state.positions[i];
-            let radius = state.radii[i];
-            let mode_index = state.mode_indices[i];
-            let rotation = state.rotations[i];
-            // Use genome_id as cell type for now (cell type 0 = default)
-            let cell_type = state.genome_ids[i];
-
-            // Get color and emissive from genome mode (no opacity needed - cells are opaque)
-            let (color, emissive) = if let Some(genome) = genome {
-                if mode_index < genome.modes.len() {
-                    let mode = &genome.modes[mode_index];
-                    (mode.color.to_array(), mode.emissive)
-                } else {
-                    ([0.5, 0.5, 0.5], 0.0)
-                }
-            } else {
-                ([0.5, 0.5, 0.5], 0.0)
-            };
-
-            // Get visual params from cell type visuals
-            let (specular_strength, specular_power, fresnel_strength, _membrane_noise_scale, _membrane_noise_strength, _membrane_noise_speed) =
-                if let Some(visuals) = cell_type_visuals {
-                    if cell_type < visuals.len() {
-                        let v = &visuals[cell_type];
-                        (v.specular_strength, v.specular_power, v.fresnel_strength, 0.0, 0.0, 0.0) // Noise disabled
-                    } else {
-                        (0.5, 32.0, 0.3, 0.0, 0.0, 0.0) // Noise disabled
-                    }
-                } else {
-                    (0.5, 32.0, 0.3, 0.0, 0.0, 0.0) // Noise disabled
-                };
-
-            // Create stable animation offset from cell ID (doesn't change on split)
-            let anim_offset = (state.cell_ids[i] as f32 * 0.1) % 100.0;
-
-            let instance = CellInstance {
-                position: position.to_array(),
-                radius,
-                color: [color[0], color[1], color[2], 1.0], // Always fully opaque
-                visual_params: [specular_strength, specular_power, fresnel_strength, emissive],
-                membrane_params: [0.0, 0.0, 0.0, anim_offset], // Noise disabled
-                rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
-            };
-
-            instances.push(instance);
-        }
-
-        instances
     }
 }

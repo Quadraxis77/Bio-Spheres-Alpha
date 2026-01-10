@@ -2,6 +2,7 @@ pub mod adhesion;
 pub mod adhesion_forces;
 pub mod adhesion_manager;
 pub mod adhesion_zones;
+pub mod behaviors;
 pub mod division;
 pub mod type_registry;
 pub mod types;
@@ -26,3 +27,10 @@ pub use adhesion_zones::{
     get_zone_color, 
     EQUATORIAL_THRESHOLD_DEGREES,
 };
+
+// Re-export cell type registry
+pub use type_registry::CellTypeRegistry;
+pub use types::CellType;
+
+// Re-export behavior types
+pub use behaviors::{CellBehavior, TypeSpecificInstanceData, create_behavior};

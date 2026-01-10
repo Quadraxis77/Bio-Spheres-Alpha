@@ -184,17 +184,56 @@ struct GpuCellTypeVisuals {
     _pad: [f32; 2],
 }
 
-// Instance struct must match shader and CellRenderer
+/// Per-cell instance data for GPU rendering.
+///
+/// Uses a unified layout with reserved fields for type-specific data.
+/// All cell types share this structure, with type_data interpreted
+/// differently based on cell type.
+///
+/// # Layout (96 bytes, 16-byte aligned)
+///
+/// Common fields (64 bytes):
+/// - position: [f32; 3] (12 bytes) - World position
+/// - radius: f32 (4 bytes) - Cell radius
+/// - color: [f32; 4] (16 bytes) - RGBA color from mode
+/// - visual_params: [f32; 4] (16 bytes) - specular, power, fresnel, emissive
+/// - rotation: [f32; 4] (16 bytes) - Quaternion rotation
+///
+/// Type-specific reserved fields (32 bytes):
+/// - type_data: [f32; 8] - Reserved for type-specific use
+///   - type_data[0]: membrane_noise_scale (Test), flagella_angle (Flagellocyte)
+///   - type_data[1]: membrane_noise_strength (Test), flagella_speed (Flagellocyte)
+///   - type_data[2]: membrane_noise_speed (Test), sensor_direction_x (Neurocyte)
+///   - type_data[3]: membrane_anim_offset (Test), sensor_direction_y (Neurocyte)
+///   - type_data[4]: sensor_direction_z (Neurocyte)
+///   - type_data[5-7]: reserved for future use
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct CellInstance {
+    /// World position (xyz)
     pub position: [f32; 3],
+    /// Cell radius
     pub radius: f32,
+    /// RGBA color from mode settings
     pub color: [f32; 4],
+    /// Visual parameters: specular_strength, specular_power, fresnel_strength, emissive
     pub visual_params: [f32; 4],
-    pub membrane_params: [f32; 4],
+    /// Rotation quaternion (x, y, z, w)
     pub rotation: [f32; 4],
+    /// Type-specific data (8 floats, 32 bytes)
+    /// Interpretation depends on cell type - see struct documentation
+    pub type_data: [f32; 8],
 }
+
+// Compile-time assertions to verify struct layout matches shader expectations
+const _: () = assert!(
+    std::mem::size_of::<CellInstance>() == 96,
+    "CellInstance must be exactly 96 bytes to match shader layout"
+);
+const _: () = assert!(
+    std::mem::align_of::<CellInstance>() <= 16,
+    "CellInstance must be at most 16-byte aligned for GPU compatibility"
+);
 
 
 impl InstanceBuilder {

@@ -1,7 +1,102 @@
 //! Cell type definitions for Bio-Spheres simulation.
 //!
 //! This module defines the different types of cells that can exist in the simulation,
-//! each with their own behaviors and properties.
+//! each with their own behaviors and visual properties. The [`CellType`] enum is the
+//! central registry of all available cell types.
+//!
+//! # Architecture Overview
+//!
+//! Each cell type in Bio-Spheres has three components:
+//! 1. **Enum variant** - Defined in [`CellType`] with a unique index
+//! 2. **Behavior module** - Implements [`CellBehavior`](crate::cell::behaviors::CellBehavior) for simulation logic
+//! 3. **Appearance shader** - WGSL shader in `shaders/cells/` for rendering
+//!
+//! # Adding a New Cell Type
+//!
+//! To add a new cell type (e.g., `Flagellocyte`), follow these steps:
+//!
+//! ## Step 1: Update the CellType Enum
+//!
+//! ```ignore
+//! #[repr(u32)]
+//! pub enum CellType {
+//!     Test = 0,
+//!     Flagellocyte = 1,  // Add new variant with next index
+//! }
+//!
+//! impl CellType {
+//!     pub const COUNT: usize = 2;  // Update count
+//!
+//!     pub const fn all() -> &'static [CellType] {
+//!         &[CellType::Test, CellType::Flagellocyte]  // Add to array
+//!     }
+//!
+//!     pub fn from_index(index: u32) -> Option<Self> {
+//!         match index {
+//!             0 => Some(CellType::Test),
+//!             1 => Some(CellType::Flagellocyte),  // Add match arm
+//!             _ => None,
+//!         }
+//!     }
+//!
+//!     pub fn shader_path(&self) -> &'static str {
+//!         match self {
+//!             CellType::Test => "shaders/cells/test_cell.wgsl",
+//!             CellType::Flagellocyte => "shaders/cells/flagellocyte.wgsl",  // Add path
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! ## Step 2: Create Behavior Module
+//!
+//! Create `src/cell/behaviors/flagellocyte.rs`:
+//!
+//! ```ignore
+//! use crate::cell::behaviors::{CellBehavior, TypeSpecificInstanceData};
+//! use crate::genome::ModeSettings;
+//!
+//! pub struct FlagellocyteBehavior;
+//!
+//! impl CellBehavior for FlagellocyteBehavior {
+//!     fn build_instance_data(&self, mode_settings: &ModeSettings) -> TypeSpecificInstanceData {
+//!         TypeSpecificInstanceData::flagellocyte(0.0, mode_settings.swim_force)
+//!     }
+//! }
+//! ```
+//!
+//! ## Step 3: Register Behavior
+//!
+//! Update `src/cell/behaviors/mod.rs`:
+//!
+//! ```ignore
+//! pub mod flagellocyte;
+//!
+//! pub fn create_behavior(cell_type: CellType) -> Box<dyn CellBehavior> {
+//!     match cell_type {
+//!         CellType::Test => Box::new(test_cell::TestCellBehavior),
+//!         CellType::Flagellocyte => Box::new(flagellocyte::FlagellocyteBehavior),
+//!     }
+//! }
+//! ```
+//!
+//! ## Step 4: Create Appearance Shader
+//!
+//! Create `shaders/cells/flagellocyte.wgsl` with the required vertex and fragment
+//! entry points. Use `test_cell.wgsl` as a template.
+//!
+//! ## Step 5: Update Registry Shader Loading
+//!
+//! Update `src/cell/type_registry.rs`:
+//!
+//! ```ignore
+//! fn load_shader_source(cell_type: CellType) -> &'static str {
+//!     match cell_type {
+//!         CellType::Test => include_str!("../../shaders/cells/test_cell.wgsl"),
+//!         CellType::Flagellocyte => include_str!("../../shaders/cells/flagellocyte.wgsl"),
+//!     }
+//! }
+//! ```
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -108,18 +203,69 @@ pub enum CellVisualsError {
     RonSerialize(#[from] ron::Error),
 }
 
-/// Cell type enumeration.
+/// Cell type enumeration - each variant corresponds to a unique
+/// appearance shader and behavior module.
 ///
-/// Currently only Test cells are implemented.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// `CellType` is the central registry of all cell types in Bio-Spheres. Each variant
+/// represents a distinct type of cell with its own:
+/// - **Visual appearance** - Defined by a WGSL shader in `shaders/cells/`
+/// - **Simulation behavior** - Implemented via [`CellBehavior`](crate::cell::behaviors::CellBehavior)
+/// - **Mode settings** - Configured in the genome editor
+///
+/// # Memory Layout
+///
+/// The enum uses `#[repr(u32)]` to ensure a stable memory layout for GPU compatibility.
+/// Each variant's discriminant is its index in the registry.
+///
+/// # Extension Guide
+///
+/// To add a new cell type, you need to modify this enum and create two new files:
+///
+/// 1. **Add enum variant** with the next available index
+/// 2. **Update `COUNT`** to reflect the new total
+/// 3. **Add to `all()`** array
+/// 4. **Add match arms** in `from_index()`, `name()`, `names()`, and `shader_path()`
+/// 5. **Create behavior module** in `src/cell/behaviors/{type_name}.rs`
+/// 6. **Create appearance shader** in `shaders/cells/{type_name}.wgsl`
+/// 7. **Register behavior** in `src/cell/behaviors/mod.rs`
+/// 8. **Update shader loading** in `src/cell/type_registry.rs`
+///
+/// See the module-level documentation for detailed examples.
+///
+/// # Example
+///
+/// ```
+/// use biospheres::cell::CellType;
+///
+/// // Get all cell types
+/// for cell_type in CellType::iter() {
+///     println!("{}: {}", cell_type.to_index(), cell_type.name());
+/// }
+///
+/// // Convert from index (e.g., from GPU buffer)
+/// if let Some(cell_type) = CellType::from_index(0) {
+///     assert_eq!(cell_type, CellType::Test);
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u32)]
 pub enum CellType {
     Test = 0,
+    // Future types: Flagellocyte = 1, Lipocyte = 2, etc.
 }
 
 impl CellType {
+    /// Number of registered cell types. Update when adding new types.
+    pub const COUNT: usize = 1;
+
     /// Get all available cell types as a slice.
     pub const fn all() -> &'static [CellType] {
         &[CellType::Test]
+    }
+
+    /// Iterator over all cell types for registry initialization.
+    pub fn iter() -> impl Iterator<Item = Self> {
+        (0..Self::COUNT as u32).filter_map(Self::from_index)
     }
 
     /// Get the display name for this cell type.
@@ -135,7 +281,7 @@ impl CellType {
     }
 
     /// Convert from integer index to cell type.
-    pub fn from_index(index: i32) -> Option<Self> {
+    pub fn from_index(index: u32) -> Option<Self> {
         match index {
             0 => Some(CellType::Test),
             _ => None,
@@ -143,8 +289,15 @@ impl CellType {
     }
 
     /// Convert to integer index.
-    pub const fn to_index(&self) -> i32 {
-        *self as i32
+    pub const fn to_index(&self) -> u32 {
+        *self as u32
+    }
+
+    /// Get the path to the appearance shader for this cell type.
+    pub fn shader_path(&self) -> &'static str {
+        match self {
+            CellType::Test => "shaders/cells/test_cell.wgsl",
+        }
     }
 }
 

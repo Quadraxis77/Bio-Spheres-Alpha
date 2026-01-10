@@ -9,14 +9,34 @@ struct CellData {
     rotation: vec4<f32>,  // Quaternion (x, y, z, w)
 }
 
-// Output: Packed instance data for rendering
+// Output: Packed instance data for rendering (96 bytes, 16-byte aligned)
+// Matches Rust CellInstance struct in instance_builder.rs
 struct CellInstance {
-    position: vec3<f32>,
-    radius: f32,
-    color: vec4<f32>,
-    visual_params: vec4<f32>,   // x: specular, y: power, z: fresnel, w: emissive
-    membrane_params: vec4<f32>, // x: noise_scale, y: noise_strength, z: noise_speed, w: anim_offset
-    rotation: vec4<f32>,
+    position: vec3<f32>,        // 12 bytes - World position
+    radius: f32,                // 4 bytes - Cell radius
+    color: vec4<f32>,           // 16 bytes - RGBA color from mode
+    visual_params: vec4<f32>,   // 16 bytes - x: specular, y: power, z: fresnel, w: emissive
+    rotation: vec4<f32>,        // 16 bytes - Quaternion rotation
+    type_data_0: vec4<f32>,     // 16 bytes - Type-specific data [0-3]
+    type_data_1: vec4<f32>,     // 16 bytes - Type-specific data [4-7]
+    // Total: 96 bytes
+    //
+    // Type data interpretation by cell type:
+    // Test cell:
+    //   type_data_0.x = membrane_noise_scale
+    //   type_data_0.y = membrane_noise_strength
+    //   type_data_0.z = membrane_noise_speed
+    //   type_data_0.w = membrane_anim_offset
+    //   type_data_1 = reserved (zeros)
+    // Flagellocyte (future):
+    //   type_data_0.x = flagella_angle
+    //   type_data_0.y = flagella_speed
+    //   type_data_0.zw = reserved
+    //   type_data_1 = reserved
+    // Neurocyte (future):
+    //   type_data_0.xyz = sensor_direction
+    //   type_data_0.w = reserved
+    //   type_data_1 = reserved
 }
 
 // Mode visual data (from genome)
@@ -272,6 +292,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pos_and_mass = positions[idx];
     let position = pos_and_mass.xyz;
     let mass = pos_and_mass.w;
+    
+    // Skip dead cells (mass below death threshold)
+    // This handles cells marked for removal before the lifecycle pipeline runs
+    const DEATH_MASS_THRESHOLD: f32 = 0.1;
+    if (mass < DEATH_MASS_THRESHOLD) {
+        return;
+    }
+    
     let rotation = rotations[idx];
     // Calculate radius from mass (GPU-side) for proper growth visualization
     // This ensures cells visually grow as mass increases from mass_accum shader
@@ -340,8 +368,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     instance.radius = radius;
     instance.color = vec4<f32>(color, 1.0);  // Always fully opaque
     instance.visual_params = vec4<f32>(specular_strength, specular_power, fresnel_strength, emissive);
-    instance.membrane_params = vec4<f32>(noise_scale, noise_strength, noise_speed, anim_offset);
     instance.rotation = rotation;
+    // Type-specific data: membrane params in type_data_0 for Test cells
+    instance.type_data_0 = vec4<f32>(noise_scale, noise_strength, noise_speed, anim_offset);
+    instance.type_data_1 = vec4<f32>(0.0, 0.0, 0.0, 0.0);  // Reserved for future use
     
     // Atomically get output index and write instance
     let output_idx = atomicAdd(&counters[0], 1u);

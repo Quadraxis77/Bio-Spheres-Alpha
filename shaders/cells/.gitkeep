@@ -1,0 +1,3 @@
+# This directory contains cell type-specific shaders
+# Each cell type has its own appearance shader (e.g., test_cell.wgsl)
+# A shared depth shader (shared_depth.wgsl) is used for depth pre-pass
