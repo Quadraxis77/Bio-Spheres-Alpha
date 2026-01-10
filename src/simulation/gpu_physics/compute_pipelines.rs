@@ -767,6 +767,14 @@ impl GpuPhysicsPipelines {
                     binding: 5,
                     resource: buffers.cell_types.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: buffers.mode_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: buffers.mode_cell_types.as_entire_binding(),
+                },
             ],
         })
     }
@@ -1361,7 +1369,7 @@ impl GpuPhysicsPipelines {
     /// read_only: true for division scan (only reads), false for division execute (writes)
     fn create_cell_state_bind_group_layout(device: &wgpu::Device, read_only: bool) -> wgpu::BindGroupLayout {
         if read_only {
-            // Read-only version for division scan (6 bindings)
+            // Read-only version for division scan (8 bindings)
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Cell State Read Bind Group Layout"),
                 entries: &[
@@ -1420,9 +1428,31 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Cell types (0 = Test, 1 = Flagellocyte)
+                    // Cell types (0 = Test, 1 = Flagellocyte) - DEPRECATED, use mode_cell_types
                     wgpu::BindGroupLayoutEntry {
                         binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Mode indices (per-cell mode index)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -3367,7 +3397,7 @@ impl GpuPhysicsPipelines {
     }
     
     /// Create swim force cell data bind group layout (Group 2 in swim_force shader)
-    /// Contains mode_indices, cell_types, and mode_properties
+    /// Contains mode_indices, cell_types, mode_properties, and mode_cell_types
     fn create_swim_force_cell_data_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Swim Force Cell Data Bind Group Layout"),
@@ -3383,7 +3413,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 1: Cell types (read-only)
+                // Binding 1: Cell types (read-only) - DEPRECATED, use mode_cell_types instead
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3397,6 +3427,18 @@ impl GpuPhysicsPipelines {
                 // Binding 2: Mode properties (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Mode cell types lookup table (read-only)
+                // mode_cell_types[mode_index] = cell_type - always up-to-date with genome settings
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -3462,6 +3504,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: triple_buffers.mode_properties.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: triple_buffers.mode_cell_types.as_entire_binding(),
                 },
             ],
         })

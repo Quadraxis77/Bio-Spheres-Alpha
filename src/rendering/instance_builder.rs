@@ -487,8 +487,8 @@ impl InstanceBuilder {
         
         let mode_visuals_buffer = Self::create_storage_buffer(device, "Mode Visuals", mode_capacity * std::mem::size_of::<ModeVisuals>());
         let cell_type_visuals_buffer = Self::create_storage_buffer(device, "Cell Type Visuals", cell_type_capacity * std::mem::size_of::<GpuCellTypeVisuals>());
-        // Mode properties: 8 floats per mode (32 bytes) - nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, swim_force, padding x2
-        let mode_properties_buffer = Self::create_storage_buffer(device, "Mode Properties", mode_capacity * 32);
+        // Mode properties: 12 floats per mode (48 bytes) - nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3
+        let mode_properties_buffer = Self::create_storage_buffer(device, "Mode Properties", mode_capacity * 48);
         // Mode cell types: 1 u32 per mode - lookup table for deriving cell_type from mode_index
         let mode_cell_types_buffer = Self::create_storage_buffer(device, "Mode Cell Types", mode_capacity * 4);
         

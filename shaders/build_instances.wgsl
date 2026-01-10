@@ -67,7 +67,8 @@ struct CellTypeVisuals {
 }
 
 // Mode properties (per-mode settings from genome)
-// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low]
+// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3]
+// Total: 12 floats = 48 bytes per mode
 struct ModeProperties {
     nutrient_gain_rate: f32,
     max_cell_size: f32,
@@ -77,6 +78,10 @@ struct ModeProperties {
     nutrient_priority: f32,
     swim_force: f32,
     prioritize_when_low: f32,
+    max_splits: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 // Frustum plane (normal.xyz, distance)
@@ -340,8 +345,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mode_index = mode_indices[idx];
     let cell_id = cell_ids[idx];
     
-    // Read cell_type from buffer - this is set during cell insertion and updated by triple buffer sync
-    let cell_type = cell_types[idx];
+    // Derive cell_type from mode (always up-to-date with genome settings)
+    // This ensures children get the correct cell_type after division
+    let cell_type = mode_cell_types[mode_index];
     
     // Increment total processed counter
     atomicAdd(&counters[1], 1u);

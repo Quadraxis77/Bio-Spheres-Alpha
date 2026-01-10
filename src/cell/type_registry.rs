@@ -276,6 +276,8 @@ impl CellTypeRegistry {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth_format,
                 depth_write_enabled: true,
+                // Use Less comparison - the shader outputs proper sphere surface depth
+                // which enables correct mutual overlap where spheres intersect
                 depth_compare: wgpu::CompareFunction::Less,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),

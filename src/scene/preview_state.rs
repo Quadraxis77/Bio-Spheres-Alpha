@@ -174,11 +174,17 @@ impl PreviewState {
             mode.parent_split_direction.y.to_bits().hash(&mut hasher);
             // Hash other important fields for change detection
             mode.max_splits.hash(&mut hasher);
+            mode.mode_a_after_splits.hash(&mut hasher);
+            mode.mode_b_after_splits.hash(&mut hasher);
             mode.max_adhesions.hash(&mut hasher);
             mode.min_adhesions.hash(&mut hasher);
+            mode.enable_parent_angle_snapping.hash(&mut hasher);
             mode.split_ratio.to_bits().hash(&mut hasher);
             mode.nutrient_gain_rate.to_bits().hash(&mut hasher);
             mode.max_cell_size.to_bits().hash(&mut hasher);
+            mode.swim_force.to_bits().hash(&mut hasher);
+            mode.nutrient_priority.to_bits().hash(&mut hasher);
+            mode.prioritize_when_low.hash(&mut hasher);
             // Hash child settings
             mode.child_a.mode_number.hash(&mut hasher);
             mode.child_b.mode_number.hash(&mut hasher);

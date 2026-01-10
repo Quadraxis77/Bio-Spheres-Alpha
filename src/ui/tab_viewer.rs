@@ -1351,6 +1351,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("No mode selected");
                 return;
             }
+            
+            // Collect mode info BEFORE borrowing mode mutably (for mode_after_splits dropdowns)
+            let mode_info_for_dropdowns: Vec<_> = context.genome.modes.iter()
+                .map(|m| (m.name.clone(), m.color))
+                .collect();
+            
             let mode = &mut context.genome.modes[selected_idx];
 
             // Special Functions Group (Purple) - cell type specific settings at the top
@@ -1485,6 +1491,102 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     
                     ui.add(drag_value);
                 });
+                
+                // Mode after max splits reached - only show if max_splits is not infinite
+                if mode.max_splits >= 0 {
+                    let mode_count = mode_info_for_dropdowns.len();
+                    
+                    // Get current values
+                    let current_mode_a = mode.mode_a_after_splits;
+                    let current_mode_b = mode.mode_b_after_splits;
+                    
+                    // Track new selections
+                    let mut new_mode_a: Option<i32> = None;
+                    let mut new_mode_b: Option<i32> = None;
+                    
+                    ui.add_space(4.0);
+                    ui.label("Mode A After Splits:");
+                    ui.horizontal(|ui| {
+                        let selected_text = if current_mode_a < 0 {
+                            "Default".to_string()
+                        } else if (current_mode_a as usize) < mode_count {
+                            mode_info_for_dropdowns[current_mode_a as usize].0.clone()
+                        } else {
+                            "Invalid".to_string()
+                        };
+                        
+                        egui::ComboBox::from_id_salt("mode_a_after_splits")
+                            .selected_text(selected_text)
+                            .width(ui.available_width() - 10.0)
+                            .show_ui(ui, |ui| {
+                                // Default option (use normal child_a mode)
+                                if ui.selectable_label(current_mode_a < 0, "Default").clicked() {
+                                    new_mode_a = Some(-1);
+                                }
+                                ui.separator();
+                                // Mode options
+                                for (idx, (name, color)) in mode_info_for_dropdowns.iter().enumerate() {
+                                    let is_selected = current_mode_a == idx as i32;
+                                    let color32 = egui::Color32::from_rgb(
+                                        (color.x * 255.0) as u8,
+                                        (color.y * 255.0) as u8,
+                                        (color.z * 255.0) as u8,
+                                    );
+                                    ui.horizontal(|ui| {
+                                        ui.colored_label(color32, "●");
+                                        if ui.selectable_label(is_selected, name).clicked() {
+                                            new_mode_a = Some(idx as i32);
+                                        }
+                                    });
+                                }
+                            });
+                    });
+                    
+                    ui.label("Mode B After Splits:");
+                    ui.horizontal(|ui| {
+                        let selected_text = if current_mode_b < 0 {
+                            "Default".to_string()
+                        } else if (current_mode_b as usize) < mode_count {
+                            mode_info_for_dropdowns[current_mode_b as usize].0.clone()
+                        } else {
+                            "Invalid".to_string()
+                        };
+                        
+                        egui::ComboBox::from_id_salt("mode_b_after_splits")
+                            .selected_text(selected_text)
+                            .width(ui.available_width() - 10.0)
+                            .show_ui(ui, |ui| {
+                                // Default option (use normal child_b mode)
+                                if ui.selectable_label(current_mode_b < 0, "Default").clicked() {
+                                    new_mode_b = Some(-1);
+                                }
+                                ui.separator();
+                                // Mode options
+                                for (idx, (name, color)) in mode_info_for_dropdowns.iter().enumerate() {
+                                    let is_selected = current_mode_b == idx as i32;
+                                    let color32 = egui::Color32::from_rgb(
+                                        (color.x * 255.0) as u8,
+                                        (color.y * 255.0) as u8,
+                                        (color.z * 255.0) as u8,
+                                    );
+                                    ui.horizontal(|ui| {
+                                        ui.colored_label(color32, "●");
+                                        if ui.selectable_label(is_selected, name).clicked() {
+                                            new_mode_b = Some(idx as i32);
+                                        }
+                                    });
+                                }
+                            });
+                    });
+                    
+                    // Apply selections after combo boxes are done
+                    if let Some(new_val) = new_mode_a {
+                        mode.mode_a_after_splits = new_val;
+                    }
+                    if let Some(new_val) = new_mode_b {
+                        mode.mode_b_after_splits = new_val;
+                    }
+                }
             });
 
             // Appearance Settings Group (Purple)

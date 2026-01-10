@@ -98,7 +98,8 @@ struct AdhesionConnection {
     twist_reference_b: vec4<f32>,
 }
 
-// Mode properties structure (32 bytes per mode)
+// Mode properties structure (48 bytes per mode)
+// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3]
 struct ModeProperties {
     nutrient_gain_rate: f32,
     max_cell_size: f32,
@@ -108,6 +109,10 @@ struct ModeProperties {
     nutrient_priority: f32,
     swim_force: f32,
     prioritize_when_low: f32,  // 1.0 = true, 0.0 = false
+    max_splits: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 // Constants matching reference implementation

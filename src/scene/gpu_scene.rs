@@ -459,10 +459,10 @@ impl GpuScene {
             u32_copy_size,
         );
         
-        // Copy mode properties (8 floats per mode = 32 bytes) - needed for swim_force -> tail_speed calculation
+        // Copy mode properties (12 floats per mode = 48 bytes) - needed for swim_force -> tail_speed calculation
         // Calculate total modes across all genomes
         let total_modes: usize = self.genomes.iter().map(|g| g.modes.len()).sum();
-        let mode_properties_copy_size = (total_modes * 32) as u64;
+        let mode_properties_copy_size = (total_modes * 48) as u64;
         if mode_properties_copy_size > 0 {
             encoder.copy_buffer_to_buffer(
                 &self.gpu_triple_buffers.mode_properties,
@@ -554,6 +554,9 @@ impl GpuScene {
         
         // Sync mode properties (nutrient_gain_rate, max_cell_size, etc.) for division
         self.gpu_triple_buffers.sync_mode_properties(queue, &self.genomes);
+        
+        // Sync mode cell types lookup table (for deriving cell_type from mode_index)
+        self.gpu_triple_buffers.sync_mode_cell_types(queue, &self.genomes);
         
         // Sync child mode indices for division (CRITICAL: determines what mode children get)
         self.gpu_triple_buffers.sync_child_mode_indices(queue, &self.genomes);

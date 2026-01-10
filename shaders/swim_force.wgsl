@@ -28,7 +28,8 @@ struct PhysicsParams {
 }
 
 // Mode properties (per-mode settings from genome)
-// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low]
+// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3]
+// Total: 12 floats = 48 bytes per mode
 struct ModeProperties {
     nutrient_gain_rate: f32,
     max_cell_size: f32,
@@ -38,6 +39,10 @@ struct ModeProperties {
     nutrient_priority: f32,
     swim_force: f32,
     prioritize_when_low: f32,
+    max_splits: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0)
@@ -78,10 +83,15 @@ var<storage, read> rotations: array<vec4<f32>>;
 var<storage, read> mode_indices: array<u32>;
 
 @group(2) @binding(1)
-var<storage, read> cell_types: array<u32>;
+var<storage, read> cell_types: array<u32>;  // DEPRECATED - use mode_cell_types instead
 
 @group(2) @binding(2)
 var<storage, read> mode_properties: array<ModeProperties>;
+
+// Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
+// Always up-to-date with genome settings, unlike cell_types buffer which may be stale after division
+@group(2) @binding(3)
+var<storage, read> mode_cell_types: array<u32>;
 
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const SWIM_FORCE_MULTIPLIER: f32 = 50.0; // Scale swim_force (0-1) to actual force magnitude
@@ -113,17 +123,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Get cell type - only Flagellocytes (type 1) have swim force
-    let cell_type = cell_types[cell_idx];
+    // Get mode index first, then derive cell type from mode
+    let mode_idx = mode_indices[cell_idx];
+    if (mode_idx >= arrayLength(&mode_properties)) {
+        return;
+    }
+    
+    // Derive cell type from mode (always up-to-date with genome settings)
+    // Only Flagellocytes (type 1) have swim force
+    let cell_type = mode_cell_types[mode_idx];
     if (cell_type != 1u) {
         return;
     }
     
     // Get mode properties
-    let mode_idx = mode_indices[cell_idx];
-    if (mode_idx >= arrayLength(&mode_properties)) {
-        return;
-    }
     let mode = mode_properties[mode_idx];
     
     // Skip if no swim force configured

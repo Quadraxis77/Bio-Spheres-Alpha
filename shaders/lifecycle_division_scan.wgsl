@@ -87,9 +87,19 @@ var<storage, read> split_counts: array<u32>;
 var<storage, read> max_splits: array<u32>;
 
 // Cell types: 0 = Test, 1 = Flagellocyte
-// Flagellocytes split based on mass only (ignore split_interval)
+// DEPRECATED - use mode_cell_types instead for up-to-date values
 @group(2) @binding(5)
 var<storage, read> cell_types: array<u32>;
+
+// Mode indices (per-cell mode index)
+@group(2) @binding(6)
+var<storage, read> mode_indices: array<u32>;
+
+// Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
+// Always up-to-date with genome settings, unlike cell_types buffer
+// Flagellocytes split based on mass only (ignore split_interval)
+@group(2) @binding(7)
+var<storage, read> mode_cell_types: array<u32>;
 
 // Adhesion bind group (group 3) - for checking neighbor division status
 @group(3) @binding(0)
@@ -155,7 +165,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let split_mass = split_masses[cell_idx];
     let current_splits = split_counts[cell_idx];
     let max_split = max_splits[cell_idx];
-    let cell_type = cell_types[cell_idx];
+    
+    // Derive cell_type from mode (always up-to-date with genome settings)
+    let mode_idx = mode_indices[cell_idx];
+    let cell_type = mode_cell_types[mode_idx];
     
     // Check for "never split" condition (split_mass > 3.0)
     if (split_mass > 3.0) {
@@ -249,7 +262,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let neighbor_birth_time = birth_times[neighbor_idx];
         let neighbor_split_interval = split_intervals[neighbor_idx];
         let neighbor_age = params.current_time - neighbor_birth_time;
-        let neighbor_cell_type = cell_types[neighbor_idx];
+        
+        // Derive neighbor's cell_type from mode (always up-to-date)
+        let neighbor_mode_idx = mode_indices[neighbor_idx];
+        let neighbor_cell_type = mode_cell_types[neighbor_mode_idx];
         
         // Skip if neighbor is not ready to split
         // Flagellocytes are always time-ready (they split on mass only)

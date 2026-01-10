@@ -136,8 +136,10 @@ var<storage, read> parent_make_adhesion_flags: array<u32>;
 @group(2) @binding(16)
 var<storage, read> child_mode_indices: array<vec2<i32>>;
 
-// Mode properties: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, padding, padding, padding] per mode
-// Total 32 bytes (8 floats) per mode, indexed by mode_index
+// Mode properties: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval] (vec4)
+//                  [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
+//                  [max_splits, padding, padding, padding] (vec4)
+// Total 48 bytes (12 floats = 3 vec4s) per mode, indexed by mode_index * 3
 @group(2) @binding(17)
 var<storage, read> mode_properties: array<vec4<f32>>;
 
@@ -374,14 +376,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Read Child A's properties from its mode
     // mode_properties layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval] (vec4)
-    //                         [split_mass, padding, padding, padding] (vec4)
-    let child_a_props_0 = mode_properties[child_a_mode_idx * 2u];
-    let child_a_props_1 = mode_properties[child_a_mode_idx * 2u + 1u];
+    //                         [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
+    //                         [max_splits, padding, padding, padding] (vec4)
+    // Total: 3 vec4s (12 floats = 48 bytes) per mode
+    let child_a_props_0 = mode_properties[child_a_mode_idx * 3u];
+    let child_a_props_1 = mode_properties[child_a_mode_idx * 3u + 1u];
+    let child_a_props_2 = mode_properties[child_a_mode_idx * 3u + 2u];
     nutrient_gain_rates[cell_idx] = child_a_props_0.x;
     max_cell_sizes[cell_idx] = child_a_props_0.y;
     stiffnesses[cell_idx] = child_a_props_0.z;
     split_intervals[cell_idx] = child_a_props_0.w;
     split_masses[cell_idx] = child_a_props_1.x;
+    // Read max_splits from mode properties (0 = unlimited)
+    max_splits[cell_idx] = u32(child_a_props_2.x);
     
     // === Create Child B (placed in assigned free slot) ===
     positions_out[child_b_slot] = vec4<f32>(child_b_pos, child_mass);
@@ -389,8 +396,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     rotations_out[child_b_slot] = child_b_rotation;
     
     // Read Child B's properties from its mode
-    let child_b_props_0 = mode_properties[child_b_mode_idx * 2u];
-    let child_b_props_1 = mode_properties[child_b_mode_idx * 2u + 1u];
+    let child_b_props_0 = mode_properties[child_b_mode_idx * 3u];
+    let child_b_props_1 = mode_properties[child_b_mode_idx * 3u + 1u];
+    let child_b_props_2 = mode_properties[child_b_mode_idx * 3u + 2u];
     
     // Set Child B state from its mode properties
     birth_times[child_b_slot] = params.current_time;
@@ -402,7 +410,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     } else {
         split_counts[child_b_slot] = parent_split_count + 1u;
     }
-    max_splits[child_b_slot] = max_splits[cell_idx]; // TODO: Read from mode if needed
+    // Read max_splits from mode properties (0 = unlimited)
+    max_splits[child_b_slot] = u32(child_b_props_2.x);
     genome_ids[child_b_slot] = genome_ids[cell_idx]; // Copy genome reference
     mode_indices[child_b_slot] = child_b_mode_idx; // Child B gets its designated mode
     nutrient_gain_rates[child_b_slot] = child_b_props_0.x;

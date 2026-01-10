@@ -96,8 +96,15 @@ fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     return v + ((uv * q.w) + uuv) * 2.0;
 }
 
+// Calculate normalized device depth from world position
+// This allows proper depth testing for ray-marched sphere surfaces
+fn calculate_depth(world_pos: vec3<f32>, view_proj: mat4x4<f32>) -> f32 {
+    let clip_pos = view_proj * vec4<f32>(world_pos, 1.0);
+    return clip_pos.z / clip_pos.w;
+}
+
 fn projectToScreen(point3D: vec3<f32>, camRight: vec3<f32>, camUp: vec3<f32>) -> vec2<f32> {
-    return vec2<f32>(dot(point3D, camRight), dot(point3D, camUp));
+    return vec2<f32>(dot(point3D, camRight), dot(point3D, camUp));;
 }
 
 fn sdTaperedCapsule2(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, ra: f32, rb: f32) -> vec2<f32> {
@@ -286,8 +293,15 @@ fn vs_main(
 // Fragment Shader
 // ============================================================================
 
+struct FragmentOutput {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+}
+
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput) -> FragmentOutput {
+    var output: FragmentOutput;
+    
     // Determine cell type (round to handle floating point precision)
     let cell_type = u32(round(in.type_data_1.w));
     
@@ -418,7 +432,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let lit_color = baseColor * diffuse + specular + fresnel * baseColor;
         let final_color = ambient_color + lit_color + baseColor * emissive;
         
-        return vec4<f32>(final_color, in.color.a);
+        // Output proper depth for the sphere surface (enables mutual overlap)
+        output.color = vec4<f32>(final_color, in.color.a);
+        output.depth = calculate_depth(hit_point, camera.view_proj);
+        return output;
     } else {
         // Flagella rendering (Flagellocyte only)
         let tail_thickness = in.type_data_0.y;
@@ -453,12 +470,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         normal = flagellaNormal2D(billboardPos, closestPoint, camRight, camUp, camFwd, segRadius);
         baseColor = in.color.rgb * 0.9 + vec3<f32>(0.1, 0.15, 0.2);
         
+        // Calculate flagella world position for depth
+        let flagella_world_pos = in.center + pos3D;
+        
         let outlineWidth = 0.008 * in.radius;
         let distFromEdge = -flagellaDist;
         
         if (distFromEdge < outlineWidth) {
             let outlineColor = baseColor * 0.15;
-            return vec4<f32>(outlineColor, in.color.a);
+            output.color = vec4<f32>(outlineColor, in.color.a);
+            output.depth = calculate_depth(flagella_world_pos, camera.view_proj);
+            return output;
         }
         
         let view_dir = -ray_dir;
@@ -472,6 +494,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let spec = pow(max(dot(normal, half_dir), 0.0), 32.0) * 0.3;
         color += lighting.light_color * spec;
         
-        return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), in.color.a);
+        output.color = vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), in.color.a);
+        output.depth = calculate_depth(flagella_world_pos, camera.view_proj);
+        return output;
     }
 }

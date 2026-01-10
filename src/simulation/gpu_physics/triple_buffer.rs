@@ -301,8 +301,12 @@ pub struct GpuTripleBufferSystem {
     pub child_b_keep_adhesion_flags: wgpu::Buffer,
     
     /// Mode properties buffer for division (per-mode properties)
-    /// Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, padding, padding, padding] = 32 bytes
+    /// Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3] = 48 bytes
     pub mode_properties: wgpu::Buffer,
+    
+    /// Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
+    /// Used by shaders to derive cell_type from mode_index (always up-to-date with genome settings)
+    pub mode_cell_types: wgpu::Buffer,
     
     /// Current buffer index (atomic for lock-free rotation)
     current_index: AtomicUsize,
@@ -457,8 +461,11 @@ impl GpuTripleBufferSystem {
         // Child B keep adhesion flags: one u32 per mode
         let child_b_keep_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Child B Keep Adhesion Flags");
         
-        // Mode properties: 8 floats per mode (32 bytes) - nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, padding x3
-        let mode_properties = Self::create_storage_buffer(device, max_modes * 32, "Mode Properties");
+        // Mode properties: 12 floats per mode (48 bytes) - nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3
+        let mode_properties = Self::create_storage_buffer(device, max_modes * 48, "Mode Properties");
+        
+        // Mode cell types: one u32 per mode - lookup table for deriving cell_type from mode_index
+        let mode_cell_types = Self::create_storage_buffer(device, max_modes * 4, "Mode Cell Types");
         
         Self {
             position_and_mass,
@@ -496,6 +503,7 @@ impl GpuTripleBufferSystem {
             child_a_keep_adhesion_flags,
             child_b_keep_adhesion_flags,
             mode_properties,
+            mode_cell_types,
             current_index: AtomicUsize::new(0),
             capacity,
             needs_sync: true,
@@ -719,6 +727,9 @@ impl GpuTripleBufferSystem {
         
         // Sync mode properties for division (nutrient_gain_rate, max_cell_size, etc.)
         self.sync_mode_properties(queue, genomes);
+        
+        // Sync mode cell types lookup table (for deriving cell_type from mode_index)
+        self.sync_mode_cell_types(queue, genomes);
     }
     
     /// Update cell_types buffer when genome mode cell_type settings change.
@@ -849,11 +860,16 @@ impl GpuTripleBufferSystem {
     
     /// Sync mode properties for division shader (per-mode properties like nutrient_gain_rate, max_cell_size, etc.)
     pub fn sync_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
-        // Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low] = 32 bytes (8 floats)
-        let mut properties_data: Vec<[f32; 8]> = Vec::new();
+        // Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval] (vec4)
+        //                  [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
+        //                  [max_splits, padding, padding, padding] (vec4)
+        // Total: 12 floats = 48 bytes per mode
+        let mut properties_data: Vec<[f32; 12]> = Vec::new();
         
         for genome in genomes {
             for mode in &genome.modes {
+                // Convert max_splits: -1 (infinite) -> 0 (unlimited in GPU)
+                let gpu_max_splits = if mode.max_splits < 0 { 0.0 } else { mode.max_splits as f32 };
                 properties_data.push([
                     mode.nutrient_gain_rate,
                     mode.max_cell_size,
@@ -863,12 +879,31 @@ impl GpuTripleBufferSystem {
                     mode.nutrient_priority,
                     mode.swim_force,
                     if mode.prioritize_when_low { 1.0 } else { 0.0 },
+                    gpu_max_splits,
+                    0.0, // padding
+                    0.0, // padding
+                    0.0, // padding
                 ]);
             }
         }
         
         if !properties_data.is_empty() {
             queue.write_buffer(&self.mode_properties, 0, bytemuck::cast_slice(&properties_data));
+        }
+    }
+    
+    /// Sync mode cell types lookup table (cell_type per mode)
+    /// This allows shaders to derive cell_type from mode_index, which is always up-to-date
+    pub fn sync_mode_cell_types(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let mode_cell_types: Vec<u32> = genomes
+            .iter()
+            .flat_map(|genome| {
+                genome.modes.iter().map(|mode| mode.cell_type as u32)
+            })
+            .collect();
+        
+        if !mode_cell_types.is_empty() {
+            queue.write_buffer(&self.mode_cell_types, 0, bytemuck::cast_slice(&mode_cell_types));
         }
     }
     
