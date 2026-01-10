@@ -8,6 +8,7 @@
 //! 3. Insert cells into grid
 //! 4. Collision detection (optimized with pre-computed neighbor indices)
 //! 5. Adhesion physics (spring-damper forces between adhered cells)
+//! 5.5. Swim force (thrust for Flagellocyte cells based on rotation and swim_force setting)
 //! 6. Position integration
 //! 7. Velocity integration
 //! 8. Mass accumulation - nutrient growth based on nutrient_gain_rate
@@ -111,7 +112,7 @@ pub fn execute_gpu_physics_step(
         grid_resolution: GRID_RESOLUTION as i32,
         grid_cell_size: world_size / GRID_RESOLUTION as f32,
         max_cells_per_grid: 16,
-        enable_thrust_force: 0,
+        enable_thrust_force: 1, // Enable swim force for Flagellocyte cells
         cell_capacity: triple_buffers.capacity,
         _padding2: [0.0; 3],
         _padding: [0.0; 48],
@@ -179,6 +180,14 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
         compute_pass.set_bind_group(3, &cached_bind_groups.force_accum, &[]);
         // Dispatch based on cell count (per-cell processing)
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        
+        // Stage 5.5: Swim force (256 threads) - applies thrust for Flagellocyte cells
+        // Accumulates swim force to force buffers based on cell rotation and mode swim_force setting
+        compute_pass.set_pipeline(&pipelines.swim_force);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.swim_force_force_accum[current_index], &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
         // Stage 6: Position integration (256 threads)

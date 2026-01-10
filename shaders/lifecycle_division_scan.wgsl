@@ -86,6 +86,11 @@ var<storage, read> split_counts: array<u32>;
 @group(2) @binding(4)
 var<storage, read> max_splits: array<u32>;
 
+// Cell types: 0 = Test, 1 = Flagellocyte
+// Flagellocytes split based on mass only (ignore split_interval)
+@group(2) @binding(5)
+var<storage, read> cell_types: array<u32>;
+
 // Adhesion bind group (group 3) - for checking neighbor division status
 @group(3) @binding(0)
 var<storage, read> adhesion_connections: array<AdhesionConnection>;
@@ -150,13 +155,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let split_mass = split_masses[cell_idx];
     let current_splits = split_counts[cell_idx];
     let max_split = max_splits[cell_idx];
+    let cell_type = cell_types[cell_idx];
+    
+    // Check for "never split" condition (split_mass > 3.0)
+    if (split_mass > 3.0) {
+        division_flags[cell_idx] = 0u;
+        return;
+    }
     
     // Calculate age
     let age = params.current_time - birth_time;
     
     // Check division criteria
     let mass_ready = mass >= split_mass;
-    let time_ready = age >= split_interval;
+    // Flagellocytes (cell_type == 1) split based on mass only, ignore split_interval
+    // Test cells (cell_type == 0) require both mass and time conditions
+    let time_ready = (cell_type == 1u) || (age >= split_interval);
     let splits_remaining = current_splits < max_split || max_split == 0u;
     
     let wants_to_divide = mass_ready && time_ready && splits_remaining;
@@ -231,12 +245,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Check if neighbor is also ready to split (matching reference exactly)
         // Reference only checks: other.age < otherMode.splitInterval
         // If neighbor's age >= split_interval, they want to split
+        // For Flagellocytes (cell_type == 1), they're always "time ready" since they ignore split_interval
         let neighbor_birth_time = birth_times[neighbor_idx];
         let neighbor_split_interval = split_intervals[neighbor_idx];
         let neighbor_age = params.current_time - neighbor_birth_time;
+        let neighbor_cell_type = cell_types[neighbor_idx];
         
-        // Skip if neighbor is not ready to split (age < split_interval)
-        if (neighbor_age < neighbor_split_interval) {
+        // Skip if neighbor is not ready to split
+        // Flagellocytes are always time-ready (they split on mass only)
+        // Test cells need age >= split_interval
+        let neighbor_time_ready = (neighbor_cell_type == 1u) || (neighbor_age >= neighbor_split_interval);
+        if (!neighbor_time_ready) {
             continue;
         }
         

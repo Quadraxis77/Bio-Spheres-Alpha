@@ -74,8 +74,7 @@ const FIXED_POINT_SCALE: f32 = 1000.0;
 const MAX_DISTANCE_FIXED: u32 = 0xFFFFFFFFu;
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
-    let volume = mass / 1.0;
-    return pow(volume * 3.0 / (4.0 * PI), 1.0 / 3.0);
+    return clamp(mass, 0.5, 2.0);
 }
 
 // Ray-sphere intersection test

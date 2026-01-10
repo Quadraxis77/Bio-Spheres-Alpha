@@ -89,8 +89,7 @@ const PI: f32 = 3.14159265359;
 const FIXED_POINT_SCALE: f32 = 1000.0;
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
-    let volume = mass / 1.0;
-    return pow(volume * 3.0 / (4.0 * PI), 1.0 / 3.0);
+    return clamp(mass, 0.5, 2.0);
 }
 
 fn grid_coords_to_index(x: i32, y: i32, z: i32) -> u32 {

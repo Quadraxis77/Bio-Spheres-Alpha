@@ -250,6 +250,10 @@ pub struct GpuTripleBufferSystem {
     /// Genome IDs for each cell
     pub genome_ids: wgpu::Buffer,
     
+    /// Cell types for each cell (0 = Test, 1 = Flagellocyte, etc.)
+    /// Derived from mode settings during cell insertion
+    pub cell_types: wgpu::Buffer,
+    
     /// Mode indices for each cell
     pub mode_indices: wgpu::Buffer,
     
@@ -416,6 +420,7 @@ impl GpuTripleBufferSystem {
         let split_counts = Self::create_storage_buffer(device, u32_per_cell, "Split Counts");
         let max_splits = Self::create_storage_buffer(device, u32_per_cell, "Max Splits");
         let genome_ids = Self::create_storage_buffer(device, u32_per_cell, "Genome IDs");
+        let cell_types = Self::create_storage_buffer(device, u32_per_cell, "Cell Types");
         let mode_indices = Self::create_storage_buffer(device, u32_per_cell, "Mode Indices");
         let cell_ids = Self::create_storage_buffer(device, u32_per_cell, "Cell IDs");
         let next_cell_id = Self::create_storage_buffer(device, 4, "Next Cell ID");
@@ -477,6 +482,7 @@ impl GpuTripleBufferSystem {
             split_counts,
             max_splits,
             genome_ids,
+            cell_types,
             mode_indices,
             cell_ids,
             next_cell_id,
@@ -615,7 +621,9 @@ impl GpuTripleBufferSystem {
                     let mode = &genome.modes[mode_idx];
                     let ms = mode.max_splits;
                     max_splits_data.push(if ms < 0 { 0 } else { ms as u32 });
-                    nutrient_gain_rates_data.push(mode.nutrient_gain_rate);
+                    // Flagellocytes (cell_type == 1) don't generate their own nutrients
+                    let nutrient_rate = if mode.cell_type == 1 { 0.0 } else { mode.nutrient_gain_rate };
+                    nutrient_gain_rates_data.push(nutrient_rate);
                     max_cell_sizes_data.push(mode.max_cell_size);
                     stiffnesses_data.push(mode.membrane_stiffness);
                 } else {
@@ -639,6 +647,25 @@ impl GpuTripleBufferSystem {
         // Genome IDs
         let genome_ids: Vec<u32> = state.genome_ids[..state.cell_count].iter().map(|&x| x as u32).collect();
         queue.write_buffer(&self.genome_ids, 0, bytemuck::cast_slice(&genome_ids));
+        
+        // Cell types - derived from mode settings
+        let cell_types_data: Vec<u32> = (0..state.cell_count)
+            .map(|i| {
+                let genome_id = state.genome_ids[i];
+                let mode_idx = state.mode_indices[i];
+                if genome_id < genomes.len() {
+                    let genome = &genomes[genome_id];
+                    if mode_idx < genome.modes.len() {
+                        genome.modes[mode_idx].cell_type as u32
+                    } else {
+                        0 // Default to Test cell type
+                    }
+                } else {
+                    0 // Default to Test cell type
+                }
+            })
+            .collect();
+        queue.write_buffer(&self.cell_types, 0, bytemuck::cast_slice(&cell_types_data));
         
         // Mode indices - store ABSOLUTE indices (with genome offset applied)
         // This matches how the instance builder's mode_visuals buffer is organized:
@@ -692,6 +719,50 @@ impl GpuTripleBufferSystem {
         
         // Sync mode properties for division (nutrient_gain_rate, max_cell_size, etc.)
         self.sync_mode_properties(queue, genomes);
+    }
+    
+    /// Update cell_types buffer when genome mode cell_type settings change.
+    /// 
+    /// This should be called when a mode's cell_type is changed (e.g., from Test to Flagellocyte)
+    /// to ensure existing cells are rendered with the correct pipeline.
+    /// 
+    /// # Arguments
+    /// * `queue` - The wgpu queue for buffer writes
+    /// * `genomes` - The current genomes with updated mode settings
+    /// * `cell_count` - Current number of live cells
+    /// * `genome_ids` - Genome ID for each cell (from GPU buffer readback or canonical state)
+    /// * `mode_indices` - Mode index for each cell (from GPU buffer readback or canonical state)
+    pub fn update_cell_types_from_genomes(
+        &self,
+        queue: &wgpu::Queue,
+        genomes: &[crate::genome::Genome],
+        cell_count: usize,
+        genome_ids: &[usize],
+        mode_indices: &[usize],
+    ) {
+        if cell_count == 0 {
+            return;
+        }
+        
+        // Derive cell types from current genome mode settings
+        let cell_types_data: Vec<u32> = (0..cell_count)
+            .map(|i| {
+                let genome_id = genome_ids[i];
+                let mode_idx = mode_indices[i];
+                if genome_id < genomes.len() {
+                    let genome = &genomes[genome_id];
+                    if mode_idx < genome.modes.len() {
+                        genome.modes[mode_idx].cell_type as u32
+                    } else {
+                        0 // Default to Test cell type
+                    }
+                } else {
+                    0 // Default to Test cell type
+                }
+            })
+            .collect();
+        
+        queue.write_buffer(&self.cell_types, 0, bytemuck::cast_slice(&cell_types_data));
     }
     
     /// Sync genome mode data (child orientations) for division shader
@@ -778,7 +849,7 @@ impl GpuTripleBufferSystem {
     
     /// Sync mode properties for division shader (per-mode properties like nutrient_gain_rate, max_cell_size, etc.)
     pub fn sync_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
-        // Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, padding, padding, padding] = 32 bytes (8 floats)
+        // Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, swim_force, padding, padding] = 32 bytes (8 floats)
         let mut properties_data: Vec<[f32; 8]> = Vec::new();
         
         for genome in genomes {
@@ -789,7 +860,7 @@ impl GpuTripleBufferSystem {
                     mode.membrane_stiffness,
                     mode.split_interval,
                     mode.split_mass,
-                    0.0, // padding
+                    mode.swim_force,
                     0.0, // padding
                     0.0, // padding
                 ]);
@@ -832,6 +903,7 @@ impl GpuTripleBufferSystem {
         nutrient_gain_rate: f32,
         max_cell_size: f32,
         stiffness: f32,
+        cell_type: u32,
     ) {
         let offset = (cell_idx * 4) as u64; // f32/u32 = 4 bytes
         
@@ -848,6 +920,7 @@ impl GpuTripleBufferSystem {
         queue.write_buffer(&self.max_cell_sizes, offset, bytemuck::bytes_of(&max_cell_size));
         queue.write_buffer(&self.stiffnesses, offset, bytemuck::bytes_of(&stiffness));
         queue.write_buffer(&self.genome_ids, offset, bytemuck::bytes_of(&(genome_id as u32)));
+        queue.write_buffer(&self.cell_types, offset, bytemuck::bytes_of(&cell_type));
         queue.write_buffer(&self.mode_indices, offset, bytemuck::bytes_of(&(mode_index as u32)));
         queue.write_buffer(&self.cell_ids, offset, bytemuck::bytes_of(&(cell_id as u32)));
         queue.write_buffer(&self.death_flags, offset, bytemuck::bytes_of(&0u32)); // Alive
@@ -882,6 +955,18 @@ impl GpuTripleBufferSystem {
             genomes,
         );
         
+        // Get cell_type from genome mode settings
+        let cell_type = if request.genome_id < genomes.len() {
+            let genome = &genomes[request.genome_id];
+            if request.mode_index < genome.modes.len() {
+                genome.modes[request.mode_index].cell_type as u32
+            } else {
+                0 // Default to Test cell type
+            }
+        } else {
+            0 // Default to Test cell type
+        };
+        
         // Sync cell state for division system
         self.sync_single_cell_state(
             queue,
@@ -896,6 +981,7 @@ impl GpuTripleBufferSystem {
             0.2, // Default nutrient_gain_rate
             2.0, // Default max_cell_size
             request.stiffness,
+            cell_type,
         );
         
         // Update GPU cell count
@@ -1237,16 +1323,18 @@ impl GpuTripleBufferSystem {
                 // Get max_splits, nutrient_gain_rate, max_cell_size, and stiffness from genome mode
                 let genome_id = state.genome_ids[cell_idx];
                 let local_mode_idx = state.mode_indices[cell_idx];
-                let (max_splits, nutrient_gain_rate, max_cell_size, stiffness) = if genome_id < genomes.len() {
+                let (max_splits, nutrient_gain_rate, max_cell_size, stiffness, cell_type) = if genome_id < genomes.len() {
                     let genome = &genomes[genome_id];
                     if local_mode_idx < genome.modes.len() {
                         let mode = &genome.modes[local_mode_idx];
-                        (mode.max_splits, mode.nutrient_gain_rate, mode.max_cell_size, mode.membrane_stiffness)
+                        // Flagellocytes (cell_type == 1) don't generate their own nutrients
+                        let nutrient_rate = if mode.cell_type == 1 { 0.0 } else { mode.nutrient_gain_rate };
+                        (mode.max_splits, nutrient_rate, mode.max_cell_size, mode.membrane_stiffness, mode.cell_type as u32)
                     } else {
-                        (-1, 0.2, 2.0, 50.0) // Defaults if mode not found
+                        (-1, 0.2, 2.0, 50.0, 0) // Defaults if mode not found
                     }
                 } else {
-                    (-1, 0.2, 2.0, 50.0) // Defaults if genome not found
+                    (-1, 0.2, 2.0, 50.0, 0) // Defaults if genome not found
                 };
                 
                 // Calculate absolute mode index (with genome offset)
@@ -1266,6 +1354,7 @@ impl GpuTripleBufferSystem {
                     nutrient_gain_rate,
                     max_cell_size,
                     stiffness,
+                    cell_type,
                 );
             }
         }

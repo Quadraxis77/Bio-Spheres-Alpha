@@ -81,6 +81,7 @@
 //! All behavior implementations must be `Send + Sync` to support parallel physics
 //! processing. The trait bound enforces this at compile time.
 
+pub mod flagellocyte;
 pub mod test_cell;
 
 use crate::genome::ModeSettings;
@@ -92,13 +93,25 @@ use crate::genome::ModeSettings;
 ///
 /// # Layout
 ///
-/// The 8 floats are reserved for type-specific use:
-/// - `data[0]`: flagella_angle (Flagellocyte)
-/// - `data[1]`: flagella_speed (Flagellocyte)
-/// - `data[2]`: sensor_direction_x (Neurocyte)
-/// - `data[3]`: sensor_direction_y (Neurocyte)
-/// - `data[4]`: sensor_direction_z (Neurocyte)
-/// - `data[5-7]`: reserved for future use
+/// The 8 floats are reserved for type-specific use. Each cell type defines
+/// its own layout:
+///
+/// ## Flagellocyte Layout
+/// - `data[0]`: tail_length - Length of the flagellum (0.5 - 3.0)
+/// - `data[1]`: tail_thickness - Thickness at the base (0.01 - 0.3)
+/// - `data[2]`: tail_amplitude - Wave amplitude (0.0 - 0.5)
+/// - `data[3]`: tail_frequency - Wave frequency (0.5 - 10.0)
+/// - `data[4]`: tail_speed - Wave propagation speed (0.0 - 15.0)
+/// - `data[5]`: tail_taper - Taper from base to tip (0.0 - 1.0)
+/// - `data[6]`: tail_segments - Number of render segments (4 - 64)
+/// - `data[7]`: cell_type - Cell type for unified shader branching
+///
+/// ## Neurocyte Layout
+/// - `data[0-1]`: reserved
+/// - `data[2]`: sensor_direction_x
+/// - `data[3]`: sensor_direction_y
+/// - `data[4]`: sensor_direction_z
+/// - `data[5-7]`: reserved
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TypeSpecificInstanceData {
     /// The 8 reserved floats for type-specific rendering data.
@@ -116,16 +129,68 @@ impl TypeSpecificInstanceData {
 
     /// Create type-specific data for a Flagellocyte cell.
     ///
+    /// Packs all flagella visual parameters into the type_data array for
+    /// shader rendering. The shader uses these values to render the animated
+    /// helical tail.
+    ///
+    /// # Layout
+    ///
+    /// - `data[0]`: tail_length - Length of the flagellum (0.5 - 3.0)
+    /// - `data[1]`: tail_thickness - Thickness at the base (0.01 - 0.3)
+    /// - `data[2]`: tail_amplitude - Wave amplitude (0.0 - 0.5)
+    /// - `data[3]`: tail_frequency - Wave frequency (0.5 - 10.0)
+    /// - `data[4]`: tail_speed - Wave propagation speed (0.0 - 15.0)
+    /// - `data[5]`: tail_taper - Taper from base to tip (0.0 - 1.0)
+    /// - `data[6]`: tail_segments - Number of render segments (4 - 64)
+    /// - `data[7]`: cell_type - Cell type for unified shader branching
+    ///
     /// # Arguments
     ///
-    /// * `angle` - Current flagella rotation angle in radians
-    /// * `speed` - Current flagella rotation speed
-    #[allow(dead_code)]
-    pub fn flagellocyte(angle: f32, speed: f32) -> Self {
-        let mut data = [0.0f32; 8];
-        data[0] = angle;
-        data[1] = speed;
-        Self { data }
+    /// * `tail_length` - Length of the flagellum tail
+    /// * `tail_thickness` - Thickness of the flagellum at the base
+    /// * `tail_amplitude` - Amplitude of the helical wave motion
+    /// * `tail_frequency` - Frequency of the helical wave
+    /// * `tail_speed` - Speed of wave propagation along the tail
+    /// * `tail_taper` - Taper factor from base to tip (1.0 = full taper)
+    /// * `tail_segments` - Number of segments used to render the tail
+    /// * `cell_type` - Cell type index for unified shader branching
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let type_data = TypeSpecificInstanceData::flagellocyte(
+    ///     1.7,   // tail_length
+    ///     0.15,  // tail_thickness
+    ///     0.17,  // tail_amplitude
+    ///     1.0,   // tail_frequency
+    ///     9.5,   // tail_speed
+    ///     1.0,   // tail_taper
+    ///     10.0,  // tail_segments
+    ///     1.0,   // cell_type (Flagellocyte = 1)
+    /// );
+    /// ```
+    pub fn flagellocyte(
+        tail_length: f32,
+        tail_thickness: f32,
+        tail_amplitude: f32,
+        tail_frequency: f32,
+        tail_speed: f32,
+        tail_taper: f32,
+        tail_segments: f32,
+        cell_type: f32,
+    ) -> Self {
+        Self {
+            data: [
+                tail_length,      // data[0]
+                tail_thickness,   // data[1]
+                tail_amplitude,   // data[2]
+                tail_frequency,   // data[3]
+                tail_speed,       // data[4]
+                tail_taper,       // data[5]
+                tail_segments,    // data[6]
+                cell_type,        // data[7] - cell_type for unified shader
+            ],
+        }
     }
 
     /// Create type-specific data for a Neurocyte cell.
@@ -252,8 +317,6 @@ pub trait CellBehavior: Send + Sync {
 pub fn create_behavior(cell_type: crate::cell::CellType) -> Box<dyn CellBehavior> {
     match cell_type {
         crate::cell::CellType::Test => Box::new(test_cell::TestCellBehavior),
-        // Future cell types will be added here:
-        // crate::cell::CellType::Flagellocyte => Box::new(flagellocyte::FlagellocyteBehavior),
-        // crate::cell::CellType::Lipocyte => Box::new(lipocyte::LipocyteBehavior),
+        crate::cell::CellType::Flagellocyte => Box::new(flagellocyte::FlagellocyteBehavior),
     }
 }

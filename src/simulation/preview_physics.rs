@@ -239,11 +239,49 @@ pub fn integrate_angular_velocities(
     }
 }
 
+/// Apply swim forces for Flagellocyte cells (cell_type == 1)
+/// 
+/// Flagellocytes apply a forward thrust force in their orientation direction.
+/// The thrust magnitude is determined by the swim_force parameter in ModeSettings.
+/// 
+/// # Arguments
+/// * `state` - The canonical simulation state containing cell data
+/// * `genome` - The genome containing mode settings with swim_force values
+/// 
+/// # Physics
+/// - Forward direction is derived from the cell's rotation quaternion (local +Z axis)
+/// - Thrust force = forward * swim_force * 120.0 (scaled for physics simulation)
+/// - Only applies to cells with cell_type == 1 (Flagellocyte) and swim_force > 0.0
+pub fn apply_swim_forces(state: &mut CanonicalState, genome: &Genome) {
+    for i in 0..state.cell_count {
+        let mode_index = state.mode_indices[i];
+        if let Some(mode) = genome.modes.get(mode_index) {
+            // Only apply swim force to Flagellocyte cells (cell_type == 1)
+            if mode.cell_type == 1 && mode.swim_force > 0.0 {
+                // Get forward direction from cell's rotation (local +Z axis)
+                let forward = state.rotations[i] * Vec3::Z;
+                
+                // Apply thrust force in forward direction
+                // Scale by 120.0 to make the force meaningful in the physics simulation
+                let thrust_force = forward * mode.swim_force * 120.0;
+                state.forces[i] += thrust_force;
+            }
+        }
+    }
+}
+
 /// Update nutrient growth
+/// Note: Flagellocytes (cell_type == 1) don't generate their own nutrients -
+/// they must receive nutrients through adhesion connections from other cells.
 pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f32) {
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
         if let Some(mode) = genome.modes.get(mode_index) {
+            // Flagellocytes don't generate their own nutrients
+            if mode.cell_type == 1 {
+                continue;
+            }
+            
             let current_mass = state.masses[i];
             let max_mass = mode.max_cell_size;
             
@@ -263,6 +301,172 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
             }
         }
     }
+}
+
+/// Transport nutrients between adhesion-connected cells based on priority ratios.
+/// 
+/// Nutrients flow to establish equilibrium: mass_a / mass_b = priority_a / priority_b
+/// Flow is driven by "pressure" differences: pressure = mass / priority
+/// Cells with low mass get temporary priority boost when below danger threshold.
+/// 
+/// This allows Flagellocytes (which consume nutrients for swimming) to receive
+/// nutrients from connected cells with higher nutrient_gain_rate.
+pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome: &Genome, dt: f32) {
+    const DANGER_THRESHOLD: f32 = 0.6;
+    const PRIORITY_BOOST: f32 = 10.0;
+    const TRANSPORT_RATE: f32 = 0.5;
+    
+    // Collect mass deltas to apply atomically after processing all adhesions
+    let mut mass_deltas = vec![0.0f32; state.cell_count];
+    
+    // Process each active adhesion connection (SoA layout)
+    let connections = &state.adhesion_connections;
+    for i in 0..connections.is_active.len() {
+        if connections.is_active[i] == 0 {
+            continue;
+        }
+        
+        let cell_a = connections.cell_a_index[i];
+        let cell_b = connections.cell_b_index[i];
+        
+        if cell_a >= state.cell_count || cell_b >= state.cell_count {
+            continue;
+        }
+        
+        // Get mode settings for both cells
+        let mode_a_idx = state.mode_indices[cell_a];
+        let mode_b_idx = state.mode_indices[cell_b];
+        
+        let mode_a = match genome.modes.get(mode_a_idx) {
+            Some(m) => m,
+            None => continue,
+        };
+        let mode_b = match genome.modes.get(mode_b_idx) {
+            Some(m) => m,
+            None => continue,
+        };
+        
+        let mass_a = state.masses[cell_a];
+        let mass_b = state.masses[cell_b];
+        
+        // Get base priorities
+        let base_priority_a = mode_a.nutrient_priority;
+        let base_priority_b = mode_b.nutrient_priority;
+        
+        // Apply temporary priority boost when cells are dangerously low on nutrients
+        let priority_a = if mode_a.prioritize_when_low && mass_a < DANGER_THRESHOLD {
+            base_priority_a * PRIORITY_BOOST
+        } else {
+            base_priority_a
+        };
+        let priority_b = if mode_b.prioritize_when_low && mass_b < DANGER_THRESHOLD {
+            base_priority_b * PRIORITY_BOOST
+        } else {
+            base_priority_b
+        };
+        
+        // Calculate equilibrium-based nutrient flow
+        // At equilibrium: mass_a / mass_b = priority_a / priority_b
+        // Flow is driven by "pressure" difference: pressure = mass / priority
+        let pressure_a = mass_a / priority_a;
+        let pressure_b = mass_b / priority_b;
+        let pressure_diff = pressure_a - pressure_b;
+        
+        // Calculate mass transfer (positive = A -> B, negative = B -> A)
+        let mass_transfer = pressure_diff * TRANSPORT_RATE * dt;
+        
+        // Apply transfer with minimum thresholds
+        let min_mass_a = if mode_a.prioritize_when_low { 0.1 } else { 0.0 };
+        let min_mass_b = if mode_b.prioritize_when_low { 0.1 } else { 0.0 };
+        
+        let actual_transfer = if mass_transfer > 0.0 {
+            // A -> B: limit by A's available mass
+            mass_transfer.min(mass_a - min_mass_a)
+        } else {
+            // B -> A: limit by B's available mass
+            mass_transfer.max(-(mass_b - min_mass_b))
+        };
+        
+        // Accumulate deltas
+        mass_deltas[cell_a] -= actual_transfer;
+        mass_deltas[cell_b] += actual_transfer;
+    }
+    
+    // Apply accumulated mass deltas
+    for i in 0..state.cell_count {
+        if mass_deltas[i] != 0.0 {
+            let new_mass = (state.masses[i] + mass_deltas[i]).max(0.0);
+            if new_mass != state.masses[i] {
+                state.masses[i] = new_mass;
+                let new_radius = new_mass.clamp(0.5, 2.0);
+                if new_radius != state.radii[i] {
+                    state.radii[i] = new_radius;
+                    state.masses_changed = true;
+                }
+            }
+        }
+    }
+}
+
+/// Consume nutrients for Flagellocyte cells based on swim force.
+/// 
+/// Flagellocytes (cell_type == 1) consume mass proportional to their swim force.
+/// The consumption rate is fixed (not user-adjustable) - faster swimming costs more nutrients.
+/// 
+/// # Arguments
+/// * `state` - The canonical simulation state containing cell data
+/// * `genome` - The genome containing mode settings with swim_force values
+/// * `dt` - Delta time for this physics step
+/// 
+/// # Returns
+/// A vector of cell indices that died (mass < MIN_CELL_MASS threshold).
+/// These cells should be removed from the simulation.
+/// 
+/// # Physics
+/// - Consumption rate: swim_force * 0.2 * dt (0.2 mass per second at full swim force)
+/// - Death threshold: mass < 0.5
+/// - Radius is updated based on remaining mass (clamped to 0.5-2.0 range)
+/// - Only applies to cells with cell_type == 1 (Flagellocyte) and swim_force > 0.0
+pub fn consume_swim_nutrients(
+    state: &mut CanonicalState,
+    genome: &Genome,
+    dt: f32,
+) -> Vec<usize> {
+    const MIN_CELL_MASS: f32 = 0.5;
+    // Fixed consumption rate - NOT adjustable by user
+    // This creates a direct tradeoff: faster swimming = higher nutrient cost
+    const CONSUMPTION_RATE: f32 = 0.2; // mass per second at full swim force
+    
+    let mut cells_to_remove = Vec::new();
+    
+    for i in 0..state.cell_count {
+        let mode_index = state.mode_indices[i];
+        if let Some(mode) = genome.modes.get(mode_index) {
+            // Only apply nutrient consumption to Flagellocyte cells (cell_type == 1)
+            if mode.cell_type == 1 && mode.swim_force > 0.0 {
+                // Consume mass proportional to swim force (automatic, not adjustable)
+                let mass_loss = mode.swim_force * CONSUMPTION_RATE * dt;
+                state.masses[i] -= mass_loss;
+                
+                // Check if cell has died (below minimum mass threshold)
+                if state.masses[i] < MIN_CELL_MASS {
+                    cells_to_remove.push(i);
+                    continue;
+                }
+                
+                // Update radius based on new mass
+                let max_size = mode.max_cell_size;
+                let target_radius = state.masses[i].min(max_size);
+                let new_radius = target_radius.clamp(0.5, 2.0);
+                if new_radius != state.radii[i] {
+                    state.radii[i] = new_radius;
+                    state.masses_changed = true;
+                }
+            }
+        }
+    }
+    
+    cells_to_remove
 }
 
 /// Physics step with genome support
@@ -309,6 +513,9 @@ pub fn physics_step_with_genome(
         );
     }
 
+    // Skip swim forces in preview mode - flagellocyte thrust is GPU-only
+    // apply_swim_forces(state, genome);
+
     apply_boundary_forces(state, config);
 
     verlet_integrate_velocities(
@@ -331,6 +538,19 @@ pub fn physics_step_with_genome(
     );
 
     update_nutrient_growth(state, genome, dt);
+    
+    // Transport nutrients between adhesion-connected cells
+    // This allows Flagellocytes to receive nutrients from connected cells
+    transport_nutrients_through_adhesions(state, genome, dt);
+    
+    // Consume nutrients for Flagellocyte cells swimming
+    // This must happen after nutrient growth so cells can potentially recover
+    let dead_cells = consume_swim_nutrients(state, genome, dt);
+    
+    // Remove dead cells (those that ran out of nutrients while swimming)
+    if !dead_cells.is_empty() {
+        state.remove_cells(&dead_cells);
+    }
 
     let max_cells = state.capacity;
     let rng_seed = 12345;

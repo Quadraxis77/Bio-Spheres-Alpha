@@ -1353,8 +1353,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
             }
             let mode = &mut context.genome.modes[selected_idx];
 
-            // Special Functions Group (Purple) - at the top for test cells
-            if mode.cell_type == 0 { // Only show for test cells (cell_type == 0)
+            // Special Functions Group (Purple) - cell type specific settings at the top
+            if mode.cell_type == 0 { // Test cells (cell_type == 0)
                 group_container(ui, "Special Functions", egui::Color32::from_rgb(180, 140, 200), |ui| {
                     ui.label("Nutrient Generation Rate:");
                     ui.horizontal(|ui| {
@@ -1363,6 +1363,27 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.style_mut().spacing.slider_width = slider_width;
                         ui.add(egui::Slider::new(&mut mode.nutrient_gain_rate, 0.0..=2.0).show_value(false));
                         ui.add(egui::DragValue::new(&mut mode.nutrient_gain_rate).speed(0.01).range(0.0..=2.0).suffix("/s"));
+                    });
+                    
+                    ui.add_space(4.0);
+                    ui.label("Split Interval:");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.split_interval, 1.0..=60.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.split_interval).speed(0.1).range(1.0..=60.0).suffix("s"));
+                    });
+                });
+            } else if mode.cell_type == 1 { // Flagellocyte (cell_type == 1)
+                group_container(ui, "Flagellocyte Functions", egui::Color32::from_rgb(140, 180, 220), |ui| {
+                    ui.label("Swim Force:");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.swim_force, 0.0..=1.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.swim_force).speed(0.01).range(0.0..=1.0));
                     });
                 });
             }
@@ -1374,17 +1395,18 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                     ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.split_mass, 1.0..=3.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.split_mass).speed(0.01).range(1.0..=3.0));
-                });
-
-                ui.label("Split Interval:");
-                ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.split_interval, 1.0..=60.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.split_interval).speed(0.1).range(1.0..=60.0).suffix("s"));
+                    // Range 1.0-3.1, values > 3.0 = never split
+                    ui.add(egui::Slider::new(&mut mode.split_mass, 1.0..=3.1)
+                        .show_value(false)
+                        .custom_formatter(|v, _| {
+                            if v > 3.0 { "Never".to_string() } else { format!("{:.2}", v) }
+                        }));
+                    // Show "Never" or the drag value
+                    if mode.split_mass > 3.0 {
+                        ui.label("Never");
+                    } else {
+                        ui.add(egui::DragValue::new(&mut mode.split_mass).speed(0.01).range(1.0..=3.0));
+                    }
                 });
 
                 ui.label("Membrane Stiffness:");
@@ -1974,6 +1996,75 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                     visuals.fresnel_strength = 0.5;
                 }
             });
+
+            // Flagella section (only for Flagellocyte cell type)
+            if cell_types.get(selected_idx) == Some(&CellType::Flagellocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Flagella").strong());
+                ui.add_space(4.0);
+
+                // Tail Length (0.5 - 3.0, default 1.7)
+                ui.label("Tail Length:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.tail_length, 0.5..=3.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.tail_length).speed(0.01).range(0.5..=3.0));
+                });
+
+                // Tail Thickness (0.01 - 0.3, default 0.15)
+                ui.label("Tail Thickness:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.tail_thickness, 0.01..=0.3).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.tail_thickness).speed(0.005).range(0.01..=0.3));
+                });
+
+                // Wave Amplitude (0.0 - 0.5, default 0.17)
+                ui.label("Wave Amplitude:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.tail_amplitude, 0.0..=0.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.tail_amplitude).speed(0.01).range(0.0..=0.5));
+                });
+
+                // Wave Frequency (0.5 - 10.0, default 1.0)
+                ui.label("Wave Frequency:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.tail_frequency, 0.5..=10.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.tail_frequency).speed(0.1).range(0.5..=10.0));
+                });
+
+                // Taper (0.0 - 1.0, default 1.0)
+                ui.label("Taper:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.tail_taper, 0.0..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.tail_taper).speed(0.01).range(0.0..=1.0));
+                });
+
+                // Segments (4 - 64, default 10)
+                ui.label("Segments:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.tail_segments, 4.0..=64.0).show_value(false).integer());
+                    ui.add(egui::DragValue::new(&mut visuals.tail_segments).speed(1.0).range(4.0..=64.0));
+                });
+            }
         });
 }
 

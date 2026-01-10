@@ -22,21 +22,21 @@ struct CellInstance {
     // Total: 96 bytes
     //
     // Type data interpretation by cell type:
-    // Test cell:
+    // Test cell (cell_type = 0):
     //   type_data_0.x = membrane_noise_scale
     //   type_data_0.y = membrane_noise_strength
     //   type_data_0.z = membrane_noise_speed
     //   type_data_0.w = membrane_anim_offset
     //   type_data_1 = reserved (zeros)
-    // Flagellocyte (future):
-    //   type_data_0.x = flagella_angle
-    //   type_data_0.y = flagella_speed
-    //   type_data_0.zw = reserved
-    //   type_data_1 = reserved
-    // Neurocyte (future):
-    //   type_data_0.xyz = sensor_direction
-    //   type_data_0.w = reserved
-    //   type_data_1 = reserved
+    // Flagellocyte (cell_type = 1):
+    //   type_data_0.x = tail_length (0.5 - 3.0)
+    //   type_data_0.y = tail_thickness (0.01 - 0.3)
+    //   type_data_0.z = tail_amplitude (0.0 - 0.5)
+    //   type_data_0.w = tail_frequency (0.5 - 10.0)
+    //   type_data_1.x = tail_speed (0.0 - 15.0, calculated from swim_force)
+    //   type_data_1.y = tail_taper (0.0 - 1.0)
+    //   type_data_1.z = tail_segments (4 - 64)
+    //   type_data_1.w = reserved
 }
 
 // Mode visual data (from genome)
@@ -55,7 +55,28 @@ struct CellTypeVisuals {
     membrane_noise_scale: f32,
     membrane_noise_strength: f32,
     membrane_noise_speed: f32,
-    _pad: vec2<f32>,
+    // Flagella parameters (used by Flagellocyte cell type)
+    tail_length: f32,
+    tail_thickness: f32,
+    tail_amplitude: f32,
+    tail_frequency: f32,
+    // tail_speed removed - now calculated from swim_force in mode_properties
+    tail_taper: f32,
+    tail_segments: f32,
+    _pad: vec4<f32>, // Padding to 64 bytes (16 floats)
+}
+
+// Mode properties (per-mode settings from genome)
+// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, swim_force, padding, padding]
+struct ModeProperties {
+    nutrient_gain_rate: f32,
+    max_cell_size: f32,
+    membrane_stiffness: f32,
+    split_interval: f32,
+    split_mass: f32,
+    swim_force: f32,
+    _pad0: f32,
+    _pad1: f32,
 }
 
 // Frustum plane (normal.xyz, distance)
@@ -102,11 +123,9 @@ struct BuildParams {
 // Constants for radius calculation
 const PI: f32 = 3.14159265359;
 
-// Calculate radius from mass (assuming unit density spheres)
-// radius = (mass * 3 / (4 * PI))^(1/3)
+// Calculate radius from mass (matching preview scene: radius = mass clamped to 0.5-2.0)
 fn calculate_radius_from_mass(mass: f32) -> f32 {
-    let volume = mass / 1.0;  // density = 1.0
-    return pow(volume * 3.0 / (4.0 * PI), 1.0 / 3.0);
+    return clamp(mass, 0.5, 2.0);
 }
 
 // Lookup tables
@@ -118,7 +137,9 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
 
 // Atomic counter for visible instance count
 @group(0) @binding(10) var<storage, read_write> counters: array<atomic<u32>>;
-// counters[0] = visible count, counters[1] = total processed, counters[2] = frustum culled, counters[3] = occluded
+// counters[0] = visible count (total), counters[1] = total processed, counters[2] = frustum culled, counters[3] = occluded
+// counters[4] = Test cell count, counters[5] = Flagellocyte count
+// Per-type counts are used for multi-pipeline rendering
 
 // Hi-Z depth texture for occlusion culling (optional, binding 11)
 // Note: R32Float is not filterable, so we use textureLoad instead of textureSample
@@ -126,6 +147,18 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
 
 // GPU-side cell count buffer: [0] = total cells, [1] = live cells
 @group(0) @binding(12) var<storage, read> cell_count_buffer: array<u32>;
+
+// Cell types per cell (0 = Test, 1 = Flagellocyte, etc.)
+// NOTE: This buffer may be stale if mode cell_type settings changed after cell creation.
+// The shader now derives cell_type from mode_cell_types[mode_index] for correctness.
+@group(0) @binding(13) var<storage, read> cell_types: array<u32>;
+
+// Mode properties (per-mode settings including swim_force for tail animation)
+@group(0) @binding(14) var<storage, read> mode_properties: array<ModeProperties>;
+
+// Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
+// This is always up-to-date with current genome settings, unlike cell_types buffer
+@group(0) @binding(15) var<storage, read> mode_cell_types: array<u32>;
 
 // ============================================================================
 // Frustum Culling
@@ -306,7 +339,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let radius = calculate_radius_from_mass(mass);
     let mode_index = mode_indices[idx];
     let cell_id = cell_ids[idx];
-    let cell_type = genome_ids[idx];
+    
+    // Read cell_type from buffer - this is set during cell insertion and updated by triple buffer sync
+    let cell_type = cell_types[idx];
     
     // Increment total processed counter
     atomicAdd(&counters[1], 1u);
@@ -369,11 +404,56 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     instance.color = vec4<f32>(color, 1.0);  // Always fully opaque
     instance.visual_params = vec4<f32>(specular_strength, specular_power, fresnel_strength, emissive);
     instance.rotation = rotation;
-    // Type-specific data: membrane params in type_data_0 for Test cells
-    instance.type_data_0 = vec4<f32>(noise_scale, noise_strength, noise_speed, anim_offset);
-    instance.type_data_1 = vec4<f32>(0.0, 0.0, 0.0, 0.0);  // Reserved for future use
     
-    // Atomically get output index and write instance
-    let output_idx = atomicAdd(&counters[0], 1u);
-    instances[output_idx] = instance;
+    // Type-specific data based on cell type
+    // Cell type 0 = Test: membrane noise params
+    // Cell type 1 = Flagellocyte: flagella params
+    // type_data_1.w always stores cell_type for the unified shader
+    if (cell_type == 1u && cell_type < params.cell_type_count) {
+        // Flagellocyte: populate type_data with flagella parameters from visuals
+        let visuals = cell_type_visuals[cell_type];
+        
+        // Calculate tail_speed from swim_force (animation speed proportional to thrust)
+        // swim_force is in range 0.0-1.0, scale to tail_speed 0.0-15.0
+        var tail_speed = 0.0;
+        if (mode_index < params.mode_count) {
+            let props = mode_properties[mode_index];
+            tail_speed = props.swim_force * 15.0;
+        }
+        
+        // type_data layout for Flagellocyte:
+        // [0]=tail_length, [1]=tail_thickness, [2]=tail_amplitude, [3]=tail_frequency
+        // [4]=tail_speed, [5]=tail_taper, [6]=tail_segments, [7]=cell_type
+        instance.type_data_0 = vec4<f32>(
+            visuals.tail_length,
+            visuals.tail_thickness,
+            visuals.tail_amplitude,
+            visuals.tail_frequency
+        );
+        instance.type_data_1 = vec4<f32>(
+            tail_speed,
+            visuals.tail_taper,
+            visuals.tail_segments,
+            f32(cell_type)  // Store cell_type for unified shader
+        );
+    } else {
+        // Test cell or unknown: membrane params (currently disabled)
+        // type_data_1.w = cell_type for unified shader
+        instance.type_data_0 = vec4<f32>(noise_scale, noise_strength, noise_speed, anim_offset);
+        instance.type_data_1 = vec4<f32>(0.0, 0.0, 0.0, f32(cell_type));
+    }
+    
+    // Write instance at same index as input cell (deterministic 1:1 mapping)
+    // Track counts by type for indirect draw buffers
+    if (cell_type == 0u) {
+        atomicAdd(&counters[4], 1u); // Test count
+    } else {
+        atomicAdd(&counters[5], 1u); // Flagellocyte count
+    }
+    
+    // Increment total visible count
+    atomicAdd(&counters[0], 1u);
+    
+    // Write to same index as input - deterministic 1:1 mapping
+    instances[idx] = instance;
 }

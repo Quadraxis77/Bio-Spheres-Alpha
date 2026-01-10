@@ -59,16 +59,26 @@ pub struct InstanceBuilder {
     mode_indices_buffer: wgpu::Buffer,
     cell_ids_buffer: wgpu::Buffer,
     genome_ids_buffer: wgpu::Buffer,
+    cell_types_buffer: wgpu::Buffer,
     
     // Lookup table buffers
     mode_visuals_buffer: wgpu::Buffer,
     cell_type_visuals_buffer: wgpu::Buffer,
+    mode_properties_buffer: wgpu::Buffer,
+    /// Cell type per mode (lookup table: mode_cell_types[mode_index] = cell_type)
+    /// Used by shader to derive cell_type from mode_index when genomes change
+    mode_cell_types_buffer: wgpu::Buffer,
     
     // Output buffer (instance data for rendering)
     pub instance_buffer: wgpu::Buffer,
     
-    // Indirect draw buffer for GPU-driven rendering
+    // Indirect draw buffer for GPU-driven rendering (total visible count)
     pub indirect_buffer: wgpu::Buffer,
+    
+    // Per-type indirect draw buffers for multi-pipeline rendering
+    // Test cells are in [0, capacity/2), Flagellocytes in [capacity/2, capacity)
+    indirect_buffer_test: wgpu::Buffer,
+    indirect_buffer_flagellocyte: wgpu::Buffer,
     
     // Counter buffer for atomic operations
     counters_buffer: wgpu::Buffer,
@@ -96,6 +106,7 @@ pub struct InstanceBuilder {
     mode_indices_dirty: bool,
     cell_ids_dirty: bool,
     genome_ids_dirty: bool,
+    cell_types_dirty: bool,
     mode_visuals_dirty: bool,
     cell_type_visuals_dirty: bool,
     
@@ -104,6 +115,7 @@ pub struct InstanceBuilder {
     temp_rotations: Vec<[f32; 4]>,
     temp_mode_indices: Vec<u32>,
     temp_genome_ids: Vec<u32>,
+    temp_cell_types: Vec<u32>,
     
     // Hash for change detection
     last_cell_count: usize,
@@ -181,7 +193,15 @@ struct GpuCellTypeVisuals {
     membrane_noise_scale: f32,
     membrane_noise_strength: f32,
     membrane_noise_speed: f32,
-    _pad: [f32; 2],
+    // Flagella parameters (used by Flagellocyte cell type)
+    tail_length: f32,
+    tail_thickness: f32,
+    tail_amplitude: f32,
+    tail_frequency: f32,
+    // tail_speed removed - now calculated from swim_force in shader
+    tail_taper: f32,
+    tail_segments: f32,
+    _pad: [f32; 4], // Padding to 64 bytes (16 floats)
 }
 
 /// Per-cell instance data for GPU rendering.
@@ -396,6 +416,39 @@ impl InstanceBuilder {
                     },
                     count: None,
                 },
+                // cell_types (binding 13) - cell type per cell (0 = Test, 1 = Flagellocyte, etc.)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 13,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // mode_properties (binding 14) - per-mode properties including swim_force
+                wgpu::BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // mode_cell_types (binding 15) - cell type per mode (lookup table)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         
@@ -430,18 +483,24 @@ impl InstanceBuilder {
         let mode_indices_buffer = Self::create_storage_buffer(device, "Mode Indices", cell_capacity * 4);
         let cell_ids_buffer = Self::create_storage_buffer(device, "Cell IDs", cell_capacity * 4);
         let genome_ids_buffer = Self::create_storage_buffer(device, "Genome IDs", cell_capacity * 4);
+        let cell_types_buffer = Self::create_storage_buffer(device, "Cell Types", cell_capacity * 4);
         
         let mode_visuals_buffer = Self::create_storage_buffer(device, "Mode Visuals", mode_capacity * std::mem::size_of::<ModeVisuals>());
         let cell_type_visuals_buffer = Self::create_storage_buffer(device, "Cell Type Visuals", cell_type_capacity * std::mem::size_of::<GpuCellTypeVisuals>());
+        // Mode properties: 8 floats per mode (32 bytes) - nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, swim_force, padding x2
+        let mode_properties_buffer = Self::create_storage_buffer(device, "Mode Properties", mode_capacity * 32);
+        // Mode cell types: 1 u32 per mode - lookup table for deriving cell_type from mode_index
+        let mode_cell_types_buffer = Self::create_storage_buffer(device, "Mode Cell Types", mode_capacity * 4);
         
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Builder Output"),
             size: (cell_capacity * std::mem::size_of::<CellInstance>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         
         // Indirect draw buffer: vertex_count, instance_count, first_vertex, first_instance
+        // Main buffer for total visible count (legacy, kept for compatibility)
         let indirect_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Builder Indirect"),
             size: 16, // 4 u32s
@@ -449,16 +508,33 @@ impl InstanceBuilder {
             mapped_at_creation: false,
         });
         
-        // 4 counters: visible, total, frustum_culled, occluded
+        // Per-type indirect draw buffers for multi-pipeline rendering
+        // Test cells (type 0): first_instance = 0
+        let indirect_buffer_test = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Instance Builder Indirect Test"),
+            size: 16, // 4 u32s
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        
+        // Flagellocyte cells (type 1): first_instance = capacity/2
+        let indirect_buffer_flagellocyte = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Instance Builder Indirect Flagellocyte"),
+            size: 16, // 4 u32s
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        
+        // 6 counters: visible, total, frustum_culled, occluded, test_count, flagellocyte_count
         let counters_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Builder Counters"),
-            size: 16,
+            size: 24, // 6 u32s
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let counters_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Counters Readback"),
-            size: 16,
+            size: 24, // 6 u32s
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -473,10 +549,15 @@ impl InstanceBuilder {
             mode_indices_buffer,
             cell_ids_buffer,
             genome_ids_buffer,
+            cell_types_buffer,
             mode_visuals_buffer,
             cell_type_visuals_buffer,
+            mode_properties_buffer,
+            mode_cell_types_buffer,
             instance_buffer,
             indirect_buffer,
+            indirect_buffer_test,
+            indirect_buffer_flagellocyte,
             counters_buffer,
             counters_readback_buffer,
             bind_group: None,
@@ -493,6 +574,7 @@ impl InstanceBuilder {
             mode_indices_dirty: true,
             cell_ids_dirty: true,
             genome_ids_dirty: true,
+            cell_types_dirty: true,
             mode_visuals_dirty: true,
             cell_type_visuals_dirty: true,
             last_cell_count: 0,
@@ -512,6 +594,7 @@ impl InstanceBuilder {
             temp_rotations: Vec::new(),
             temp_mode_indices: Vec::new(),
             temp_genome_ids: Vec::new(),
+            temp_cell_types: Vec::new(),
         }
     }
     
@@ -519,7 +602,7 @@ impl InstanceBuilder {
         device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("Instance Builder {}", label)),
             size: size.max(16) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         })
     }
@@ -598,6 +681,7 @@ impl InstanceBuilder {
         self.mode_indices_dirty = true;
         self.cell_ids_dirty = true;
         self.genome_ids_dirty = true;
+        self.cell_types_dirty = true;
         self.mode_visuals_dirty = true;
         self.cell_type_visuals_dirty = true;
     }
@@ -625,6 +709,11 @@ impl InstanceBuilder {
     /// Mark mode indices buffer as dirty (call when cell modes change).
     pub fn mark_mode_indices_dirty(&mut self) {
         self.mode_indices_dirty = true;
+    }
+    
+    /// Mark cell types buffer as dirty (call when mode cell_type settings change).
+    pub fn mark_cell_types_dirty(&mut self) {
+        self.cell_types_dirty = true;
     }
     
     /// Create or resize the Hi-Z texture for occlusion culling.
@@ -735,6 +824,18 @@ impl InstanceBuilder {
                     binding: 12,
                     resource: cell_count_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: self.cell_types_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: self.mode_properties_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: self.mode_cell_types_buffer.as_entire_binding(),
+                },
             ],
         }));
     }
@@ -764,6 +865,7 @@ impl InstanceBuilder {
             self.mode_indices_dirty = true;
             self.cell_ids_dirty = true;
             self.genome_ids_dirty = true;
+            self.cell_types_dirty = true;
             self.last_cell_count = cell_count;
         }
         
@@ -851,6 +953,30 @@ impl InstanceBuilder {
             queue.write_buffer(&self.genome_ids_buffer, 0, bytemuck::cast_slice(&self.temp_genome_ids));
             self.genome_ids_dirty = false;
         }
+        
+        if self.cell_types_dirty {
+            // Update cell types from mode settings
+            // Each cell's type is determined by its genome's mode settings
+            self.temp_cell_types.clear();
+            self.temp_cell_types.reserve(cell_count);
+            for i in 0..cell_count {
+                let genome_id = state.genome_ids[i];
+                let mode_idx = state.mode_indices[i];
+                let cell_type = if genome_id < genomes.len() {
+                    let genome = &genomes[genome_id];
+                    if mode_idx < genome.modes.len() {
+                        genome.modes[mode_idx].cell_type as u32
+                    } else {
+                        0 // Default to Test cell type
+                    }
+                } else {
+                    0 // Default to Test cell type
+                };
+                self.temp_cell_types.push(cell_type);
+            }
+            queue.write_buffer(&self.cell_types_buffer, 0, bytemuck::cast_slice(&self.temp_cell_types));
+            self.cell_types_dirty = false;
+        }
 
         // Update mode visuals from all genomes (combined into single buffer)
         // Force update if genome count changed (new genome added)
@@ -920,6 +1046,12 @@ impl InstanceBuilder {
                 "Mode Visuals",
                 self.mode_capacity * std::mem::size_of::<ModeVisuals>(),
             );
+            // Also resize mode_cell_types_buffer
+            self.mode_cell_types_buffer = Self::create_storage_buffer(
+                device,
+                "Mode Cell Types",
+                self.mode_capacity * 4,
+            );
         }
         
         // Always invalidate bind group when mode visuals change
@@ -941,6 +1073,19 @@ impl InstanceBuilder {
         
         if !mode_visuals.is_empty() {
             queue.write_buffer(&self.mode_visuals_buffer, 0, bytemuck::cast_slice(&mode_visuals));
+        }
+        
+        // Build mode_cell_types lookup table (cell_type per mode)
+        // This allows the shader to derive cell_type from mode_index
+        let mode_cell_types: Vec<u32> = genomes
+            .iter()
+            .flat_map(|genome| {
+                genome.modes.iter().map(|mode| mode.cell_type as u32)
+            })
+            .collect();
+        
+        if !mode_cell_types.is_empty() {
+            queue.write_buffer(&self.mode_cell_types_buffer, 0, bytemuck::cast_slice(&mode_cell_types));
         }
     }
     
@@ -966,7 +1111,15 @@ impl InstanceBuilder {
                 membrane_noise_scale: 0.0,        // Noise disabled
                 membrane_noise_strength: 0.0,     // Noise disabled
                 membrane_noise_speed: 0.0,        // Noise disabled
-                _pad: [0.0; 2],
+                // Flagella parameters (used by Flagellocyte cell type)
+                tail_length: v.tail_length,
+                tail_thickness: v.tail_thickness,
+                tail_amplitude: v.tail_amplitude,
+                tail_frequency: v.tail_frequency,
+                // tail_speed removed - calculated from swim_force in shader
+                tail_taper: v.tail_taper,
+                tail_segments: v.tail_segments,
+                _pad: [0.0; 4],
             })
             .collect();
         
@@ -989,11 +1142,12 @@ impl InstanceBuilder {
         self.mode_indices_buffer = Self::create_storage_buffer(device, "Mode Indices", new_capacity * 4);
         self.cell_ids_buffer = Self::create_storage_buffer(device, "Cell IDs", new_capacity * 4);
         self.genome_ids_buffer = Self::create_storage_buffer(device, "Genome IDs", new_capacity * 4);
+        self.cell_types_buffer = Self::create_storage_buffer(device, "Cell Types", new_capacity * 4);
         
         self.instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Builder Output"),
             size: (new_capacity * std::mem::size_of::<CellInstance>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         
@@ -1087,6 +1241,18 @@ impl InstanceBuilder {
                     binding: 12,
                     resource: cell_count_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: self.cell_types_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: self.mode_properties_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: self.mode_cell_types_buffer.as_entire_binding(),
+                },
             ],
         }));
     }
@@ -1147,13 +1313,24 @@ impl InstanceBuilder {
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
         
-        // Clear counters
-        let zero_counters: [u32; 4] = [0, 0, 0, 0];
+        // Clear all 6 counters: visible, total, frustum_culled, occluded, test_count, flagellocyte_count
+        let zero_counters: [u32; 6] = [0, 0, 0, 0, 0, 0];
         queue.write_buffer(&self.counters_buffer, 0, bytemuck::cast_slice(&zero_counters));
         
-        // Initialize indirect draw buffer: vertex_count=6 (quad), instance_count=0 (will be set by shader), first_vertex=0, first_instance=0
-        let indirect_data: [u32; 4] = [6, 0, 0, 0];
+        // Initialize indirect draw buffer (legacy, total visible count)
+        // vertex_count=4 (triangle strip quad), instance_count=0, first_vertex=0, first_instance=0
+        let indirect_data: [u32; 4] = [4, 0, 0, 0];
         queue.write_buffer(&self.indirect_buffer, 0, bytemuck::cast_slice(&indirect_data));
+        
+        // Initialize per-type indirect draw buffers
+        // All instances are written contiguously: Test cells at [0, test_count), Flagellocytes at [test_count, total)
+        // Test cells: first_instance = 0
+        let indirect_test: [u32; 4] = [4, 0, 0, 0];
+        queue.write_buffer(&self.indirect_buffer_test, 0, bytemuck::cast_slice(&indirect_test));
+        
+        // Flagellocyte cells: first_instance = 0 (will be updated to test_count after compute pass)
+        let indirect_flagellocyte: [u32; 4] = [4, 0, 0, 0];
+        queue.write_buffer(&self.indirect_buffer_flagellocyte, 0, bytemuck::cast_slice(&indirect_flagellocyte));
 
         // Ensure bind group exists with cell_count_buffer
         if self.bind_group.is_none() {
@@ -1177,11 +1354,29 @@ impl InstanceBuilder {
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
         
-        // Copy visible count (counters[0]) to indirect buffer's instance_count field (offset 4)
+        // Copy visible count (counters[0]) to legacy indirect buffer's instance_count field (offset 4)
         encoder.copy_buffer_to_buffer(
             &self.counters_buffer,
             0,  // counters[0] = visible count
             &self.indirect_buffer,
+            4,  // instance_count field offset
+            4,  // 4 bytes (u32)
+        );
+        
+        // Copy Test cell count (counters[4]) to Test indirect buffer's instance_count field
+        encoder.copy_buffer_to_buffer(
+            &self.counters_buffer,
+            16, // counters[4] = test count (4 * 4 bytes offset)
+            &self.indirect_buffer_test,
+            4,  // instance_count field offset
+            4,  // 4 bytes (u32)
+        );
+        
+        // Copy Flagellocyte count (counters[5]) to Flagellocyte indirect buffer's instance_count field
+        encoder.copy_buffer_to_buffer(
+            &self.counters_buffer,
+            20, // counters[5] = flagellocyte count (5 * 4 bytes offset)
+            &self.indirect_buffer_flagellocyte,
             4,  // instance_count field offset
             4,  // 4 bytes (u32)
         );
@@ -1193,7 +1388,7 @@ impl InstanceBuilder {
                 0,
                 &self.counters_readback_buffer,
                 0,
-                16,
+                24, // 6 u32s
             );
         }
         
@@ -1372,9 +1567,26 @@ impl InstanceBuilder {
         &self.instance_buffer
     }
     
+    /// Get the current cell capacity.
+    pub fn cell_capacity(&self) -> usize {
+        self.cell_capacity
+    }
+    
     /// Get the indirect draw buffer for GPU-driven rendering.
     pub fn get_indirect_buffer(&self) -> &wgpu::Buffer {
         &self.indirect_buffer
+    }
+    
+    /// Get the indirect draw buffer for Test cells (type 0).
+    /// Test cells are stored at instance indices [0, capacity/2).
+    pub fn get_indirect_buffer_test(&self) -> &wgpu::Buffer {
+        &self.indirect_buffer_test
+    }
+    
+    /// Get the indirect draw buffer for Flagellocyte cells (type 1).
+    /// Flagellocyte cells are stored at instance indices [capacity/2, capacity).
+    pub fn get_indirect_buffer_flagellocyte(&self) -> &wgpu::Buffer {
+        &self.indirect_buffer_flagellocyte
     }
     
     /// Get current cell capacity.
@@ -1407,6 +1619,16 @@ impl InstanceBuilder {
         &self.genome_ids_buffer
     }
     
+    /// Get the cell types buffer for external GPU-to-GPU copies.
+    pub fn cell_types_buffer(&self) -> &wgpu::Buffer {
+        &self.cell_types_buffer
+    }
+    
+    /// Get the mode properties buffer for external GPU-to-GPU copies.
+    pub fn mode_properties_buffer(&self) -> &wgpu::Buffer {
+        &self.mode_properties_buffer
+    }
+    
     /// Clear mode indices dirty flag (call after GPU-to-GPU copy).
     pub fn clear_mode_indices_dirty(&mut self) {
         self.mode_indices_dirty = false;
@@ -1422,9 +1644,19 @@ impl InstanceBuilder {
         self.genome_ids_dirty = false;
     }
     
+    /// Clear cell types dirty flag (call after GPU-to-GPU copy).
+    pub fn clear_cell_types_dirty(&mut self) {
+        self.cell_types_dirty = false;
+    }
+    
     /// Clear rotations dirty flag (call after GPU-to-GPU copy).
     pub fn clear_rotations_dirty(&mut self) {
         self.rotations_dirty = false;
+    }
+    
+    /// Get the counters buffer for debug readback.
+    pub fn counters_buffer(&self) -> &wgpu::Buffer {
+        &self.counters_buffer
     }
     
     /// DEBUG: Blocking readback of counters buffer [visible, total, frustum_culled, occluded].

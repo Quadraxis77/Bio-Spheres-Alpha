@@ -192,11 +192,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Age = current_time - birth_time
     extracted_data.age = params.current_time - extracted_data.birth_time;
     
-    // Calculate radius from mass (assuming spherical cells)
-    // Volume = (4/3) * π * r³, mass = density * volume
-    // Assuming density = 1, radius = (3 * mass / (4 * π))^(1/3)
-    // Simplified approximation: radius ≈ (mass / 4.19)^(1/3)
-    extracted_data.radius = pow(extracted_data.mass / 4.19, 1.0 / 3.0);
+    // Calculate radius from mass (matching preview scene: radius = mass clamped to 0.5-2.0)
+    extracted_data.radius = clamp(extracted_data.mass, 0.5, 2.0);
     
     // Set valid flag
     extracted_data.is_valid = 1u; // Valid

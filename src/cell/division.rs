@@ -79,10 +79,14 @@ pub fn division_step(
             let can_split_by_mass = state.masses[i] >= state.split_masses[i];
             
             // Check time threshold - cells must be old enough to split
-            let can_split_by_time = cell_age >= state.split_intervals[i];
+            // Flagellocytes (cell_type == 1) split based on mass only, ignore split_interval
+            let is_flagellocyte = mode.map(|m| m.cell_type == 1).unwrap_or(false);
+            let can_split_by_time = is_flagellocyte || cell_age >= state.split_intervals[i];
             
             // Cell can split if ALL conditions are met
-            if can_split_by_count && can_split_by_adhesions && can_split_by_mass && can_split_by_time && state.split_intervals[i] <= 59.0 {
+            // Note: split_intervals[i] <= 59.0 check only applies to non-Flagellocytes
+            let split_interval_valid = is_flagellocyte || state.split_intervals[i] <= 59.0;
+            if can_split_by_count && can_split_by_adhesions && can_split_by_mass && can_split_by_time && split_interval_valid {
                 state.divisions_to_process_buffer.push(i);
             }
         }
@@ -535,9 +539,14 @@ pub fn division_step_multi(
             
             let can_split_by_adhesions = true;
             let can_split_by_mass = state.masses[i] >= state.split_masses[i];
-            let can_split_by_time = cell_age >= state.split_intervals[i];
             
-            if can_split_by_count && can_split_by_adhesions && can_split_by_mass && can_split_by_time && state.split_intervals[i] <= 59.0 {
+            // Flagellocytes (cell_type == 1) split based on mass only, ignore split_interval
+            let is_flagellocyte = mode.map(|m| m.cell_type == 1).unwrap_or(false);
+            let can_split_by_time = is_flagellocyte || cell_age >= state.split_intervals[i];
+            
+            // Note: split_intervals[i] <= 59.0 check only applies to non-Flagellocytes
+            let split_interval_valid = is_flagellocyte || state.split_intervals[i] <= 59.0;
+            if can_split_by_count && can_split_by_adhesions && can_split_by_mass && can_split_by_time && split_interval_valid {
                 state.divisions_to_process_buffer.push(i);
             }
         }

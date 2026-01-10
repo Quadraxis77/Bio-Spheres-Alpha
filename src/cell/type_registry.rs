@@ -289,13 +289,10 @@ impl CellTypeRegistry {
     /// Load shader source for a cell type.
     ///
     /// This uses include_str! at compile time for built-in shaders.
-    fn load_shader_source(cell_type: CellType) -> &'static str {
-        match cell_type {
-            CellType::Test => include_str!("../../shaders/cells/test_cell.wgsl"),
-            // Future cell types will be added here:
-            // CellType::Flagellocyte => include_str!("../../shaders/cells/flagellocyte.wgsl"),
-            // CellType::Lipocyte => include_str!("../../shaders/cells/lipocyte.wgsl"),
-        }
+    fn load_shader_source(_cell_type: CellType) -> &'static str {
+        // Use unified shader for all cell types
+        // The shader branches on cell_type stored in type_data_1.w
+        include_str!("../../shaders/cells/unified_cell.wgsl")
     }
     
     /// Get the vertex buffer layout for cell instances.

@@ -203,8 +203,7 @@ fn rotate_vector_by_quat(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
 }
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
-    let volume = mass / 1.0;
-    return pow(volume * 3.0 / (4.0 * PI), 1.0 / 3.0);
+    return clamp(mass, 0.5, 2.0);
 }
 
 // Quaternion multiplication: result = a * b

@@ -84,6 +84,12 @@ pub struct CellInsertionParams {
     pub max_cell_size: f32,
     pub max_splits: u32,
     pub cell_id: u32,
+    
+    // Cell type (16 bytes with padding)
+    pub cell_type: u32,
+    pub _pad2: u32,
+    pub _pad3: u32,
+    pub _pad4: u32,
 }
 
 /// Spatial query parameters for GPU spatial query compute shader
@@ -207,6 +213,10 @@ pub struct CachedBindGroups {
     pub nutrient_system: wgpu::BindGroup,
     /// Nutrient transport bind group (same for all frames, includes mode properties)
     pub nutrient_transport: wgpu::BindGroup,
+    /// Swim force force accumulation bind groups for each buffer index [0, 1, 2]
+    pub swim_force_force_accum: [wgpu::BindGroup; 3],
+    /// Swim force cell data bind group (same for all frames)
+    pub swim_force_cell_data: wgpu::BindGroup,
 }
 
 /// GPU physics compute pipelines
@@ -252,6 +262,9 @@ pub struct GpuPhysicsPipelines {
     
     // Adhesion cleanup pipeline (runs after death scan)
     pub adhesion_cleanup: wgpu::ComputePipeline,
+    
+    // Swim force pipeline (applies thrust for Flagellocyte cells)
+    pub swim_force: wgpu::ComputePipeline,
     
     // Bind group layouts
     pub physics_layout: wgpu::BindGroupLayout,
@@ -307,6 +320,10 @@ pub struct GpuPhysicsPipelines {
     // Nutrient transport bind group layouts
     pub nutrient_system_layout: wgpu::BindGroupLayout,
     pub nutrient_transport_layout: wgpu::BindGroupLayout,
+    
+    // Swim force bind group layouts
+    pub swim_force_force_accum_layout: wgpu::BindGroupLayout,
+    pub swim_force_cell_data_layout: wgpu::BindGroupLayout,
 }
 
 impl GpuPhysicsPipelines {
@@ -337,6 +354,10 @@ impl GpuPhysicsPipelines {
         // Create nutrient transport bind group layouts
         let nutrient_system_layout = Self::create_nutrient_system_bind_group_layout(device);
         let nutrient_transport_layout = Self::create_nutrient_transport_bind_group_layout(device);
+        
+        // Create swim force bind group layouts
+        let swim_force_force_accum_layout = Self::create_swim_force_force_accum_bind_group_layout(device);
+        let swim_force_cell_data_layout = Self::create_swim_force_cell_data_bind_group_layout(device);
         
         // Create cell insertion bind group layouts
         let cell_insertion_physics_layout = Self::create_cell_insertion_physics_bind_group_layout(device);
@@ -544,6 +565,15 @@ impl GpuPhysicsPipelines {
             "Adhesion Cleanup",
         );
         
+        // Swim force pipeline (applies thrust for Flagellocyte cells)
+        let swim_force = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/swim_force.wgsl"),
+            "main",
+            &[&physics_layout, &swim_force_force_accum_layout, &swim_force_cell_data_layout],
+            "Swim Force",
+        );
+        
         Self {
             spatial_grid_clear,
             spatial_grid_assign,
@@ -566,6 +596,7 @@ impl GpuPhysicsPipelines {
             lifecycle_division_scan,
             lifecycle_division_execute,
             adhesion_cleanup,
+            swim_force,
             physics_layout,
             spatial_grid_layout,
             lifecycle_layout,
@@ -595,6 +626,8 @@ impl GpuPhysicsPipelines {
             velocity_update_angular_layout,
             nutrient_system_layout,
             nutrient_transport_layout,
+            swim_force_force_accum_layout,
+            swim_force_cell_data_layout,
         }
     }
     
@@ -729,6 +762,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: buffers.max_splits.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.cell_types.as_entire_binding(),
                 },
             ],
         })
@@ -978,6 +1015,14 @@ impl GpuPhysicsPipelines {
         let nutrient_system = self.create_nutrient_system_bind_group(device, buffers);
         let nutrient_transport = self.create_nutrient_transport_bind_group(device, buffers);
         
+        // Swim force bind groups
+        let swim_force_force_accum = [
+            self.create_swim_force_force_accum_bind_group(device, adhesion_buffers, buffers, 0),
+            self.create_swim_force_force_accum_bind_group(device, adhesion_buffers, buffers, 1),
+            self.create_swim_force_force_accum_bind_group(device, adhesion_buffers, buffers, 2),
+        ];
+        let swim_force_cell_data = self.create_swim_force_cell_data_bind_group(device, buffers);
+        
         CachedBindGroups {
             physics,
             spatial_grid,
@@ -997,6 +1042,8 @@ impl GpuPhysicsPipelines {
             velocity_update_angular,
             nutrient_system,
             nutrient_transport,
+            swim_force_force_accum,
+            swim_force_cell_data,
         }
     }
     
@@ -1310,7 +1357,7 @@ impl GpuPhysicsPipelines {
     /// read_only: true for division scan (only reads), false for division execute (writes)
     fn create_cell_state_bind_group_layout(device: &wgpu::Device, read_only: bool) -> wgpu::BindGroupLayout {
         if read_only {
-            // Read-only version for division scan (5 bindings)
+            // Read-only version for division scan (6 bindings)
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Cell State Read Bind Group Layout"),
                 entries: &[
@@ -1361,6 +1408,17 @@ impl GpuPhysicsPipelines {
                     // Max splits
                     wgpu::BindGroupLayoutEntry {
                         binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Cell types (0 = Test, 1 = Flagellocyte)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -2888,6 +2946,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 14: Cell types
+                wgpu::BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -3175,6 +3244,161 @@ impl GpuPhysicsPipelines {
             state_layout: self.cell_extraction_state_layout.clone(),
             output_layout: self.cell_extraction_output_layout.clone(),
         }
+    }
+    
+    /// Create swim force force accumulation bind group layout (Group 1 in swim_force shader)
+    /// Contains force accumulators (x, y, z) and rotations buffer
+    fn create_swim_force_force_accum_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Swim Force Force Accum Bind Group Layout"),
+            entries: &[
+                // Binding 0: Force accumulation X (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Force accumulation Y (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Force accumulation Z (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Rotations buffer (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create swim force cell data bind group layout (Group 2 in swim_force shader)
+    /// Contains mode_indices, cell_types, and mode_properties
+    fn create_swim_force_cell_data_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Swim Force Cell Data Bind Group Layout"),
+            entries: &[
+                // Binding 0: Mode indices (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Cell types (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Mode properties (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create swim force force accumulation bind group (Group 1 in swim_force shader)
+    fn create_swim_force_force_accum_bind_group(
+        &self,
+        device: &wgpu::Device,
+        adhesion_buffers: &super::AdhesionBuffers,
+        triple_buffers: &GpuTripleBufferSystem,
+        buffer_index: usize,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("Swim Force Force Accum Bind Group {}", buffer_index)),
+            layout: &self.swim_force_force_accum_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: adhesion_buffers.force_accum_x.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: adhesion_buffers.force_accum_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: adhesion_buffers.force_accum_z.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: triple_buffers.rotations[buffer_index].as_entire_binding(),
+                },
+            ],
+        })
+    }
+    
+    /// Create swim force cell data bind group (Group 2 in swim_force shader)
+    fn create_swim_force_cell_data_bind_group(
+        &self,
+        device: &wgpu::Device,
+        triple_buffers: &GpuTripleBufferSystem,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Swim Force Cell Data Bind Group"),
+            layout: &self.swim_force_cell_data_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: triple_buffers.mode_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: triple_buffers.cell_types.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: triple_buffers.mode_properties.as_entire_binding(),
+                },
+            ],
+        })
     }
 }
 

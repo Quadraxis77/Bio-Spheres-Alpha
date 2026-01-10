@@ -112,12 +112,6 @@ pub struct GpuScene {
     pub show_adhesion_lines: bool,
     /// Whether to show the world boundary sphere
     pub show_world_sphere: bool,
-    /// DEBUG: Track frames since last insertion for debugging
-    debug_frames_since_insertion: u32,
-    /// DEBUG: Last known cell count for detecting drops
-    debug_last_cell_count: usize,
-    /// DEBUG: Frame counter for periodic logging
-    debug_frame_counter: u32,
     /// Current cell count (tracked on GPU, no CPU canonical state)
     pub current_cell_count: u32,
     /// Next cell ID for deterministic cell creation
@@ -231,9 +225,6 @@ impl GpuScene {
             pending_cell_extraction: None,
             show_adhesion_lines: true,
             show_world_sphere: true,
-            debug_frames_since_insertion: u32::MAX,
-            debug_last_cell_count: 0,
-            debug_frame_counter: 0,
             current_cell_count: 0,
             next_cell_id: 0,
         }
@@ -370,22 +361,6 @@ impl GpuScene {
             return;
         }
         
-        self.debug_frame_counter += 1;
-        
-        // DEBUG: Track cell count changes
-        let gpu_count = self.current_cell_count;
-        if self.debug_last_cell_count > 0 && gpu_count > 0 && gpu_count < self.debug_last_cell_count as u32 / 2 {
-            // Cell count dropped significantly - potential bug
-        }
-        if gpu_count > 0 {
-            self.debug_last_cell_count = gpu_count as usize;
-        }
-        
-        // DEBUG: Log buffer state on frames 1-3 after an insertion to see what physics does
-        if self.debug_frames_since_insertion < 5 {
-            self.debug_frames_since_insertion += 1;
-        }
-        
         // Execute pure GPU physics pipeline (7 compute shader stages)
         // Cell count is read from GPU buffer by shaders
         // Uses cached bind groups (no per-frame allocation!)
@@ -475,12 +450,36 @@ impl GpuScene {
             u32_copy_size,
         );
         
+        // Copy cell types (u32) - needed for flagella type_data population
+        encoder.copy_buffer_to_buffer(
+            &self.gpu_triple_buffers.cell_types,
+            0,
+            self.instance_builder.cell_types_buffer(),
+            0,
+            u32_copy_size,
+        );
+        
+        // Copy mode properties (8 floats per mode = 32 bytes) - needed for swim_force -> tail_speed calculation
+        // Calculate total modes across all genomes
+        let total_modes: usize = self.genomes.iter().map(|g| g.modes.len()).sum();
+        let mode_properties_copy_size = (total_modes * 32) as u64;
+        if mode_properties_copy_size > 0 {
+            encoder.copy_buffer_to_buffer(
+                &self.gpu_triple_buffers.mode_properties,
+                0,
+                self.instance_builder.mode_properties_buffer(),
+                0,
+                mode_properties_copy_size,
+            );
+        }
+        
         // Clear dirty flags since we just copied from GPU
         self.instance_builder.clear_positions_dirty();
         self.instance_builder.clear_rotations_dirty();
         self.instance_builder.clear_mode_indices_dirty();
         self.instance_builder.clear_cell_ids_dirty();
         self.instance_builder.clear_genome_ids_dirty();
+        self.instance_builder.clear_cell_types_dirty();
     }
     
 
@@ -670,9 +669,6 @@ impl GpuScene {
             let cell_index = self.current_cell_count as usize;
             self.current_cell_count += 1;
             self.next_cell_id += 1;
-            
-            // Reset debug counter to track what happens after additions
-            self.debug_frames_since_insertion = 0;
             
             Some(cell_index)
         } else {
@@ -1679,9 +1675,6 @@ impl Scene for GpuScene {
         if let Some(count) = self.gpu_triple_buffers.poll_cell_count(device) {
             self.current_cell_count = count;
         }
-        
-        // Track cell count changes
-        self.debug_last_cell_count = self.current_cell_count as usize;
         
         // Mark that we now have Hi-Z data for next frame
         self.first_frame = false;

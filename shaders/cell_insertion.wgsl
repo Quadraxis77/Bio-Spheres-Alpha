@@ -58,6 +58,12 @@ struct CellInsertionParams {
     max_cell_size: f32,
     max_splits: u32,
     cell_id: u32,
+    
+    // Cell type (16 bytes with padding)
+    cell_type: u32,
+    _pad2: u32,
+    _pad3: u32,
+    _pad4: u32,
 }
 
 @group(0) @binding(0)
@@ -143,6 +149,9 @@ var<storage, read_write> death_flags: array<u32>;
 
 @group(2) @binding(13)
 var<storage, read_write> division_flags: array<u32>;
+
+@group(2) @binding(14)
+var<storage, read_write> cell_types: array<u32>;
 
 @compute @workgroup_size(1, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -233,6 +242,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Initialize lifecycle flags
     death_flags[slot] = 0u; // Alive
     division_flags[slot] = 0u; // Not dividing
+    
+    // Initialize cell type (0 = Test, 1 = Flagellocyte, etc.)
+    cell_types[slot] = insertion_params.cell_type;
     
     // Update live cell count (same as total for now)
     atomicStore(&cell_count_buffer[1], slot + 1u);

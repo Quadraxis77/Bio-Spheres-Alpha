@@ -103,6 +103,7 @@ use std::path::PathBuf;
 
 /// Visual settings for a cell type.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CellTypeVisuals {
     pub specular_strength: f32,
     pub specular_power: f32,
@@ -113,6 +114,20 @@ pub struct CellTypeVisuals {
     pub membrane_noise_strength: f32,
     /// Animation speed of the membrane noise (0 = static)
     pub membrane_noise_speed: f32,
+    
+    // Flagella parameters (used by Flagellocyte cell type)
+    /// Length of the flagellum tail (0.5 - 3.0, default 1.7)
+    pub tail_length: f32,
+    /// Thickness of the flagellum at the base (0.01 - 0.3, default 0.15)
+    pub tail_thickness: f32,
+    /// Amplitude of the helical wave motion (0.0 - 0.5, default 0.17)
+    pub tail_amplitude: f32,
+    /// Frequency of the helical wave (0.5 - 10.0, default 1.0)
+    pub tail_frequency: f32,
+    /// Taper factor from base to tip (0.0 - 1.0, default 1.0)
+    pub tail_taper: f32,
+    /// Number of segments used to render the tail (4 - 64, default 10)
+    pub tail_segments: f32,
 }
 
 impl Default for CellTypeVisuals {
@@ -124,6 +139,13 @@ impl Default for CellTypeVisuals {
             membrane_noise_scale: 0.0,        // Disabled by default
             membrane_noise_strength: 0.0,     // Disabled by default
             membrane_noise_speed: 0.0,        // Disabled by default
+            // Flagella defaults (from reference implementation)
+            tail_length: 1.7,
+            tail_thickness: 0.15,
+            tail_amplitude: 0.17,
+            tail_frequency: 1.0,
+            tail_taper: 1.0,
+            tail_segments: 10.0,
         }
     }
 }
@@ -251,16 +273,16 @@ pub enum CellVisualsError {
 #[repr(u32)]
 pub enum CellType {
     Test = 0,
-    // Future types: Flagellocyte = 1, Lipocyte = 2, etc.
+    Flagellocyte = 1,
 }
 
 impl CellType {
     /// Number of registered cell types. Update when adding new types.
-    pub const COUNT: usize = 1;
+    pub const COUNT: usize = 2;
 
     /// Get all available cell types as a slice.
     pub const fn all() -> &'static [CellType] {
-        &[CellType::Test]
+        &[CellType::Test, CellType::Flagellocyte]
     }
 
     /// Iterator over all cell types for registry initialization.
@@ -272,18 +294,20 @@ impl CellType {
     pub const fn name(&self) -> &'static str {
         match self {
             CellType::Test => "Test",
+            CellType::Flagellocyte => "Flagellocyte",
         }
     }
 
     /// Get all cell type names as a slice.
     pub const fn names() -> &'static [&'static str] {
-        &["Test"]
+        &["Test", "Flagellocyte"]
     }
 
     /// Convert from integer index to cell type.
     pub fn from_index(index: u32) -> Option<Self> {
         match index {
             0 => Some(CellType::Test),
+            1 => Some(CellType::Flagellocyte),
             _ => None,
         }
     }
@@ -294,10 +318,10 @@ impl CellType {
     }
 
     /// Get the path to the appearance shader for this cell type.
+    /// All cell types now use the unified shader.
     pub fn shader_path(&self) -> &'static str {
-        match self {
-            CellType::Test => "shaders/cells/test_cell.wgsl",
-        }
+        // All cell types use the unified shader
+        "shaders/cells/unified_cell.wgsl"
     }
 }
 

@@ -173,6 +173,10 @@ impl GpuCellInsertion {
                     binding: 13,
                     resource: buffers.division_flags.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: buffers.cell_types.as_entire_binding(),
+                },
             ],
         });
         
@@ -204,24 +208,27 @@ impl GpuCellInsertion {
         genomes: &[Genome],
     ) {
         // Get parameters from genome mode
-        let (split_interval, split_mass, stiffness, nutrient_gain_rate, max_cell_size, max_splits) = 
+        let (split_interval, split_mass, stiffness, nutrient_gain_rate, max_cell_size, max_splits, cell_type) = 
             if (genome_id as usize) < genomes.len() {
                 let genome = &genomes[genome_id as usize];
                 if (mode_index as usize) < genome.modes.len() {
                     let mode = &genome.modes[mode_index as usize];
+                    // Flagellocytes (cell_type == 1) don't generate their own nutrients
+                    let nutrient_rate = if mode.cell_type == 1 { 0.0 } else { mode.nutrient_gain_rate };
                     (
                         mode.split_interval,
                         mode.split_mass,
                         mode.membrane_stiffness,
-                        mode.nutrient_gain_rate,
+                        nutrient_rate,
                         mode.max_cell_size,
-                        if mode.max_splits < 0 { 0 } else { mode.max_splits as u32 }
+                        if mode.max_splits < 0 { 0 } else { mode.max_splits as u32 },
+                        mode.cell_type as u32
                     )
                 } else {
-                    (10.0, 2.0, 50.0, 0.2, 2.0, 0) // Default values
+                    (10.0, 2.0, 50.0, 0.2, 2.0, 0, 0) // Default values (Test cell type)
                 }
             } else {
-                (10.0, 2.0, 50.0, 0.2, 2.0, 0) // Default values
+                (10.0, 2.0, 50.0, 0.2, 2.0, 0, 0) // Default values (Test cell type)
             };
         
         // Calculate radius from mass
@@ -261,6 +268,10 @@ impl GpuCellInsertion {
             max_cell_size,
             max_splits,
             cell_id: 0, // Let shader generate new cell ID
+            cell_type,
+            _pad2: 0,
+            _pad3: 0,
+            _pad4: 0,
         };
         
         // Upload parameters to GPU
@@ -299,24 +310,27 @@ impl GpuCellInsertion {
         genomes: &[Genome],
     ) {
         // Get parameters from genome mode
-        let (split_interval, split_mass, stiffness, nutrient_gain_rate, max_cell_size, max_splits) = 
+        let (split_interval, split_mass, stiffness, nutrient_gain_rate, max_cell_size, max_splits, cell_type) = 
             if (genome_id as usize) < genomes.len() {
                 let genome = &genomes[genome_id as usize];
                 if (mode_index as usize) < genome.modes.len() {
                     let mode = &genome.modes[mode_index as usize];
+                    // Flagellocytes (cell_type == 1) don't generate their own nutrients
+                    let nutrient_rate = if mode.cell_type == 1 { 0.0 } else { mode.nutrient_gain_rate };
                     (
                         mode.split_interval,
                         mode.split_mass,
                         mode.membrane_stiffness,
-                        mode.nutrient_gain_rate,
+                        nutrient_rate,
                         mode.max_cell_size,
-                        if mode.max_splits < 0 { 0 } else { mode.max_splits as u32 }
+                        if mode.max_splits < 0 { 0 } else { mode.max_splits as u32 },
+                        mode.cell_type as u32
                     )
                 } else {
-                    (10.0, 2.0, 50.0, 0.2, 2.0, 0) // Default values
+                    (10.0, 2.0, 50.0, 0.2, 2.0, 0, 0) // Default values (Test cell type)
                 }
             } else {
-                (10.0, 2.0, 50.0, 0.2, 2.0, 0) // Default values
+                (10.0, 2.0, 50.0, 0.2, 2.0, 0, 0) // Default values (Test cell type)
             };
         
         // Calculate radius from mass
@@ -356,7 +370,22 @@ impl GpuCellInsertion {
             max_cell_size,
             max_splits,
             cell_id, // Use provided cell ID
+            cell_type,
+            _pad2: 0,
+            _pad3: 0,
+            _pad4: 0,
         };
+        
+        // DEBUG: Log cell insertion parameters
+        let type_name = match cell_type {
+            0 => "Test",
+            1 => "Flagellocyte",
+            _ => "Unknown",
+        };
+        println!("[DEBUG CELL_INSERTION] Inserting cell:");
+        println!("  genome_id: {}, local_mode_index: {}, absolute_mode_index: {}", genome_id, mode_index, absolute_mode_index);
+        println!("  cell_type: {} ({})", cell_type, type_name);
+        println!("  position: ({:.2}, {:.2}, {:.2})", position.x, position.y, position.z);
         
         // Upload parameters to GPU
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));

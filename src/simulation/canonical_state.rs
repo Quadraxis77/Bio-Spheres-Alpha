@@ -696,6 +696,107 @@ impl CanonicalState {
         Some(slot_index)
     }
     
+    /// Remove a cell at the given index using swap-remove semantics.
+    /// 
+    /// The last cell in the array is moved to fill the gap left by the removed cell.
+    /// This maintains contiguous data without gaps while being O(1).
+    /// 
+    /// # Arguments
+    /// * `cell_index` - Index of the cell to remove
+    /// 
+    /// # Returns
+    /// * `true` - Cell was successfully removed
+    /// * `false` - Index was out of bounds or no cells to remove
+    /// 
+    /// # Side Effects
+    /// - Decrements `cell_count`
+    /// - If not removing the last cell, the last cell's data is moved to `cell_index`
+    /// - Adhesion connections involving the removed cell are deactivated
+    /// - Adhesion indices are updated for the swapped cell
+    pub fn remove_cell(&mut self, cell_index: usize) -> bool {
+        if cell_index >= self.cell_count || self.cell_count == 0 {
+            return false;
+        }
+        
+        // Remove all adhesion connections for this cell
+        self.adhesion_manager.remove_all_connections_for_cell(
+            &mut self.adhesion_connections,
+            cell_index,
+        );
+        
+        let last_index = self.cell_count - 1;
+        
+        // If not removing the last cell, swap with the last cell
+        if cell_index != last_index {
+            // Copy all data from last cell to the removed cell's slot
+            self.cell_ids[cell_index] = self.cell_ids[last_index];
+            self.positions[cell_index] = self.positions[last_index];
+            self.prev_positions[cell_index] = self.prev_positions[last_index];
+            self.velocities[cell_index] = self.velocities[last_index];
+            self.masses[cell_index] = self.masses[last_index];
+            self.radii[cell_index] = self.radii[last_index];
+            self.genome_ids[cell_index] = self.genome_ids[last_index];
+            self.mode_indices[cell_index] = self.mode_indices[last_index];
+            self.rotations[cell_index] = self.rotations[last_index];
+            self.genome_orientations[cell_index] = self.genome_orientations[last_index];
+            self.angular_velocities[cell_index] = self.angular_velocities[last_index];
+            self.forces[cell_index] = self.forces[last_index];
+            self.torques[cell_index] = self.torques[last_index];
+            self.accelerations[cell_index] = self.accelerations[last_index];
+            self.prev_accelerations[cell_index] = self.prev_accelerations[last_index];
+            self.stiffnesses[cell_index] = self.stiffnesses[last_index];
+            self.birth_times[cell_index] = self.birth_times[last_index];
+            self.split_intervals[cell_index] = self.split_intervals[last_index];
+            self.split_masses[cell_index] = self.split_masses[last_index];
+            self.split_counts[cell_index] = self.split_counts[last_index];
+            
+            // Update adhesion system for the swapped cell
+            self.adhesion_manager.update_cell_index_after_swap(
+                &mut self.adhesion_connections,
+                last_index,
+                cell_index,
+            );
+        }
+        
+        // Decrement cell count
+        self.cell_count -= 1;
+        
+        true
+    }
+    
+    /// Remove multiple cells by their indices.
+    /// 
+    /// Cells are removed in reverse order of their indices to maintain correct
+    /// swap-remove semantics (removing from highest index first prevents
+    /// index invalidation issues).
+    /// 
+    /// # Arguments
+    /// * `indices` - Slice of cell indices to remove (will be sorted internally)
+    /// 
+    /// # Returns
+    /// Number of cells successfully removed
+    pub fn remove_cells(&mut self, indices: &[usize]) -> usize {
+        if indices.is_empty() {
+            return 0;
+        }
+        
+        // Sort indices in descending order to remove from end first
+        let mut sorted_indices: Vec<usize> = indices.to_vec();
+        sorted_indices.sort_unstable_by(|a, b| b.cmp(a));
+        
+        // Remove duplicates
+        sorted_indices.dedup();
+        
+        let mut removed_count = 0;
+        for &index in &sorted_indices {
+            if self.remove_cell(index) {
+                removed_count += 1;
+            }
+        }
+        
+        removed_count
+    }
+    
     /// Update cached adhesion settings from genome if needed (single genome version)
     /// 
     /// This is a convenience method for simulations using a single genome.

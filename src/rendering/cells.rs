@@ -28,7 +28,8 @@ use std::ops::Range;
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
     camera_pos: [f32; 3],
-    _padding: f32,
+    /// Current time for animated shaders (e.g., flagellocyte tail animation)
+    time: f32,
 }
 
 /// Lighting uniform data for shaders.
@@ -214,10 +215,10 @@ impl CellRenderer {
         device: &wgpu::Device,
         bind_group_layout: &wgpu::BindGroupLayout,
     ) -> wgpu::RenderPipeline {
-        // Load depth shader
+        // Load depth shader (uses unified cell shader)
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Cell Depth Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cells/test_cell.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cells/unified_cell.wgsl").into()),
         });
         
         // Create pipeline layout
@@ -347,6 +348,7 @@ impl CellRenderer {
         queue: &wgpu::Queue,
         camera_pos: Vec3,
         camera_rotation: Quat,
+        current_time: f32,
     ) {
         // Calculate view matrix from camera position and rotation
         let view = Mat4::from_rotation_translation(camera_rotation, camera_pos).inverse();
@@ -360,7 +362,7 @@ impl CellRenderer {
         let camera_uniform = CameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),
-            _padding: 0.0,
+            time: current_time,
         };
         
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
@@ -489,10 +491,32 @@ impl CellRenderer {
                 .unwrap_or_default();
             
             // Get type-specific instance data from behavior module
-            let type_data = if cell_type_index < self.behaviors.len() {
-                self.behaviors[cell_type_index].build_instance_data(&mode_settings)
+            // For Flagellocyte cells, populate from visuals instead of behavior
+            // IMPORTANT: data[7] must contain cell_type for the unified shader to branch correctly
+            let type_data = if cell_type_index == crate::cell::CellType::Flagellocyte as usize {
+                // Flagellocyte: populate type_data with flagella parameters from visuals
+                // tail_speed is derived from swim_force (animation speed proportional to thrust)
+                let tail_speed = mode_settings.swim_force * 15.0; // Scale swim_force (0-1) to speed (0-15)
+                crate::cell::behaviors::TypeSpecificInstanceData::flagellocyte(
+                    visuals.tail_length,
+                    visuals.tail_thickness,
+                    visuals.tail_amplitude,
+                    visuals.tail_frequency,
+                    tail_speed,
+                    visuals.tail_taper,
+                    visuals.tail_segments,
+                    cell_type_index as f32, // cell_type for unified shader
+                )
             } else {
-                crate::cell::behaviors::TypeSpecificInstanceData::empty()
+                // For all other cell types, use behavior module but ensure cell_type is in data[7]
+                let mut data = if cell_type_index < self.behaviors.len() {
+                    self.behaviors[cell_type_index].build_instance_data(&mode_settings)
+                } else {
+                    crate::cell::behaviors::TypeSpecificInstanceData::empty()
+                };
+                // Store cell_type in data[7] for unified shader branching
+                data.data[7] = cell_type_index as f32;
+                data
             };
             
             // Build instance
@@ -538,7 +562,7 @@ impl CellRenderer {
         cell_type_visuals: Option<&[CellTypeVisuals]>,
         camera_pos: Vec3,
         camera_rotation: Quat,
-        _current_time: f32,
+        current_time: f32,
     ) {
         if state.cell_count == 0 {
             return;
@@ -559,7 +583,7 @@ impl CellRenderer {
         queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
         
         // Update uniforms
-        self.update_camera(queue, camera_pos, camera_rotation);
+        self.update_camera(queue, camera_pos, camera_rotation, current_time);
         self.update_lighting(queue);
         
         // Get cell groups for batched rendering
@@ -627,6 +651,12 @@ impl CellRenderer {
     /// This method is used when instance data is built on the GPU via compute shaders.
     /// It skips the CPU-side instance building and uses the GPU-generated buffer directly.
     /// Uses indirect drawing to read the actual visible count from the GPU buffer.
+    /// 
+    /// Instances are sorted by cell type in the buffer:
+    /// - Test cells (type 0): indices [0, capacity/2)
+    /// - Flagellocyte cells (type 1): indices [capacity/2, capacity)
+    /// 
+    /// Each cell type is rendered with its appropriate pipeline for correct visual appearance.
     pub fn render_with_encoder(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -636,19 +666,18 @@ impl CellRenderer {
         _visible_count: u32, // Deprecated: use indirect buffer instead
         camera_pos: Vec3,
         camera_rotation: Quat,
-        _current_time: f32,
+        current_time: f32,
     ) {
         // Update uniforms
-        self.update_camera(queue, camera_pos, camera_rotation);
+        self.update_camera(queue, camera_pos, camera_rotation, current_time);
         self.update_lighting(queue);
         
         // Note: Depth pre-pass is skipped for ray-marched billboards because the
         // fragment shader discards pixels outside the sphere. See render_with_depth_prepass
         // for detailed explanation.
         
-        // Single pass: Color with depth write (all cells with Test shader for now)
-        // Note: GPU-built instances don't have type grouping yet,
-        // so we render all cells with the Test cell shader.
+        // Render each cell type with its appropriate pipeline
+        // Instances are sorted by type: Test cells at [0, capacity/2), Flagellocytes at [capacity/2, capacity)
         {
             let mut color_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Cell Color Pass"),
@@ -673,14 +702,14 @@ impl CellRenderer {
                 occlusion_query_set: None,
             });
             
-            // Use Test cell pipeline for all GPU-built instances
-            let pipeline = self.type_registry.get_pipeline(CellType::Test);
-            color_pass.set_pipeline(pipeline);
             color_pass.set_bind_group(0, &self.bind_group, &[]);
             color_pass.set_vertex_buffer(0, instance_builder.instance_buffer.slice(..));
-            // Use indirect drawing to read actual visible count from GPU buffer
-            // This ensures we only draw the cells that passed culling, and handles
-            // reset correctly (0 cells when cell_count_buffer is 0)
+            
+            // Render all cells with unified pipeline
+            // The unified shader handles all cell types based on type_data_1.w
+            // Instances are at indices [0, visible_count) in deterministic order
+            let unified_pipeline = self.type_registry.get_pipeline(CellType::Flagellocyte);
+            color_pass.set_pipeline(unified_pipeline);
             color_pass.draw_indirect(instance_builder.get_indirect_buffer(), 0);
         }
     }
