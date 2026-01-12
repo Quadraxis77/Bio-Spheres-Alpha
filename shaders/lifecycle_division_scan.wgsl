@@ -256,22 +256,33 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         
         // Check if neighbor is also ready to split (matching reference exactly)
-        // Reference only checks: other.age < otherMode.splitInterval
-        // If neighbor's age >= split_interval, they want to split
-        // For Flagellocytes (cell_type == 1), they're always "time ready" since they ignore split_interval
+        // Need to check ALL division criteria, not just time readiness
         let neighbor_birth_time = birth_times[neighbor_idx];
         let neighbor_split_interval = split_intervals[neighbor_idx];
+        let neighbor_split_mass = split_masses[neighbor_idx];
+        let neighbor_mass = positions_out[neighbor_idx].w;
         let neighbor_age = params.current_time - neighbor_birth_time;
+        let neighbor_current_splits = split_counts[neighbor_idx];
+        let neighbor_max_splits = max_splits[neighbor_idx];
         
         // Derive neighbor's cell_type from mode (always up-to-date)
         let neighbor_mode_idx = mode_indices[neighbor_idx];
         let neighbor_cell_type = mode_cell_types[neighbor_mode_idx];
         
-        // Skip if neighbor is not ready to split
-        // Flagellocytes are always time-ready (they split on mass only)
-        // Test cells need age >= split_interval
+        // Check if neighbor is set to "never split" (split_mass > 3.0)
+        if (neighbor_split_mass > 3.0) {
+            continue; // Neighbor will never split, no need to defer
+        }
+        
+        // Check all division criteria for neighbor
+        let neighbor_mass_ready = neighbor_mass >= neighbor_split_mass;
         let neighbor_time_ready = (neighbor_cell_type == 1u) || (neighbor_age >= neighbor_split_interval);
-        if (!neighbor_time_ready) {
+        let neighbor_splits_remaining = neighbor_current_splits < neighbor_max_splits || neighbor_max_splits == 0u;
+        
+        let neighbor_wants_to_divide = neighbor_mass_ready && neighbor_time_ready && neighbor_splits_remaining;
+        
+        // Skip if neighbor doesn't actually want to split
+        if (!neighbor_wants_to_divide) {
             continue;
         }
         

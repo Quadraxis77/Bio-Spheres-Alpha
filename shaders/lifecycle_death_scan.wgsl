@@ -81,6 +81,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         atomicStore(&lifecycle_counts[2], 0u);
     }
     
+    // CRITICAL: Synchronize all threads after clear
+    // This ensures all threads see the cleared values
+    workgroupBarrier();
+    
     // Read cell count from GPU buffer
     let cell_count = cell_count_buffer[0];
     if (cell_idx >= cell_count) {

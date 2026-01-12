@@ -389,6 +389,15 @@ impl GpuScene {
             self.current_time,
         );
         
+        // CRITICAL: Rebuild spatial grid after lifecycle pipeline
+        // This ensures dead cells are not included in collision detection
+        crate::simulation::gpu_physics::gpu_scene_integration::rebuild_spatial_grid_after_lifecycle(
+            encoder,
+            &self.gpu_physics_pipelines,
+            &self.gpu_triple_buffers,
+            &self.cached_bind_groups,
+        );
+        
         // Copy GPU physics output to instance builder's buffers
         self.copy_buffers_to_instance_builder(encoder);
     }

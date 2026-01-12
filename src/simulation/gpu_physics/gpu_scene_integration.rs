@@ -245,10 +245,10 @@ pub fn execute_lifecycle_pipeline(
     // Calculate workgroup counts - dispatch for capacity, shaders check cell_count
     let cell_workgroups_lifecycle = (triple_buffers.capacity + WORKGROUP_SIZE_LIFECYCLE - 1) / WORKGROUP_SIZE_LIFECYCLE;
     
-    // Execute lifecycle pipeline
+    // Execute lifecycle pipeline with explicit synchronization to prevent race conditions
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Lifecycle Pipeline"),
+            label: Some("Lifecycle Pipeline - Death Scan"),
             timestamp_writes: None,
         });
         
@@ -258,24 +258,49 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
         
-        // Stage 1.5: Adhesion cleanup - remove adhesions for dead cells (256 threads)
-        // This must run after death scan so we know which cells are dead
-        // and before prefix sum so freed adhesion slots can be reused
+        // CRITICAL: Drop compute pass to force GPU synchronization
+        drop(compute_pass);
+    }
+    
+    // Stage 1.5: Adhesion cleanup (after death scan completes)
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Lifecycle Pipeline - Adhesion Cleanup"),
+            timestamp_writes: None,
+        });
+        
         compute_pass.set_pipeline(&pipelines.adhesion_cleanup);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.lifecycle_adhesion, &[]);
-        // Dispatch based on adhesion capacity (500K for 200K cells)
         let adhesion_workgroups = (MAX_ADHESION_CONNECTIONS + WORKGROUP_SIZE_ADHESION - 1) / WORKGROUP_SIZE_ADHESION;
         compute_pass.dispatch_workgroups(adhesion_workgroups, 1, 1);
         
-        // Stage 2: Prefix sum - compact free slots (128 threads)
+        drop(compute_pass);
+    }
+    
+    // Stage 2: Prefix sum (after adhesion cleanup completes)
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Lifecycle Pipeline - Prefix Sum"),
+            timestamp_writes: None,
+        });
+        
         compute_pass.set_pipeline(&pipelines.lifecycle_prefix_sum);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
         
-        // Stage 3: Division scan - identify cells ready to divide (128 threads)
+        drop(compute_pass);
+    }
+    
+    // Stage 3: Division scan (after prefix sum completes)
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Lifecycle Pipeline - Division Scan"),
+            timestamp_writes: None,
+        });
+        
         compute_pass.set_pipeline(&pipelines.lifecycle_division_scan);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
@@ -283,12 +308,62 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.set_bind_group(3, &cached_bind_groups.division_scan_adhesion, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
         
-        // Stage 4: Division execute - create child cells (128 threads)
+        drop(compute_pass);
+    }
+    
+    // Stage 4: Division execute (after division scan completes)
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Lifecycle Pipeline - Division Execute"),
+            timestamp_writes: None,
+        });
+        
         compute_pass.set_pipeline(&pipelines.lifecycle_division_execute);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.set_bind_group(2, cell_state_write_bind_group, &[]);
         compute_pass.set_bind_group(3, &cached_bind_groups.lifecycle_adhesion, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
+    }
+}
+
+/// Rebuild spatial grid after lifecycle pipeline
+/// This ensures dead cells are not included in collision detection
+pub fn rebuild_spatial_grid_after_lifecycle(
+    encoder: &mut wgpu::CommandEncoder,
+    pipelines: &GpuPhysicsPipelines,
+    triple_buffers: &GpuTripleBufferSystem,
+    cached_bind_groups: &CachedBindGroups,
+) {
+    let current_index = triple_buffers.current_index();
+    let physics_bind_group = &cached_bind_groups.physics[current_index];
+    let spatial_grid_bind_group = &cached_bind_groups.spatial_grid;
+    
+    let total_grid_cells = GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION;
+    let grid_workgroups = (total_grid_cells + WORKGROUP_SIZE_GRID - 1) / WORKGROUP_SIZE_GRID;
+    let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+    
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Spatial Grid Rebuild After Lifecycle"),
+            timestamp_writes: None,
+        });
+        
+        // Stage 1: Clear spatial grid
+        compute_pass.set_pipeline(&pipelines.spatial_grid_clear);
+        compute_pass.set_bind_group(0, spatial_grid_bind_group, &[]);
+        compute_pass.dispatch_workgroups(grid_workgroups, 1, 1);
+        
+        // Stage 2: Assign cells to grid (now only live cells)
+        compute_pass.set_pipeline(&pipelines.spatial_grid_assign);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        
+        // Stage 3: Insert cells into grid
+        compute_pass.set_pipeline(&pipelines.spatial_grid_insert);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
     }
 }

@@ -126,63 +126,70 @@ fn remove_adhesion_from_cell(cell_idx: u32, adhesion_idx: u32) {
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let adhesion_idx = global_id.x;
+    let thread_id = global_id.x;
     
-    // Get total adhesion count
+    // Get total adhesion count and cell count
     let total_adhesions = atomicLoad(&adhesion_counts[0]);
-    
-    if (adhesion_idx >= total_adhesions) {
-        return;
-    }
-    
-    // Read the adhesion connection
-    let connection = adhesion_connections[adhesion_idx];
-    
-    // Skip if already inactive
-    if (connection.is_active == 0u) {
-        return;
-    }
-    
-    let cell_a = connection.cell_a_index;
-    let cell_b = connection.cell_b_index;
-    
-    // Get cell count from GPU buffer
     let cell_count = cell_count_buffer[0];
     
-    // Check bounds
-    if (cell_a >= cell_count || cell_b >= cell_count) {
-        // Invalid cell indices - mark as inactive
-        adhesion_connections[adhesion_idx].is_active = 0u;
-        atomicSub(&adhesion_counts[1], 1u); // Decrement live count
+    // Process adhesions (existing functionality)
+    if (thread_id < total_adhesions) {
+        let adhesion_idx = thread_id;
         
-        // Add to free slot stack (deterministic order by adhesion index)
-        let free_slot_idx = atomicAdd(&adhesion_counts[2], 1u);
-        free_adhesion_slots[free_slot_idx] = adhesion_idx;
-        return;
+        // Read the adhesion connection
+        let connection = adhesion_connections[adhesion_idx];
+        
+        // Skip if already inactive
+        if (connection.is_active != 0u) {
+            let cell_a = connection.cell_a_index;
+            let cell_b = connection.cell_b_index;
+            
+            // Check bounds
+            if (cell_a >= cell_count || cell_b >= cell_count) {
+                // Invalid cell indices - mark as inactive
+                adhesion_connections[adhesion_idx].is_active = 0u;
+                atomicSub(&adhesion_counts[1], 1u); // Decrement live count
+                
+                // Add to free slot stack (deterministic order by adhesion index)
+                let free_slot_idx = atomicAdd(&adhesion_counts[2], 1u);
+                free_adhesion_slots[free_slot_idx] = adhesion_idx;
+                return;
+            }
+            
+            // Check if either cell is dead
+            let cell_a_dead = death_flags[cell_a] == 1u;
+            let cell_b_dead = death_flags[cell_b] == 1u;
+            
+            if (cell_a_dead || cell_b_dead) {
+                // Mark adhesion as inactive
+                adhesion_connections[adhesion_idx].is_active = 0u;
+                
+                // Remove adhesion index from both cells' per-cell adhesion indices
+                // Even if a cell is dead, we still clean up its indices for consistency
+                remove_adhesion_from_cell(cell_a, adhesion_idx);
+                remove_adhesion_from_cell(cell_b, adhesion_idx);
+                
+                // Decrement live adhesion count
+                atomicSub(&adhesion_counts[1], 1u);
+                
+                // Add to free slot stack for reuse
+                // Note: This uses atomic to get a unique slot in the free stack.
+                // Since adhesions are processed in index order (0, 1, 2, ...),
+                // and atomicAdd returns the previous value, lower adhesion indices
+                // will get lower positions in the free stack, maintaining determinism.
+                let free_slot_idx = atomicAdd(&adhesion_counts[2], 1u);
+                free_adhesion_slots[free_slot_idx] = adhesion_idx;
+            }
+        }
     }
     
-    // Check if either cell is dead
-    let cell_a_dead = death_flags[cell_a] == 1u;
-    let cell_b_dead = death_flags[cell_b] == 1u;
-    
-    if (cell_a_dead || cell_b_dead) {
-        // Mark adhesion as inactive
-        adhesion_connections[adhesion_idx].is_active = 0u;
-        
-        // Remove adhesion index from both cells' per-cell adhesion indices
-        // Even if a cell is dead, we still clean up its indices for consistency
-        remove_adhesion_from_cell(cell_a, adhesion_idx);
-        remove_adhesion_from_cell(cell_b, adhesion_idx);
-        
-        // Decrement live adhesion count
-        atomicSub(&adhesion_counts[1], 1u);
-        
-        // Add to free slot stack for reuse
-        // Note: This uses atomic to get a unique slot in the free stack.
-        // Since adhesions are processed in index order (0, 1, 2, ...),
-        // and atomicAdd returns the previous value, lower adhesion indices
-        // will get lower positions in the free stack, maintaining determinism.
-        let free_slot_idx = atomicAdd(&adhesion_counts[2], 1u);
-        free_adhesion_slots[free_slot_idx] = adhesion_idx;
+    // CRITICAL: Clear adhesion indices for dead cells
+    // This prevents future adhesion physics from reading stale indices
+    if (thread_id < cell_count && death_flags[thread_id] == 1u) {
+        // Cell is dead - clear all its adhesion indices
+        let base_offset = thread_id * MAX_ADHESIONS_PER_CELL;
+        for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+            cell_adhesion_indices[base_offset + i] = -1;
+        }
     }
 }
