@@ -178,6 +178,47 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
 @group(0) @binding(15) var<storage, read> mode_cell_types: array<u32>;
 
 // ============================================================================
+// Random Number Generation
+// ============================================================================
+
+// Hash function for generating pseudo-random values from cell ID
+fn hash_u32(x: u32) -> u32 {
+    var h = x;
+    h = h ^ (h >> 16u);
+    h = h * 0x85ebca6bu;
+    h = h ^ (h >> 13u);
+    h = h * 0xc2b2ae35u;
+    h = h ^ (h >> 16u);
+    return h;
+}
+
+// Generate a random float in [0, 1) from a seed
+fn random_float(seed: u32) -> f32 {
+    return f32(hash_u32(seed)) / 4294967296.0;
+}
+
+// Generate a random unit quaternion from cell ID (for texture orientation)
+fn random_quaternion(cell_id: u32) -> vec4<f32> {
+    // Use different seeds for each component
+    let u0 = random_float(cell_id);
+    let u1 = random_float(cell_id + 12345u);
+    let u2 = random_float(cell_id + 67890u);
+    
+    // Uniform random quaternion using Shoemake's method
+    let sqrt_u0 = sqrt(u0);
+    let sqrt_1_u0 = sqrt(1.0 - u0);
+    let theta1 = 2.0 * PI * u1;
+    let theta2 = 2.0 * PI * u2;
+    
+    return vec4<f32>(
+        sqrt_1_u0 * sin(theta1),  // x
+        sqrt_1_u0 * cos(theta1),  // y
+        sqrt_u0 * sin(theta2),    // z
+        sqrt_u0 * cos(theta2)     // w
+    );
+}
+
+// ============================================================================
 // Frustum Culling
 // ============================================================================
 
@@ -425,7 +466,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     instance.radius = radius;
     instance.color = vec4<f32>(color, 1.0);  // Always fully opaque
     instance.visual_params = vec4<f32>(specular_strength, specular_power, fresnel_strength, emissive);
-    instance.rotation = rotation;
+    
+    // Rotation: Test cells get randomized texture orientation, others use physics rotation
+    if (cell_type == 0u) {
+        // Test cell: use random quaternion based on cell_id for varied texture appearance
+        instance.rotation = random_quaternion(cell_id);
+    } else {
+        // Other cell types: use physics-driven rotation
+        instance.rotation = rotation;
+    }
     
     // Type-specific data based on cell type
     // Cell type 0 = Test: atlas UV coordinates for texture-based rendering

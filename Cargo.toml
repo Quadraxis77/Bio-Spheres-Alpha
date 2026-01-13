@@ -35,6 +35,7 @@ rayon = "1.10"
 glam = "0.29"
 web-time = "1.1"
 sysinfo = "0.32"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["wincon", "consoleapi"] }
