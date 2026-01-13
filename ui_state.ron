@@ -65,7 +65,7 @@
     occlusion_min_screen_size: 0.0,
     occlusion_min_distance: 0.0,
     occlusion_enabled: false,
-    frustum_enabled: true,
+    frustum_enabled: false,
     gpu_readbacks_enabled: true,
     show_adhesion_lines: false,
     cell_capacity: 100000,
@@ -74,5 +74,5 @@
     lod_threshold_low: 10.0,
     lod_threshold_medium: 20.0,
     lod_threshold_high: 50.0,
-    lod_debug_colors: false,
+    lod_debug_colors: true,
 )

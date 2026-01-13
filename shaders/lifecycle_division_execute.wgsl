@@ -441,7 +441,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let total_adhesions = atomicAdd(&adhesion_counts[0], 1u);
         
         // Check if we have capacity (simplified check - in full implementation would use free slot stack)
-        if (total_adhesions < 100000u) { // MAX_ADHESION_CONNECTIONS
+        // MAX_ADHESION_CONNECTIONS = 500,000
+        if (total_adhesions < 500000u) {
             let adhesion_slot = total_adhesions;
             sibling_adhesion_slot = adhesion_slot; // Save for later skip check
             
@@ -490,13 +491,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Store the connection
             adhesion_connections[adhesion_slot] = connection;
             
-            // Update per-cell adhesion indices (simplified - assumes first slot is free)
-            // In full implementation, would search for free slot in the 20-element array
-            let cell_a_base = cell_idx * 20u;
-            let cell_b_base = child_b_slot * 20u;
+            // Update per-cell adhesion indices
+            // MAX_ADHESIONS_PER_CELL = 10
+            let cell_a_base = cell_idx * MAX_ADHESIONS_PER_CELL;
+            let cell_b_base = child_b_slot * MAX_ADHESIONS_PER_CELL;
             
             // Find first free slot for Child A and add adhesion index
-            for (var i = 0u; i < 20u; i++) {
+            for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
                 if (cell_adhesion_indices[cell_a_base + i] == -1) {
                     cell_adhesion_indices[cell_a_base + i] = i32(adhesion_slot);
                     break;
@@ -504,7 +505,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
             
             // Find first free slot for Child B and add adhesion index
-            for (var i = 0u; i < 20u; i++) {
+            for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
                 if (cell_adhesion_indices[cell_b_base + i] == -1) {
                     cell_adhesion_indices[cell_b_base + i] = i32(adhesion_slot);
                     break;
@@ -808,7 +809,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             
             // === Create duplicate connection for Child B ===
             let dup_slot = atomicAdd(&adhesion_counts[0], 1u);
-            if (dup_slot < 100000u) { // MAX_ADHESION_CONNECTIONS
+            // MAX_ADHESION_CONNECTIONS = 500,000
+            if (dup_slot < 500000u) {
                 let child_b_anchor = calculate_child_anchor_direction(
                     child_b_pos_parent_frame,
                     neighbor_pos_parent_frame,
