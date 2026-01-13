@@ -110,6 +110,18 @@ struct BuildParams {
     occlusion_mip_override: i32,  // -1 = auto, 0+ = force specific mip level
     min_screen_size: f32,         // Minimum screen-space size (pixels) to cull
     min_distance: f32,            // Don't cull objects closer than this distance
+    // Camera focal length for LOD calculation
+    focal_length: f32,
+    // LOD parameters for configurable thresholds
+    lod_scale_factor: f32,
+    lod_threshold_low: f32,
+    lod_threshold_medium: f32,
+    lod_threshold_high: f32,
+    // Debug colors flag for LOD visualization
+    lod_debug_colors: u32,  // 0 = disabled, 1 = enabled
+    // Padding to maintain 16-byte alignment
+    _padding0: f32,
+    _padding1: f32,
     // Frustum planes (6 planes: left, right, bottom, top, near, far)
     frustum_planes: array<FrustumPlane, 6>,
 }
@@ -347,7 +359,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Derive cell_type from mode (always up-to-date with genome settings)
     // This ensures children get the correct cell_type after division
-    let cell_type = mode_cell_types[mode_index];
+    // Use bounds check to prevent reading garbage if mode_index is invalid
+    var cell_type = 0u;
+    if (mode_index < params.mode_count) {
+        cell_type = mode_cell_types[mode_index];
+    }
     
     // Increment total processed counter
     atomicAdd(&counters[1], 1u);
@@ -412,9 +428,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     instance.rotation = rotation;
     
     // Type-specific data based on cell type
-    // Cell type 0 = Test: membrane noise params
-    // Cell type 1 = Flagellocyte: flagella params
-    // type_data_1.w always stores cell_type for the unified shader
+    // Cell type 0 = Test: atlas UV coordinates for texture-based rendering
+    // Cell type 1 = Flagellocyte: flagella params for pixelated 3D geometry
+    // type_data_1.w always stores cell_type for the hybrid shader
     if (cell_type == 1u && cell_type < params.cell_type_count) {
         // Flagellocyte: populate type_data with flagella parameters from visuals
         let visuals = cell_type_visuals[cell_type];
@@ -427,9 +443,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             tail_speed = props.swim_force * 15.0;
         }
         
-        // type_data layout for Flagellocyte:
+        // type_data layout for Flagellocyte (pixelated 3D geometry):
         // [0]=tail_length, [1]=tail_thickness, [2]=tail_amplitude, [3]=tail_frequency
-        // [4]=tail_speed, [5]=tail_taper, [6]=tail_segments, [7]=cell_type
+        // [4]=tail_speed, [5]=tail_taper, [6]=debug_colors_enabled, [7]=cell_type
+        // Note: tail_segments is not stored - the tail shader uses a fixed LOD mesh
         instance.type_data_0 = vec4<f32>(
             visuals.tail_length,
             visuals.tail_thickness,
@@ -439,27 +456,71 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         instance.type_data_1 = vec4<f32>(
             tail_speed,
             visuals.tail_taper,
-            visuals.tail_segments,
-            f32(cell_type)  // Store cell_type for unified shader
+            f32(params.lod_debug_colors),  // debug_colors in .z for consistency with cell shader
+            f32(cell_type)  // Store cell_type for hybrid shader
         );
     } else {
-        // Test cell or unknown: membrane params (currently disabled)
-        // type_data_1.w = cell_type for unified shader
-        instance.type_data_0 = vec4<f32>(noise_scale, noise_strength, noise_speed, anim_offset);
-        instance.type_data_1 = vec4<f32>(0.0, 0.0, 0.0, f32(cell_type));
+        // Test cell: atlas UV coordinates for texture-based rendering
+        // Calculate screen radius for LOD selection with configurable scale factor
+        let camera_distance = max(length(position - params.camera_pos), 1.0);
+        // Use configurable scale factor for more spread out transitions
+        let screen_radius = (radius / camera_distance) * params.lod_scale_factor;
+        let clamped_screen_radius = clamp(screen_radius, 0.1, 200.0);
+        
+        // Select LOD based on configurable thresholds
+        var lod_level = 1u; // Default to Medium (64x64)
+        if (clamped_screen_radius < params.lod_threshold_low) {
+            lod_level = 0u; // Low (32x32) - Far away
+        } else if (clamped_screen_radius < params.lod_threshold_medium) {
+            lod_level = 1u; // Medium (64x64) - Medium distance
+        } else if (clamped_screen_radius < params.lod_threshold_high) {
+            lod_level = 2u; // High (128x128) - Close
+        } else {
+            lod_level = 3u; // Ultra (256x256) - Very close
+        }
+        
+        // Calculate atlas UV coordinates for Test cell type
+        // Atlas layout: 4 LODs horizontally, 2 cell types vertically
+        // Test cells are in row 0, Flagellocyte cells in row 1
+        let atlas_width = 1024.0;  // 4 * 256
+        let atlas_height = 512.0;  // 2 * 256
+        let slot_size = 256.0;     // Each slot is 256x256
+        
+        let x_offset = f32(lod_level) * slot_size;
+        let y_offset = 0.0; // Test cells in row 0
+        
+        // Calculate actual texture size for this LOD
+        let actual_size = slot_size / pow(2.0, f32(3u - lod_level)); // 32, 64, 128, 256
+        
+        // Center the texture within the slot
+        let x_padding = (slot_size - actual_size) * 0.5;
+        let y_padding = (slot_size - actual_size) * 0.5;
+        
+        let uv_min_x = (x_offset + x_padding) / atlas_width;
+        let uv_min_y = (y_offset + y_padding) / atlas_height;
+        let uv_max_x = (x_offset + x_padding + actual_size) / atlas_width;
+        let uv_max_y = (y_offset + y_padding + actual_size) / atlas_height;
+        
+        // type_data layout for Test cell (texture atlas):
+        // [0]=uv_min.x, [1]=uv_min.y, [2]=uv_max.x, [3]=uv_max.y
+        // [4]=lod_level, [5]=screen_radius, [6]=debug_colors_enabled, [7]=cell_type
+        instance.type_data_0 = vec4<f32>(uv_min_x, uv_min_y, uv_max_x, uv_max_y);
+        instance.type_data_1 = vec4<f32>(f32(lod_level), clamped_screen_radius, f32(params.lod_debug_colors), f32(cell_type)); // cell_type in .w
     }
     
-    // Write instance at same index as input cell (deterministic 1:1 mapping)
-    // Track counts by type for indirect draw buffers
-    if (cell_type == 0u) {
-        atomicAdd(&counters[4], 1u); // Test count
-    } else {
-        atomicAdd(&counters[5], 1u); // Flagellocyte count
+    // Write instance at sorted position by type
+    // For now, write ALL cells to the start of the buffer (no sorting)
+    // This ensures all cells render via the Test indirect buffer
+    let output_index = atomicAdd(&counters[4], 1u);
+    
+    // Also track flagellocyte count for debugging
+    if (cell_type != 0u) {
+        atomicAdd(&counters[5], 1u);
     }
     
     // Increment total visible count
     atomicAdd(&counters[0], 1u);
     
-    // Write to same index as input - deterministic 1:1 mapping
-    instances[idx] = instance;
+    // Write to sorted position
+    instances[output_index] = instance;
 }

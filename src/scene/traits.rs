@@ -24,6 +24,11 @@ pub trait Scene {
         view: &wgpu::TextureView,
         cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
         world_diameter: f32,
+        lod_scale_factor: f32,
+        lod_threshold_low: f32,
+        lod_threshold_medium: f32,
+        lod_threshold_high: f32,
+        lod_debug_colors: bool,
     );
 
     /// Handle window resize.

@@ -4,7 +4,7 @@
 //! editing and debugging genomes with small cell counts.
 
 use crate::genome::Genome;
-use crate::rendering::{AdhesionLineRenderer, CellRenderer, OrientationGizmoRenderer, SplitRingRenderer};
+use crate::rendering::{AdhesionLineRenderer, CellRenderer, OrientationGizmoRenderer, SplitRingRenderer, TailRenderer, TailInstance};
 use crate::scene::{PreviewState, Scene};
 use crate::simulation::PhysicsConfig;
 use crate::ui::camera::CameraController;
@@ -27,6 +27,8 @@ pub struct PreviewScene {
     pub gizmo_renderer: OrientationGizmoRenderer,
     /// Split ring renderer
     pub split_ring_renderer: SplitRingRenderer,
+    /// Tail renderer for flagellocyte cells
+    pub tail_renderer: TailRenderer,
     /// Current genome being edited
     pub genome: Genome,
     /// Physics configuration
@@ -64,6 +66,7 @@ impl PreviewScene {
         let adhesion_renderer = AdhesionLineRenderer::new(device, queue, surface_config, capacity * 20); // 20 adhesions per cell max
         let gizmo_renderer = OrientationGizmoRenderer::new(device, queue, surface_config);
         let split_ring_renderer = SplitRingRenderer::new(device, queue, surface_config);
+        let tail_renderer = TailRenderer::new(device, surface_config.format, capacity);
 
         Self {
             state,
@@ -71,6 +74,7 @@ impl PreviewScene {
             adhesion_renderer,
             gizmo_renderer,
             split_ring_renderer,
+            tail_renderer,
             genome,
             config,
             paused: false,
@@ -161,7 +165,19 @@ impl Scene for PreviewScene {
         // No automatic time advancement - time is controlled entirely by the slider
     }
 
-    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView, cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>, _world_diameter: f32) {
+    fn render(
+        &mut self, 
+        device: &wgpu::Device, 
+        queue: &wgpu::Queue, 
+        view: &wgpu::TextureView, 
+        cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>, 
+        _world_diameter: f32,
+        lod_scale_factor: f32,
+        lod_threshold_low: f32,
+        lod_threshold_medium: f32,
+        lod_threshold_high: f32,
+        lod_debug_colors: bool,
+    ) {
         // Calculate view-projection matrix (same as used by cell renderer)
         let view_matrix = glam::Mat4::look_at_rh(
             self.camera.position(),
@@ -223,7 +239,40 @@ impl Scene for PreviewScene {
             self.camera.position(),
             self.camera.rotation,
             self.state.current_time,  // Use simulation time for animation
+            lod_scale_factor,
+            lod_threshold_low,
+            lod_threshold_medium,
+            lod_threshold_high,
+            lod_debug_colors,
         );
+
+        // Pass 2.5: Render flagellocyte tails
+        {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Preview Scene Tail Encoder"),
+            });
+            
+            // Build tail instances for flagellocyte cells
+            let tail_instances = self.build_tail_instances(cell_type_visuals);
+            
+            if !tail_instances.is_empty() {
+                self.tail_renderer.render(
+                    device,
+                    queue,
+                    &mut encoder,
+                    view,
+                    &self.renderer.depth_view,
+                    &tail_instances,
+                    self.camera.position(),
+                    self.camera.rotation,
+                    self.state.current_time,
+                    self.renderer.width,
+                    self.renderer.height,
+                );
+            }
+            
+            queue.submit(std::iter::once(encoder.finish()));
+        }
 
         // Pass 3: Render overlays (adhesion lines, gizmos, split rings)
         {
@@ -314,6 +363,7 @@ impl Scene for PreviewScene {
         self.adhesion_renderer.resize(width, height);
         self.gizmo_renderer.resize(device, width, height);
         self.split_ring_renderer.resize(device, width, height);
+        self.tail_renderer.resize(width, height);
     }
 
     fn camera(&self) -> &CameraController {
@@ -354,5 +404,71 @@ impl PreviewScene {
         use crate::rendering::split_rings::SplitRingConfig;
         let config = SplitRingConfig::from_editor_state(editor_state);
         self.split_ring_renderer.update_config(&config);
+    }
+    
+    /// Build tail instances for flagellocyte cells
+    fn build_tail_instances(&self, cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>) -> Vec<TailInstance> {
+        use crate::cell::CellType;
+        
+        let mut instances = Vec::new();
+        let flagellocyte_index = CellType::Flagellocyte as usize;
+        
+        // Get flagellocyte visuals for tail parameters
+        let visuals = cell_type_visuals
+            .and_then(|v| v.get(flagellocyte_index))
+            .copied()
+            .unwrap_or_default();
+        
+        for i in 0..self.state.canonical_state.cell_count {
+            let mode_index = self.state.canonical_state.mode_indices[i];
+            
+            // Check if this cell is a flagellocyte
+            let cell_type_index = if mode_index < self.genome.modes.len() {
+                self.genome.modes[mode_index].cell_type as u32
+            } else {
+                0
+            };
+            
+            if cell_type_index != CellType::Flagellocyte as u32 {
+                continue;
+            }
+            
+            let position = self.state.canonical_state.positions[i];
+            let rotation = self.state.canonical_state.rotations[i];
+            let radius = self.state.canonical_state.radii[i];
+            
+            // Get color from mode
+            let color = if mode_index < self.genome.modes.len() {
+                let mode = &self.genome.modes[mode_index];
+                [mode.color.x, mode.color.y, mode.color.z, mode.opacity]
+            } else {
+                [0.8, 0.6, 0.9, 1.0] // Default purple for flagellocyte
+            };
+            
+            // Calculate tail speed from swim_force
+            let swim_force = if mode_index < self.genome.modes.len() {
+                self.genome.modes[mode_index].swim_force
+            } else {
+                0.5
+            };
+            let tail_speed = swim_force * 15.0;
+            
+            instances.push(TailInstance {
+                cell_position: position.to_array(),
+                cell_radius: radius,
+                rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
+                color,
+                tail_length: visuals.tail_length,
+                tail_thickness: visuals.tail_thickness,
+                tail_amplitude: visuals.tail_amplitude,
+                tail_frequency: visuals.tail_frequency,
+                tail_speed,
+                tail_taper: visuals.tail_taper,
+                time: self.state.current_time,
+                _pad: 0.0,
+            });
+        }
+        
+        instances
     }
 }

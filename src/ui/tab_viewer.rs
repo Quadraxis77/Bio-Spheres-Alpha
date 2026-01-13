@@ -702,6 +702,55 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
                     .step_by(0.5)
                     .fixed_decimals(1));
             }
+            
+            ui.add_space(8.0);
+            
+            // LOD Controls section
+            ui.heading("LOD Controls");
+            ui.separator();
+            
+            ui.label("Scale Factor:")
+                .on_hover_text("Higher values = more aggressive LOD transitions");
+            ui.add(egui::Slider::new(&mut state.lod_scale_factor, 100.0..=1000.0)
+                .step_by(10.0)
+                .fixed_decimals(0));
+            
+            ui.add_space(4.0);
+            
+            ui.label("Low → Medium Threshold:")
+                .on_hover_text("Screen radius threshold for 32x32 → 64x64 transition");
+            ui.add(egui::Slider::new(&mut state.lod_threshold_low, 1.0..=50.0)
+                .step_by(0.5)
+                .fixed_decimals(1));
+            
+            ui.label("Medium → High Threshold:")
+                .on_hover_text("Screen radius threshold for 64x64 → 128x128 transition");
+            ui.add(egui::Slider::new(&mut state.lod_threshold_medium, 5.0..=100.0)
+                .step_by(0.5)
+                .fixed_decimals(1));
+            
+            ui.label("High → Ultra Threshold:")
+                .on_hover_text("Screen radius threshold for 128x128 → 256x256 transition");
+            ui.add(egui::Slider::new(&mut state.lod_threshold_high, 10.0..=200.0)
+                .step_by(1.0)
+                .fixed_decimals(1));
+            
+            ui.add_space(4.0);
+            
+            // Debug colors toggle
+            ui.checkbox(&mut state.lod_debug_colors, "Show Debug Colors")
+                .on_hover_text("Show LOD levels as colors: Red (Low), Green (Medium), Blue (High), Yellow (Ultra)");
+            
+            ui.add_space(4.0);
+            
+            // Reset LOD to defaults button
+            if ui.button("Reset LOD to Defaults").clicked() {
+                state.lod_scale_factor = 500.0;
+                state.lod_threshold_low = 10.0;
+                state.lod_threshold_medium = 25.0;
+                state.lod_threshold_high = 50.0;
+                state.lod_debug_colors = false;
+            }
         }
         
         ui.add_space(8.0);

@@ -141,7 +141,7 @@ impl TypeSpecificInstanceData {
     /// - `data[3]`: tail_frequency - Wave frequency (0.5 - 10.0)
     /// - `data[4]`: tail_speed - Wave propagation speed (0.0 - 15.0)
     /// - `data[5]`: tail_taper - Taper from base to tip (0.0 - 1.0)
-    /// - `data[6]`: tail_segments - Number of render segments (4 - 64)
+    /// - `data[6]`: debug_colors_enabled - Debug colors flag (0.0 or 1.0)
     /// - `data[7]`: cell_type - Cell type for unified shader branching
     ///
     /// # Arguments
@@ -152,7 +152,7 @@ impl TypeSpecificInstanceData {
     /// * `tail_frequency` - Frequency of the helical wave
     /// * `tail_speed` - Speed of wave propagation along the tail
     /// * `tail_taper` - Taper factor from base to tip (1.0 = full taper)
-    /// * `tail_segments` - Number of segments used to render the tail
+    /// * `debug_colors_enabled` - Debug colors flag (0.0 or 1.0)
     /// * `cell_type` - Cell type index for unified shader branching
     ///
     /// # Example
@@ -165,7 +165,7 @@ impl TypeSpecificInstanceData {
     ///     1.0,   // tail_frequency
     ///     9.5,   // tail_speed
     ///     1.0,   // tail_taper
-    ///     10.0,  // tail_segments
+    ///     1.0,   // debug_colors_enabled
     ///     1.0,   // cell_type (Flagellocyte = 1)
     /// );
     /// ```
@@ -176,19 +176,19 @@ impl TypeSpecificInstanceData {
         tail_frequency: f32,
         tail_speed: f32,
         tail_taper: f32,
-        tail_segments: f32,
+        debug_colors_enabled: f32, // Debug colors flag
         cell_type: f32,
     ) -> Self {
         Self {
             data: [
-                tail_length,      // data[0]
-                tail_thickness,   // data[1]
-                tail_amplitude,   // data[2]
-                tail_frequency,   // data[3]
-                tail_speed,       // data[4]
-                tail_taper,       // data[5]
-                tail_segments,    // data[6]
-                cell_type,        // data[7] - cell_type for unified shader
+                tail_length,           // data[0]
+                tail_thickness,        // data[1]
+                tail_amplitude,        // data[2]
+                tail_frequency,        // data[3]
+                tail_speed,            // data[4]
+                tail_taper,            // data[5]
+                debug_colors_enabled,  // data[6] - debug colors flag
+                cell_type,             // data[7] - cell_type for unified shader
             ],
         }
     }

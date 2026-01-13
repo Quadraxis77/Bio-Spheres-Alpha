@@ -234,6 +234,26 @@ pub struct GlobalUiState {
     #[serde(default = "default_world_diameter")]
     pub world_diameter: f32,
 
+    /// LOD scale factor for distance calculations (higher = more aggressive LOD)
+    #[serde(default = "default_lod_scale_factor")]
+    pub lod_scale_factor: f32,
+
+    /// LOD threshold for Low (32x32) to Medium (64x64) transition
+    #[serde(default = "default_lod_threshold_low")]
+    pub lod_threshold_low: f32,
+
+    /// LOD threshold for Medium (64x64) to High (128x128) transition
+    #[serde(default = "default_lod_threshold_medium")]
+    pub lod_threshold_medium: f32,
+
+    /// LOD threshold for High (128x128) to Ultra (256x256) transition
+    #[serde(default = "default_lod_threshold_high")]
+    pub lod_threshold_high: f32,
+
+    /// Whether to show debug colors for LOD levels
+    #[serde(default)]
+    pub lod_debug_colors: bool,
+
     /// Whether the low FPS warning dialog is shown
     #[serde(skip)]
     pub show_low_fps_dialog: bool,
@@ -261,6 +281,22 @@ fn default_cell_capacity() -> u32 {
 
 fn default_world_diameter() -> f32 {
     200.0
+}
+
+fn default_lod_scale_factor() -> f32 {
+    500.0 // Default scale factor for screen radius calculation
+}
+
+fn default_lod_threshold_low() -> f32 {
+    10.0 // Low to Medium transition
+}
+
+fn default_lod_threshold_medium() -> f32 {
+    25.0 // Medium to High transition
+}
+
+fn default_lod_threshold_high() -> f32 {
+    50.0 // High to Ultra transition
 }
 
 fn default_true() -> bool {
@@ -292,6 +328,11 @@ impl Default for GlobalUiState {
             show_adhesion_lines: true,
             cell_capacity: 20_000,
             world_diameter: 200.0,
+            lod_scale_factor: 500.0,
+            lod_threshold_low: 10.0,
+            lod_threshold_medium: 25.0,
+            lod_threshold_high: 50.0,
+            lod_debug_colors: false,
             show_low_fps_dialog: false,
             show_reset_dialog: false,
             mode_request: None,

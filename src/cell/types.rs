@@ -320,8 +320,8 @@ impl CellType {
     /// Get the path to the appearance shader for this cell type.
     /// All cell types now use the unified shader.
     pub fn shader_path(&self) -> &'static str {
-        // All cell types use the unified shader
-        "shaders/cells/unified_cell.wgsl"
+        // All cell types use the textured shader
+        "shaders/cells/textured_cell.wgsl"
     }
 }
 

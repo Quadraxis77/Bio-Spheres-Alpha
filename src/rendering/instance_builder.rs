@@ -172,8 +172,18 @@ struct BuildParams {
     occlusion_mip_override: i32,
     min_screen_size: f32,
     min_distance: f32,
+    // Camera focal length for LOD calculation
+    focal_length: f32,
+    // LOD parameters for configurable thresholds
+    lod_scale_factor: f32,
+    lod_threshold_low: f32,
+    lod_threshold_medium: f32,
+    lod_threshold_high: f32,
+    // Debug colors flag for LOD visualization
+    lod_debug_colors: u32,  // 0 = disabled, 1 = enabled
+    // Padding to maintain 16-byte alignment (reduced by 1 due to debug flag)
+    _padding: [f32; 2],
     // Frustum planes array needs 16-byte alignment
-    // Current offset is 128, which is 16-byte aligned, so no padding needed
     frustum_planes: [FrustumPlane; 6],
 }
 
@@ -1282,6 +1292,11 @@ impl InstanceBuilder {
         screen_width: u32,
         screen_height: u32,
         cell_count_buffer: &wgpu::Buffer,
+        lod_scale_factor: f32,
+        lod_threshold_low: f32,
+        lod_threshold_medium: f32,
+        lod_threshold_high: f32,
+        lod_debug_colors: bool,
     ) {
         if cell_capacity == 0 {
             self.last_visible_count = 0;
@@ -1309,6 +1324,22 @@ impl InstanceBuilder {
             occlusion_mip_override: self.occlusion_mip_override,
             min_screen_size: self.min_screen_size,
             min_distance: self.min_distance,
+            // Calculate focal length from projection matrix for LOD calculation
+            focal_length: {
+                // For perspective projection, focal_length = projection[1][1] * screen_height / 2
+                // This gives the focal length in pixels
+                let proj_y = view_proj.y_axis.y;
+                proj_y * screen_height as f32 * 0.5
+            },
+            // LOD parameters for configurable thresholds
+            lod_scale_factor,
+            lod_threshold_low,
+            lod_threshold_medium,
+            lod_threshold_high,
+            // Debug colors flag for LOD visualization
+            lod_debug_colors: if lod_debug_colors { 1 } else { 0 },
+            // Padding to maintain 16-byte alignment (reduced by 1 due to debug flag)
+            _padding: [0.0, 0.0],
             frustum_planes,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
@@ -1323,13 +1354,14 @@ impl InstanceBuilder {
         queue.write_buffer(&self.indirect_buffer, 0, bytemuck::cast_slice(&indirect_data));
         
         // Initialize per-type indirect draw buffers
-        // All instances are written contiguously: Test cells at [0, test_count), Flagellocytes at [test_count, total)
+        // Instances are sorted by type: Test cells at [0, test_count), Flagellocytes at [capacity/2, capacity/2 + flagellocyte_count)
         // Test cells: first_instance = 0
         let indirect_test: [u32; 4] = [4, 0, 0, 0];
         queue.write_buffer(&self.indirect_buffer_test, 0, bytemuck::cast_slice(&indirect_test));
         
-        // Flagellocyte cells: first_instance = 0 (will be updated to test_count after compute pass)
-        let indirect_flagellocyte: [u32; 4] = [4, 0, 0, 0];
+        // Flagellocyte cells: first_instance = capacity/2 (fixed offset for sorted layout)
+        let flagellocyte_first_instance = (cell_capacity / 2) as u32;
+        let indirect_flagellocyte: [u32; 4] = [4, 0, 0, flagellocyte_first_instance];
         queue.write_buffer(&self.indirect_buffer_flagellocyte, 0, bytemuck::cast_slice(&indirect_flagellocyte));
 
         // Ensure bind group exists with cell_count_buffer
@@ -1417,6 +1449,11 @@ impl InstanceBuilder {
         screen_width: u32,
         screen_height: u32,
         cell_count_buffer: &wgpu::Buffer,
+        lod_scale_factor: f32,
+        lod_threshold_low: f32,
+        lod_threshold_medium: f32,
+        lod_threshold_high: f32,
+        lod_debug_colors: bool,
     ) {
         // Ensure bind group exists before creating encoder
         if self.bind_group.is_none() {
@@ -1439,6 +1476,11 @@ impl InstanceBuilder {
             screen_width,
             screen_height,
             cell_count_buffer,
+            lod_scale_factor,
+            lod_threshold_low,
+            lod_threshold_medium,
+            lod_threshold_high,
+            lod_debug_colors,
         );
         
         queue.submit(std::iter::once(encoder.finish()));

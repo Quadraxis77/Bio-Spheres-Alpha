@@ -184,8 +184,31 @@ impl SceneManager {
     }
 
     /// Render the active scene.
-    pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView, cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>, world_diameter: f32) {
-        self.active_scene_mut().render(device, queue, view, cell_type_visuals, world_diameter);
+    pub fn render(
+        &mut self, 
+        device: &wgpu::Device, 
+        queue: &wgpu::Queue, 
+        view: &wgpu::TextureView, 
+        cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>, 
+        world_diameter: f32,
+        lod_scale_factor: f32,
+        lod_threshold_low: f32,
+        lod_threshold_medium: f32,
+        lod_threshold_high: f32,
+        lod_debug_colors: bool,
+    ) {
+        self.active_scene_mut().render(
+            device, 
+            queue, 
+            view, 
+            cell_type_visuals, 
+            world_diameter,
+            lod_scale_factor,
+            lod_threshold_low,
+            lod_threshold_medium,
+            lod_threshold_high,
+            lod_debug_colors,
+        );
     }
 
     /// Insert a cell from genome using GPU operations (GPU scene only).

@@ -4,7 +4,7 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CellRenderer, CullingMode, GpuAdhesionLineRenderer, HizGenerator, InstanceBuilder, WorldSphereRenderer};
+use crate::rendering::{CellRenderer, CullingMode, GpuAdhesionLineRenderer, HizGenerator, InstanceBuilder, TailRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager};
@@ -112,10 +112,22 @@ pub struct GpuScene {
     pub show_adhesion_lines: bool,
     /// Whether to show the world boundary sphere
     pub show_world_sphere: bool,
+    /// LOD scale factor for distance calculations
+    pub lod_scale_factor: f32,
+    /// LOD threshold for Low to Medium transition
+    pub lod_threshold_low: f32,
+    /// LOD threshold for Medium to High transition
+    pub lod_threshold_medium: f32,
+    /// LOD threshold for High to Ultra transition
+    pub lod_threshold_high: f32,
+    /// Whether to show debug colors for LOD levels
+    pub lod_debug_colors: bool,
     /// Current cell count (tracked on GPU, no CPU canonical state)
     pub current_cell_count: u32,
     /// Next cell ID for deterministic cell creation
     next_cell_id: u32,
+    /// Tail renderer for flagellocyte cells
+    pub tail_renderer: TailRenderer,
 }
 
 impl GpuScene {
@@ -187,6 +199,9 @@ impl GpuScene {
         
         // Create async readback manager for coordinating all readback operations
         let readback_manager = None; // Will be initialized when needed
+        
+        // Create tail renderer for flagellocyte cells
+        let tail_renderer = TailRenderer::new(device, surface_config.format, capacity as usize);
 
         Self {
             renderer,
@@ -225,8 +240,14 @@ impl GpuScene {
             pending_cell_extraction: None,
             show_adhesion_lines: true,
             show_world_sphere: true,
+            lod_scale_factor: 500.0,
+            lod_threshold_low: 10.0,
+            lod_threshold_medium: 25.0,
+            lod_threshold_high: 50.0,
+            lod_debug_colors: false,
             current_cell_count: 0,
             next_cell_id: 0,
+            tail_renderer,
         }
     }
     
@@ -327,6 +348,22 @@ impl GpuScene {
     /// Set the minimum distance for occlusion culling.
     pub fn set_occlusion_min_distance(&mut self, distance: f32) {
         self.instance_builder.set_min_distance(distance);
+    }
+    
+    /// Set LOD parameters for texture atlas rendering.
+    pub fn set_lod_settings(
+        &mut self, 
+        scale_factor: f32, 
+        threshold_low: f32, 
+        threshold_medium: f32, 
+        threshold_high: f32,
+        debug_colors: bool,
+    ) {
+        self.lod_scale_factor = scale_factor;
+        self.lod_threshold_low = threshold_low;
+        self.lod_threshold_medium = threshold_medium;
+        self.lod_threshold_high = threshold_high;
+        self.lod_debug_colors = debug_colors;
     }
     
     /// Set whether GPU readbacks are enabled (cell count, etc.)
@@ -532,6 +569,19 @@ impl GpuScene {
             }
         }
         true
+    }
+    
+    /// Update the working genome (genome at index 0) with new settings.
+    /// This is called when the user edits the genome in the UI while in GPU mode.
+    /// The genome is updated in place to preserve existing cells' mode indices.
+    pub fn update_genome(&mut self, genome: &Genome) {
+        if self.genomes.is_empty() {
+            self.genomes.push(genome.clone());
+        } else {
+            // Update the first genome in place
+            self.genomes[0] = genome.clone();
+        }
+        // Note: sync_adhesion_settings will be called during render to upload changes to GPU
     }
     
     /// Add a genome to the scene and return its ID.
@@ -1422,6 +1472,11 @@ impl Scene for GpuScene {
         view: &wgpu::TextureView,
         cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
         world_diameter: f32,
+        lod_scale_factor: f32,
+        lod_threshold_low: f32,
+        lod_threshold_medium: f32,
+        lod_threshold_high: f32,
+        _lod_debug_colors: bool,
     ) {
         // Sync adhesion settings to GPU when genomes are added or modified
         self.sync_adhesion_settings(queue);
@@ -1552,6 +1607,11 @@ impl Scene for GpuScene {
             self.renderer.width,
             self.renderer.height,
             &self.gpu_triple_buffers.cell_count_buffer,
+            self.lod_scale_factor,
+            self.lod_threshold_low,
+            self.lod_threshold_medium,
+            self.lod_threshold_high,
+            self.lod_debug_colors,
         );
 
         // Clear pass
@@ -1596,6 +1656,27 @@ impl Scene for GpuScene {
             self.camera.position(),
             self.camera.rotation,
             self.current_time,
+            lod_scale_factor,
+            lod_threshold_low,
+            lod_threshold_medium,
+            lod_threshold_high,
+        );
+
+        // Render flagellocyte tails using GPU instance buffer
+        // All cells are written contiguously - the tail shader filters for flagellocytes
+        self.tail_renderer.render_from_gpu_buffer(
+            device,
+            queue,
+            &mut encoder,
+            view,
+            &self.renderer.depth_view,
+            self.instance_builder.get_instance_buffer(),
+            self.instance_builder.get_indirect_buffer_test(), // Use test buffer (contains all cells)
+            self.camera.position(),
+            self.camera.rotation,
+            self.current_time,
+            self.renderer.width,
+            self.renderer.height,
         );
 
         // Render world boundary sphere if enabled
@@ -1696,6 +1777,7 @@ impl Scene for GpuScene {
         self.renderer.resize(device, width, height);
         self.adhesion_renderer.resize(width, height);
         self.world_sphere_renderer.resize(width, height);
+        self.tail_renderer.resize(width, height);
         self.hiz_generator.resize(device, width, height);
         self.instance_builder.reset_hiz(); // Reset Hi-Z config so bind group is recreated with new texture
         self.first_frame = true; // Need to regenerate Hi-Z

@@ -423,6 +423,15 @@ impl App {
             gpu_scene.set_readbacks_enabled(self.ui.state.gpu_readbacks_enabled);
             gpu_scene.show_adhesion_lines = self.ui.state.show_adhesion_lines;
             
+            // Apply LOD settings from UI
+            gpu_scene.set_lod_settings(
+                self.ui.state.lod_scale_factor,
+                self.ui.state.lod_threshold_low,
+                self.ui.state.lod_threshold_medium,
+                self.ui.state.lod_threshold_high,
+                self.ui.state.lod_debug_colors,
+            );
+            
             // Set culling mode based on enabled flags
             let culling_mode = match (self.ui.state.frustum_enabled, self.ui.state.occlusion_enabled) {
                 (true, true) => crate::rendering::CullingMode::FrustumAndOcclusion,
@@ -435,7 +444,18 @@ impl App {
         
         // Render 3D scene first (pass cell type visuals from editor state)
         let cell_type_visuals = &self.editor_state.cell_type_visuals;
-        self.scene_manager.render(&self.device, &self.queue, &view, Some(cell_type_visuals), self.ui.state.world_diameter);
+        self.scene_manager.render(
+            &self.device, 
+            &self.queue, 
+            &view, 
+            Some(cell_type_visuals), 
+            self.ui.state.world_diameter,
+            self.ui.state.lod_scale_factor,
+            self.ui.state.lod_threshold_low,
+            self.ui.state.lod_threshold_medium,
+            self.ui.state.lod_threshold_high,
+            self.ui.state.lod_debug_colors,
+        );
         
         // Update culling stats from GPU scene using non-blocking async read
         // Only if GPU readbacks are enabled (can be disabled to avoid CPU-GPU sync overhead)
@@ -496,6 +516,18 @@ impl App {
                 }
             }
             
+            // In GPU mode, sync working_genome FROM GPU scene if it has genomes
+            // This ensures the UI shows the current genome state
+            // Note: We only do this once when switching to GPU mode, not every frame
+            // to allow UI edits to persist
+            if current_mode == crate::ui::types::SimulationMode::Gpu {
+                if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
+                    if !gpu_scene.genomes.is_empty() && self.working_genome.modes.is_empty() {
+                        self.working_genome = gpu_scene.genomes[0].clone();
+                    }
+                }
+            }
+            
             let output = self.ui.end_frame(
                 &mut self.dock_manager,
                 &mut self.working_genome,
@@ -517,6 +549,14 @@ impl App {
                         self.editor_state.max_preview_duration,
                         self.editor_state.time_slider_dragging,
                     );
+                }
+            }
+            
+            // Sync genome changes to GPU scene if in GPU mode
+            // This ensures cell_type changes are reflected in the mode_cell_types buffer
+            if current_mode == crate::ui::types::SimulationMode::Gpu {
+                if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                    gpu_scene.update_genome(&self.working_genome);
                 }
             }
             

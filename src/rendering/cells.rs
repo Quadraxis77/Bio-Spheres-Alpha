@@ -17,6 +17,7 @@ use crate::cell::type_registry::CellTypeRegistry;
 use crate::cell::behaviors::{create_behavior, CellBehavior};
 use crate::genome::{Genome, ModeSettings};
 use crate::rendering::instance_builder::{CellInstance, InstanceBuilder};
+use crate::rendering::cell_texture_atlas::CellTextureAtlas;
 use crate::simulation::CanonicalState;
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec3};
@@ -30,6 +31,14 @@ struct CameraUniform {
     camera_pos: [f32; 3],
     /// Current time for animated shaders (e.g., flagellocyte tail animation)
     time: f32,
+    /// LOD scale factor for distance calculations (higher = more aggressive LOD)
+    lod_scale_factor: f32,
+    /// LOD threshold for Low (32x32) to Medium (64x64) transition
+    lod_threshold_low: f32,
+    /// LOD threshold for Medium (64x64) to High (128x128) transition
+    lod_threshold_medium: f32,
+    /// LOD threshold for High (128x128) to Ultra (256x256) transition
+    lod_threshold_high: f32,
 }
 
 /// Lighting uniform data for shaders.
@@ -76,6 +85,11 @@ pub struct CellRenderer {
     #[allow(dead_code)]
     depth_pipeline: wgpu::RenderPipeline,
     
+    /// Cell texture atlas for LOD-based rendering
+    /// Note: Used in shader binding, but compiler doesn't detect this usage
+    #[allow(dead_code)]
+    texture_atlas: CellTextureAtlas,
+    
     /// Camera uniform buffer
     camera_buffer: wgpu::Buffer,
     
@@ -109,7 +123,7 @@ impl CellRenderer {
     /// * `capacity` - Initial instance buffer capacity
     pub fn new(
         device: &wgpu::Device,
-        _queue: &wgpu::Queue,
+        queue: &wgpu::Queue,
         config: &wgpu::SurfaceConfiguration,
         capacity: usize,
     ) -> Self {
@@ -118,6 +132,9 @@ impl CellRenderer {
         
         // Create depth texture
         let (depth_texture, depth_view) = Self::create_depth_texture(device, width, height);
+        
+        // Create cell texture atlas
+        let texture_atlas = CellTextureAtlas::new(device, queue);
         
         // Create cell type registry with per-type pipelines
         let type_registry = CellTypeRegistry::new(device, config.format, Self::DEPTH_FORMAT);
@@ -141,7 +158,7 @@ impl CellRenderer {
             mapped_at_creation: false,
         });
         
-        // Create bind group
+        // Create bind group with texture atlas
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cell Renderer Bind Group"),
             layout: &type_registry.bind_group_layout,
@@ -153,6 +170,14 @@ impl CellRenderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: lighting_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&texture_atlas.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&texture_atlas.sampler),
                 },
             ],
         });
@@ -178,6 +203,7 @@ impl CellRenderer {
             depth_texture,
             type_registry,
             depth_pipeline,
+            texture_atlas,
             camera_buffer,
             lighting_buffer,
             bind_group,
@@ -218,7 +244,7 @@ impl CellRenderer {
         // Load depth shader (uses unified cell shader)
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Cell Depth Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cells/unified_cell.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cells/textured_cell.wgsl").into()),
         });
         
         // Create pipeline layout
@@ -349,6 +375,10 @@ impl CellRenderer {
         camera_pos: Vec3,
         camera_rotation: Quat,
         current_time: f32,
+        lod_scale_factor: f32,
+        lod_threshold_low: f32,
+        lod_threshold_medium: f32,
+        lod_threshold_high: f32,
     ) {
         // Calculate view matrix from camera position and rotation
         let view = Mat4::from_rotation_translation(camera_rotation, camera_pos).inverse();
@@ -363,6 +393,10 @@ impl CellRenderer {
             view_proj: view_proj.to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),
             time: current_time,
+            lod_scale_factor,
+            lod_threshold_low,
+            lod_threshold_medium,
+            lod_threshold_high,
         };
         
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
@@ -441,6 +475,11 @@ impl CellRenderer {
         state: &CanonicalState,
         genome: Option<&Genome>,
         cell_type_visuals: Option<&[CellTypeVisuals]>,
+        _lod_scale_factor: f32,
+        _lod_threshold_low: f32,
+        _lod_threshold_medium: f32,
+        _lod_threshold_high: f32,
+        lod_debug_colors: bool,
     ) -> Vec<CellInstance> {
         if state.cell_count == 0 {
             return Vec::new();
@@ -471,6 +510,9 @@ impl CellRenderer {
         // Second pass: build instance data
         let mut instances = Vec::with_capacity(state.cell_count);
         
+        // Simulate camera position for LOD calculation (center of world)
+        let _camera_pos = Vec3::new(0.0, 0.0, 0.0);
+        
         for (cell_index, cell_type_index) in cells_with_types {
             let position = state.positions[cell_index];
             let rotation = state.rotations[cell_index];
@@ -491,10 +533,25 @@ impl CellRenderer {
                 .unwrap_or_default();
             
             // Get type-specific instance data from behavior module
-            // For Flagellocyte cells, populate from visuals instead of behavior
-            // IMPORTANT: data[7] must contain cell_type for the unified shader to branch correctly
-            let type_data = if cell_type_index == crate::cell::CellType::Flagellocyte as usize {
-                // Flagellocyte: populate type_data with flagella parameters from visuals
+            // For Test cells, generate texture atlas UV coordinates
+            // For Flagellocyte cells, populate from visuals for 3D geometry
+            // IMPORTANT: data[7] must contain cell_type for the hybrid shader to branch correctly
+            let type_data = if cell_type_index == crate::cell::CellType::Test as usize {
+                // Test cell: Use texture atlas with GPU-calculated LOD
+                crate::cell::behaviors::TypeSpecificInstanceData {
+                    data: [
+                        0.0, // Reserved - UV coordinates calculated on GPU
+                        0.0, // Reserved - UV coordinates calculated on GPU  
+                        0.0, // Reserved - UV coordinates calculated on GPU
+                        0.0, // Reserved - UV coordinates calculated on GPU
+                        0.0, // Reserved - LOD level calculated on GPU
+                        0.0, // Reserved - screen radius calculated on GPU
+                        if lod_debug_colors { 1.0 } else { 0.0 }, // debug_colors_enabled
+                        cell_type_index as f32, // cell_type for hybrid shader (index 7)
+                    ]
+                }
+            } else if cell_type_index == crate::cell::CellType::Flagellocyte as usize {
+                // Flagellocyte: populate type_data with flagella parameters from visuals for pixelated 3D geometry
                 // tail_speed is derived from swim_force (animation speed proportional to thrust)
                 let tail_speed = mode_settings.swim_force * 15.0; // Scale swim_force (0-1) to speed (0-15)
                 crate::cell::behaviors::TypeSpecificInstanceData::flagellocyte(
@@ -504,8 +561,8 @@ impl CellRenderer {
                     visuals.tail_frequency,
                     tail_speed,
                     visuals.tail_taper,
-                    visuals.tail_segments,
-                    cell_type_index as f32, // cell_type for unified shader
+                    if lod_debug_colors { 1.0 } else { 0.0 }, // debug_colors_enabled
+                    cell_type_index as f32, // cell_type for hybrid shader
                 )
             } else {
                 // For all other cell types, use behavior module but ensure cell_type is in data[7]
@@ -514,7 +571,7 @@ impl CellRenderer {
                 } else {
                     crate::cell::behaviors::TypeSpecificInstanceData::empty()
                 };
-                // Store cell_type in data[7] for unified shader branching
+                // Store cell_type in data[7] for hybrid shader branching
                 data.data[7] = cell_type_index as f32;
                 data
             };
@@ -563,13 +620,27 @@ impl CellRenderer {
         camera_pos: Vec3,
         camera_rotation: Quat,
         current_time: f32,
+        lod_scale_factor: f32,
+        lod_threshold_low: f32,
+        lod_threshold_medium: f32,
+        lod_threshold_high: f32,
+        lod_debug_colors: bool,
     ) {
         if state.cell_count == 0 {
             return;
         }
         
         // Build instance data
-        let instances = self.build_instances(state, genome, cell_type_visuals);
+        let instances = self.build_instances(
+            state, 
+            genome, 
+            cell_type_visuals, 
+            lod_scale_factor, 
+            lod_threshold_low, 
+            lod_threshold_medium, 
+            lod_threshold_high,
+            lod_debug_colors,
+        );
         let instance_count = instances.len() as u32;
         
         if instance_count == 0 {
@@ -583,7 +654,7 @@ impl CellRenderer {
         queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
         
         // Update uniforms
-        self.update_camera(queue, camera_pos, camera_rotation, current_time);
+        self.update_camera(queue, camera_pos, camera_rotation, current_time, lod_scale_factor, lod_threshold_low, lod_threshold_medium, lod_threshold_high);
         self.update_lighting(queue);
         
         // Get cell groups for batched rendering
@@ -667,9 +738,13 @@ impl CellRenderer {
         camera_pos: Vec3,
         camera_rotation: Quat,
         current_time: f32,
+        lod_scale_factor: f32,
+        lod_threshold_low: f32,
+        lod_threshold_medium: f32,
+        lod_threshold_high: f32,
     ) {
-        // Update uniforms
-        self.update_camera(queue, camera_pos, camera_rotation, current_time);
+        // Update uniforms with LOD settings from UI
+        self.update_camera(queue, camera_pos, camera_rotation, current_time, lod_scale_factor, lod_threshold_low, lod_threshold_medium, lod_threshold_high);
         self.update_lighting(queue);
         
         // Note: Depth pre-pass is skipped for ray-marched billboards because the
@@ -677,7 +752,7 @@ impl CellRenderer {
         // for detailed explanation.
         
         // Render each cell type with its appropriate pipeline
-        // Instances are sorted by type: Test cells at [0, capacity/2), Flagellocytes at [capacity/2, capacity)
+        // Instances are sorted by type: Test cells at [0, test_count), Flagellocytes at [capacity/2, capacity/2 + flagellocyte_count)
         {
             let mut color_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Cell Color Pass"),
@@ -705,12 +780,12 @@ impl CellRenderer {
             color_pass.set_bind_group(0, &self.bind_group, &[]);
             color_pass.set_vertex_buffer(0, instance_builder.instance_buffer.slice(..));
             
-            // Render all cells with unified pipeline
-            // The unified shader handles all cell types based on type_data_1.w
-            // Instances are at indices [0, visible_count) in deterministic order
+            // Render all cells with unified pipeline using single indirect buffer
+            // All cells are written contiguously to [0, total_count)
+            // The shader handles cell type differences via type_data_1.w
             let unified_pipeline = self.type_registry.get_pipeline(CellType::Flagellocyte);
             color_pass.set_pipeline(unified_pipeline);
-            color_pass.draw_indirect(instance_builder.get_indirect_buffer(), 0);
+            color_pass.draw_indirect(instance_builder.get_indirect_buffer_test(), 0);
         }
     }
 }
