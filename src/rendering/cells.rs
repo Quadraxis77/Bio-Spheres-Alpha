@@ -17,7 +17,6 @@ use crate::cell::type_registry::CellTypeRegistry;
 use crate::cell::behaviors::{create_behavior, CellBehavior};
 use crate::genome::{Genome, ModeSettings};
 use crate::rendering::instance_builder::{CellInstance, InstanceBuilder};
-use crate::rendering::cell_texture_atlas::CellTextureAtlas;
 use crate::simulation::CanonicalState;
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec3};
@@ -85,11 +84,6 @@ pub struct CellRenderer {
     #[allow(dead_code)]
     depth_pipeline: wgpu::RenderPipeline,
     
-    /// Cell texture atlas for LOD-based rendering
-    /// Note: Used in shader binding, but compiler doesn't detect this usage
-    #[allow(dead_code)]
-    texture_atlas: CellTextureAtlas,
-    
     /// Camera uniform buffer
     camera_buffer: wgpu::Buffer,
     
@@ -123,7 +117,7 @@ impl CellRenderer {
     /// * `capacity` - Initial instance buffer capacity
     pub fn new(
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
         config: &wgpu::SurfaceConfiguration,
         capacity: usize,
     ) -> Self {
@@ -132,9 +126,6 @@ impl CellRenderer {
         
         // Create depth texture
         let (depth_texture, depth_view) = Self::create_depth_texture(device, width, height);
-        
-        // Create cell texture atlas
-        let texture_atlas = CellTextureAtlas::new(device, queue);
         
         // Create cell type registry with per-type pipelines
         let type_registry = CellTypeRegistry::new(device, config.format, Self::DEPTH_FORMAT);
@@ -158,7 +149,7 @@ impl CellRenderer {
             mapped_at_creation: false,
         });
         
-        // Create bind group with texture atlas
+        // Create bind group without texture atlas
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cell Renderer Bind Group"),
             layout: &type_registry.bind_group_layout,
@@ -170,14 +161,6 @@ impl CellRenderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: lighting_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&texture_atlas.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&texture_atlas.sampler),
                 },
             ],
         });
@@ -203,7 +186,6 @@ impl CellRenderer {
             depth_texture,
             type_registry,
             depth_pipeline,
-            texture_atlas,
             camera_buffer,
             lighting_buffer,
             bind_group,

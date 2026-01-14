@@ -192,8 +192,6 @@ impl CellTypeRegistry {
     /// Layout:
     /// - Binding 0: Camera uniform (view_proj matrix, camera position)
     /// - Binding 1: Lighting uniform (light direction, ambient, etc.)
-    /// - Binding 2: Cell texture atlas (2D texture)
-    /// - Binding 3: Cell texture sampler
     fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Cell Type Registry Bind Group Layout"),
@@ -218,24 +216,6 @@ impl CellTypeRegistry {
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
-                    count: None,
-                },
-                // Cell texture atlas
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // Cell texture sampler
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
@@ -311,10 +291,15 @@ impl CellTypeRegistry {
     /// Load shader source for a cell type.
     ///
     /// This uses include_str! at compile time for built-in shaders.
-    fn load_shader_source(_cell_type: CellType) -> &'static str {
-        // Use textured shader for all cell types
-        // Test cells use texture atlas, Flagellocyte tails use pixelated 3D geometry
-        include_str!("../../shaders/cells/textured_cell.wgsl")
+    /// Each cell type has its own shader: cell_0.wgsl, cell_1.wgsl, etc.
+    #[allow(unreachable_patterns)]
+    fn load_shader_source(cell_type: CellType) -> &'static str {
+        match cell_type {
+            CellType::Test => include_str!("../../shaders/cells/cell_0.wgsl"),
+            CellType::Flagellocyte => include_str!("../../shaders/cells/cell_1.wgsl"),
+            // Other cell types fall back to Test shader for now
+            _ => include_str!("../../shaders/cells/cell_0.wgsl"),
+        }
     }
     
     /// Get the vertex buffer layout for cell instances.

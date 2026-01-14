@@ -125,7 +125,6 @@
 
 pub mod adhesion_lines;
 pub mod boundary_crossing;
-pub mod cell_texture_atlas;
 pub mod cells;
 pub mod debug;
 pub mod gpu_adhesion_lines;
@@ -139,7 +138,6 @@ pub mod volumetric_fog;
 pub mod world_sphere;
 
 pub use adhesion_lines::AdhesionLineRenderer;
-pub use cell_texture_atlas::CellTextureAtlas;
 pub use cells::CellRenderer;
 pub use gpu_adhesion_lines::GpuAdhesionLineRenderer;
 pub use hiz_generator::HizGenerator;
