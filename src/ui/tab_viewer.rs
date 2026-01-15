@@ -1673,8 +1673,9 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
         context.genome.modes.push(crate::genome::ModeSettings::default());
     }
     
-    // Get the current mode (default to first mode if available)
-    if let Some(mode) = context.genome.modes.get_mut(0) {
+    // Get the currently selected mode
+    let selected_index = context.editor_state.selected_mode_index;
+    if let Some(mode) = context.genome.modes.get_mut(selected_index) {
         // Calculate responsive slider size - use more of the available width
         let available_width = ui.available_width();
         let max_radius = ((available_width - 20.0) / 2.0 - 10.0) / 2.0; // Reduced margins

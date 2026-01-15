@@ -213,6 +213,20 @@ impl<'a> SnarlViewer<ModeNode> for ModeGraphViewer<'a> {
         to: &InPin,
         snarl: &mut Snarl<ModeNode>,
     ) {
+        // Check if this output pin (Child A or Child B) already has a connection
+        // Each output pin can only have one connection
+        let from_pin_id = from.id;
+        
+        // Get existing connections from this output pin
+        let existing_remotes: Vec<_> = snarl.out_pin(from_pin_id).remotes.iter().copied().collect();
+        
+        // Remove existing connections from this output pin
+        for remote_in_pin in existing_remotes {
+            snarl.disconnect(from_pin_id, remote_in_pin);
+            
+            // The child mode will be updated below, so no need to reset here
+        }
+        
         let from_node = &snarl[from.id.node];
         let to_node = &snarl[to.id.node];
         

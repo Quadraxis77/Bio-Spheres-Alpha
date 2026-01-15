@@ -9,9 +9,6 @@ use crate::scene::{PreviewState, Scene};
 use crate::simulation::PhysicsConfig;
 use crate::ui::camera::CameraController;
 
-/// Debounce delay for genome changes (milliseconds)
-const GENOME_DEBOUNCE_MS: u64 = 300;
-
 /// Preview scene for genome editing.
 ///
 /// Uses CPU physics for small-scale simulations with checkpoint
@@ -41,10 +38,6 @@ pub struct PreviewScene {
     last_ui_time_value: f32,
     /// Whether to show adhesion lines
     pub show_adhesion_lines: bool,
-    /// Pending genome for debounced update
-    pending_genome: Option<Genome>,
-    /// Time when genome was last changed (for debounce)
-    genome_change_time: std::time::Instant,
 }
 
 impl PreviewScene {
@@ -81,37 +74,22 @@ impl PreviewScene {
             camera: CameraController::new(),
             last_ui_time_value: 0.0,
             show_adhesion_lines: true,
-            pending_genome: None,
-            genome_change_time: std::time::Instant::now(),
         }
     }
 
-    /// Queue a genome update (debounced - won't resimulate until editing stops)
+    /// Update genome immediately (no debouncing)
     pub fn update_genome(&mut self, new_genome: &Genome) {
         let new_hash = PreviewState::compute_genome_hash(new_genome);
         
-        // Only queue if actually changed
+        // Only update if actually changed
         if new_hash != self.state.genome_hash {
-            self.pending_genome = Some(new_genome.clone());
-            self.genome_change_time = std::time::Instant::now();
-        }
-    }
-    
-    /// Apply pending genome changes if debounce period has passed
-    fn apply_pending_genome(&mut self) {
-        if let Some(ref pending) = self.pending_genome {
-            let elapsed = self.genome_change_time.elapsed().as_millis() as u64;
-            if elapsed >= GENOME_DEBOUNCE_MS {
-                log::info!("Applying debounced genome change, triggering resimulation");
-                
-                self.genome = pending.clone();
-                self.state.genome_hash = PreviewState::compute_genome_hash(&self.genome);
-                self.state.clear_checkpoints();
-                self.state.update_initial_state(&self.genome, &self.config);
-                self.state.seek_to_time(self.state.current_time);
-                
-                self.pending_genome = None;
-            }
+            log::info!("Applying genome change, triggering resimulation");
+            
+            self.genome = new_genome.clone();
+            self.state.genome_hash = new_hash;
+            self.state.clear_checkpoints();
+            self.state.update_initial_state(&self.genome, &self.config);
+            self.state.seek_to_time(self.state.current_time);
         }
     }
     
@@ -148,9 +126,6 @@ impl PreviewScene {
 
 impl Scene for PreviewScene {
     fn update(&mut self, _dt: f32) {
-        // Apply debounced genome changes
-        self.apply_pending_genome();
-        
         // Preview mode is entirely slider-driven
         // Simulation only runs when seeking to a new time via the slider
         // No automatic time advancement
