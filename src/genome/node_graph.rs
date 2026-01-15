@@ -61,6 +61,11 @@ pub struct ModeGraphState {
     pub selected_add_mode: usize,
     /// Counter for positioning new nodes in a column
     pub node_add_count: usize,
+    /// Track which initial column slots are occupied (slot index -> node_id)
+    pub initial_column_slots: std::collections::HashMap<usize, NodeId>,
+    /// Track the last known position of each node
+    #[serde(skip)]
+    pub node_positions: std::collections::HashMap<NodeId, egui::Pos2>,
 }
 
 impl Default for ModeGraphState {
@@ -84,6 +89,8 @@ impl Clone for ModeGraphState {
             snarl: Snarl::new(),
             selected_add_mode: self.selected_add_mode,
             node_add_count: self.node_add_count,
+            initial_column_slots: std::collections::HashMap::new(),
+            node_positions: std::collections::HashMap::new(),
         }
     }
 }
@@ -94,15 +101,84 @@ impl ModeGraphState {
             snarl: Snarl::new(),
             selected_add_mode: 0,
             node_add_count: 0,
+            initial_column_slots: std::collections::HashMap::new(),
+            node_positions: std::collections::HashMap::new(),
         }
     }
     
-    /// Get the next position for a new node, offset in a column
+    /// Update node positions and clean up slots for nodes that have moved away or been removed
+    pub fn update_node_positions(&mut self, ui: &egui::Ui) {
+        const START_X: f32 = 50.0;
+        const POSITION_TOLERANCE: f32 = 60.0;
+        
+        // Use egui's memory to store and retrieve node positions across frames
+        let ctx = ui.ctx();
+        
+        // Check each node's position
+        for (node_id, _) in self.snarl.node_ids() {
+            // Create a unique ID for storing this node's position
+            let pos_id = egui::Id::new("node_pos").with(node_id);
+            
+            // Try to get the stored position from last frame
+            if let Some(last_pos) = ctx.data(|d| d.get_temp::<egui::Pos2>(pos_id)) {
+                // Check if the node has moved away from the initial column
+                let x_distance = (last_pos.x - START_X).abs();
+                
+                if x_distance > POSITION_TOLERANCE {
+                    // Node has been moved away from initial column, free up its slot
+                    self.initial_column_slots.retain(|_, id| *id != node_id);
+                }
+                
+                // Update our tracking
+                self.node_positions.insert(node_id, last_pos);
+            }
+        }
+        
+        // Clean up slots for nodes that no longer exist (removed nodes)
+        self.initial_column_slots.retain(|_, node_id| {
+            self.snarl.node_ids().any(|(id, _)| id == *node_id)
+        });
+        
+        // Clean up positions for nodes that no longer exist
+        self.node_positions.retain(|node_id, _| {
+            self.snarl.node_ids().any(|(id, _)| id == *node_id)
+        });
+    }
+    
+    /// Get the next position for a new node, reusing slots where nodes have been moved away
     pub fn next_node_position(&mut self) -> egui::Pos2 {
-        let x = 50.0;
-        let y = 50.0 + (self.node_add_count as f32 * 120.0);
+        const NODE_SPACING: f32 = 120.0;
+        const START_X: f32 = 50.0;
+        const START_Y: f32 = 50.0;
+        
+        // Find the first available slot
+        for slot in 0..100 {
+            if !self.initial_column_slots.contains_key(&slot) {
+                // This slot is free
+                self.node_add_count = self.node_add_count.max(slot + 1);
+                return egui::pos2(START_X, START_Y + (slot as f32 * NODE_SPACING));
+            }
+        }
+        
+        // Fallback: use next position after all slots
+        let y = START_Y + (self.node_add_count as f32 * NODE_SPACING);
         self.node_add_count += 1;
-        egui::pos2(x, y)
+        egui::pos2(START_X, y)
+    }
+    
+    /// Record that a node occupies a specific slot
+    pub fn record_node_in_slot(&mut self, node_id: NodeId, pos: egui::Pos2) {
+        const NODE_SPACING: f32 = 120.0;
+        const START_Y: f32 = 50.0;
+        
+        // Calculate which slot this position corresponds to
+        let slot = ((pos.y - START_Y) / NODE_SPACING).round() as i32;
+        if slot >= 0 {
+            self.initial_column_slots.insert(slot as usize, node_id);
+        }
+        
+        // Also record the position
+        self.node_positions.insert(node_id, pos);
     }
 }
 
@@ -117,6 +193,8 @@ pub struct ModeGraphViewer<'a> {
     pub child_b_modes: &'a mut [i32],
     /// Reference to full mode settings for showing changes
     pub mode_settings: &'a [crate::genome::ModeSettings],
+    /// Mutable reference to the graph state for position tracking
+    pub graph_state: &'a mut ModeGraphState,
 }
 
 #[allow(refining_impl_trait)]
@@ -315,6 +393,12 @@ impl<'a> SnarlViewer<ModeNode> for ModeGraphViewer<'a> {
         };
         
         ui.label(egui::RichText::new(title).color(text_color).strong());
+        
+        // Store the node's screen position in egui's memory for next frame comparison
+        // We'll use the UI's current cursor position as a proxy for node position
+        let pos_id = egui::Id::new("node_pos").with(node_id);
+        let current_pos = ui.cursor().min; // Approximate node position
+        ui.ctx().data_mut(|d| d.insert_temp(pos_id, current_pos));
     }
 
     fn has_body(&mut self, _node: &ModeNode) -> bool {

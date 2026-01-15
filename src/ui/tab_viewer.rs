@@ -2224,6 +2224,7 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
 fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
     use crate::genome::node_graph::{ModeGraphViewer, ModeNode};
     use egui_snarl::ui::{SnarlStyle, SnarlWidget};
+    use egui_snarl::Snarl;
 
     // Collect mode data for the viewer
     let mode_names: Vec<String> = context.genome.modes.iter().map(|m| m.name.clone()).collect();
@@ -2282,9 +2283,11 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
             let idx = *selected;
             let name = mode_names.get(idx).cloned().unwrap_or_default();
             let color = mode_colors.get(idx).copied().unwrap_or(glam::Vec3::ONE);
-            // Add node at next position in column
+            // Add node at next available position in column
             let pos = context.editor_state.mode_graph_state.next_node_position();
-            context.editor_state.mode_graph_state.snarl.insert_node(pos, ModeNode::new(idx, name, color));
+            let node_id = context.editor_state.mode_graph_state.snarl.insert_node(pos, ModeNode::new(idx, name, color));
+            // Record which slot this node occupies
+            context.editor_state.mode_graph_state.record_node_in_slot(node_id, pos);
         }
         
         ui.separator();
@@ -2300,6 +2303,7 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
         child_a_modes: &mut child_a_modes,
         child_b_modes: &mut child_b_modes,
         mode_settings: &context.genome.modes,
+        graph_state: &mut context.editor_state.mode_graph_state,
     };
 
     // Configure style with zoom limits, grid background, and better pin placement
@@ -2316,20 +2320,34 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
     };
 
     // Render the snarl graph
-    let snarl = &mut context.editor_state.mode_graph_state.snarl;
+    // We need to temporarily take ownership of the snarl to pass to the widget
+    let mut snarl = std::mem::replace(&mut viewer.graph_state.snarl, Snarl::new());
     
     SnarlWidget::new()
         .style(style)
-        .show(snarl, &mut viewer, ui);
+        .show(&mut snarl, &mut viewer, ui);
+    
+    // Put the snarl back
+    viewer.graph_state.snarl = snarl;
+    
+    // Update node positions after rendering to detect moved nodes
+    viewer.graph_state.update_node_positions(ui);
 
     // Write back any changes to child modes
+    let mut changes_made = false;
     for (i, mode) in context.genome.modes.iter_mut().enumerate() {
-        if i < child_a_modes.len() {
+        if i < child_a_modes.len() && mode.child_a.mode_number != child_a_modes[i] {
             mode.child_a.mode_number = child_a_modes[i];
+            changes_made = true;
         }
-        if i < child_b_modes.len() {
+        if i < child_b_modes.len() && mode.child_b.mode_number != child_b_modes[i] {
             mode.child_b.mode_number = child_b_modes[i];
+            changes_made = true;
         }
+    }
+    
+    if changes_made {
+        log::info!("Node graph changes written back to genome");
     }
 }
 
