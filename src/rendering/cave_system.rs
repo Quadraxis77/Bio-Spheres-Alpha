@@ -620,8 +620,8 @@ impl CaveSystemRenderer {
         (vertices, indices)
     }
 
-    /// Hash function for Voronoi cell generation
-    fn hash3(x: i32, y: i32, z: i32, seed: u32) -> Vec3 {
+    /// Hash function for single random value at integer coordinates (no gradients)
+    fn hash1(x: i32, y: i32, z: i32, seed: u32) -> f32 {
         let mut h = seed;
         h = h.wrapping_mul(374761393).wrapping_add(x as u32);
         h = h.wrapping_mul(668265263).wrapping_add(y as u32);
@@ -629,119 +629,125 @@ impl CaveSystemRenderer {
         h ^= h >> 13;
         h = h.wrapping_mul(1274126177);
         h ^= h >> 16;
-        
-        let x_rand = h as f32 / u32::MAX as f32;
-        h = h.wrapping_mul(1664525).wrapping_add(1013904223);
-        let y_rand = h as f32 / u32::MAX as f32;
-        h = h.wrapping_mul(1664525).wrapping_add(1013904223);
-        let z_rand = h as f32 / u32::MAX as f32;
-        
-        Vec3::new(x_rand, y_rand, z_rand)
-    }
-    
-    /// Hash function for wall threshold
-    fn hash1(x: i32, y: i32, z: i32, seed: u32) -> f32 {
-        let mut h = seed.wrapping_add(12345);
-        h = h.wrapping_mul(374761393).wrapping_add(x as u32);
-        h = h.wrapping_mul(668265263).wrapping_add(y as u32);
-        h = h.wrapping_mul(1274126177).wrapping_add(z as u32);
-        h ^= h >> 13;
-        h = h.wrapping_mul(1274126177);
-        h ^= h >> 16;
-        
+
         h as f32 / u32::MAX as f32
     }
-    
-    /// Voronoi-based cave generation
-    fn voronoi_cave(pos: Vec3, params: &CaveParams) -> (f32, bool) {
-        let cell_size = params.scale;
-        let scaled_pos = pos / cell_size;
-        
-        let cell = Vec3::new(
-            scaled_pos.x.floor(),
-            scaled_pos.y.floor(),
-            scaled_pos.z.floor(),
-        );
-        let local_pos = scaled_pos - cell;
-        
-        let mut min_dist = f32::MAX;
-        let mut has_wall = false;
-        
-        // Check 3x3x3 neighborhood
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                for dz in -1..=1 {
-                    let neighbor = Vec3::new(
-                        cell.x + dx as f32,
-                        cell.y + dy as f32,
-                        cell.z + dz as f32,
-                    );
-                    
-                    let rand = Self::hash3(
-                        neighbor.x as i32,
-                        neighbor.y as i32,
-                        neighbor.z as i32,
-                        params.seed,
-                    );
-                    
-                    let point = Vec3::new(dx as f32, dy as f32, dz as f32) + rand;
-                    let diff = point - local_pos;
-                    let dist = diff.length();
-                    
-                    let wall_threshold = Self::hash1(
-                        neighbor.x as i32,
-                        neighbor.y as i32,
-                        neighbor.z as i32,
-                        params.seed,
-                    );
-                    
-                    // Cave obstacles: high density = more cave walls
-                    let is_wall = params.density > wall_threshold;
-                    
-                    if dist < min_dist && is_wall {
-                        min_dist = dist;
-                        has_wall = true;
-                    }
-                }
-            }
-        }
-        
-        min_dist *= cell_size;
-        (min_dist, has_wall)
+
+    /// Smooth interpolation (smoothstep / Hermite interpolation)
+    fn smoothstep(t: f32) -> f32 {
+        t * t * (3.0 - 2.0 * t)
     }
-    
-    /// Sample density at a point using Voronoi-based caves
+
+    /// 3D value noise - interpolates between random values at lattice points
+    /// No gradients used, just smooth blending between random corner values
+    fn value_noise_3d(pos: Vec3, seed: u32) -> f32 {
+        // Integer and fractional parts
+        let ix = pos.x.floor() as i32;
+        let iy = pos.y.floor() as i32;
+        let iz = pos.z.floor() as i32;
+
+        let fx = pos.x - pos.x.floor();
+        let fy = pos.y - pos.y.floor();
+        let fz = pos.z - pos.z.floor();
+
+        // Smooth interpolation weights
+        let ux = Self::smoothstep(fx);
+        let uy = Self::smoothstep(fy);
+        let uz = Self::smoothstep(fz);
+
+        // Random values at 8 corners of the cube
+        let c000 = Self::hash1(ix, iy, iz, seed);
+        let c100 = Self::hash1(ix + 1, iy, iz, seed);
+        let c010 = Self::hash1(ix, iy + 1, iz, seed);
+        let c110 = Self::hash1(ix + 1, iy + 1, iz, seed);
+        let c001 = Self::hash1(ix, iy, iz + 1, seed);
+        let c101 = Self::hash1(ix + 1, iy, iz + 1, seed);
+        let c011 = Self::hash1(ix, iy + 1, iz + 1, seed);
+        let c111 = Self::hash1(ix + 1, iy + 1, iz + 1, seed);
+
+        // Trilinear interpolation with smooth weights
+        let mix = |a: f32, b: f32, t: f32| a + (b - a) * t;
+
+        let x00 = mix(c000, c100, ux);
+        let x10 = mix(c010, c110, ux);
+        let x01 = mix(c001, c101, ux);
+        let x11 = mix(c011, c111, ux);
+
+        let y0 = mix(x00, x10, uy);
+        let y1 = mix(x01, x11, uy);
+
+        mix(y0, y1, uz)
+    }
+
+    /// Fractal Brownian Motion - combines multiple octaves of value noise
+    fn fbm(pos: Vec3, params: &CaveParams) -> f32 {
+        let mut value = 0.0;
+        let mut amplitude = 1.0;
+        let mut frequency = 1.0;
+        let mut max_value = 0.0;
+
+        for i in 0..params.octaves {
+            let sample_pos = pos * frequency / params.scale;
+            // Use different seed for each octave to avoid correlation
+            let octave_seed = params.seed.wrapping_add(i * 1337);
+            value += amplitude * Self::value_noise_3d(sample_pos, octave_seed);
+            max_value += amplitude;
+            amplitude *= params.persistence;
+            frequency *= 2.0;
+        }
+
+        // Normalize to 0-1 range
+        value / max_value
+    }
+
+    /// Domain warping - distorts the input coordinates for more organic shapes
+    fn warp_domain(pos: Vec3, params: &CaveParams) -> Vec3 {
+        let warp_scale = params.scale * 0.5;
+        let warp_strength = params.smoothness * params.scale;
+
+        // Sample noise at offset positions to get warp vectors
+        let warp_seed = params.seed.wrapping_add(9999);
+        let wx = Self::value_noise_3d(pos / warp_scale, warp_seed) - 0.5;
+        let wy = Self::value_noise_3d(pos / warp_scale + Vec3::new(31.7, 47.3, 13.1), warp_seed) - 0.5;
+        let wz = Self::value_noise_3d(pos / warp_scale + Vec3::new(73.9, 19.4, 67.2), warp_seed) - 0.5;
+
+        Vec3::new(
+            pos.x + wx * warp_strength,
+            pos.y + wy * warp_strength,
+            pos.z + wz * warp_strength,
+        )
+    }
+
+    /// Sample density at a point using value noise with domain warping
     fn sample_density(pos: Vec3, params: &CaveParams) -> f32 {
         // Distance from world center (spherical constraint)
         let world_center = Vec3::from(params.world_center);
         let dist_from_center = (pos - world_center).length();
         let sphere_sdf = dist_from_center - params.world_radius;
-        
+
         // Outside sphere = solid (high density)
         if sphere_sdf > 0.0 {
             return 1.0;
         }
-        
-        // Inside sphere: use Voronoi-based cave system
-        let (dist_to_wall, has_nearby_wall) = Self::voronoi_cave(pos, params);
-        
-        // If no walls nearby, it's open air (cave space)
-        // Return value well below threshold so marching cubes doesn't generate mesh
-        if !has_nearby_wall {
-            return params.threshold - 1.0;
-        }
-        
-        // Distance-based density: closer to wall = higher density
-        // At wall center: density = threshold + some amount (solid)
-        // At wall edge: density = threshold (surface)
-        // Beyond wall: density < threshold (air)
-        let wall_thickness = params.scale * 0.5; // Half the cell size
-        
-        if dist_to_wall < wall_thickness {
-            // Inside wall region
-            params.threshold + (1.0 - dist_to_wall / wall_thickness) * 0.5
+
+        // Apply domain warping for organic shapes
+        let warped_pos = Self::warp_domain(pos, params);
+
+        // Get base noise value using FBM
+        let noise = Self::fbm(warped_pos, params);
+
+        // Map noise to density based on cave density parameter
+        // density parameter controls how much solid rock vs open space
+        // Higher density = more solid rock, lower = more open tunnels
+        let cave_threshold = params.density.clamp(0.0, 1.0);
+
+        // Solid rock where noise is above threshold, open tunnels where below
+        if noise > cave_threshold {
+            // Solid rock region - above marching cubes threshold
+            let wall_factor = (noise - cave_threshold) / (1.0 - cave_threshold).max(0.001);
+            params.threshold + wall_factor * 0.5
         } else {
-            // Outside wall region (cave air)
+            // Open tunnel/cave space - below marching cubes threshold
             params.threshold - 0.5
         }
     }
