@@ -122,6 +122,10 @@ pub struct GpuScene {
     pub lod_threshold_high: f32,
     /// Whether to show debug colors for LOD levels
     pub lod_debug_colors: bool,
+    /// Gravity strength for physics simulation
+    pub gravity: f32,
+    /// Gravity direction flags (X, Y, Z)
+    pub gravity_dir: [bool; 3],
     /// Current cell count (tracked on GPU, no CPU canonical state)
     pub current_cell_count: u32,
     /// Next cell ID for deterministic cell creation
@@ -254,6 +258,8 @@ impl GpuScene {
             lod_threshold_medium: 25.0,
             lod_threshold_high: 50.0,
             lod_debug_colors: false,
+            gravity: 0.0,
+            gravity_dir: [false, true, false],
             current_cell_count: 0,
             next_cell_id: 0,
             tail_renderer,
@@ -409,7 +415,7 @@ impl GpuScene {
         if self.current_cell_count == 0 {
             return;
         }
-        
+
         // Execute pure GPU physics pipeline (7 compute shader stages + cave collision if enabled)
         // Cell count is read from GPU buffer by shaders
         // Uses cached bind groups (no per-frame allocation!)
@@ -423,6 +429,8 @@ impl GpuScene {
             delta_time,
             self.current_time,
             world_diameter,
+            self.gravity,
+            self.gravity_dir,
             self.cave_renderer.as_ref(),
             self.cave_physics_bind_groups.as_ref(),
         );

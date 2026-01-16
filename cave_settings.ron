@@ -1,11 +1,11 @@
 (
-    density: 0.32,
+    density: 0.48,
     scale: 36.0,
     octaves: 1,
     persistence: 0.41,
     threshold: 0.51,
     smoothness: 0.0,
-    seed: 4400,
+    seed: 2500,
     resolution: 128,
     collision_enabled: true,
     collision_stiffness: 100.0,

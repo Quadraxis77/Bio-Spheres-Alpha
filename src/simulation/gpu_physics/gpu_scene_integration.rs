@@ -57,9 +57,9 @@ struct PhysicsParams {
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
     
-    // Capacity for division (16 bytes - cell_capacity + 3 padding floats)
+    // Capacity and gravity direction (16 bytes)
     cell_capacity: u32,        // Maximum cells that can exist
-    _padding2: [f32; 3],       // Explicit padding to 16 bytes
+    gravity_dir: [f32; 3],     // Gravity direction multipliers (0.0 or 1.0 for X, Y, Z)
     
     // Padding to 256 bytes (192 bytes = 48 floats)
     _padding: [f32; 48],
@@ -92,12 +92,14 @@ pub fn execute_gpu_physics_step(
     delta_time: f32,
     current_time: f32,
     world_diameter: f32,
+    gravity: f32,
+    gravity_dir: [bool; 3],
     cave_renderer: Option<&crate::rendering::CaveSystemRenderer>,
     cave_physics_bind_groups: Option<&[wgpu::BindGroup; 3]>,
 ) {
     // Rotate to next buffer set
     let current_index = triple_buffers.rotate_buffers();
-    
+
     // Update physics params uniform buffer
     // Note: cell_count is now read from cell_count_buffer by shaders
     // world_size is the diameter, boundary_radius = world_size * 0.5
@@ -109,14 +111,18 @@ pub fn execute_gpu_physics_step(
         cell_count: 0, // Placeholder - shaders read from cell_count_buffer
         world_size,
         boundary_stiffness: 500.0,
-        gravity: 0.0,
+        gravity,
         acceleration_damping: 0.98,
         grid_resolution: GRID_RESOLUTION as i32,
         grid_cell_size: world_size / GRID_RESOLUTION as f32,
         max_cells_per_grid: 16,
         enable_thrust_force: 1, // Enable swim force for Flagellocyte cells
         cell_capacity: triple_buffers.capacity,
-        _padding2: [0.0; 3],
+        gravity_dir: [
+            if gravity_dir[0] { 1.0 } else { 0.0 },
+            if gravity_dir[1] { 1.0 } else { 0.0 },
+            if gravity_dir[2] { 1.0 } else { 0.0 },
+        ],
         _padding: [0.0; 48],
     };
     queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));

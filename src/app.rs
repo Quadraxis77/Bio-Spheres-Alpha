@@ -387,7 +387,11 @@ impl App {
         // Update performance metrics (includes automatic spike detection)
         self.performance.update(dt);
         
-        // Update camera and scene
+        // Update camera gravity direction and scene
+        self.scene_manager.active_scene_mut().camera_mut().set_gravity_direction(
+            self.ui.state.gravity,
+            [self.ui.state.gravity_x, self.ui.state.gravity_y, self.ui.state.gravity_z],
+        );
         self.scene_manager.active_scene_mut().camera_mut().update(dt);
         self.scene_manager.update(dt);
         
@@ -440,7 +444,15 @@ impl App {
                 self.ui.state.lod_threshold_high,
                 self.ui.state.lod_debug_colors,
             );
-            
+
+            // Apply gravity from UI
+            gpu_scene.gravity = self.ui.state.gravity;
+            gpu_scene.gravity_dir = [
+                self.ui.state.gravity_x,
+                self.ui.state.gravity_y,
+                self.ui.state.gravity_z,
+            ];
+
             // Set culling mode based on enabled flags
             let culling_mode = match (self.ui.state.frustum_enabled, self.ui.state.occlusion_enabled) {
                 (true, true) => crate::rendering::CullingMode::FrustumAndOcclusion,

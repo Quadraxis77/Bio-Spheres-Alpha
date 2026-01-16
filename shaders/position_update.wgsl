@@ -21,9 +21,9 @@ struct PhysicsParams {
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
     cell_capacity: u32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    gravity_dir_x: f32,
+    gravity_dir_y: f32,
+    gravity_dir_z: f32,
 }
 
 @group(0) @binding(0)
@@ -86,15 +86,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let vel = velocities_out[cell_idx].xyz;
     
     // Read accumulated forces from collision and adhesion stages (convert from fixed-point)
-    let force = vec3<f32>(
+    var force = vec3<f32>(
         fixed_to_float(force_accum_x[cell_idx]),
         fixed_to_float(force_accum_y[cell_idx]),
         fixed_to_float(force_accum_z[cell_idx])
     );
-    
+
+    // Apply gravity (F = mg) in selected directions
+    let gravity_force = params.gravity * mass;
+    force.x += gravity_force * params.gravity_dir_x;
+    force.y += gravity_force * params.gravity_dir_y;
+    force.z += gravity_force * params.gravity_dir_z;
+
     // Read previous acceleration for Verlet integration
     let old_acceleration = prev_accelerations[cell_idx].xyz;
-    
+
     // Calculate new acceleration from accumulated forces
     let new_acceleration = force / mass;
     

@@ -19,13 +19,16 @@ pub struct CameraController {
     pub rotation: Quat,
     pub target_rotation: Quat,
     pub mode: CameraMode,
-    
+
+    // Up direction for orbit mode (opposite of gravity direction)
+    pub up_direction: Vec3,
+
     // Mouse state
     is_dragging: bool,
     last_mouse_pos: Option<PhysicalPosition<f64>>,
     accumulated_mouse_delta: Vec3,
     accumulated_scroll: f32,
-    
+
     // Configuration (matches BioSpheres-Q defaults)
     pub move_speed: f32,
     pub sprint_multiplier: f32,
@@ -35,7 +38,7 @@ pub struct CameraController {
     pub enable_spring: bool,
     pub spring_stiffness: f32,
     pub spring_damping: f32,
-    
+
     // Keyboard state
     keys_pressed: KeyState,
 }
@@ -64,7 +67,7 @@ impl CameraController {
     pub fn new() -> Self {
         // Initial rotation: looking down at the scene from a 45-degree angle
         let initial_rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4);
-        
+
         Self {
             center: Vec3::ZERO,
             distance: 50.0,
@@ -72,6 +75,7 @@ impl CameraController {
             rotation: initial_rotation,
             target_rotation: initial_rotation,
             mode: CameraMode::Orbit,
+            up_direction: Vec3::Y, // Default up is +Y (gravity pulls down in -Y)
             is_dragging: false,
             last_mouse_pos: None,
             accumulated_mouse_delta: Vec3::ZERO,
@@ -85,6 +89,34 @@ impl CameraController {
             spring_stiffness: 50.0,
             spring_damping: 0.9,
             keys_pressed: KeyState::default(),
+        }
+    }
+
+    /// Set up direction from gravity (up is opposite of gravity direction)
+    pub fn set_gravity_direction(&mut self, gravity: f32, gravity_dir: [bool; 3]) {
+        // Build gravity vector from direction flags
+        let mut grav_vec = Vec3::ZERO;
+        if gravity_dir[0] { grav_vec.x = 1.0; }
+        if gravity_dir[1] { grav_vec.y = 1.0; }
+        if gravity_dir[2] { grav_vec.z = 1.0; }
+
+        // If no direction selected or gravity is zero, default to Y up
+        if grav_vec.length_squared() < 0.001 || gravity.abs() < 0.001 {
+            self.up_direction = Vec3::Y;
+            return;
+        }
+
+        // Normalize and determine up direction (opposite of gravity)
+        grav_vec = grav_vec.normalize();
+
+        // If gravity is negative, it pulls in the negative direction of the axis
+        // So up is the positive direction
+        // If gravity is positive, it pulls in the positive direction
+        // So up is the negative direction
+        if gravity < 0.0 {
+            self.up_direction = grav_vec; // Gravity pulls negative, up is positive
+        } else {
+            self.up_direction = -grav_vec; // Gravity pulls positive, up is negative
         }
     }
     
@@ -218,19 +250,17 @@ impl CameraController {
             let delta = self.accumulated_mouse_delta.truncate() * self.mouse_sensitivity;
             
             if self.mode == CameraMode::Orbit {
-                // Orbit mode: consistent rotation around world origin
-                // Calculate yaw (horizontal) and pitch (vertical) separately
-                
-                // Yaw: always rotate around world Y axis
-                let yaw_rotation = Quat::from_axis_angle(Vec3::Y, -delta.x);
-                
+                // Orbit mode: longitude/latitude rotation around gravity-defined up axis
+                // Yaw (longitude): rotate around the up direction (opposite of gravity)
+                let yaw_rotation = Quat::from_axis_angle(self.up_direction, -delta.x);
+
                 // Apply yaw rotation to current target rotation
                 self.target_rotation = yaw_rotation * self.target_rotation;
-                
-                // Pitch: rotate around the camera's current right axis (after yaw)
+
+                // Pitch (latitude): rotate around the camera's current right axis
                 let right_axis = self.target_rotation * Vec3::X;
                 let pitch_rotation = Quat::from_axis_angle(right_axis, -delta.y);
-                
+
                 // Apply pitch rotation
                 self.target_rotation = pitch_rotation * self.target_rotation;
                 self.target_rotation = self.target_rotation.normalize();

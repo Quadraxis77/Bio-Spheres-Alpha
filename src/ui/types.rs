@@ -254,6 +254,22 @@ pub struct GlobalUiState {
     #[serde(default)]
     pub lod_debug_colors: bool,
 
+    /// Gravity strength (negative = downward)
+    #[serde(default)]
+    pub gravity: f32,
+
+    /// Gravity applies to X axis
+    #[serde(default)]
+    pub gravity_x: bool,
+
+    /// Gravity applies to Y axis
+    #[serde(default = "default_true")]
+    pub gravity_y: bool,
+
+    /// Gravity applies to Z axis
+    #[serde(default)]
+    pub gravity_z: bool,
+
     /// Whether the low FPS warning dialog is shown
     #[serde(skip)]
     pub show_low_fps_dialog: bool,
@@ -333,6 +349,10 @@ impl Default for GlobalUiState {
             lod_threshold_medium: 25.0,
             lod_threshold_high: 50.0,
             lod_debug_colors: false,
+            gravity: 0.0,
+            gravity_x: false,
+            gravity_y: true,
+            gravity_z: false,
             show_low_fps_dialog: false,
             show_reset_dialog: false,
             mode_request: None,

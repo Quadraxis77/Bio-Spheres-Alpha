@@ -620,7 +620,19 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             ui.add(egui::Slider::new(&mut state.world_diameter, 50.0..=200.0).suffix(" units"));
             
             ui.add_space(4.0);
-            
+
+            // Gravity slider
+            ui.label("Gravity:");
+            ui.add(egui::Slider::new(&mut state.gravity, -50.0..=50.0).suffix(" m/s²"));
+            ui.horizontal(|ui| {
+                ui.label("Direction:");
+                ui.checkbox(&mut state.gravity_x, "X");
+                ui.checkbox(&mut state.gravity_y, "Y");
+                ui.checkbox(&mut state.gravity_z, "Z");
+            });
+
+            ui.add_space(4.0);
+
             // Cell capacity slider
             let current_capacity = context.gpu_capacity().unwrap_or(state.cell_capacity);
             let capacity_k = state.cell_capacity / 1000;
