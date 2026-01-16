@@ -395,6 +395,15 @@ impl App {
         if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
             // Poll for tool operation results and update radial menu state
             self.scene_manager.poll_tool_operation_results(&mut self.editor_state.radial_menu, &mut self.editor_state.drag_distance, &self.queue);
+            
+            // Apply cave parameters from UI if they changed
+            if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                if self.editor_state.cave_params_dirty {
+                    gpu_scene.apply_cave_params_from_editor(&self.editor_state);
+                    // Clear the dirty flag in editor state
+                    self.editor_state.cave_params_dirty = false;
+                }
+            }
         }
         
         // Auto-save dock layouts periodically
@@ -592,6 +601,12 @@ impl App {
                     // Reset the GPU scene
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                         gpu_scene.reset(&self.queue);
+                        
+                        // Reapply saved cave settings after reset
+                        self.editor_state.cave_params_dirty = true;
+                        gpu_scene.apply_cave_params_from_editor(&self.editor_state);
+                        gpu_scene.update_cave_params(&self.device, &self.queue);
+                        self.editor_state.cave_params_dirty = false;
                     }
                 }
                 crate::ui::panel_context::SceneModeRequest::SetSpeed(speed) => {
@@ -624,7 +639,11 @@ impl App {
                     }
                 }
                 
-                self.scene_manager.switch_mode(requested_mode, &self.device, &self.queue, &self.config);
+                let cave_initialized = self.scene_manager.switch_mode(requested_mode, &self.device, &self.queue, &self.config);
+                if cave_initialized {
+                    // Cave was just initialized, mark params as dirty so they get applied
+                    self.editor_state.cave_params_dirty = true;
+                }
                 self.dock_manager.switch_mode(requested_mode);
                 // Reset cursor visibility and radial menu state when switching modes
                 
@@ -649,7 +668,11 @@ impl App {
                     self.working_genome = preview_scene.genome.clone();
                 }
             }
-            self.scene_manager.switch_mode(dock_mode, &self.device, &self.queue, &self.config);
+            let cave_initialized = self.scene_manager.switch_mode(dock_mode, &self.device, &self.queue, &self.config);
+            if cave_initialized {
+                // Cave was just initialized, mark params as dirty so they get applied
+                self.editor_state.cave_params_dirty = true;
+            }
         }
         
         // Create command encoder for egui rendering

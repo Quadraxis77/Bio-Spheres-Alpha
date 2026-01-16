@@ -59,6 +59,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::GenomeEditor => render_genome_editor(ui, self.context),
             Panel::PerformanceMonitor => render_performance_monitor(ui, self.context, self.state),
             Panel::RenderingControls => render_rendering_controls(ui),
+            Panel::CaveSystem => render_cave_system(ui, self.context),
             Panel::TimeScrubber => render_time_scrubber(ui, self.context),
             Panel::ThemeEditor => render_theme_editor(ui),
             Panel::CameraSettings => render_camera_settings(ui, self.context),
@@ -886,6 +887,119 @@ fn render_rendering_controls(ui: &mut Ui) {
     ui.separator();
     ui.label("Fog, bloom, and visual settings.");
     // TODO: Implement rendering controls
+}
+
+/// Render the Cave System panel for procedural cave generation and collision.
+fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
+    ui.heading("Cave System");
+    ui.separator();
+    
+    // Check if we're in GPU mode
+    if !context.is_gpu_mode() {
+        ui.label("Cave system is only available in GPU mode.");
+        return;
+    }
+    
+    // Store cave generation request in editor state
+    let _editor_state = &mut context.editor_state;
+    
+    // Check if cave system exists
+    let has_cave_system = context.scene_manager.gpu_scene()
+        .map(|s| s.cave_renderer.is_some())
+        .unwrap_or(false);
+    
+    if !has_cave_system {
+        ui.label("Cave system not initialized.");
+        ui.add_space(10.0);
+        
+        if ui.button("🏔️ Generate Cave System").clicked() {
+            // Request cave system initialization
+            // This will be handled by the app's render loop
+            *context.scene_request = crate::ui::panel_context::SceneModeRequest::Reset; // Temporary - will add proper request
+        }
+        
+        ui.add_space(10.0);
+        ui.label("Click the button above to generate a procedural cave system with XPBD collision.");
+        return;
+    }
+    
+    // Cave system exists - show editable parameters
+    if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
+        if let Some(cave_renderer) = &gpu_scene.cave_renderer {
+            let params = cave_renderer.params();
+            
+            // Create local copies for editing
+            let mut density = params.density;
+            let mut scale = params.scale;
+            let mut octaves = params.octaves as i32;
+            let mut persistence = params.persistence;
+            let mut threshold = params.threshold;
+            let mut smoothness = params.smoothness;
+            let mut seed = params.seed as i32;
+            let mut resolution = params.grid_resolution as i32;
+            let mut collision_enabled = params.collision_enabled != 0;
+            let mut collision_stiffness = params.collision_stiffness;
+            let mut collision_damping = params.collision_damping;
+            let mut substeps = params.substeps as i32;
+            
+            let mut params_changed = false;
+            
+            ui.heading("Generation Parameters");
+            ui.add_space(5.0);
+            
+            // Editable parameters
+            params_changed |= ui.add(egui::Slider::new(&mut density, 0.1..=2.0).text("Density")).changed();
+            params_changed |= ui.add(egui::Slider::new(&mut scale, 1.0..=100.0).text("Scale")).changed();
+            params_changed |= ui.add(egui::Slider::new(&mut octaves, 1..=8).text("Octaves")).changed();
+            params_changed |= ui.add(egui::Slider::new(&mut persistence, 0.1..=1.0).text("Persistence")).changed();
+            params_changed |= ui.add(egui::Slider::new(&mut threshold, 0.0..=1.0).text("Threshold")).changed();
+            params_changed |= ui.add(egui::Slider::new(&mut smoothness, 0.0..=1.0).text("Smoothness")).changed();
+            params_changed |= ui.add(egui::Slider::new(&mut seed, 0..=9999).text("Seed")).changed();
+            params_changed |= ui.add(egui::Slider::new(&mut resolution, 32..=128).text("Resolution")).changed();
+            
+            ui.add_space(10.0);
+            ui.separator();
+            ui.heading("Collision Settings");
+            ui.add_space(5.0);
+            
+            params_changed |= ui.checkbox(&mut collision_enabled, "Enable Collision").changed();
+            
+            if collision_enabled {
+                params_changed |= ui.add(egui::Slider::new(&mut collision_stiffness, 100.0..=10000.0).text("Stiffness")).changed();
+                params_changed |= ui.add(egui::Slider::new(&mut collision_damping, 0.0..=1.0).text("Damping")).changed();
+                params_changed |= ui.add(egui::Slider::new(&mut substeps, 1..=10).text("Substeps")).changed();
+            }
+            
+            ui.add_space(10.0);
+            ui.separator();
+            ui.label(format!("Triangle Count: {}", params.triangle_count));
+            
+            ui.add_space(10.0);
+            
+            let regenerate_clicked = ui.button("🔄 Regenerate Cave").clicked();
+            
+            // Apply changes if any parameter changed or regenerate was clicked
+            if params_changed || regenerate_clicked {
+                // Store changes in editor state for the app to apply
+                context.editor_state.cave_density = density;
+                context.editor_state.cave_scale = scale;
+                context.editor_state.cave_octaves = octaves as u32;
+                context.editor_state.cave_persistence = persistence;
+                context.editor_state.cave_threshold = threshold;
+                context.editor_state.cave_smoothness = smoothness;
+                context.editor_state.cave_seed = seed as u32;
+                context.editor_state.cave_resolution = resolution as u32;
+                context.editor_state.cave_collision_enabled = collision_enabled;
+                context.editor_state.cave_collision_stiffness = collision_stiffness;
+                context.editor_state.cave_collision_damping = collision_damping;
+                context.editor_state.cave_substeps = substeps as u32;
+                context.editor_state.cave_params_dirty = true;
+                
+                // Save settings to disk
+                context.editor_state.save_cave_settings();
+            }
+        }
+    }
 }
 
 /// Render the TimeScrubber panel (placeholder).

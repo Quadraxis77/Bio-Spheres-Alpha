@@ -46,6 +46,8 @@ pub enum Panel {
     GizmoSettings,
     /// Cell type visuals panel for appearance settings.
     CellTypeVisuals,
+    /// Cave system settings for procedural cave generation and collision.
+    CaveSystem,
 
     // Genome editor sub-panels
     /// Cell modes list panel.
@@ -87,6 +89,7 @@ impl Panel {
             Panel::LightingSettings => true,
             Panel::GizmoSettings => true,
             Panel::RenderingControls => true,
+            Panel::CaveSystem => true,
             Panel::Help => true,
 
             // Preview mode only (genome editing)
@@ -132,6 +135,7 @@ impl Panel {
                 Panel::PerformanceMonitor,
                 Panel::RenderingControls,
                 Panel::CameraSettings,
+                Panel::CaveSystem,
                 Panel::GizmoSettings,
             ],
         }
@@ -155,6 +159,7 @@ impl Panel {
             Panel::LightingSettings,
             Panel::GizmoSettings,
             Panel::CellTypeVisuals,
+            Panel::CaveSystem,
             Panel::Modes,
             Panel::NameTypeEditor,
             Panel::AdhesionSettings,
@@ -185,6 +190,7 @@ impl Panel {
             Panel::LightingSettings => "Lighting",
             Panel::GizmoSettings => "Gizmo Rendering",
             Panel::CellTypeVisuals => "Cell Visuals",
+            Panel::CaveSystem => "Cave System",
             Panel::Modes => "Modes",
             Panel::NameTypeEditor => "Name & Type",
             Panel::AdhesionSettings => "Adhesion Settings",

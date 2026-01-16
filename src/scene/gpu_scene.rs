@@ -4,7 +4,7 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CellRenderer, CullingMode, GpuAdhesionLineRenderer, HizGenerator, InstanceBuilder, TailRenderer, WorldSphereRenderer};
+use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, HizGenerator, InstanceBuilder, TailRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager};
@@ -128,6 +128,12 @@ pub struct GpuScene {
     next_cell_id: u32,
     /// Tail renderer for flagellocyte cells
     pub tail_renderer: TailRenderer,
+    /// Cave system renderer for procedural cave generation and collision
+    pub cave_renderer: Option<CaveSystemRenderer>,
+    /// Flag to indicate cave params need GPU update
+    pub cave_params_dirty: bool,
+    /// Cave-specific physics bind groups (one per buffer index)
+    cave_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
 }
 
 impl GpuScene {
@@ -202,6 +208,9 @@ impl GpuScene {
         
         // Create tail renderer for flagellocyte cells
         let tail_renderer = TailRenderer::new(device, surface_config.format, capacity as usize);
+        
+        // Cave system will be initialized on demand
+        let cave_renderer = None;
 
         Self {
             renderer,
@@ -248,6 +257,9 @@ impl GpuScene {
             current_cell_count: 0,
             next_cell_id: 0,
             tail_renderer,
+            cave_renderer,
+            cave_params_dirty: false,
+            cave_physics_bind_groups: None,
         }
     }
     
@@ -398,7 +410,7 @@ impl GpuScene {
             return;
         }
         
-        // Execute pure GPU physics pipeline (7 compute shader stages)
+        // Execute pure GPU physics pipeline (7 compute shader stages + cave collision if enabled)
         // Cell count is read from GPU buffer by shaders
         // Uses cached bind groups (no per-frame allocation!)
         execute_gpu_physics_step(
@@ -411,6 +423,8 @@ impl GpuScene {
             delta_time,
             self.current_time,
             world_diameter,
+            self.cave_renderer.as_ref(),
+            self.cave_physics_bind_groups.as_ref(),
         );
         
         // Execute lifecycle pipeline for cell division (4 compute shader stages)
@@ -1108,8 +1122,9 @@ impl GpuScene {
             max_cells_per_grid: i32,
             enable_thrust_force: i32,
             cell_capacity: u32,
-            _padding2: [f32; 3],
-            _padding: [f32; 48],
+            _pad0: f32,
+            _pad1: f32,
+            _pad2: f32,
         }
         
         let world_diameter = self.config.sphere_radius * 2.0;
@@ -1127,8 +1142,9 @@ impl GpuScene {
             max_cells_per_grid: 16,
             enable_thrust_force: 0,
             cell_capacity: self.gpu_triple_buffers.capacity,
-            _padding2: [0.0; 3],
-            _padding: [0.0; 48],
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         
         queue.write_buffer(&self.gpu_triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
@@ -1283,6 +1299,173 @@ impl GpuScene {
         }
     }
     
+    /// Initialize cave system for procedural generation and collision
+    pub fn has_cave_renderer(&self) -> bool {
+        self.cave_renderer.is_some()
+    }
+    
+    pub fn initialize_cave_system(&mut self, device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> bool {
+        if self.cave_renderer.is_none() {
+            let width = self.renderer.width;
+            let height = self.renderer.height;
+            let world_radius = self.config.sphere_radius;
+            
+            let cave_renderer = CaveSystemRenderer::new(device, surface_format, width, height, world_radius);
+            
+            self.cave_renderer = Some(cave_renderer);
+            
+            // Create cave-specific physics bind groups
+            self.create_cave_physics_bind_groups(device);
+            
+            return true; // Cave was just initialized, params need to be applied
+        }
+        false // Cave was already initialized
+    }
+    
+    /// Create bind groups specifically for cave collision (only bindings 0-3)
+    fn create_cave_physics_bind_groups(&mut self, device: &wgpu::Device) {
+        if self.cave_renderer.is_none() {
+            return;
+        }
+        
+        // Create a bind group layout for cave collision (in-place position/velocity updates)
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cave Physics Bind Group Layout"),
+            entries: &[
+                // @binding(0): PhysicsParams uniform
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // @binding(1): positions (read_write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // @binding(2): velocities (read_write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // @binding(3): cell_count_buffer (read_write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        
+        // Create bind groups for each buffer index
+        let bind_groups = [
+            self.create_cave_physics_bind_group(device, &layout, 0),
+            self.create_cave_physics_bind_group(device, &layout, 1),
+            self.create_cave_physics_bind_group(device, &layout, 2),
+        ];
+        
+        self.cave_physics_bind_groups = Some(bind_groups);
+    }
+    
+    fn create_cave_physics_bind_group(
+        &self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        buffer_index: usize,
+    ) -> wgpu::BindGroup {
+        // Cave collision performs in-place position correction on the buffer that
+        // position_update just wrote to. Position_update writes to (buffer_index+1)%3,
+        // so cave collision should operate on the same buffer: (buffer_index+1)%3
+        let write_buffer = (buffer_index + 1) % 3;
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("Cave Physics Bind Group {}", buffer_index)),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.gpu_triple_buffers.physics_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.gpu_triple_buffers.position_and_mass[write_buffer].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.gpu_triple_buffers.velocity[write_buffer].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.gpu_triple_buffers.cell_count_buffer.as_entire_binding(),
+                },
+            ],
+        })
+    }
+    
+    /// Apply cave parameters from editor state
+    pub fn apply_cave_params_from_editor(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
+        if !editor_state.cave_params_dirty {
+            return;
+        }
+        
+        if let Some(ref mut cave_renderer) = self.cave_renderer {
+            let mut params = *cave_renderer.params();
+            params.density = editor_state.cave_density;
+            params.scale = editor_state.cave_scale;
+            params.octaves = editor_state.cave_octaves;
+            params.persistence = editor_state.cave_persistence;
+            params.threshold = editor_state.cave_threshold;
+            params.smoothness = editor_state.cave_smoothness;
+            params.seed = editor_state.cave_seed;
+            params.grid_resolution = editor_state.cave_resolution;
+            params.collision_enabled = if editor_state.cave_collision_enabled { 1 } else { 0 };
+            params.collision_stiffness = editor_state.cave_collision_stiffness;
+            params.collision_damping = editor_state.cave_collision_damping;
+            params.substeps = editor_state.cave_substeps;
+            
+            // Ensure world dimensions match the physics world
+            params.world_center = [0.0, 0.0, 0.0];
+            params.world_radius = self.config.sphere_radius;
+            
+            *cave_renderer.params_mut() = params;
+            self.cave_params_dirty = true;
+        }
+    }
+    
+    /// Update cave parameters and regenerate mesh if needed
+    pub fn update_cave_params(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if !self.cave_params_dirty {
+            return;
+        }
+        
+        if let Some(ref mut cave_renderer) = self.cave_renderer {
+            let params = *cave_renderer.params();
+            cave_renderer.update_params(device, queue, params);
+            self.cave_params_dirty = false;
+        }
+    }
+    
     /// Initialize all GPU systems for the scene
     /// 
     /// This method creates and initializes all GPU systems including:
@@ -1368,8 +1551,9 @@ impl GpuScene {
             max_cells_per_grid: i32,
             enable_thrust_force: i32,
             cell_capacity: u32,
-            _padding2: [f32; 3],
-            _padding: [f32; 48],
+            _pad0: f32,
+            _pad1: f32,
+            _pad2: f32,
         }
         
         let world_diameter = self.config.sphere_radius * 2.0;
@@ -1387,8 +1571,9 @@ impl GpuScene {
             max_cells_per_grid: 16,
             enable_thrust_force: 0,
             cell_capacity: self.gpu_triple_buffers.capacity,
-            _padding2: [0.0; 3],
-            _padding: [0.0; 48],
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         
         queue.write_buffer(&self.gpu_triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
@@ -1514,6 +1699,9 @@ impl Scene for GpuScene {
             label: Some("GPU Scene Encoder"),
         });
 
+        // Update cave parameters if dirty
+        self.update_cave_params(device, queue);
+        
         // Process any pending cell insertion from input handling
         let cell_inserted = self.process_pending_insertion(device, &mut encoder, queue);
 
@@ -1544,6 +1732,7 @@ impl Scene for GpuScene {
             
             while self.time_accumulator >= fixed_dt && steps < max_steps {
                 self.run_physics(device, &mut encoder, queue, fixed_dt, world_diameter);
+
                 self.current_time += fixed_dt;
                 self.time_accumulator -= fixed_dt;
                 steps += 1;
@@ -1693,6 +1882,18 @@ impl Scene for GpuScene {
                 self.camera.rotation,
             );
         }
+        
+        // Render cave system if initialized
+        if let Some(ref mut cave_renderer) = self.cave_renderer {
+            cave_renderer.render(
+                &mut encoder,
+                queue,
+                view,
+                &self.renderer.depth_view,
+                self.camera.position(),
+                self.camera.rotation,
+            );
+        }
 
         // Render adhesion lines if enabled
         if self.show_adhesion_lines {
@@ -1781,6 +1982,11 @@ impl Scene for GpuScene {
         self.hiz_generator.resize(device, width, height);
         self.instance_builder.reset_hiz(); // Reset Hi-Z config so bind group is recreated with new texture
         self.first_frame = true; // Need to regenerate Hi-Z
+        
+        // Resize cave renderer if initialized
+        if let Some(ref mut cave_renderer) = self.cave_renderer {
+            cave_renderer.resize(width, height);
+        }
     }
 
     fn camera(&self) -> &CameraController {

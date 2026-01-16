@@ -9,6 +9,7 @@ use crate::scene::SceneManager;
 use crate::ui::camera::CameraController;
 use crate::ui::performance::PerformanceMetrics;
 use crate::ui::types::SimulationMode;
+use std::path::PathBuf;
 
 /// Request for scene mode changes.
 ///
@@ -126,6 +127,21 @@ pub struct GenomeEditorState {
     /// Whether the time slider is being dragged
     pub time_slider_dragging: bool,
     
+    // Cave system parameters
+    pub cave_density: f32,
+    pub cave_scale: f32,
+    pub cave_octaves: u32,
+    pub cave_persistence: f32,
+    pub cave_threshold: f32,
+    pub cave_smoothness: f32,
+    pub cave_seed: u32,
+    pub cave_resolution: u32,
+    pub cave_collision_enabled: bool,
+    pub cave_collision_stiffness: f32,
+    pub cave_collision_damping: f32,
+    pub cave_substeps: u32,
+    pub cave_params_dirty: bool,
+    
     // Orientation gizmo state
     /// Whether the orientation gizmo is visible
     pub gizmo_visible: bool,
@@ -157,6 +173,10 @@ pub struct GenomeEditorState {
 impl GenomeEditorState {
     /// Create a new genome editor state with default values.
     pub fn new() -> Self {
+        let (cave_density, cave_scale, cave_octaves, cave_persistence, cave_threshold, 
+             cave_smoothness, cave_seed, cave_resolution, cave_collision_enabled, cave_collision_stiffness, 
+             cave_collision_damping, cave_substeps) = Self::load_cave_settings();
+        
         Self {
             renaming_mode: None,
             rename_buffer: String::new(),
@@ -187,8 +207,21 @@ impl GenomeEditorState {
             child_b_keep_adhesion: false,
             enable_snapping: true,
             time_value: 0.0,
-            max_preview_duration: 60.0, // 60 second preview range
+            max_preview_duration: 60.0,
             time_slider_dragging: false,
+            cave_density,
+            cave_scale,
+            cave_octaves,
+            cave_persistence,
+            cave_threshold,
+            cave_smoothness,
+            cave_seed,
+            cave_resolution,
+            cave_collision_enabled,
+            cave_collision_stiffness,
+            cave_collision_damping,
+            cave_substeps,
+            cave_params_dirty: false,
             gizmo_visible: true,
             split_rings_visible: true,
             radial_menu: crate::ui::radial_menu::RadialMenuState::new(),
@@ -206,6 +239,135 @@ impl GenomeEditorState {
         if let Err(e) = crate::cell::types::CellTypeVisualsStore::save(&self.cell_type_visuals) {
             log::error!("Failed to save cell type visuals: {}", e);
         }
+    }
+    
+    /// Save cave settings to disk.
+    pub fn save_cave_settings(&self) {
+        if let Err(e) = Self::save_cave_settings_to_file(
+            self.cave_density,
+            self.cave_scale,
+            self.cave_octaves,
+            self.cave_persistence,
+            self.cave_threshold,
+            self.cave_smoothness,
+            self.cave_seed,
+            self.cave_resolution,
+            self.cave_collision_enabled,
+            self.cave_collision_stiffness,
+            self.cave_collision_damping,
+            self.cave_substeps,
+        ) {
+            log::error!("Failed to save cave settings: {}", e);
+        }
+    }
+    
+    fn save_cave_settings_to_file(
+        density: f32,
+        scale: f32,
+        octaves: u32,
+        persistence: f32,
+        threshold: f32,
+        smoothness: f32,
+        seed: u32,
+        resolution: u32,
+        collision_enabled: bool,
+        collision_stiffness: f32,
+        collision_damping: f32,
+        substeps: u32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        #[derive(serde::Serialize)]
+        struct CaveSettings {
+            density: f32,
+            scale: f32,
+            octaves: u32,
+            persistence: f32,
+            threshold: f32,
+            smoothness: f32,
+            seed: u32,
+            resolution: u32,
+            collision_enabled: bool,
+            collision_stiffness: f32,
+            collision_damping: f32,
+            substeps: u32,
+        }
+        
+        let settings = CaveSettings {
+            density,
+            scale,
+            octaves,
+            persistence,
+            threshold,
+            smoothness,
+            seed,
+            resolution,
+            collision_enabled,
+            collision_stiffness,
+            collision_damping,
+            substeps,
+        };
+        
+        let path = PathBuf::from("cave_settings.ron");
+        let contents = ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default())?;
+        std::fs::write(path, contents)?;
+        Ok(())
+    }
+    
+    /// Load cave settings from disk, or return defaults if file doesn't exist.
+    pub fn load_cave_settings() -> (f32, f32, u32, f32, f32, f32, u32, u32, bool, f32, f32, u32) {
+        #[derive(serde::Deserialize)]
+        struct CaveSettings {
+            density: f32,
+            scale: f32,
+            octaves: u32,
+            persistence: f32,
+            threshold: f32,
+            smoothness: f32,
+            seed: u32,
+            #[serde(default = "default_resolution")]
+            resolution: u32,
+            collision_enabled: bool,
+            collision_stiffness: f32,
+            collision_damping: f32,
+            substeps: u32,
+        }
+        
+        fn default_resolution() -> u32 { 64 }
+        
+        let path = PathBuf::from("cave_settings.ron");
+        
+        if path.exists() {
+            match std::fs::read_to_string(&path) {
+                Ok(contents) => {
+                match ron::from_str::<CaveSettings>(&contents) {
+                    Ok(settings) => {
+                        return (
+                                settings.density,
+                                settings.scale,
+                                settings.octaves,
+                                settings.persistence,
+                                settings.threshold,
+                                settings.smoothness,
+                                settings.seed,
+                                settings.resolution,
+                                settings.collision_enabled,
+                                settings.collision_stiffness,
+                                settings.collision_damping,
+                                settings.substeps,
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to parse cave settings: {}. Using defaults.", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to read cave settings: {}. Using defaults.", e);
+                }
+            }
+        }
+        
+        // Return defaults
+        (1.0, 10.0, 4u32, 0.5, 0.5, 0.1, 12345u32, 64u32, true, 1000.0, 0.5, 4u32)
     }
 }
 

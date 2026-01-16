@@ -92,6 +92,8 @@ pub fn execute_gpu_physics_step(
     delta_time: f32,
     current_time: f32,
     world_diameter: f32,
+    cave_renderer: Option<&crate::rendering::CaveSystemRenderer>,
+    cave_physics_bind_groups: Option<&[wgpu::BindGroup; 3]>,
 ) {
     // Rotate to next buffer set
     let current_index = triple_buffers.rotate_buffers();
@@ -198,6 +200,26 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(1, position_update_rotations_bind_group, &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.position_update_force_accum, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        
+        // Stage 6.5: Cave collision (if enabled) - corrects positions to prevent wall penetration
+        if let (Some(cave_renderer), Some(cave_bind_groups)) = (cave_renderer, cave_physics_bind_groups) {
+            if cave_renderer.params().collision_enabled != 0 {
+                // Build spatial grid for cave mesh (needs separate pass)
+                drop(compute_pass);
+                cave_renderer.build_spatial_grid(encoder);
+                
+                // Resume compute pass for collision
+                compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("GPU Physics Pipeline (continued)"),
+                    timestamp_writes: None,
+                });
+                
+                compute_pass.set_pipeline(cave_renderer.collision_pipeline());
+                compute_pass.set_bind_group(0, &cave_bind_groups[current_index], &[]);
+                compute_pass.set_bind_group(1, cave_renderer.collision_bind_group(), &[]);
+                compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+            }
+        }
         
         // Stage 7: Angular velocity integration (256 threads)
         // Applies accumulated torques to angular velocities and rotations

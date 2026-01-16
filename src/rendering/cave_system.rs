@@ -8,6 +8,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
+use std::sync::Arc;
 
 /// Camera uniform structure matching the shader
 #[repr(C)]
@@ -45,8 +46,19 @@ pub struct CaveParams {
     /// Grid resolution for marching cubes
     pub grid_resolution: u32,
     
-    /// Padding to 256-byte alignment
-    _padding: [f32; 50],
+    /// Triangle count (for collision)
+    pub triangle_count: u32,
+    /// Collision enabled flag
+    pub collision_enabled: u32,
+    /// Collision stiffness (XPBD)
+    pub collision_stiffness: f32,
+    /// Collision damping
+    pub collision_damping: f32,
+    /// XPBD substeps
+    pub substeps: u32,
+    
+    /// Padding to 256-byte alignment (68 bytes used, need 188 bytes padding = 47 vec4s)
+    _padding: [f32; 188],
 }
 
 impl Default for CaveParams {
@@ -62,12 +74,17 @@ impl Default for CaveParams {
             smoothness: 0.1,
             seed: 12345,
             grid_resolution: 64,
-            _padding: [0.0; 50],
+            triangle_count: 0,
+            collision_enabled: 1,
+            collision_stiffness: 1000.0,
+            collision_damping: 0.5,
+            substeps: 4,
+            _padding: [0.0; 188],
         }
     }
 }
 
-/// Vertex data for cave mesh
+/// Vertex data for cave mesh (rendering)
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct CaveVertex {
@@ -76,7 +93,33 @@ pub struct CaveVertex {
     pub uv: [f32; 2],
 }
 
-/// Cave system renderer
+/// Vertex data for collision (positions only, GPU-aligned)
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct CaveCollisionVertex {
+    position: [f32; 3],
+    _padding: f32,
+}
+
+/// Triangle indices for collision
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct CaveTriangle {
+    v0: u32,
+    v1: u32,
+    v2: u32,
+    _padding: u32,
+}
+
+/// Spatial grid cell for fast triangle lookup
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct CaveSpatialCell {
+    triangle_count: u32,
+    triangle_indices: [u32; 16], // Max 16 triangles per cell
+}
+
+/// Cave system renderer with GPU collision
 pub struct CaveSystemRenderer {
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
@@ -89,18 +132,38 @@ pub struct CaveSystemRenderer {
     params: CaveParams,
     width: u32,
     height: u32,
-    /// CPU copy of vertices for collision (positions only)
-    collision_vertices: Vec<Vec3>,
-    /// CPU copy of indices for collision
-    collision_indices: Vec<u32>,
+    
+    // GPU collision buffers
+    collision_vertex_buffer: wgpu::Buffer,
+    collision_triangle_buffer: wgpu::Buffer,
+    collision_spatial_grid: wgpu::Buffer,
+    collision_bind_group: wgpu::BindGroup,
+    
+    // Collision compute pipelines
+    spatial_grid_build_pipeline: wgpu::ComputePipeline,
+    collision_pipeline: wgpu::ComputePipeline,
+    
+    // Bind group layouts
+    collision_layout: Arc<wgpu::BindGroupLayout>,
 }
 
 impl CaveSystemRenderer {
     pub fn new(
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+        world_radius: f32,
     ) -> Self {
-        let params = CaveParams::default();
+        let mut params = CaveParams::default();
+        
+        // Set world dimensions before generating mesh
+        params.world_center = [0.0, 0.0, 0.0];
+        params.world_radius = world_radius;
+        
+        // Generate initial cave mesh with correct world size
+        let (vertices, indices) = Self::generate_cave_mesh(&params);
+        params.triangle_count = (indices.len() / 3) as u32;
         
         // Create parameter buffer
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -220,7 +283,7 @@ impl CaveSystemRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back), // Enable backface culling for single-sided rendering
+                cull_mode: Some(wgpu::Face::Front),  // Cull front faces to see inside cave
                 unclipped_depth: false,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
@@ -236,15 +299,210 @@ impl CaveSystemRenderer {
             multiview: None,
             cache: None,
         });
-
-        // Generate initial cave mesh
-        let (vertices, indices) = Self::generate_cave_mesh(&params);
         
-        // Store collision data (positions only)
-        let collision_vertices: Vec<Vec3> = vertices.iter()
-            .map(|v| Vec3::from(v.position))
+        // Create GPU collision buffers
+        let collision_vertices_gpu: Vec<CaveCollisionVertex> = vertices.iter()
+            .map(|v| CaveCollisionVertex {
+                position: v.position,
+                _padding: 0.0,
+            })
             .collect();
-        let collision_indices = indices.clone();
+        
+        let collision_triangles: Vec<CaveTriangle> = (0..indices.len() / 3)
+            .map(|i| CaveTriangle {
+                v0: indices[i * 3],
+                v1: indices[i * 3 + 1],
+                v2: indices[i * 3 + 2],
+                _padding: 0,
+            })
+            .collect();
+        
+        let collision_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Cave Collision Vertices"),
+            contents: bytemuck::cast_slice(&collision_vertices_gpu),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        
+        let collision_triangle_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Cave Collision Triangles"),
+            contents: bytemuck::cast_slice(&collision_triangles),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        
+        // Create spatial grid (grid_resolution^3 cells)
+        let grid_size = (params.grid_resolution * params.grid_resolution * params.grid_resolution) as usize;
+        let spatial_grid_data = vec![CaveSpatialCell {
+            triangle_count: 0,
+            triangle_indices: [0; 16],
+        }; grid_size];
+        
+        let collision_spatial_grid = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Cave Spatial Grid"),
+            contents: bytemuck::cast_slice(&spatial_grid_data),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        
+        // Create physics bind group layout for cave collision
+        // This matches what the cave_collision.wgsl shader expects in group(0)
+        let physics_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cave Physics Layout"),
+            entries: &[
+                // @binding(0): PhysicsParams uniform
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // @binding(1): positions (read_write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // @binding(2): velocities (read_write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // @binding(3): cell_count_buffer (read_write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        
+        // Create collision bind group layout
+        let collision_layout = Arc::new(device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cave Collision Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        }));
+        
+        // Create collision bind group
+        let collision_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cave Collision Bind Group"),
+            layout: &collision_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: collision_vertex_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: collision_triangle_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: collision_spatial_grid.as_entire_binding(),
+                },
+            ],
+        });
+        
+        // Create compute shaders
+        let spatial_grid_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Cave Spatial Grid Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cave_spatial_grid_build.wgsl").into()),
+        });
+        
+        let collision_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Cave Collision Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cave_collision.wgsl").into()),
+        });
+        
+        // Create spatial grid build pipeline
+        let spatial_grid_build_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Cave Spatial Grid Build Pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Cave Spatial Grid Build Layout"),
+                bind_group_layouts: &[&collision_layout],
+                push_constant_ranges: &[],
+            })),
+            module: &spatial_grid_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        
+        // Create collision pipeline (will be integrated with physics)
+        let collision_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Cave Collision Pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Cave Collision Layout"),
+                bind_group_layouts: &[&physics_layout, &collision_layout],
+                push_constant_ranges: &[],
+            })),
+            module: &collision_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
         
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Cave Vertex Buffer"),
@@ -268,28 +526,90 @@ impl CaveSystemRenderer {
             camera_bind_group,
             index_count: indices.len() as u32,
             params,
-            width: 800,
-            height: 600,
-            collision_vertices,
-            collision_indices,
+            width,
+            height,
+            collision_vertex_buffer,
+            collision_triangle_buffer,
+            collision_spatial_grid,
+            collision_bind_group,
+            spatial_grid_build_pipeline,
+            collision_pipeline,
+            collision_layout,
         }
     }
     
     /// Update cave parameters and regenerate mesh
-    pub fn update_params(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, params: CaveParams) {
+    pub fn update_params(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, mut params: CaveParams) {
+        // Regenerate mesh
+        let (vertices, indices) = Self::generate_cave_mesh(&params);
+        params.triangle_count = (indices.len() / 3) as u32;
+        
         self.params = params;
         
         // Update uniform buffer
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
         
-        // Regenerate mesh
-        let (vertices, indices) = Self::generate_cave_mesh(&params);
-        
-        // Update collision data
-        self.collision_vertices = vertices.iter()
-            .map(|v| Vec3::from(v.position))
+        // Update GPU collision buffers
+        let collision_vertices_gpu: Vec<CaveCollisionVertex> = vertices.iter()
+            .map(|v| CaveCollisionVertex {
+                position: v.position,
+                _padding: 0.0,
+            })
             .collect();
-        self.collision_indices = indices.clone();
+        
+        let collision_triangles: Vec<CaveTriangle> = (0..indices.len() / 3)
+            .map(|i| CaveTriangle {
+                v0: indices[i * 3],
+                v1: indices[i * 3 + 1],
+                v2: indices[i * 3 + 2],
+                _padding: 0,
+            })
+            .collect();
+        
+        // Recreate collision buffers if size changed
+        if collision_vertices_gpu.len() * std::mem::size_of::<CaveCollisionVertex>() > self.collision_vertex_buffer.size() as usize {
+            self.collision_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Cave Collision Vertices"),
+                contents: bytemuck::cast_slice(&collision_vertices_gpu),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            });
+        } else {
+            queue.write_buffer(&self.collision_vertex_buffer, 0, bytemuck::cast_slice(&collision_vertices_gpu));
+        }
+        
+        if collision_triangles.len() * std::mem::size_of::<CaveTriangle>() > self.collision_triangle_buffer.size() as usize {
+            self.collision_triangle_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Cave Collision Triangles"),
+                contents: bytemuck::cast_slice(&collision_triangles),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            });
+        } else {
+            queue.write_buffer(&self.collision_triangle_buffer, 0, bytemuck::cast_slice(&collision_triangles));
+        }
+        
+        // Recreate collision bind group with new buffers
+        self.collision_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cave Collision Bind Group"),
+            layout: &self.collision_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.collision_vertex_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.collision_triangle_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.collision_spatial_grid.as_entire_binding(),
+                },
+            ],
+        });
         
         // Recreate buffers if size changed
         if vertices.len() * std::mem::size_of::<CaveVertex>() > self.vertex_buffer.size() as usize {
@@ -389,14 +709,43 @@ impl CaveSystemRenderer {
         &mut self.params
     }
     
-    /// Get collision mesh data (vertices and indices)
-    pub fn collision_mesh(&self) -> (&[Vec3], &[u32]) {
-        (&self.collision_vertices, &self.collision_indices)
+    /// Build spatial grid for collision detection
+    /// This should be called after mesh generation or parameter updates
+    pub fn build_spatial_grid(&self, encoder: &mut wgpu::CommandEncoder) {
+        // First, clear the spatial grid by writing zeros to the buffer
+        encoder.clear_buffer(
+            &self.collision_spatial_grid,
+            0,
+            None, // Clear entire buffer
+        );
+        
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Cave Spatial Grid Build"),
+            timestamp_writes: None,
+        });
+
+        compute_pass.set_pipeline(&self.spatial_grid_build_pipeline);
+        compute_pass.set_bind_group(0, &self.collision_bind_group, &[]);
+
+        // Dispatch one thread per triangle
+        let workgroup_size = 256;
+        let num_workgroups = (self.params.triangle_count + workgroup_size - 1) / workgroup_size;
+        compute_pass.dispatch_workgroups(num_workgroups, 1, 1);
+    }
+    
+    /// Get collision bind group for physics integration
+    pub fn collision_bind_group(&self) -> &wgpu::BindGroup {
+        &self.collision_bind_group
+    }
+    
+    /// Get collision pipeline for physics integration
+    pub fn collision_pipeline(&self) -> &wgpu::ComputePipeline {
+        &self.collision_pipeline
     }
     
     /// Get triangle count for collision
-    pub fn triangle_count(&self) -> usize {
-        self.collision_indices.len() / 3
+    pub fn triangle_count(&self) -> u32 {
+        self.params.triangle_count
     }
 }
 

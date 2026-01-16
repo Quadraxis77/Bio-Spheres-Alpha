@@ -718,6 +718,28 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
         }
     });
 
+    // Cave System (GPU mode only)
+    if state.current_mode == crate::ui::types::SimulationMode::Gpu {
+        let cave_open = is_panel_open(dock_manager.current_tree(), &Panel::CaveSystem);
+        let cave_name = format!("{:?}", Panel::CaveSystem);
+        let cave_locked = state.is_panel_locked(&cave_name);
+        
+        ui.horizontal(|ui| {
+            if ui.selectable_label(cave_open, "  Cave System").clicked() {
+                if cave_open {
+                    close_panel(dock_manager.current_tree_mut(), &Panel::CaveSystem);
+                } else {
+                    open_panel(dock_manager.current_tree_mut(), &Panel::CaveSystem);
+                }
+            }
+            
+            let lock_icon = if cave_locked { "🔒" } else { "🔓" };
+            if ui.small_button(lock_icon).clicked() {
+                state.set_panel_locked(&cave_name, !cave_locked);
+            }
+        });
+    }
+
     ui.separator();
 
     // Layout Management

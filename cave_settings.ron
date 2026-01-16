@@ -1,0 +1,14 @@
+(
+    density: 1.08,
+    scale: 25.0,
+    octaves: 2,
+    persistence: 0.1,
+    threshold: 0.0,
+    smoothness: 0.0,
+    seed: 6500,
+    resolution: 64,
+    collision_enabled: true,
+    collision_stiffness: 100.0,
+    collision_damping: 0.99,
+    substeps: 1,
+)

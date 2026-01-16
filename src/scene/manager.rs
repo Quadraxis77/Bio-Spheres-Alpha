@@ -46,8 +46,8 @@ impl SceneManager {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         config: &wgpu::SurfaceConfiguration,
-    ) {
-        self.switch_mode_with_capacity(mode, device, queue, config, 20_000);
+    ) -> bool {
+        self.switch_mode_with_capacity(mode, device, queue, config, 20_000)
     }
     
     /// Switch to a different simulation mode with specified GPU scene capacity.
@@ -58,9 +58,9 @@ impl SceneManager {
         queue: &wgpu::Queue,
         config: &wgpu::SurfaceConfiguration,
         gpu_capacity: u32,
-    ) {
+    ) -> bool {
         if mode == self.current_mode {
-            return;
+            return false;
         }
 
         log::info!(
@@ -78,12 +78,18 @@ impl SceneManager {
             }
             SimulationMode::Gpu => {
                 if self.gpu_scene.is_none() {
-                    self.gpu_scene = Some(GpuScene::with_capacity(device, queue, config, gpu_capacity));
+                    let mut gpu_scene = GpuScene::with_capacity(device, queue, config, gpu_capacity);
+                    // Initialize cave system automatically
+                    let cave_initialized = gpu_scene.initialize_cave_system(device, config.format);
+                    self.gpu_scene = Some(gpu_scene);
+                    self.current_mode = mode;
+                    return cave_initialized; // Return true if cave was just initialized
                 }
             }
         }
 
         self.current_mode = mode;
+        false
     }
     
     /// Recreate the GPU scene with a new capacity.
@@ -103,7 +109,10 @@ impl SceneManager {
         }
         
         log::info!("Recreating GPU scene with capacity: {}", capacity);
-        self.gpu_scene = Some(GpuScene::with_capacity(device, queue, config, capacity));
+        let mut gpu_scene = GpuScene::with_capacity(device, queue, config, capacity);
+        // Initialize cave system automatically
+        let _cave_initialized = gpu_scene.initialize_cave_system(device, config.format);
+        self.gpu_scene = Some(gpu_scene);
     }
 
     /// Get a reference to the active scene.
