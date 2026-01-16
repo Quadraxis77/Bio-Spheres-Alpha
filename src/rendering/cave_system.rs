@@ -119,7 +119,7 @@ struct CaveSpatialCell {
     triangle_indices: [u32; 16], // Max 16 triangles per cell
 }
 
-/// Cave system renderer with GPU collision
+/// Cave system renderer with GPU SDF-based collision
 pub struct CaveSystemRenderer {
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
@@ -133,17 +133,9 @@ pub struct CaveSystemRenderer {
     width: u32,
     height: u32,
     
-    // GPU collision buffers
-    collision_vertex_buffer: wgpu::Buffer,
-    collision_triangle_buffer: wgpu::Buffer,
-    collision_spatial_grid: wgpu::Buffer,
+    // SDF collision (no mesh buffers needed)
     collision_bind_group: wgpu::BindGroup,
-    
-    // Collision compute pipelines
-    spatial_grid_build_pipeline: wgpu::ComputePipeline,
     collision_pipeline: wgpu::ComputePipeline,
-    
-    // Bind group layouts
     collision_layout: Arc<wgpu::BindGroupLayout>,
 }
 
@@ -300,48 +292,6 @@ impl CaveSystemRenderer {
             cache: None,
         });
         
-        // Create GPU collision buffers
-        let collision_vertices_gpu: Vec<CaveCollisionVertex> = vertices.iter()
-            .map(|v| CaveCollisionVertex {
-                position: v.position,
-                _padding: 0.0,
-            })
-            .collect();
-        
-        let collision_triangles: Vec<CaveTriangle> = (0..indices.len() / 3)
-            .map(|i| CaveTriangle {
-                v0: indices[i * 3],
-                v1: indices[i * 3 + 1],
-                v2: indices[i * 3 + 2],
-                _padding: 0,
-            })
-            .collect();
-        
-        let collision_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Cave Collision Vertices"),
-            contents: bytemuck::cast_slice(&collision_vertices_gpu),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-        
-        let collision_triangle_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Cave Collision Triangles"),
-            contents: bytemuck::cast_slice(&collision_triangles),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-        
-        // Create spatial grid (grid_resolution^3 cells)
-        let grid_size = (params.grid_resolution * params.grid_resolution * params.grid_resolution) as usize;
-        let spatial_grid_data = vec![CaveSpatialCell {
-            triangle_count: 0,
-            triangle_indices: [0; 16],
-        }; grid_size];
-        
-        let collision_spatial_grid = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Cave Spatial Grid"),
-            contents: bytemuck::cast_slice(&spatial_grid_data),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-        
         // Create physics bind group layout for cave collision
         // This matches what the cave_collision.wgsl shader expects in group(0)
         let physics_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -394,7 +344,8 @@ impl CaveSystemRenderer {
             ],
         });
         
-        // Create collision bind group layout
+        // Create collision bind group layout (simplified for SDF-based collision)
+        // Only needs cave params - no mesh data required
         let collision_layout = Arc::new(device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Cave Collision Layout"),
             entries: &[
@@ -408,40 +359,10 @@ impl CaveSystemRenderer {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
             ],
         }));
         
-        // Create collision bind group
+        // Create collision bind group (simplified - only cave params)
         let collision_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cave Collision Bind Group"),
             layout: &collision_layout,
@@ -450,47 +371,16 @@ impl CaveSystemRenderer {
                     binding: 0,
                     resource: params_buffer.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: collision_vertex_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: collision_triangle_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: collision_spatial_grid.as_entire_binding(),
-                },
             ],
         });
         
-        // Create compute shaders
-        let spatial_grid_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Cave Spatial Grid Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cave_spatial_grid_build.wgsl").into()),
-        });
-        
+        // Create collision compute shader (SDF-based)
         let collision_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Cave Collision Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cave_collision.wgsl").into()),
         });
         
-        // Create spatial grid build pipeline
-        let spatial_grid_build_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Cave Spatial Grid Build Pipeline"),
-            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Cave Spatial Grid Build Layout"),
-                bind_group_layouts: &[&collision_layout],
-                push_constant_ranges: &[],
-            })),
-            module: &spatial_grid_shader,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        
-        // Create collision pipeline (will be integrated with physics)
+        // Create collision pipeline (SDF-based, no spatial grid needed)
         let collision_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Cave Collision Pipeline"),
             layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -528,11 +418,7 @@ impl CaveSystemRenderer {
             params,
             width,
             height,
-            collision_vertex_buffer,
-            collision_triangle_buffer,
-            collision_spatial_grid,
             collision_bind_group,
-            spatial_grid_build_pipeline,
             collision_pipeline,
             collision_layout,
         }
@@ -549,45 +435,7 @@ impl CaveSystemRenderer {
         // Update uniform buffer
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
         
-        // Update GPU collision buffers
-        let collision_vertices_gpu: Vec<CaveCollisionVertex> = vertices.iter()
-            .map(|v| CaveCollisionVertex {
-                position: v.position,
-                _padding: 0.0,
-            })
-            .collect();
-        
-        let collision_triangles: Vec<CaveTriangle> = (0..indices.len() / 3)
-            .map(|i| CaveTriangle {
-                v0: indices[i * 3],
-                v1: indices[i * 3 + 1],
-                v2: indices[i * 3 + 2],
-                _padding: 0,
-            })
-            .collect();
-        
-        // Recreate collision buffers if size changed
-        if collision_vertices_gpu.len() * std::mem::size_of::<CaveCollisionVertex>() > self.collision_vertex_buffer.size() as usize {
-            self.collision_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Cave Collision Vertices"),
-                contents: bytemuck::cast_slice(&collision_vertices_gpu),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-        } else {
-            queue.write_buffer(&self.collision_vertex_buffer, 0, bytemuck::cast_slice(&collision_vertices_gpu));
-        }
-        
-        if collision_triangles.len() * std::mem::size_of::<CaveTriangle>() > self.collision_triangle_buffer.size() as usize {
-            self.collision_triangle_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Cave Collision Triangles"),
-                contents: bytemuck::cast_slice(&collision_triangles),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-        } else {
-            queue.write_buffer(&self.collision_triangle_buffer, 0, bytemuck::cast_slice(&collision_triangles));
-        }
-        
-        // Recreate collision bind group with new buffers
+        // Recreate collision bind group (just params, no mesh data needed for SDF)
         self.collision_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cave Collision Bind Group"),
             layout: &self.collision_layout,
@@ -596,22 +444,10 @@ impl CaveSystemRenderer {
                     binding: 0,
                     resource: self.params_buffer.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.collision_vertex_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.collision_triangle_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: self.collision_spatial_grid.as_entire_binding(),
-                },
             ],
         });
         
-        // Recreate buffers if size changed
+        // Recreate rendering buffers if size changed
         if vertices.len() * std::mem::size_of::<CaveVertex>() > self.vertex_buffer.size() as usize {
             self.vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Cave Vertex Buffer"),
@@ -711,27 +547,8 @@ impl CaveSystemRenderer {
     
     /// Build spatial grid for collision detection
     /// This should be called after mesh generation or parameter updates
-    pub fn build_spatial_grid(&self, encoder: &mut wgpu::CommandEncoder) {
-        // First, clear the spatial grid by writing zeros to the buffer
-        encoder.clear_buffer(
-            &self.collision_spatial_grid,
-            0,
-            None, // Clear entire buffer
-        );
-        
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Cave Spatial Grid Build"),
-            timestamp_writes: None,
-        });
-
-        compute_pass.set_pipeline(&self.spatial_grid_build_pipeline);
-        compute_pass.set_bind_group(0, &self.collision_bind_group, &[]);
-
-        // Dispatch one thread per triangle
-        let workgroup_size = 256;
-        let num_workgroups = (self.params.triangle_count + workgroup_size - 1) / workgroup_size;
-        compute_pass.dispatch_workgroups(num_workgroups, 1, 1);
-    }
+    // Spatial grid building is no longer needed with SDF-based collision
+    // The SDF is evaluated directly at runtime without precomputation
     
     /// Get collision bind group for physics integration
     pub fn collision_bind_group(&self) -> &wgpu::BindGroup {
@@ -803,81 +620,8 @@ impl CaveSystemRenderer {
         (vertices, indices)
     }
 
-    /// Sample density at a point using smooth interpolated hash-based noise
-    fn sample_density(pos: Vec3, params: &CaveParams) -> f32 {
-        let mut density = 0.0;
-        let mut amplitude = 1.0;
-        let mut frequency = 1.0 / params.scale;
-        
-        // Multi-octave noise
-        for _ in 0..params.octaves {
-            density += Self::smooth_noise(pos * frequency, params.seed) * amplitude;
-            amplitude *= params.persistence;
-            frequency *= 2.0;
-        }
-        
-        // Apply density parameter
-        density = density * params.density;
-        
-        // Distance from world center (spherical constraint)
-        let world_center = Vec3::from(params.world_center);
-        let dist_from_center = (pos - world_center).length();
-        let sphere_sdf = dist_from_center - params.world_radius;
-        
-        // Combine cave noise with sphere boundary
-        // Inside sphere: use cave noise
-        // Outside sphere: solid (positive density for marching cubes)
-        if sphere_sdf > 0.0 {
-            1.0 // Outside sphere = solid
-        } else {
-            // Smooth transition near boundary
-            // sphere_sdf is negative inside, ranges from 0 (at surface) to -radius (at center)
-            // Normalize to 0..1 range where 0 = at boundary, 1 = deep inside
-            let boundary_factor = (-sphere_sdf / params.smoothness).min(1.0);
-            density * boundary_factor
-        }
-    }
-    
-    /// Smooth interpolated hash-based noise
-    fn smooth_noise(pos: Vec3, seed: u32) -> f32 {
-        // Get integer and fractional parts
-        let ix = pos.x.floor() as i32;
-        let iy = pos.y.floor() as i32;
-        let iz = pos.z.floor() as i32;
-        
-        let fx = pos.x - ix as f32;
-        let fy = pos.y - iy as f32;
-        let fz = pos.z - iz as f32;
-        
-        // Smooth interpolation (smoothstep)
-        let u = fx * fx * (3.0 - 2.0 * fx);
-        let v = fy * fy * (3.0 - 2.0 * fy);
-        let w = fz * fz * (3.0 - 2.0 * fz);
-        
-        // Sample corners of cube
-        let c000 = Self::hash_noise(ix, iy, iz, seed);
-        let c100 = Self::hash_noise(ix + 1, iy, iz, seed);
-        let c010 = Self::hash_noise(ix, iy + 1, iz, seed);
-        let c110 = Self::hash_noise(ix + 1, iy + 1, iz, seed);
-        let c001 = Self::hash_noise(ix, iy, iz + 1, seed);
-        let c101 = Self::hash_noise(ix + 1, iy, iz + 1, seed);
-        let c011 = Self::hash_noise(ix, iy + 1, iz + 1, seed);
-        let c111 = Self::hash_noise(ix + 1, iy + 1, iz + 1, seed);
-        
-        // Trilinear interpolation
-        let x00 = Self::lerp(c000, c100, u);
-        let x10 = Self::lerp(c010, c110, u);
-        let x01 = Self::lerp(c001, c101, u);
-        let x11 = Self::lerp(c011, c111, u);
-        
-        let y0 = Self::lerp(x00, x10, v);
-        let y1 = Self::lerp(x01, x11, v);
-        
-        Self::lerp(y0, y1, w)
-    }
-
-    /// Hash function for noise generation
-    fn hash_noise(x: i32, y: i32, z: i32, seed: u32) -> f32 {
+    /// Hash function for Voronoi cell generation
+    fn hash3(x: i32, y: i32, z: i32, seed: u32) -> Vec3 {
         let mut h = seed;
         h = h.wrapping_mul(374761393).wrapping_add(x as u32);
         h = h.wrapping_mul(668265263).wrapping_add(y as u32);
@@ -886,13 +630,120 @@ impl CaveSystemRenderer {
         h = h.wrapping_mul(1274126177);
         h ^= h >> 16;
         
-        // Convert to [-1, 1] range
-        (h as f32 / u32::MAX as f32) * 2.0 - 1.0
+        let x_rand = h as f32 / u32::MAX as f32;
+        h = h.wrapping_mul(1664525).wrapping_add(1013904223);
+        let y_rand = h as f32 / u32::MAX as f32;
+        h = h.wrapping_mul(1664525).wrapping_add(1013904223);
+        let z_rand = h as f32 / u32::MAX as f32;
+        
+        Vec3::new(x_rand, y_rand, z_rand)
     }
     
-    /// Linear interpolation
-    fn lerp(a: f32, b: f32, t: f32) -> f32 {
-        a + (b - a) * t
+    /// Hash function for wall threshold
+    fn hash1(x: i32, y: i32, z: i32, seed: u32) -> f32 {
+        let mut h = seed.wrapping_add(12345);
+        h = h.wrapping_mul(374761393).wrapping_add(x as u32);
+        h = h.wrapping_mul(668265263).wrapping_add(y as u32);
+        h = h.wrapping_mul(1274126177).wrapping_add(z as u32);
+        h ^= h >> 13;
+        h = h.wrapping_mul(1274126177);
+        h ^= h >> 16;
+        
+        h as f32 / u32::MAX as f32
+    }
+    
+    /// Voronoi-based cave generation
+    fn voronoi_cave(pos: Vec3, params: &CaveParams) -> (f32, bool) {
+        let cell_size = params.scale;
+        let scaled_pos = pos / cell_size;
+        
+        let cell = Vec3::new(
+            scaled_pos.x.floor(),
+            scaled_pos.y.floor(),
+            scaled_pos.z.floor(),
+        );
+        let local_pos = scaled_pos - cell;
+        
+        let mut min_dist = f32::MAX;
+        let mut has_wall = false;
+        
+        // Check 3x3x3 neighborhood
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let neighbor = Vec3::new(
+                        cell.x + dx as f32,
+                        cell.y + dy as f32,
+                        cell.z + dz as f32,
+                    );
+                    
+                    let rand = Self::hash3(
+                        neighbor.x as i32,
+                        neighbor.y as i32,
+                        neighbor.z as i32,
+                        params.seed,
+                    );
+                    
+                    let point = Vec3::new(dx as f32, dy as f32, dz as f32) + rand;
+                    let diff = point - local_pos;
+                    let dist = diff.length();
+                    
+                    let wall_threshold = Self::hash1(
+                        neighbor.x as i32,
+                        neighbor.y as i32,
+                        neighbor.z as i32,
+                        params.seed,
+                    );
+                    
+                    // Cave obstacles: high density = more cave walls
+                    let is_wall = params.density > wall_threshold;
+                    
+                    if dist < min_dist && is_wall {
+                        min_dist = dist;
+                        has_wall = true;
+                    }
+                }
+            }
+        }
+        
+        min_dist *= cell_size;
+        (min_dist, has_wall)
+    }
+    
+    /// Sample density at a point using Voronoi-based caves
+    fn sample_density(pos: Vec3, params: &CaveParams) -> f32 {
+        // Distance from world center (spherical constraint)
+        let world_center = Vec3::from(params.world_center);
+        let dist_from_center = (pos - world_center).length();
+        let sphere_sdf = dist_from_center - params.world_radius;
+        
+        // Outside sphere = solid (high density)
+        if sphere_sdf > 0.0 {
+            return 1.0;
+        }
+        
+        // Inside sphere: use Voronoi-based cave system
+        let (dist_to_wall, has_nearby_wall) = Self::voronoi_cave(pos, params);
+        
+        // If no walls nearby, it's open air (cave space)
+        // Return value well below threshold so marching cubes doesn't generate mesh
+        if !has_nearby_wall {
+            return params.threshold - 1.0;
+        }
+        
+        // Distance-based density: closer to wall = higher density
+        // At wall center: density = threshold + some amount (solid)
+        // At wall edge: density = threshold (surface)
+        // Beyond wall: density < threshold (air)
+        let wall_thickness = params.scale * 0.5; // Half the cell size
+        
+        if dist_to_wall < wall_thickness {
+            // Inside wall region
+            params.threshold + (1.0 - dist_to_wall / wall_thickness) * 0.5
+        } else {
+            // Outside wall region (cave air)
+            params.threshold - 0.5
+        }
     }
 }
 

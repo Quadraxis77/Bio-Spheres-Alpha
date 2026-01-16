@@ -1,12 +1,14 @@
-// Cave Collision XPBD Shader
+// Cave Collision SDF Shader
 // 
-// Implements GPU-based XPBD collision detection and response for cells colliding with cave mesh.
-// Uses spatial grid for efficient triangle lookup to prevent tunneling.
+// Implements GPU-based SDF collision detection using Voronoi-based cave generation.
+// Uses 3D Voronoi cells with random wall thresholds for clear wall/air regions.
 //
-// XPBD (Extended Position Based Dynamics) ensures:
-// - No tunneling through thin cave walls
-// - Stable collision response with multiple substeps
-// - Proper constraint satisfaction
+// Voronoi cave approach:
+// - Each Voronoi cell has a random "wall threshold" (0-1)
+// - If wall_density > wall_threshold, the cell is a CAVE OBSTACLE (solid)
+// - Caves are SOLID OBSTACLES that cells must avoid
+// - Cells stay in OPEN SPACE (non-cave cells)
+// - When in a cave cell, cells are pushed OUT into open space
 
 struct PhysicsParams {
     delta_time: f32,
@@ -93,238 +95,230 @@ struct CaveParams {
     _padding47: vec4<f32>,
 }
 
-struct CaveVertex {
-    position: vec3<f32>,
-    _padding: f32,
-}
-
-struct CaveTriangle {
-    v0: u32,
-    v1: u32,
-    v2: u32,
-    _padding: u32,
-}
-
-struct CaveSpatialCell {
-    triangle_count: atomic<u32>,
-    triangle_indices: array<u32, 16>, // Max 16 triangles per cell
-}
-
 @group(0) @binding(0) var<uniform> params: PhysicsParams;
 @group(0) @binding(1) var<storage, read_write> positions: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read_write> velocities: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read_write> cell_count_buffer: array<u32>;
 
 @group(1) @binding(0) var<uniform> cave_params: CaveParams;
-@group(1) @binding(1) var<storage, read> cave_vertices: array<CaveVertex>;
-@group(1) @binding(2) var<storage, read> cave_triangles: array<CaveTriangle>;
-@group(1) @binding(3) var<storage, read_write> cave_spatial_grid: array<CaveSpatialCell>;
 
 // Constants
 const EPSILON: f32 = 0.0001;
-const MAX_COLLISION_ITERATIONS: u32 = 4u;
 
-// Hash function for spatial grid - MUST match cave_spatial_grid_build.wgsl exactly
-fn spatial_hash(pos: vec3<f32>) -> i32 {
-    let normalized = (pos - cave_params.world_center + vec3<f32>(cave_params.world_radius)) / (cave_params.world_radius * 2.0);
-    let grid_pos = vec3<i32>(floor(normalized * f32(cave_params.grid_resolution)));
-    let res = i32(cave_params.grid_resolution);
+// Hash function for Voronoi cell generation
+fn hash3(x: i32, y: i32, z: i32, seed: u32) -> vec3<f32> {
+    var h = seed;
+    h = h * 374761393u + u32(x);
+    h = h * 668265263u + u32(y);
+    h = h * 1274126177u + u32(z);
+    h ^= h >> 13u;
+    h = h * 1274126177u;
+    h ^= h >> 16u;
     
-    // Clamp to grid bounds
-    let clamped = clamp(grid_pos, vec3<i32>(0), vec3<i32>(res - 1));
+    // Generate 3 random values
+    let x_rand = f32(h) / f32(0xFFFFFFFFu);
+    h = h * 1664525u + 1013904223u;
+    let y_rand = f32(h) / f32(0xFFFFFFFFu);
+    h = h * 1664525u + 1013904223u;
+    let z_rand = f32(h) / f32(0xFFFFFFFFu);
     
-    return clamped.x + clamped.y * res + clamped.z * res * res;
+    return vec3<f32>(x_rand, y_rand, z_rand);
 }
 
-// Get triangle vertices
-fn get_triangle_vertices(tri_idx: u32) -> array<vec3<f32>, 3> {
-    let tri = cave_triangles[tri_idx];
-    var verts: array<vec3<f32>, 3>;
-    verts[0] = cave_vertices[tri.v0].position;
-    verts[1] = cave_vertices[tri.v1].position;
-    verts[2] = cave_vertices[tri.v2].position;
-    return verts;
+// Hash function for single value (wall threshold)
+fn hash1(x: i32, y: i32, z: i32, seed: u32) -> f32 {
+    var h = seed + 12345u; // Different seed for threshold
+    h = h * 374761393u + u32(x);
+    h = h * 668265263u + u32(y);
+    h = h * 1274126177u + u32(z);
+    h ^= h >> 13u;
+    h = h * 1274126177u;
+    h ^= h >> 16u;
+    
+    return f32(h) / f32(0xFFFFFFFFu);
 }
 
-// Point-triangle distance and closest point
-fn point_triangle_distance(p: vec3<f32>, v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>) -> vec4<f32> {
-    // Returns (distance, closest_point.xyz)
-    let edge0 = v1 - v0;
-    let edge1 = v2 - v0;
-    let v0_to_p = p - v0;
+// 3D Voronoi noise - returns (distance to nearest point, is_current_cell_wall)
+fn voronoi_cave(pos: vec3<f32>) -> vec2<f32> {
+    let cell_size = cave_params.scale;
+    let scaled_pos = pos / cell_size;
     
-    let a = dot(edge0, edge0);
-    let b = dot(edge0, edge1);
-    let c = dot(edge1, edge1);
-    let d = dot(edge0, v0_to_p);
-    let e = dot(edge1, v0_to_p);
+    // Current cell
+    let cell = vec3<i32>(floor(scaled_pos));
+    let local_pos = fract(scaled_pos);
     
-    let det = a * c - b * b;
-    var s = b * e - c * d;
-    var t = b * d - a * e;
+    var min_dist = 10000.0;
+    var closest_is_wall = 0.0;
     
-    if (s + t <= det) {
-        if (s < 0.0) {
-            if (t < 0.0) {
-                // Region 4
-                if (d < 0.0) {
-                    t = 0.0;
-                    s = clamp(-d / a, 0.0, 1.0);
-                } else {
-                    s = 0.0;
-                    t = clamp(-e / c, 0.0, 1.0);
+    // Check neighboring cells (3x3x3 grid)
+    for (var dx = -1; dx <= 1; dx = dx + 1) {
+        for (var dy = -1; dy <= 1; dy = dy + 1) {
+            for (var dz = -1; dz <= 1; dz = dz + 1) {
+                let neighbor = cell + vec3<i32>(dx, dy, dz);
+                
+                // Get random point within this cell
+                let rand = hash3(neighbor.x, neighbor.y, neighbor.z, cave_params.seed);
+                let point = vec3<f32>(f32(dx), f32(dy), f32(dz)) + rand;
+                
+                // Distance to this Voronoi point
+                let diff = point - local_pos;
+                let dist = length(diff);
+                
+                // Check if this cell is a wall (cave obstacle)
+                let wall_threshold = hash1(neighbor.x, neighbor.y, neighbor.z, cave_params.seed);
+                let cell_is_wall = cave_params.density > wall_threshold;
+                
+                // Track closest cell (wall or not)
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    closest_is_wall = f32(cell_is_wall);
                 }
-            } else {
-                // Region 3
-                s = 0.0;
-                t = clamp(-e / c, 0.0, 1.0);
             }
-        } else if (t < 0.0) {
-            // Region 5
-            t = 0.0;
-            s = clamp(-d / a, 0.0, 1.0);
-        } else {
-            // Region 0 (inside triangle)
-            let inv_det = 1.0 / det;
-            s = s * inv_det;
-            t = t * inv_det;
-        }
-    } else {
-        if (s < 0.0) {
-            // Region 2
-            let tmp0 = b + d;
-            let tmp1 = c + e;
-            if (tmp1 > tmp0) {
-                let numer = tmp1 - tmp0;
-                let denom = a - 2.0 * b + c;
-                s = clamp(numer / denom, 0.0, 1.0);
-                t = 1.0 - s;
-            } else {
-                s = 0.0;
-                t = clamp(-e / c, 0.0, 1.0);
-            }
-        } else if (t < 0.0) {
-            // Region 6
-            if (a + d > b + e) {
-                let numer = c + e - b - d;
-                let denom = a - 2.0 * b + c;
-                s = clamp(numer / denom, 0.0, 1.0);
-                t = 1.0 - s;
-            } else {
-                t = 0.0;
-                s = clamp(-d / a, 0.0, 1.0);
-            }
-        } else {
-            // Region 1
-            let numer = c + e - b - d;
-            let denom = a - 2.0 * b + c;
-            s = clamp(numer / denom, 0.0, 1.0);
-            t = 1.0 - s;
         }
     }
     
-    let closest = v0 + s * edge0 + t * edge1;
-    let dist = length(p - closest);
+    // Convert distance back to world space
+    min_dist = min_dist * cell_size;
     
-    return vec4<f32>(dist, closest);
+    return vec2<f32>(min_dist, closest_is_wall);
 }
 
-// Solve XPBD collision constraint
+// Sample cave density using Voronoi-based walls
+fn sample_cave_density(pos: vec3<f32>) -> f32 {
+    // Distance from world center (spherical constraint)
+    let dist_from_center = length(pos - cave_params.world_center);
+    let sphere_sdf = dist_from_center - cave_params.world_radius;
+    
+    // Outside sphere = solid (high density)
+    if (sphere_sdf > 0.0) {
+        return 1.0;
+    }
+    
+    // Inside sphere: use Voronoi-based cave system
+    let voronoi = voronoi_cave(pos);
+    let dist_to_wall = voronoi.x;
+    let has_nearby_wall = voronoi.y;
+    
+    // If no walls nearby, it's open air (cave space)
+    if (has_nearby_wall < 0.5) {
+        return cave_params.threshold - 1.0; // Well below threshold = air
+    }
+    
+    // Distance-based density relative to threshold
+    let wall_thickness = cave_params.scale * 0.5; // Half the cell size
+    
+    if (dist_to_wall < wall_thickness) {
+        // Inside wall region (above threshold = solid)
+        return cave_params.threshold + (1.0 - dist_to_wall / wall_thickness) * 0.5;
+    } else {
+        // Outside wall region (below threshold = air/cave)
+        return cave_params.threshold - 0.5;
+    }
+}
+
+// Compute SDF gradient (normal) using central differences
+fn compute_sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {
+    let dx = vec3<f32>(h, 0.0, 0.0);
+    let dy = vec3<f32>(0.0, h, 0.0);
+    let dz = vec3<f32>(0.0, 0.0, h);
+    
+    let grad_x = sample_cave_density(pos + dx) - sample_cave_density(pos - dx);
+    let grad_y = sample_cave_density(pos + dy) - sample_cave_density(pos - dy);
+    let grad_z = sample_cave_density(pos + dz) - sample_cave_density(pos - dz);
+    
+    let grad = vec3<f32>(grad_x, grad_y, grad_z);
+    let len = length(grad);
+    
+    // Avoid division by zero
+    if (len < 0.0001) {
+        return vec3<f32>(0.0, 1.0, 0.0); // Default up direction
+    }
+    
+    return grad / len;
+}
+
+// Find nearest Voronoi point (returns point position and whether it's a wall)
+fn find_nearest_voronoi_point(pos: vec3<f32>) -> vec4<f32> {
+    let cell_size = cave_params.scale;
+    let scaled_pos = pos / cell_size;
+    let cell = vec3<i32>(floor(scaled_pos));
+    let local_pos = fract(scaled_pos);
+    
+    var min_dist = 10000.0;
+    var nearest_point = vec3<f32>(0.0);
+    var is_wall = 0.0;
+    
+    // Check 3x3x3 neighborhood
+    for (var dx = -1; dx <= 1; dx = dx + 1) {
+        for (var dy = -1; dy <= 1; dy = dy + 1) {
+            for (var dz = -1; dz <= 1; dz = dz + 1) {
+                let neighbor = cell + vec3<i32>(dx, dy, dz);
+                let rand = hash3(neighbor.x, neighbor.y, neighbor.z, cave_params.seed);
+                let point = vec3<f32>(f32(dx), f32(dy), f32(dz)) + rand;
+                let diff = point - local_pos;
+                let dist = length(diff);
+                
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    nearest_point = (vec3<f32>(f32(neighbor.x), f32(neighbor.y), f32(neighbor.z)) + rand) * cell_size;
+                    
+                    let wall_threshold = hash1(neighbor.x, neighbor.y, neighbor.z, cave_params.seed);
+                    is_wall = f32(cave_params.density > wall_threshold);
+                }
+            }
+        }
+    }
+    
+    return vec4<f32>(nearest_point, is_wall);
+}
+
+// Solve SDF-based collision constraint
 fn solve_cave_collision(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: f32, dt: f32) -> vec3<f32> {
     if (cave_params.collision_enabled == 0u) {
         return pos;
     }
     
     var corrected_pos = pos;
-    let substep_dt = dt / f32(cave_params.substeps);
-    var collision_count = 0u;
     
-    // XPBD substeps for stability
+    // Multiple substeps for stability
     for (var substep = 0u; substep < cave_params.substeps; substep = substep + 1u) {
-        // Check spatial grid cells around the cell position
-        let grid_idx = spatial_hash(corrected_pos);
+        // Find which Voronoi cell we're in
+        let voronoi_data = find_nearest_voronoi_point(corrected_pos);
+        let voronoi_point = voronoi_data.xyz;
+        let is_in_wall_cell = voronoi_data.w > 0.5;
         
-        // Check current cell and neighbors
-        for (var dx = -1; dx <= 1; dx = dx + 1) {
-            for (var dy = -1; dy <= 1; dy = dy + 1) {
-                for (var dz = -1; dz <= 1; dz = dz + 1) {
-                    let neighbor_pos = vec3<i32>(
-                        (grid_idx % i32(cave_params.grid_resolution)) + dx,
-                        ((grid_idx / i32(cave_params.grid_resolution)) % i32(cave_params.grid_resolution)) + dy,
-                        (grid_idx / (i32(cave_params.grid_resolution) * i32(cave_params.grid_resolution))) + dz
-                    );
+        // If we're in a wall cell, push out
+        if (is_in_wall_cell) {
+            // Normal points from Voronoi center toward cell position (outward)
+            let to_cell = corrected_pos - voronoi_point;
+            let dist = length(to_cell);
+            
+            if (dist > 0.001) {
+                let normal = to_cell / dist;
+                
+                // Push cell to the edge of the Voronoi cell + radius
+                let target_dist = cave_params.scale * 0.5 + radius;
+                let penetration = target_dist - dist;
+                
+                if (penetration > 0.0) {
+                    // Push cell outward
+                    let stiffness_factor = cave_params.collision_stiffness / 1000.0;
+                    let correction = normal * penetration * stiffness_factor;
                     
-                    let res = i32(cave_params.grid_resolution);
-                    if (neighbor_pos.x < 0 || neighbor_pos.x >= res ||
-                        neighbor_pos.y < 0 || neighbor_pos.y >= res ||
-                        neighbor_pos.z < 0 || neighbor_pos.z >= res) {
-                        continue;
-                    }
+                    corrected_pos = corrected_pos + correction;
                     
-                    let neighbor_idx = neighbor_pos.x + neighbor_pos.y * res + neighbor_pos.z * res * res;
-                    let cell = &cave_spatial_grid[neighbor_idx];
-                    let tri_count = min(atomicLoad(&(*cell).triangle_count), 16u);
-                    
-                    // Check all triangles in this spatial cell
-                    for (var i = 0u; i < tri_count; i = i + 1u) {
-                        let tri_idx = (*cell).triangle_indices[i];
-                        if (tri_idx >= cave_params.triangle_count) {
-                            continue;
-                        }
-                        
-                        let verts = get_triangle_vertices(tri_idx);
-                        let result = point_triangle_distance(corrected_pos, verts[0], verts[1], verts[2]);
-                        let dist = result.x;
-                        let closest = result.yzw;
-                        
-                        // Collision if cell is close to triangle surface
-                        if (dist < radius) {
-                            let penetration = radius - dist;
-                            
-                            // Normal points from surface toward cell
-                            var normal: vec3<f32>;
-                            if (dist > EPSILON) {
-                                normal = normalize(corrected_pos - closest);
-                            } else {
-                                // Very close - use triangle normal
-                                let edge1 = verts[1] - verts[0];
-                                let edge2 = verts[2] - verts[0];
-                                let tri_normal = normalize(cross(edge1, edge2));
-                                // Ensure it points toward cell
-                                if (dot(tri_normal, corrected_pos - closest) < 0.0) {
-                                    normal = -tri_normal;
-                                } else {
-                                    normal = tri_normal;
-                                }
-                            }
-                            
-                            // XPBD constraint solving with compliance
-                            // Compliance = 1 / stiffness, controls how soft the constraint is
-                            let alpha = 1.0 / (cave_params.collision_stiffness + 0.0001); // Compliance
-                            let dt_substep = dt / f32(cave_params.substeps);
-                            
-                            // XPBD correction with compliance (makes it soft and stable)
-                            let w = 1.0 / mass; // Inverse mass
-                            let delta_lambda = penetration / (w + alpha / (dt_substep * dt_substep));
-                            let correction = normal * delta_lambda * w;
-                            
-                            corrected_pos = corrected_pos + correction;
-                            
-                            // Apply velocity damping (don't add correction to velocity)
-                            let vel = velocities[cell_idx].xyz;
-                            let vel_normal_mag = dot(vel, normal);
-                            if (vel_normal_mag < 0.0) {
-                                // Remove velocity toward wall and damp tangential
-                                let vel_tangent = vel - vel_normal_mag * normal;
-                                velocities[cell_idx] = vec4<f32>(vel_tangent * (1.0 - cave_params.collision_damping), velocities[cell_idx].w);
-                            }
-                            
-                            collision_count = collision_count + 1u;
-                        }
+                    // Apply velocity damping
+                    let vel = velocities[cell_idx].xyz;
+                    let vel_normal_mag = dot(vel, normal);
+                    if (vel_normal_mag < 0.0) {
+                        // Remove velocity toward wall center
+                        let vel_tangent = vel - vel_normal_mag * normal;
+                        velocities[cell_idx] = vec4<f32>(vel_tangent * (1.0 - cave_params.collision_damping), velocities[cell_idx].w);
                     }
                 }
             }
         }
+        // If in open cell (not wall), no collision
     }
     
     return corrected_pos;
@@ -353,18 +347,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Calculate radius from mass (mass = 4/3 * pi * r^3)
     let visual_radius = pow(mass * 0.75 / 3.14159265359, 1.0 / 3.0);
     
-    // Calculate adaptive collision radius based on cave scale
-    // The spatial grid cell size is (world_radius * 2) / grid_resolution
-    // We want the collision radius to be proportional to this cell size
-    let world_size = cave_params.world_radius * 2.0;
-    let grid_cell_size = world_size / f32(cave_params.grid_resolution);
+    // Use visual radius for collision (SDF gives us exact distance)
+    let collision_radius = visual_radius;
     
-    // Use a collision radius that's a multiple of the grid cell size
-    // This ensures we detect collisions with the mesh geometry inside each grid cell
-    // The multiplier needs to be large enough to reach the mesh triangles
-    let collision_radius = max(visual_radius * 10.0, grid_cell_size * 2.0);
-    
-    // Solve cave collision with XPBD
+    // Solve cave collision with SDF
     let corrected_pos = solve_cave_collision(idx, pos, collision_radius, mass, params.delta_time);
     
     // Write corrected position back (in-place update)
