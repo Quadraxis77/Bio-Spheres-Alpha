@@ -10,6 +10,13 @@ pub enum CameraMode {
     FreeFly,
 }
 
+/// Scene type for camera behavior
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SceneType {
+    GpuScene,
+    PreviewScene,
+}
+
 /// Camera controller - Space Engineers style 6DOF camera (matches BioSpheres-Q)
 pub struct CameraController {
     // Core camera state
@@ -19,6 +26,7 @@ pub struct CameraController {
     pub rotation: Quat,
     pub target_rotation: Quat,
     pub mode: CameraMode,
+    pub scene_type: SceneType,  // Add scene type for different behaviors
 
     // Up direction for orbit mode (opposite of gravity direction)
     pub up_direction: Vec3,
@@ -75,6 +83,7 @@ impl CameraController {
             rotation: initial_rotation,
             target_rotation: initial_rotation,
             mode: CameraMode::FreeFly,
+            scene_type: SceneType::GpuScene,  // Default to GPU scene
             up_direction: Vec3::Y, // Default up is +Y (gravity pulls down in -Y)
             is_dragging: false,
             last_mouse_pos: None,
@@ -104,6 +113,7 @@ impl CameraController {
             rotation: initial_rotation,
             target_rotation: initial_rotation,
             mode: CameraMode::FreeFly,
+            scene_type: SceneType::GpuScene,
             up_direction: Vec3::Y,
             is_dragging: false,
             last_mouse_pos: None,
@@ -133,6 +143,7 @@ impl CameraController {
             rotation: initial_rotation,
             target_rotation: initial_rotation,
             mode: CameraMode::Orbit,  // Preview starts in Orbit mode
+            scene_type: SceneType::PreviewScene,
             up_direction: Vec3::Y,
             is_dragging: false,
             last_mouse_pos: None,
@@ -294,10 +305,14 @@ impl CameraController {
                 self.mode = CameraMode::FreeFly;
             }
             CameraMode::FreeFly => {
-                // Switch to Orbit: set orbit center to world origin, always use 500 units
+                // Switch to Orbit: set orbit center to world origin, use scene-specific distance
                 self.center = Vec3::ZERO;
-                self.distance = 500.0;
-                self.target_distance = 500.0;
+                let orbit_distance = match self.scene_type {
+                    SceneType::GpuScene => 500.0,
+                    SceneType::PreviewScene => 50.0,
+                };
+                self.distance = orbit_distance;
+                self.target_distance = orbit_distance;
                 
                 // Remove roll component when switching to Orbit mode
                 // Extract forward direction and create clean orbit rotation
