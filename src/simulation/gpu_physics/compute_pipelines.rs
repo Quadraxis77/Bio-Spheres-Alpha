@@ -181,6 +181,8 @@ pub struct CachedBindGroups {
     pub physics: [wgpu::BindGroup; 3],
     /// Spatial grid bind group (same for all frames)
     pub spatial_grid: wgpu::BindGroup,
+    /// Position update spatial grid bind group (read-only, same for all frames)
+    pub position_update_spatial_grid: wgpu::BindGroup,
     /// Lifecycle bind group (same for all frames)
     pub lifecycle: wgpu::BindGroup,
     /// Cell state read bind group (same for all frames)
@@ -275,6 +277,7 @@ pub struct GpuPhysicsPipelines {
     pub mass_accum_layout: wgpu::BindGroupLayout,
     pub rotations_layout: wgpu::BindGroupLayout,
     pub position_update_rotations_layout: wgpu::BindGroupLayout,
+    pub position_update_spatial_grid_layout: wgpu::BindGroupLayout,
     
     // Cell insertion bind group layouts
     pub cell_insertion_physics_layout: wgpu::BindGroupLayout,
@@ -338,6 +341,9 @@ impl GpuPhysicsPipelines {
         let mass_accum_layout = Self::create_mass_accum_bind_group_layout(device);
         let rotations_layout = Self::create_rotations_bind_group_layout(device);
         let position_update_rotations_layout = Self::create_position_update_rotations_bind_group_layout(device);
+        
+        // Create spatial grid layout for position update sweep tests
+        let position_update_spatial_grid_layout = Self::create_position_update_spatial_grid_bind_group_layout(device);
         
         // Create adhesion bind group layouts
         let adhesion_layout = Self::create_adhesion_bind_group_layout(device);
@@ -428,7 +434,7 @@ impl GpuPhysicsPipelines {
             device,
             include_str!("../../../shaders/position_update.wgsl"),
             "main",
-            &[&physics_layout, &position_update_rotations_layout, &position_update_force_accum_layout],
+            &[&physics_layout, &position_update_rotations_layout, &position_update_force_accum_layout, &position_update_spatial_grid_layout],
             "Position Update",
         );
         
@@ -605,6 +611,7 @@ impl GpuPhysicsPipelines {
             mass_accum_layout,
             rotations_layout,
             position_update_rotations_layout,
+            position_update_spatial_grid_layout,
             cell_insertion_physics_layout,
             cell_insertion_params_layout,
             cell_insertion_state_layout,
@@ -965,6 +972,9 @@ impl GpuPhysicsPipelines {
         // Spatial grid bind group (same for all frames)
         let spatial_grid = self.create_spatial_grid_bind_group_internal(device, buffers);
         
+        // Position update spatial grid bind group (read-only, same for all frames)
+        let position_update_spatial_grid = self.create_position_update_spatial_grid_bind_group_internal(device, buffers);
+        
         // Lifecycle bind group (same for all frames)
         let lifecycle = self.create_lifecycle_bind_group(device, buffers);
         
@@ -1038,6 +1048,7 @@ impl GpuPhysicsPipelines {
         CachedBindGroups {
             physics,
             spatial_grid,
+            position_update_spatial_grid,
             lifecycle,
             cell_state_read,
             cell_state_write,
@@ -1107,6 +1118,40 @@ impl GpuPhysicsPipelines {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Spatial Grid Bind Group"),
             layout: &self.spatial_grid_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.spatial_grid_counts.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.spatial_grid_offsets.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.cell_grid_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffers.spatial_grid_cells.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.stiffnesses.as_entire_binding(),
+                },
+            ],
+        })
+    }
+    
+    /// Create read-only spatial grid bind group for position update sweep tests
+    fn create_position_update_spatial_grid_bind_group_internal(
+        &self,
+        device: &wgpu::Device,
+        buffers: &GpuTripleBufferSystem,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Position Update Spatial Grid Bind Group"),
+            layout: &self.position_update_spatial_grid_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -1287,6 +1332,70 @@ impl GpuPhysicsPipelines {
                     count: None,
                 },
                 // Stiffnesses (per-cell membrane stiffness from genome)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create read-only spatial grid bind group layout for position update sweep tests
+    fn create_position_update_spatial_grid_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Position Update Spatial Grid Bind Group Layout"),
+            entries: &[
+                // Grid counts (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Grid offsets (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Cell grid indices (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Spatial grid cells (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Stiffnesses (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,

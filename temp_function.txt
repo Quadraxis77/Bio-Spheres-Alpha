@@ -1,0 +1,33 @@
+/// Create read-only spatial grid bind group for position update sweep tests
+    fn create_position_update_spatial_grid_bind_group_internal(
+        &self,
+        device: &wgpu::Device,
+        buffers: &GpuTripleBufferSystem,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Position Update Spatial Grid Bind Group"),
+            layout: &self.position_update_spatial_grid_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.spatial_grid_counts.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.spatial_grid_offsets.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.cell_grid_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffers.spatial_grid_cells.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.stiffnesses.as_entire_binding(),
+                },
+            ],
+        })
+    }

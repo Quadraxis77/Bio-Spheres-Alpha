@@ -9,6 +9,6 @@
     resolution: 128,
     collision_enabled: true,
     collision_stiffness: 100.0,
-    collision_damping: 0.0,
+    collision_damping: 1.0,
     substeps: 1,
 )

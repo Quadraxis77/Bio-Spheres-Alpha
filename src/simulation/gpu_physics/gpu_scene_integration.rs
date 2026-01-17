@@ -205,6 +205,7 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, position_update_rotations_bind_group, &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.position_update_force_accum, &[]);
+        compute_pass.set_bind_group(3, &cached_bind_groups.position_update_spatial_grid, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
         // Stage 6.5: Cave collision (if enabled) - corrects positions using SDF
