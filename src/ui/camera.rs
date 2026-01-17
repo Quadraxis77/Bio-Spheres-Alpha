@@ -93,31 +93,62 @@ impl CameraController {
     }
 
     /// Set up direction from gravity (up is opposite of gravity direction)
+    /// Realigns camera when gravity axis changes, but doesn't flip when direction changes
     pub fn set_gravity_direction(&mut self, gravity: f32, gravity_dir: [bool; 3]) {
-        // Build gravity vector from direction flags
-        let mut grav_vec = Vec3::ZERO;
-        if gravity_dir[0] { grav_vec.x = 1.0; }
-        if gravity_dir[1] { grav_vec.y = 1.0; }
-        if gravity_dir[2] { grav_vec.z = 1.0; }
+        let old_up = self.up_direction;
+
+        // Build gravity vector from direction flags (this is the axis, unsigned)
+        let mut grav_axis = Vec3::ZERO;
+        if gravity_dir[0] { grav_axis.x = 1.0; }
+        if gravity_dir[1] { grav_axis.y = 1.0; }
+        if gravity_dir[2] { grav_axis.z = 1.0; }
 
         // If no direction selected or gravity is zero, default to Y up
-        if grav_vec.length_squared() < 0.001 || gravity.abs() < 0.001 {
+        if grav_axis.length_squared() < 0.001 || gravity.abs() < 0.001 {
             self.up_direction = Vec3::Y;
             return;
         }
 
-        // Normalize and determine up direction (opposite of gravity)
-        grav_vec = grav_vec.normalize();
+        grav_axis = grav_axis.normalize();
 
-        // If gravity is negative, it pulls in the negative direction of the axis
-        // So up is the positive direction
-        // If gravity is positive, it pulls in the positive direction
-        // So up is the negative direction
-        if gravity < 0.0 {
-            self.up_direction = grav_vec; // Gravity pulls negative, up is positive
-        } else {
-            self.up_direction = -grav_vec; // Gravity pulls positive, up is negative
+        // Check if the axis changed (not just the direction)
+        // Axis is the same if old_up is parallel to grav_axis (dot product ~= ±1)
+        let axis_changed = old_up.dot(grav_axis).abs() < 0.99;
+
+        // New up is always the positive direction of the gravity axis
+        // (camera doesn't flip when gravity direction changes)
+        let new_up = grav_axis;
+
+        if axis_changed {
+            // Axis changed - realign camera to new up direction
+            let forward = self.rotation * Vec3::NEG_Z;
+
+            // Project forward onto plane perpendicular to new_up
+            let forward_projected = (forward - new_up * forward.dot(new_up)).normalize_or_zero();
+
+            let new_forward = if forward_projected.length_squared() < 0.001 {
+                // Forward is parallel to up, pick a default
+                if new_up.y.abs() < 0.9 {
+                    Vec3::Y.cross(new_up).normalize()
+                } else {
+                    Vec3::X.cross(new_up).normalize()
+                }
+            } else {
+                forward_projected
+            };
+
+            // Build rotation from forward and up
+            let new_right = new_forward.cross(new_up).normalize();
+            let corrected_forward = new_up.cross(new_right).normalize();
+
+            let rot_matrix = glam::Mat3::from_cols(new_right, new_up, -corrected_forward);
+            let new_rotation = Quat::from_mat3(&rot_matrix).normalize();
+
+            self.rotation = new_rotation;
+            self.target_rotation = new_rotation;
         }
+
+        self.up_direction = new_up;
     }
     
     /// Get the current camera position in world space
@@ -257,12 +288,17 @@ impl CameraController {
                 // Apply yaw rotation to current target rotation
                 self.target_rotation = yaw_rotation * self.target_rotation;
 
-                // Pitch (latitude): rotate around the camera's current right axis
-                let right_axis = self.target_rotation * Vec3::X;
-                let pitch_rotation = Quat::from_axis_angle(right_axis, -delta.y);
+                // Pitch (latitude): rotate around the camera's right axis, but ensure
+                // the right axis is perpendicular to the up direction to prevent tilt drift
+                let camera_right = self.target_rotation * Vec3::X;
+                // Project right axis onto plane perpendicular to up_direction
+                let right_axis = (camera_right - self.up_direction * camera_right.dot(self.up_direction)).normalize_or_zero();
 
-                // Apply pitch rotation
-                self.target_rotation = pitch_rotation * self.target_rotation;
+                // Only apply pitch if we have a valid right axis (not looking straight up/down)
+                if right_axis.length_squared() > 0.001 {
+                    let pitch_rotation = Quat::from_axis_angle(right_axis, -delta.y);
+                    self.target_rotation = pitch_rotation * self.target_rotation;
+                }
                 self.target_rotation = self.target_rotation.normalize();
             } else {
                 // FreeFly mode: free rotation

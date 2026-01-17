@@ -4,7 +4,7 @@
     octaves: 1,
     persistence: 0.41,
     threshold: 0.51,
-    smoothness: 0.0,
+    smoothness: 1.0,
     seed: 2500,
     resolution: 128,
     collision_enabled: true,

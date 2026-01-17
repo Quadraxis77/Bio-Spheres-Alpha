@@ -387,11 +387,13 @@ impl App {
         // Update performance metrics (includes automatic spike detection)
         self.performance.update(dt);
         
-        // Update camera gravity direction and scene
-        self.scene_manager.active_scene_mut().camera_mut().set_gravity_direction(
-            self.ui.state.gravity,
-            [self.ui.state.gravity_x, self.ui.state.gravity_y, self.ui.state.gravity_z],
-        );
+        // Update camera gravity direction only for GPU scene (preview scene ignores gravity)
+        if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
+            self.scene_manager.active_scene_mut().camera_mut().set_gravity_direction(
+                self.ui.state.gravity,
+                [self.ui.state.gravity_x, self.ui.state.gravity_y, self.ui.state.gravity_z],
+            );
+        }
         self.scene_manager.active_scene_mut().camera_mut().update(dt);
         self.scene_manager.update(dt);
         
