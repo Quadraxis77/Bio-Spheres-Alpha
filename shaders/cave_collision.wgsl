@@ -261,17 +261,21 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
         return;
     }
 
-    // Sample density at current position
-    let density = sample_cave_density(pos);
-
-    // If density > threshold, we're in solid rock - apply force to push into cave
-    if (density > cave_params.threshold) {
+    // Check collision at cell surface, not just center
+    // Sample density at cell center and adjust threshold by radius
+    let center_density = sample_cave_density(pos);
+    
+    // Effective threshold accounts for cell radius - cell collides earlier
+    let radius_threshold = cave_params.threshold - radius * 0.1; // Adjust threshold by radius
+    
+    // If center density > adjusted threshold, we're colliding with cave wall
+    if (center_density > radius_threshold) {
         // Compute gradient pointing toward lower density (into cave)
-        let gradient_step = cave_params.scale * 0.1;
+        let gradient_step = max(cave_params.scale * 0.1, radius * 0.5); // Ensure gradient step is meaningful
         let normal = -compute_sdf_gradient(pos, gradient_step);  // Invert normal to point into cave
 
-        // Penetration depth - how far into solid rock we are
-        let penetration = (density - cave_params.threshold) * cave_params.scale;
+        // Penetration depth - how far into solid rock we are, accounting for radius
+        let penetration = (center_density - radius_threshold) * cave_params.scale;
 
         if (penetration > 0.0) {
             // Apply force proportional to penetration depth
@@ -294,7 +298,7 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
             velocities[cell_idx] = vec4<f32>(vel, velocities[cell_idx].w);
         }
     }
-    // If density <= threshold, cell is in cave tunnel - no collision forces needed
+    // If density <= adjusted threshold, cell is safely in cave tunnel - no collision forces needed
 }
 
 @compute @workgroup_size(256)

@@ -93,10 +93,8 @@ impl CameraController {
     }
 
     /// Set up direction from gravity (up is opposite of gravity direction)
-    /// Realigns camera when gravity axis changes, but doesn't flip when direction changes
+    /// Always realigns camera when gravity axis is set to ensure proper orientation
     pub fn set_gravity_direction(&mut self, gravity: f32, gravity_dir: [bool; 3]) {
-        let old_up = self.up_direction;
-
         // Build gravity vector from direction flags (this is the axis, unsigned)
         let mut grav_axis = Vec3::ZERO;
         if gravity_dir[0] { grav_axis.x = 1.0; }
@@ -105,50 +103,53 @@ impl CameraController {
 
         // If no direction selected or gravity is zero, default to Y up
         if grav_axis.length_squared() < 0.001 || gravity.abs() < 0.001 {
-            self.up_direction = Vec3::Y;
+            if self.up_direction != Vec3::Y {
+                self.up_direction = Vec3::Y;
+                // Realign camera to default Y up
+                self.realign_camera_to_up(Vec3::Y);
+            }
             return;
         }
 
         grav_axis = grav_axis.normalize();
-
-        // Check if the axis changed (not just the direction)
-        // Axis is the same if old_up is parallel to grav_axis (dot product ~= ±1)
-        let axis_changed = old_up.dot(grav_axis).abs() < 0.99;
-
-        // New up is always the positive direction of the gravity axis
-        // (camera doesn't flip when gravity direction changes)
         let new_up = grav_axis;
 
-        if axis_changed {
-            // Axis changed - realign camera to new up direction
-            let forward = self.rotation * Vec3::NEG_Z;
-
-            // Project forward onto plane perpendicular to new_up
-            let forward_projected = (forward - new_up * forward.dot(new_up)).normalize_or_zero();
-
-            let new_forward = if forward_projected.length_squared() < 0.001 {
-                // Forward is parallel to up, pick a default
-                if new_up.y.abs() < 0.9 {
-                    Vec3::Y.cross(new_up).normalize()
-                } else {
-                    Vec3::X.cross(new_up).normalize()
-                }
-            } else {
-                forward_projected
-            };
-
-            // Build rotation from forward and up
-            let new_right = new_forward.cross(new_up).normalize();
-            let corrected_forward = new_up.cross(new_right).normalize();
-
-            let rot_matrix = glam::Mat3::from_cols(new_right, new_up, -corrected_forward);
-            let new_rotation = Quat::from_mat3(&rot_matrix).normalize();
-
-            self.rotation = new_rotation;
-            self.target_rotation = new_rotation;
+        // Always realign camera when gravity direction is explicitly set
+        // This ensures camera repositioning when user selects Y axis
+        if self.up_direction != new_up {
+            self.realign_camera_to_up(new_up);
         }
 
         self.up_direction = new_up;
+    }
+
+    /// Helper method to realign camera to a new up direction
+    fn realign_camera_to_up(&mut self, new_up: Vec3) {
+        let forward = self.rotation * Vec3::NEG_Z;
+
+        // Project forward onto plane perpendicular to new_up
+        let forward_projected = (forward - new_up * forward.dot(new_up)).normalize_or_zero();
+
+        let new_forward = if forward_projected.length_squared() < 0.001 {
+            // Forward is parallel to up, pick a default
+            if new_up.y.abs() < 0.9 {
+                Vec3::Y.cross(new_up).normalize()
+            } else {
+                Vec3::X.cross(new_up).normalize()
+            }
+        } else {
+            forward_projected
+        };
+
+        // Build rotation from forward and up
+        let new_right = new_forward.cross(new_up).normalize();
+        let corrected_forward = new_up.cross(new_right).normalize();
+
+        let rot_matrix = glam::Mat3::from_cols(new_right, new_up, -corrected_forward);
+        let new_rotation = Quat::from_mat3(&rot_matrix).normalize();
+
+        self.rotation = new_rotation;
+        self.target_rotation = new_rotation;
     }
     
     /// Get the current camera position in world space

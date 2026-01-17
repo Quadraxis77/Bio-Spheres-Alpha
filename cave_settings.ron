@@ -5,10 +5,10 @@
     persistence: 1.0,
     threshold: 1.0,
     smoothness: 0.0,
-    seed: 2500,
+    seed: 9999,
     resolution: 128,
     collision_enabled: true,
-    collision_stiffness: 100.0,
+    collision_stiffness: 500.0,
     collision_damping: 1.0,
     substeps: 1,
 )
