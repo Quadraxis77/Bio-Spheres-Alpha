@@ -84,7 +84,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (current_mass < max_mass) {
         // Calculate mass increase: mass += nutrient_gain_rate * delta_time
         let mass_increase = nutrient_gain_rate * params.delta_time;
-        new_mass = min(current_mass + mass_increase, max_mass);
+        new_mass = current_mass + mass_increase; // Remove cap to allow high split mass accumulation
+    } else {
+        // Continue growing even beyond max_size to allow high split mass division
+        let mass_increase = nutrient_gain_rate * params.delta_time;
+        new_mass = current_mass + mass_increase;
     }
     
     // Write updated mass back (position unchanged)

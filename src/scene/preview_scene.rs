@@ -71,7 +71,7 @@ impl PreviewScene {
             genome,
             config,
             paused: false,
-            camera: CameraController::new(),
+            camera: CameraController::new_for_preview_scene(),
             last_ui_time_value: 0.0,
             show_adhesion_lines: true,
         }

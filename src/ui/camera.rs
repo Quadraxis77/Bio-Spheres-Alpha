@@ -70,11 +70,11 @@ impl CameraController {
 
         Self {
             center: Vec3::ZERO,
-            distance: 50.0,
-            target_distance: 50.0,
+            distance: 600.0,
+            target_distance: 600.0,
             rotation: initial_rotation,
             target_rotation: initial_rotation,
-            mode: CameraMode::Orbit,
+            mode: CameraMode::FreeFly,
             up_direction: Vec3::Y, // Default up is +Y (gravity pulls down in -Y)
             is_dragging: false,
             last_mouse_pos: None,
@@ -82,6 +82,64 @@ impl CameraController {
             accumulated_scroll: 0.0,
             move_speed: 15.0,
             sprint_multiplier: 6.0, // Increased from 3.0 for faster shift movement
+            mouse_sensitivity: 0.003,
+            roll_speed: 1.5,
+            zoom_speed: 0.2,
+            enable_spring: true,
+            spring_stiffness: 50.0,
+            spring_damping: 0.9,
+            keys_pressed: KeyState::default(),
+        }
+    }
+
+    /// Create camera for GPU scene (FreeFly at origin)
+    pub fn new_for_gpu_scene() -> Self {
+        // Start at origin looking down at 45-degree angle
+        let initial_rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4);
+
+        Self {
+            center: Vec3::ZERO,  // FreeFly starts at origin
+            distance: 0.0,       // FreeFly has no distance
+            target_distance: 0.0,
+            rotation: initial_rotation,
+            target_rotation: initial_rotation,
+            mode: CameraMode::FreeFly,
+            up_direction: Vec3::Y,
+            is_dragging: false,
+            last_mouse_pos: None,
+            accumulated_mouse_delta: Vec3::ZERO,
+            accumulated_scroll: 0.0,
+            move_speed: 15.0,
+            sprint_multiplier: 6.0,
+            mouse_sensitivity: 0.003,
+            roll_speed: 1.5,
+            zoom_speed: 0.2,
+            enable_spring: true,
+            spring_stiffness: 50.0,
+            spring_damping: 0.9,
+            keys_pressed: KeyState::default(),
+        }
+    }
+
+    /// Create camera for preview scene (Orbit at 50 units)
+    pub fn new_for_preview_scene() -> Self {
+        // Initial rotation: looking down at the scene from a 45-degree angle
+        let initial_rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4);
+
+        Self {
+            center: Vec3::ZERO,
+            distance: 50.0,       // Orbit at 50 units
+            target_distance: 50.0,
+            rotation: initial_rotation,
+            target_rotation: initial_rotation,
+            mode: CameraMode::Orbit,  // Preview starts in Orbit mode
+            up_direction: Vec3::Y,
+            is_dragging: false,
+            last_mouse_pos: None,
+            accumulated_mouse_delta: Vec3::ZERO,
+            accumulated_scroll: 0.0,
+            move_speed: 15.0,
+            sprint_multiplier: 6.0,
             mouse_sensitivity: 0.003,
             roll_speed: 1.5,
             zoom_speed: 0.2,
@@ -236,12 +294,10 @@ impl CameraController {
                 self.mode = CameraMode::FreeFly;
             }
             CameraMode::FreeFly => {
-                // Switch to Orbit: set orbit center to world origin, calculate distance
-                let current_pos = self.position();
+                // Switch to Orbit: set orbit center to world origin, always use 500 units
                 self.center = Vec3::ZERO;
-                let new_distance = current_pos.distance(Vec3::ZERO);
-                self.distance = new_distance;
-                self.target_distance = new_distance;
+                self.distance = 500.0;
+                self.target_distance = 500.0;
                 
                 // Remove roll component when switching to Orbit mode
                 // Extract forward direction and create clean orbit rotation

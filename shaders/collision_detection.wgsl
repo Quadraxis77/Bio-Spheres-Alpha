@@ -100,6 +100,7 @@ var<storage, read> rotations: array<vec4<f32>>;
 const MAX_CELLS_PER_GRID: u32 = 16u;
 const PI: f32 = 3.14159265359;
 const FIXED_POINT_SCALE: f32 = 1000.0;
+const MAX_FORCE: f32 = 1000000.0; // Clamp forces to prevent i32 overflow
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     return clamp(mass, 0.5, 2.0);
@@ -164,7 +165,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let r_hat = pos / safe_dist;  // Outward radial direction
         let normal = -r_hat;  // Inward direction
         // Only apply force when penetration > 0 (clamped_pen handles this naturally)
-        force += normal * clamped_pen * clamped_pen * 500.0;
+        let boundary_force = normal * clamped_pen * clamped_pen * 500.0;
+        
+        // Clamp boundary force to prevent overflow
+        force += clamp(boundary_force, vec3<f32>(-MAX_FORCE), vec3<f32>(MAX_FORCE));
         
         // Apply torque to rotate cell to face inward (matching BioSpheres-Q reference)
         // Only apply when in the soft zone (clamped_pen > 0)
@@ -190,10 +194,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 
                 // Torque magnitude increases with penetration and angle
                 // Matching BioSpheres-Q: torque_strength = 50.0 * penetration * angle
-                let torque_strength = 50.0 * clamped_pen * angle;
+                let torque_magnitude = 50.0 * clamped_pen * angle;
+                let torque_vector = normalized_axis * torque_magnitude;
                 
-                // Apply torque to rotate toward center
-                torque += normalized_axis * torque_strength;
+                // Clamp torque to prevent overflow
+                torque += clamp(torque_vector, vec3<f32>(-MAX_FORCE), vec3<f32>(MAX_FORCE));
             }
         }
     }
@@ -276,7 +281,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let relative_vel = vel - other_vel;
                 let damping = dot(relative_vel, coll_normal) * 0.5;
                 
-                force += coll_normal * (coll_penetration * combined_stiffness - damping);
+                let collision_force = coll_normal * (coll_penetration * combined_stiffness - damping);
+                
+                // Clamp force to prevent i32 overflow in atomic operations
+                let clamped_force = clamp(collision_force, vec3<f32>(-MAX_FORCE), vec3<f32>(MAX_FORCE));
+                force += clamped_force;
             }
         }
     }

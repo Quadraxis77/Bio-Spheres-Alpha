@@ -70,14 +70,14 @@ impl Default for CaveParams {
             scale: 10.0,  // Base scale, will be multiplied by world size factor
             octaves: 4,
             persistence: 0.5,
-            threshold: 0.0,
+            threshold: 1.0,
             smoothness: 0.1,
             seed: 12345,
             grid_resolution: 64,
             triangle_count: 0,
             collision_enabled: 1,
-            collision_stiffness: 1000.0,
-            collision_damping: 0.5,
+            collision_stiffness: 1.0,
+            collision_damping: 1.0,
             substeps: 4,
             _padding: [0.0; 188],
         }

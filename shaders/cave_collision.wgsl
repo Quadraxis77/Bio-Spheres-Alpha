@@ -275,8 +275,8 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
     }
     
     // Cell might be near a cave wall - perform detailed collision check
-    // Effective threshold accounts for cell radius - cell collides earlier
-    let radius_threshold = cave_params.threshold - radius * 0.1; // Adjust threshold by radius
+    // Use fixed threshold for collision detection regardless of cell size
+    let radius_threshold = cave_params.threshold;
     
     // If center density > adjusted threshold, we're colliding with cave wall
     if (center_density > radius_threshold) {
@@ -288,21 +288,24 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
         let penetration = (center_density - radius_threshold) * cave_params.scale;
 
         if (penetration > 0.0) {
-            // Apply force proportional to penetration depth
-            let force_magnitude = penetration * cave_params.collision_stiffness;
+            // Force proportional to penetration depth (Hooke's law)
+            // Divide by substeps to maintain stability with multiple substeps
+            let force_magnitude = penetration * cave_params.collision_stiffness / f32(cave_params.substeps);
             let force = normal * force_magnitude;
 
             // F = ma, so a = F/m, and dv = a * dt
-            let velocity_change = force * dt / mass;
+            // Use dt/substeps for each substep to maintain physics accuracy
+            let velocity_change = force * dt / f32(cave_params.substeps) / mass;
 
-            // Update velocity
+            // Update velocity with force response
             var vel = velocities[cell_idx].xyz;
             vel = vel + velocity_change;
 
-            // Apply damping to velocity component going into solid rock
+            // Critical damping to prevent oscillation: damping = 2 * sqrt(stiffness * mass)
+            // Simplified: use high damping to eliminate bouncing
             let vel_normal_mag = dot(vel, normal);
             if (vel_normal_mag < 0.0) {
-                vel = vel - normal * vel_normal_mag * cave_params.collision_damping;
+                vel = vel - normal * vel_normal_mag * 0.95;
             }
 
             velocities[cell_idx] = vec4<f32>(vel, velocities[cell_idx].w);

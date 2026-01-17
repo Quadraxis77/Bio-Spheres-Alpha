@@ -987,7 +987,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             params_changed |= ui.checkbox(&mut collision_enabled, "Enable Collision").changed();
             
             if collision_enabled {
-                params_changed |= ui.add(egui::Slider::new(&mut collision_stiffness, 100.0..=10000.0).text("Stiffness")).changed();
+                params_changed |= ui.add(egui::Slider::new(&mut collision_stiffness, 0.0..=10000.0).logarithmic(true).text("Stiffness")).changed();
                 params_changed |= ui.add(egui::Slider::new(&mut collision_damping, 0.0..=1.0).text("Damping")).changed();
                 params_changed |= ui.add(egui::Slider::new(&mut substeps, 1..=10).text("Substeps")).changed();
             }
@@ -1571,8 +1571,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.swim_force, 0.0..=1.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.swim_force).speed(0.01).range(0.0..=1.0));
+                        ui.add(egui::Slider::new(&mut mode.swim_force, 0.0..=3.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.swim_force).speed(0.01).range(0.0..=3.0));
                     });
                 });
             }
