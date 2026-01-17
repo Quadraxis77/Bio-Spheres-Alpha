@@ -81,7 +81,7 @@ impl CameraController {
             accumulated_mouse_delta: Vec3::ZERO,
             accumulated_scroll: 0.0,
             move_speed: 15.0,
-            sprint_multiplier: 3.0,
+            sprint_multiplier: 6.0, // Increased from 3.0 for faster shift movement
             mouse_sensitivity: 0.003,
             roll_speed: 1.5,
             zoom_speed: 0.2,
@@ -242,7 +242,18 @@ impl CameraController {
                 let new_distance = current_pos.distance(Vec3::ZERO);
                 self.distance = new_distance;
                 self.target_distance = new_distance;
-                self.target_rotation = self.rotation;
+                
+                // Remove roll component when switching to Orbit mode
+                // Extract forward direction and create clean orbit rotation
+                let forward = (self.rotation * Vec3::NEG_Z).normalize();
+                let up = self.up_direction;
+                let right = forward.cross(up).normalize();
+                let corrected_forward = up.cross(right).normalize();
+                
+                let rot_matrix = glam::Mat3::from_cols(right, up, -corrected_forward);
+                self.target_rotation = Quat::from_mat3(&rot_matrix).normalize();
+                self.rotation = self.target_rotation;
+                
                 self.mode = CameraMode::Orbit;
             }
         }

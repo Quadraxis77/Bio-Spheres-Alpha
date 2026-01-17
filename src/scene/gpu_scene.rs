@@ -1446,7 +1446,6 @@ impl GpuScene {
             params.scale = editor_state.cave_scale; // Use user's scale directly
             
             params.octaves = editor_state.cave_octaves;
-            params.persistence = editor_state.cave_persistence;
             params.smoothness = editor_state.cave_smoothness;
             params.seed = editor_state.cave_seed;
             params.grid_resolution = editor_state.cave_resolution;

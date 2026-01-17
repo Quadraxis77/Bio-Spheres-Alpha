@@ -32,8 +32,8 @@ impl Default for WorldSphereParams {
             // More transparent than reference (0.99) - use 0.15 for subtle visibility
             transparency: 0.15,
             radius: 100.0,
-            fade_start_distance: 150.0,
-            fade_end_distance: 300.0,
+            fade_start_distance: 10000.0, // No fade - very large distance
+            fade_end_distance: 10000.0,   // No fade - very large distance
             _padding: 0.0,
         }
     }

@@ -944,7 +944,6 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             let mut density = params.density;
             let mut scale = params.scale; // Use actual scale directly
             let mut octaves = params.octaves as i32;
-            let mut persistence = params.persistence;
             let mut smoothness = params.smoothness;
             let mut seed = params.seed as i32;
             let mut resolution = params.grid_resolution as i32;
@@ -962,8 +961,8 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             params_changed |= ui.add(egui::Slider::new(&mut density, 0.1..=2.0).text("Density")).changed();
             params_changed |= ui.add(egui::Slider::new(&mut scale, 50.0..=100.0).text("Scale")).changed();
             params_changed |= ui.add(egui::Slider::new(&mut octaves, 1..=8).text("Octaves")).changed();
-            params_changed |= ui.add(egui::Slider::new(&mut persistence, 0.1..=1.0).text("Persistence")).changed();
             params_changed |= ui.add(egui::Slider::new(&mut smoothness, 0.0..=1.0).text("Smoothness")).changed();
+            params_changed |= ui.add(egui::Slider::new(&mut resolution, 32..=128).text("Resolution")).changed();
             ui.horizontal(|ui| {
                 ui.label("Seed:");
                 params_changed |= ui.add(egui::DragValue::new(&mut seed).range(0..=9999)).changed();
@@ -979,7 +978,6 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                     params_changed = true;
                 }
             });
-            params_changed |= ui.add(egui::Slider::new(&mut resolution, 32..=128).text("Resolution")).changed();
             
             ui.add_space(10.0);
             ui.separator();
@@ -1008,7 +1006,6 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 context.editor_state.cave_density = density;
                 context.editor_state.cave_scale = scale;
                 context.editor_state.cave_octaves = octaves as u32;
-                context.editor_state.cave_persistence = persistence;
                 context.editor_state.cave_smoothness = smoothness;
                 context.editor_state.cave_seed = seed as u32;
                 context.editor_state.cave_resolution = resolution as u32;
