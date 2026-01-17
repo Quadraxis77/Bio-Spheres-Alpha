@@ -296,7 +296,7 @@ fn default_cell_capacity() -> u32 {
 }
 
 fn default_world_diameter() -> f32 {
-    200.0
+    400.0
 }
 
 fn default_lod_scale_factor() -> f32 {
@@ -343,7 +343,7 @@ impl Default for GlobalUiState {
             gpu_readbacks_enabled: true,
             show_adhesion_lines: true,
             cell_capacity: 20_000,
-            world_diameter: 200.0,
+            world_diameter: 400.0,
             lod_scale_factor: 500.0,
             lod_threshold_low: 10.0,
             lod_threshold_medium: 25.0,

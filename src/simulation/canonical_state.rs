@@ -484,8 +484,8 @@ impl CanonicalState {
             genome_modes_hash: 0,
             
             // Spatial grid for collision detection
-            // Parameters: grid_density³ cells, 200.0 world size, 100.0 boundary radius
-            spatial_grid: DeterministicSpatialGrid::with_capacity(grid_density, 200.0, 100.0, capacity),
+            // Parameters: grid_density³ cells, 400.0 world size, 200.0 boundary radius
+            spatial_grid: DeterministicSpatialGrid::with_capacity(grid_density, 400.0, 200.0, capacity),
             
             // State tracking
             masses_changed: false,

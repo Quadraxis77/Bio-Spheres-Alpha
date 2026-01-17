@@ -9,7 +9,7 @@
 //! - `position_and_mass[3]`: Vec4(x, y, z, mass) per cell
 //! - `velocity[3]`: Vec4(x, y, z, 0) per cell
 //! 
-//! ### Spatial Grid (64³ = 262,144 grid cells)
+//! ### Spatial Grid (128³ = 2,097,152 grid cells)
 //! - `spatial_grid_counts`: u32 per grid cell (how many cells in each grid cell)
 //! - `spatial_grid_offsets`: u32 per grid cell (prefix-sum for O(1) lookup)
 //! - `spatial_grid_cells`: u32 per cell (sorted cell indices by grid cell)
@@ -191,7 +191,7 @@ pub struct GpuTripleBufferSystem {
     /// Used to compute velocity_change = 0.5 * (old_accel + new_accel) * dt
     pub prev_accelerations: wgpu::Buffer,
     
-    /// Spatial grid cell counts (64³ = 262,144 grid cells)
+    /// Spatial grid cell counts (128³ = 2,097,152 grid cells)
     /// spatial_grid_counts[grid_idx] = number of cells in that grid cell
     pub spatial_grid_counts: wgpu::Buffer,
     
@@ -368,8 +368,8 @@ impl GpuTripleBufferSystem {
         // Previous accelerations for Verlet integration (single buffer, not triple buffered)
         let prev_accelerations = Self::create_storage_buffer(device, buffer_size, "Previous Accelerations");
         
-        // Create spatial grid buffers (64³ = 262,144 grid cells)
-        let grid_size = 64 * 64 * 64;
+        // Create spatial grid buffers (128³ = 2,097,152 grid cells)
+        let grid_size = 128 * 128 * 128;
         let spatial_grid_counts = Self::create_storage_buffer(
             device, 
             grid_size * 4, // u32 = 4 bytes
@@ -388,11 +388,11 @@ impl GpuTripleBufferSystem {
             "Cell Grid Indices"
         );
         
-        // Sorted cell indices by grid cell (16 cells max per grid cell * 64³ grid cells)
+        // Sorted cell indices by grid cell (16 cells max per grid cell * 128³ grid cells)
         // This enables O(1) neighbor lookup in collision detection
         let spatial_grid_cells = Self::create_storage_buffer(
             device,
-            16 * grid_size * 4, // 16 cells per grid cell * 262,144 grid cells * 4 bytes
+            16 * grid_size * 4, // 16 cells per grid cell * 2,097,152 grid cells * 4 bytes
             "Spatial Grid Cells"
         );
         

@@ -67,15 +67,13 @@ var<storage, read_write> spatial_grid_cells: array<u32>;
 @group(1) @binding(4)
 var<storage, read> stiffnesses: array<f32>;
 
-const GRID_RESOLUTION: i32 = 64;
-
-fn world_pos_to_grid_index(pos: vec3<f32>, world_size: f32, grid_cell_size: f32) -> u32 {
+fn world_pos_to_grid_index(pos: vec3<f32>, world_size: f32, grid_cell_size: f32, grid_resolution: i32) -> u32 {
     let grid_pos = (pos + world_size * 0.5) / grid_cell_size;
-    let grid_x = clamp(i32(grid_pos.x), 0, GRID_RESOLUTION - 1);
-    let grid_y = clamp(i32(grid_pos.y), 0, GRID_RESOLUTION - 1);
-    let grid_z = clamp(i32(grid_pos.z), 0, GRID_RESOLUTION - 1);
+    let grid_x = clamp(i32(grid_pos.x), 0, grid_resolution - 1);
+    let grid_y = clamp(i32(grid_pos.y), 0, grid_resolution - 1);
+    let grid_z = clamp(i32(grid_pos.z), 0, grid_resolution - 1);
     
-    return u32(grid_x + grid_y * GRID_RESOLUTION + grid_z * GRID_RESOLUTION * GRID_RESOLUTION);
+    return u32(grid_x + grid_y * grid_resolution + grid_z * grid_resolution * grid_resolution);
 }
 
 @compute @workgroup_size(256)
@@ -90,6 +88,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pos = positions_in[cell_idx].xyz;
     
     // Calculate and store grid index for this cell
-    let grid_idx = world_pos_to_grid_index(pos, params.world_size, params.grid_cell_size);
+    let grid_idx = world_pos_to_grid_index(pos, params.world_size, params.grid_cell_size, params.grid_resolution);
     cell_grid_indices[cell_idx] = grid_idx;
 }

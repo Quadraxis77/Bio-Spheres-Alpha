@@ -65,9 +65,9 @@ impl Default for CaveParams {
     fn default() -> Self {
         Self {
             world_center: [0.0, 0.0, 0.0],
-            world_radius: 50.0,
+            world_radius: 200.0,  // Updated for 400-unit world diameter
             density: 0.5,
-            scale: 10.0,
+            scale: 10.0,  // Base scale, will be multiplied by world size factor
             octaves: 4,
             persistence: 0.5,
             threshold: 0.0,
@@ -469,6 +469,13 @@ impl CaveSystemRenderer {
         }
         
         self.index_count = indices.len() as u32;
+    }
+    
+    /// Update cave world radius and regenerate mesh
+    pub fn update_world_radius(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, world_radius: f32) {
+        let mut params = self.params;
+        params.world_radius = world_radius;
+        self.update_params(device, queue, params);
     }
     
     /// Resize the renderer

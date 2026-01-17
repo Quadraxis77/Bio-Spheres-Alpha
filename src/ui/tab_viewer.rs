@@ -617,7 +617,7 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             
             // World diameter slider
             ui.label("World Diameter:");
-            ui.add(egui::Slider::new(&mut state.world_diameter, 50.0..=200.0).suffix(" units"));
+            ui.add(egui::Slider::new(&mut state.world_diameter, 50.0..=400.0).suffix(" units"));
             
             ui.add_space(4.0);
 
@@ -942,10 +942,9 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             
             // Create local copies for editing
             let mut density = params.density;
-            let mut scale = params.scale;
+            let mut scale = params.scale; // Use actual scale directly
             let mut octaves = params.octaves as i32;
             let mut persistence = params.persistence;
-            let mut threshold = params.threshold;
             let mut smoothness = params.smoothness;
             let mut seed = params.seed as i32;
             let mut resolution = params.grid_resolution as i32;
@@ -961,12 +960,25 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             
             // Editable parameters
             params_changed |= ui.add(egui::Slider::new(&mut density, 0.1..=2.0).text("Density")).changed();
-            params_changed |= ui.add(egui::Slider::new(&mut scale, 1.0..=100.0).text("Scale")).changed();
+            params_changed |= ui.add(egui::Slider::new(&mut scale, 50.0..=100.0).text("Scale")).changed();
             params_changed |= ui.add(egui::Slider::new(&mut octaves, 1..=8).text("Octaves")).changed();
             params_changed |= ui.add(egui::Slider::new(&mut persistence, 0.1..=1.0).text("Persistence")).changed();
-            params_changed |= ui.add(egui::Slider::new(&mut threshold, 0.0..=1.0).text("Threshold")).changed();
             params_changed |= ui.add(egui::Slider::new(&mut smoothness, 0.0..=1.0).text("Smoothness")).changed();
-            params_changed |= ui.add(egui::Slider::new(&mut seed, 0..=9999).text("Seed")).changed();
+            ui.horizontal(|ui| {
+                ui.label("Seed:");
+                params_changed |= ui.add(egui::DragValue::new(&mut seed).range(0..=9999)).changed();
+                if ui.button("🎲").on_hover_text("Randomize seed").clicked() {
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
+                    use std::time::SystemTime;
+                    
+                    // Generate a simple random seed using system time
+                    let mut hasher = DefaultHasher::new();
+                    SystemTime::now().hash(&mut hasher);
+                    seed = (hasher.finish() % 10000) as i32;
+                    params_changed = true;
+                }
+            });
             params_changed |= ui.add(egui::Slider::new(&mut resolution, 32..=128).text("Resolution")).changed();
             
             ui.add_space(10.0);
@@ -997,7 +1009,6 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 context.editor_state.cave_scale = scale;
                 context.editor_state.cave_octaves = octaves as u32;
                 context.editor_state.cave_persistence = persistence;
-                context.editor_state.cave_threshold = threshold;
                 context.editor_state.cave_smoothness = smoothness;
                 context.editor_state.cave_seed = seed as u32;
                 context.editor_state.cave_resolution = resolution as u32;

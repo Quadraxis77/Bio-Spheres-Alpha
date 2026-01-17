@@ -65,8 +65,8 @@ struct PhysicsParams {
     _padding: [f32; 48],
 }
 
-/// Grid resolution: 64³ = 262,144 grid cells
-const GRID_RESOLUTION: u32 = 64;
+/// Grid resolution: 128³ = 2,097,152 grid cells
+const GRID_RESOLUTION: u32 = 128;
 
 /// Workgroup size for grid operations (optimal for 64³ grid)
 const WORKGROUP_SIZE_GRID: u32 = 256;

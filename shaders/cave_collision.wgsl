@@ -256,15 +256,25 @@ fn compute_sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {
 }
 
 // Apply force-based collision - pushes cells out of solid rock into cave tunnels
+// Optimized: only check cells near cave walls, skip cells safely in open space
 fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: f32, dt: f32) {
     if (cave_params.collision_enabled == 0u) {
         return;
     }
 
-    // Check collision at cell surface, not just center
-    // Sample density at cell center and adjust threshold by radius
+    // Quick check: sample density at cell center first
     let center_density = sample_cave_density(pos);
     
+    // Early exit: if we're safely in open space (density well below threshold), skip collision
+    let safety_margin = 0.2; // 20% safety margin
+    let open_space_threshold = cave_params.threshold - 0.5 - safety_margin;
+    
+    if (center_density <= open_space_threshold) {
+        // Cell is safely in open cave space - no collision check needed
+        return;
+    }
+    
+    // Cell might be near a cave wall - perform detailed collision check
     // Effective threshold accounts for cell radius - cell collides earlier
     let radius_threshold = cave_params.threshold - radius * 0.1; // Adjust threshold by radius
     

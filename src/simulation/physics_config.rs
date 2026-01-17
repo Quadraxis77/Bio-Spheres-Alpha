@@ -32,7 +32,7 @@ impl Default for PhysicsConfig {
     fn default() -> Self {
         Self {
             fixed_timestep: 1.0 / 64.0, // 64 Hz
-            sphere_radius: 100.0,
+            sphere_radius: 200.0,  // Updated for 400-unit world diameter
             default_stiffness: 0.0,
             damping: 0.0,
             velocity_damping: 0.98,

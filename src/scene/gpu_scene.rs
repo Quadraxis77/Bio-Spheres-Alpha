@@ -138,6 +138,8 @@ pub struct GpuScene {
     pub cave_params_dirty: bool,
     /// Cave-specific physics bind groups (one per buffer index)
     cave_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
+    /// Track previous world diameter to detect changes for cave regeneration
+    previous_world_diameter: f32,
 }
 
 impl GpuScene {
@@ -266,6 +268,7 @@ impl GpuScene {
             cave_renderer,
             cave_params_dirty: false,
             cave_physics_bind_groups: None,
+            previous_world_diameter: 400.0, // Default world diameter
         }
     }
     
@@ -275,7 +278,7 @@ impl GpuScene {
         queue: &wgpu::Queue,
         surface_config: &wgpu::SurfaceConfiguration,
     ) -> Self {
-        Self::with_capacity(device, queue, surface_config, 20_000)
+        Self::with_capacity(device, queue, surface_config, 100_000)
     }
     
     /// Get the current cell capacity.
@@ -1312,11 +1315,11 @@ impl GpuScene {
         self.cave_renderer.is_some()
     }
     
-    pub fn initialize_cave_system(&mut self, device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> bool {
+    pub fn initialize_cave_system(&mut self, device: &wgpu::Device, surface_format: wgpu::TextureFormat, world_diameter: f32) -> bool {
         if self.cave_renderer.is_none() {
             let width = self.renderer.width;
             let height = self.renderer.height;
-            let world_radius = self.config.sphere_radius;
+            let world_radius = world_diameter * 0.5; // Use actual world diameter instead of config
             
             let cave_renderer = CaveSystemRenderer::new(device, surface_format, width, height, world_radius);
             
@@ -1440,10 +1443,10 @@ impl GpuScene {
         if let Some(ref mut cave_renderer) = self.cave_renderer {
             let mut params = *cave_renderer.params();
             params.density = editor_state.cave_density;
-            params.scale = editor_state.cave_scale;
+            params.scale = editor_state.cave_scale; // Use user's scale directly
+            
             params.octaves = editor_state.cave_octaves;
             params.persistence = editor_state.cave_persistence;
-            params.threshold = editor_state.cave_threshold;
             params.smoothness = editor_state.cave_smoothness;
             params.seed = editor_state.cave_seed;
             params.grid_resolution = editor_state.cave_resolution;
@@ -1471,6 +1474,18 @@ impl GpuScene {
             let params = *cave_renderer.params();
             cave_renderer.update_params(device, queue, params);
             self.cave_params_dirty = false;
+        }
+    }
+    
+    /// Check and update cave world radius if world diameter changed
+    pub fn check_world_diameter_change(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, world_diameter: f32) {
+        // Check if world diameter changed significantly (more than 0.1 units)
+        if (world_diameter - self.previous_world_diameter).abs() > 0.1 {
+            if let Some(ref mut cave_renderer) = self.cave_renderer {
+                let new_world_radius = world_diameter * 0.5;
+                cave_renderer.update_world_radius(device, queue, new_world_radius);
+                self.previous_world_diameter = world_diameter;
+            }
         }
     }
     
@@ -1673,6 +1688,9 @@ impl Scene for GpuScene {
     ) {
         // Sync adhesion settings to GPU when genomes are added or modified
         self.sync_adhesion_settings(queue);
+        
+        // Check and update cave world radius if world diameter changed
+        self.check_world_diameter_change(device, queue, world_diameter);
         
         // Calculate view-projection matrix for culling
         let view_matrix = Mat4::look_at_rh(

@@ -609,6 +609,7 @@ impl App {
                         &self.device,
                         &self.queue,
                         &self.config,
+                        self.ui.state.world_diameter,
                         capacity,
                     );
                     
@@ -653,7 +654,7 @@ impl App {
                     }
                 }
                 
-                let cave_initialized = self.scene_manager.switch_mode(requested_mode, &self.device, &self.queue, &self.config);
+                let cave_initialized = self.scene_manager.switch_mode(requested_mode, &self.device, &self.queue, &self.config, self.ui.state.world_diameter, self.ui.state.cell_capacity);
                 if cave_initialized {
                     // Cave was just initialized, mark params as dirty so they get applied
                     self.editor_state.cave_params_dirty = true;
@@ -682,7 +683,7 @@ impl App {
                     self.working_genome = preview_scene.genome.clone();
                 }
             }
-            let cave_initialized = self.scene_manager.switch_mode(dock_mode, &self.device, &self.queue, &self.config);
+            let cave_initialized = self.scene_manager.switch_mode(dock_mode, &self.device, &self.queue, &self.config, self.ui.state.world_diameter, self.ui.state.cell_capacity);
             if cave_initialized {
                 // Cave was just initialized, mark params as dirty so they get applied
                 self.editor_state.cave_params_dirty = true;

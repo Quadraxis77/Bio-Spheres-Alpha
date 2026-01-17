@@ -46,8 +46,10 @@ impl SceneManager {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         config: &wgpu::SurfaceConfiguration,
+        world_diameter: f32,
+        cell_capacity: u32,
     ) -> bool {
-        self.switch_mode_with_capacity(mode, device, queue, config, 20_000)
+        self.switch_mode_with_capacity(mode, device, queue, config, world_diameter, cell_capacity)
     }
     
     /// Switch to a different simulation mode with specified GPU scene capacity.
@@ -57,7 +59,8 @@ impl SceneManager {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         config: &wgpu::SurfaceConfiguration,
-        gpu_capacity: u32,
+        world_diameter: f32,
+        cell_capacity: u32,
     ) -> bool {
         if mode == self.current_mode {
             return false;
@@ -78,9 +81,9 @@ impl SceneManager {
             }
             SimulationMode::Gpu => {
                 if self.gpu_scene.is_none() {
-                    let mut gpu_scene = GpuScene::with_capacity(device, queue, config, gpu_capacity);
+                    let mut gpu_scene = GpuScene::with_capacity(device, queue, config, cell_capacity);
                     // Initialize cave system automatically
-                    let cave_initialized = gpu_scene.initialize_cave_system(device, config.format);
+                    let cave_initialized = gpu_scene.initialize_cave_system(device, config.format, world_diameter);
                     self.gpu_scene = Some(gpu_scene);
                     self.current_mode = mode;
                     return cave_initialized; // Return true if cave was just initialized
@@ -99,6 +102,7 @@ impl SceneManager {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         config: &wgpu::SurfaceConfiguration,
+        world_diameter: f32,
         capacity: u32,
     ) {
         // Only recreate if capacity actually changed
@@ -111,7 +115,7 @@ impl SceneManager {
         log::info!("Recreating GPU scene with capacity: {}", capacity);
         let mut gpu_scene = GpuScene::with_capacity(device, queue, config, capacity);
         // Initialize cave system automatically
-        let _cave_initialized = gpu_scene.initialize_cave_system(device, config.format);
+        let _cave_initialized = gpu_scene.initialize_cave_system(device, config.format, world_diameter);
         self.gpu_scene = Some(gpu_scene);
     }
 

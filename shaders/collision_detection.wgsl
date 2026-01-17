@@ -97,7 +97,6 @@ var<storage, read_write> torque_accum_z: array<atomic<i32>>;
 @group(2) @binding(6)
 var<storage, read> rotations: array<vec4<f32>>;
 
-const GRID_RESOLUTION: i32 = 64;
 const MAX_CELLS_PER_GRID: u32 = 16u;
 const PI: f32 = 3.14159265359;
 const FIXED_POINT_SCALE: f32 = 1000.0;
@@ -114,12 +113,12 @@ fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     return v + ((uv * q.w) + uuv) * 2.0;
 }
 
-fn grid_coords_to_index(x: i32, y: i32, z: i32) -> u32 {
-    return u32(x + y * GRID_RESOLUTION + z * GRID_RESOLUTION * GRID_RESOLUTION);
+fn grid_coords_to_index(x: i32, y: i32, z: i32, grid_resolution: i32) -> u32 {
+    return u32(x + y * grid_resolution + z * grid_resolution * grid_resolution);
 }
 
-fn grid_index_to_coords(grid_idx: u32) -> vec3<i32> {
-    let res = GRID_RESOLUTION;
+fn grid_index_to_coords(grid_idx: u32, grid_resolution: i32) -> vec3<i32> {
+    let res = grid_resolution;
     let z = i32(grid_idx) / (res * res);
     let y = (i32(grid_idx) - z * res * res) / res;
     let x = i32(grid_idx) - z * res * res - y * res;
@@ -141,54 +140,61 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let radius = calculate_radius_from_mass(mass);
     let my_stiffness = stiffnesses[cell_idx];
     let my_grid_idx = cell_grid_indices[cell_idx];
-    let my_grid_coords = grid_index_to_coords(my_grid_idx);
+    let my_grid_coords = grid_index_to_coords(my_grid_idx, params.grid_resolution);
     
     var force = vec3<f32>(0.0);
     var torque = vec3<f32>(0.0);
     
     // Boundary forces - soft spherical boundary (branchless)
-    // Also applies torque to rotate cells to face inward (matching BioSpheres-Q reference)
+    // Only apply if cell is near boundary AND there are cells in nearby grid cells
     let dist_from_center = length(pos);
     let boundary_radius = params.world_size * 0.5;
     let soft_zone = 5.0;
     let soft_zone_start = boundary_radius - soft_zone;
-    let penetration = (dist_from_center - soft_zone_start) / soft_zone;
-    let clamped_pen = clamp(penetration, 0.0, 1.0);
-    // Use select to avoid branch - safe_dist avoids division by zero
-    let safe_dist = max(dist_from_center, 0.001);
-    let r_hat = pos / safe_dist;  // Outward radial direction
-    let normal = -r_hat;  // Inward direction
-    // Only apply force when penetration > 0 (clamped_pen handles this naturally)
-    force += normal * clamped_pen * clamped_pen * 500.0;
     
-    // Apply torque to rotate cell to face inward (matching BioSpheres-Q reference)
-    // Only apply when in the soft zone (clamped_pen > 0)
-    if (clamped_pen > 0.0) {
-        // Get the cell's forward direction (local +Z axis)
-        let rotation = rotations[cell_idx];
-        let forward = quat_rotate(rotation, vec3<f32>(0.0, 0.0, 1.0));
+    // Quick check: skip boundary forces if not in soft zone
+    if (dist_from_center <= soft_zone_start) {
+        // Skip boundary collision entirely - no cells nearby
+    } else {
+        // Cell is in boundary soft zone - apply boundary forces
+        let penetration = (dist_from_center - soft_zone_start) / soft_zone;
+        let clamped_pen = clamp(penetration, 0.0, 1.0);
+        // Use select to avoid branch - safe_dist avoids division by zero
+        let safe_dist = max(dist_from_center, 0.001);
+        let r_hat = pos / safe_dist;  // Outward radial direction
+        let normal = -r_hat;  // Inward direction
+        // Only apply force when penetration > 0 (clamped_pen handles this naturally)
+        force += normal * clamped_pen * clamped_pen * 500.0;
         
-        // Calculate desired direction (toward center)
-        let desired_direction = -r_hat;
-        
-        // Calculate rotation axis (cross product of current forward and desired direction)
-        let rotation_axis = cross(forward, desired_direction);
-        let rotation_axis_length = length(rotation_axis);
-        
-        // Only apply torque if there's a meaningful rotation needed
-        if (rotation_axis_length > 0.001) {
-            let normalized_axis = rotation_axis / rotation_axis_length;
+        // Apply torque to rotate cell to face inward (matching BioSpheres-Q reference)
+        // Only apply when in the soft zone (clamped_pen > 0)
+        if (clamped_pen > 0.0) {
+            // Get the cell's forward direction (local +Z axis)
+            let rotation = rotations[cell_idx];
+            let forward = quat_rotate(rotation, vec3<f32>(0.0, 0.0, 1.0));
             
-            // Calculate angle between current and desired direction
-            let dot_product = clamp(dot(forward, desired_direction), -1.0, 1.0);
-            let angle = acos(dot_product);
+            // Calculate desired direction (toward center)
+            let desired_direction = -r_hat;
             
-            // Torque magnitude increases with penetration and angle
-            // Matching BioSpheres-Q: torque_strength = 50.0 * penetration * angle
-            let torque_strength = 50.0 * clamped_pen * angle;
+            // Calculate rotation axis (cross product of current forward and desired direction)
+            let rotation_axis = cross(forward, desired_direction);
+            let rotation_axis_length = length(rotation_axis);
             
-            // Apply torque to rotate toward center
-            torque += normalized_axis * torque_strength;
+            // Only apply torque if there's a meaningful rotation needed
+            if (rotation_axis_length > 0.001) {
+                let normalized_axis = rotation_axis / rotation_axis_length;
+                
+                // Calculate angle between current and desired direction
+                let dot_product = clamp(dot(forward, desired_direction), -1.0, 1.0);
+                let angle = acos(dot_product);
+                
+                // Torque magnitude increases with penetration and angle
+                // Matching BioSpheres-Q: torque_strength = 50.0 * penetration * angle
+                let torque_strength = 50.0 * clamped_pen * angle;
+                
+                // Apply torque to rotate toward center
+                torque += normalized_axis * torque_strength;
+            }
         }
     }
     
@@ -202,16 +208,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         for (var dy = -1; dy <= 1; dy++) {
             for (var dx = -1; dx <= 1; dx++) {
                 // Use clamp instead of branch for boundary check
-                let nx = clamp(my_grid_coords.x + dx, 0, GRID_RESOLUTION - 1);
-                let ny = clamp(my_grid_coords.y + dy, 0, GRID_RESOLUTION - 1);
-                let nz = clamp(my_grid_coords.z + dz, 0, GRID_RESOLUTION - 1);
+                let nx = clamp(my_grid_coords.x + dx, 0, params.grid_resolution - 1);
+                let ny = clamp(my_grid_coords.y + dy, 0, params.grid_resolution - 1);
+                let nz = clamp(my_grid_coords.z + dz, 0, params.grid_resolution - 1);
                 
                 // Check if this is actually a valid neighbor (not clamped)
-                let is_valid = (my_grid_coords.x + dx >= 0) && (my_grid_coords.x + dx < GRID_RESOLUTION) &&
-                               (my_grid_coords.y + dy >= 0) && (my_grid_coords.y + dy < GRID_RESOLUTION) &&
-                               (my_grid_coords.z + dz >= 0) && (my_grid_coords.z + dz < GRID_RESOLUTION);
+                let is_valid = (my_grid_coords.x + dx >= 0) && (my_grid_coords.x + dx < params.grid_resolution) &&
+                               (my_grid_coords.y + dy >= 0) && (my_grid_coords.y + dy < params.grid_resolution) &&
+                               (my_grid_coords.z + dz >= 0) && (my_grid_coords.z + dz < params.grid_resolution);
                 
-                let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz);
+                let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
                 neighbor_indices[n_idx] = neighbor_grid_idx;
                 // Use select to zero out invalid neighbors (branchless)
                 neighbor_counts[n_idx] = select(0u, min(spatial_grid_counts[neighbor_grid_idx], MAX_CELLS_PER_GRID), is_valid);

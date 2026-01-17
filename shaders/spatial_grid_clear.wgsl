@@ -14,6 +14,7 @@ var<storage, read_write> spatial_grid_offsets: array<u32>;
 @group(0) @binding(2)
 var<storage, read_write> cell_grid_indices: array<u32>;
 
+// Unused in this shader but required for bind group layout compatibility
 @group(0) @binding(3)
 var<storage, read_write> spatial_grid_cells: array<u32>;
 
@@ -21,12 +22,10 @@ var<storage, read_write> spatial_grid_cells: array<u32>;
 @group(0) @binding(4)
 var<storage, read> stiffnesses: array<f32>;
 
-const GRID_RESOLUTION: u32 = 64u;
-
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let grid_idx = global_id.x;
-    let total_grid_cells = GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION;
+    let total_grid_cells = 128u * 128u * 128u; // 128³ = 2,097,152 grid cells
     
     if (grid_idx >= total_grid_cells) {
         return;
