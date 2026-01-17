@@ -123,6 +123,29 @@ fn noise(p: vec2<f32>) -> f32 {
     return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
 }
 
+// Triplanar texture sampling for cave walls
+// Prevents stretching from multiple viewing angles
+fn sample_triplanar_texture(world_pos: vec3<f32>, normal: vec3<f32>) -> f32 {
+    // Determine which plane to sample from based on normal
+    let abs_normal = abs(normal);
+    let raw_weights = abs_normal * abs_normal; // Square for proper weighting
+    let total_weight = raw_weights.x + raw_weights.y + raw_weights.z;
+    let normalized_weights = raw_weights / total_weight;
+    
+    // Sample from three planes
+    let uv_xz = world_pos.xz * 0.05;  // Scale for texture density
+    let uv_xy = world_pos.xy * 0.05;
+    let uv_yz = world_pos.yz * 0.05;
+    
+    // Generate texture for each plane
+    let tex_xz = noise(uv_xz);
+    let tex_xy = noise(uv_xy);
+    let tex_yz = noise(uv_yz);
+    
+    // Blend based on normal direction
+    return tex_xz * normalized_weights.x + tex_xy * normalized_weights.y + tex_yz * normalized_weights.z;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Normalize normal
@@ -141,14 +164,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let H = normalize(light_dir + V);
     let specular = pow(max(dot(N, H), 0.0), 32.0);
     
-    // Ambient occlusion approximation based on position
-    let ao = 0.5 + 0.5 * noise(in.uv * 10.0);
+    // Triplanar texture sampling prevents stretching
+    let texture_value = sample_triplanar_texture(in.world_position, N);
+    
+    // Ambient occlusion approximation
+    let ao = 0.5 + 0.5 * texture_value;
     
     // Base cave color (dark gray-brown)
     let base_color = vec3<f32>(0.15, 0.12, 0.10);
     
-    // Add some color variation based on noise
-    let color_variation = noise(in.world_position.xy * 0.1) * 0.1;
+    // Add color variation based on triplanar texture
+    let color_variation = texture_value * 0.15;
     let cave_color = base_color + vec3<f32>(color_variation);
     
     // Combine lighting

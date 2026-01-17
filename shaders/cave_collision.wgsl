@@ -255,7 +255,7 @@ fn compute_sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {
     return grad / len;
 }
 
-// Apply force-based collision - pushes cells out of cave tunnels via velocity
+// Apply force-based collision - pushes cells out of solid rock into cave tunnels
 fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: f32, dt: f32) {
     if (cave_params.collision_enabled == 0u) {
         return;
@@ -264,14 +264,14 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
     // Sample density at current position
     let density = sample_cave_density(pos);
 
-    // If density < threshold, we're inside a cave tunnel - apply outward force
-    if (density < cave_params.threshold) {
-        // Compute gradient pointing toward higher density (out of cave)
+    // If density > threshold, we're in solid rock - apply force to push into cave
+    if (density > cave_params.threshold) {
+        // Compute gradient pointing toward lower density (into cave)
         let gradient_step = cave_params.scale * 0.1;
-        let normal = compute_sdf_gradient(pos, gradient_step);
+        let normal = -compute_sdf_gradient(pos, gradient_step);  // Invert normal to point into cave
 
-        // Penetration depth - how far into the cave we are
-        let penetration = (cave_params.threshold - density) * cave_params.scale;
+        // Penetration depth - how far into solid rock we are
+        let penetration = (density - cave_params.threshold) * cave_params.scale;
 
         if (penetration > 0.0) {
             // Apply force proportional to penetration depth
@@ -285,7 +285,7 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
             var vel = velocities[cell_idx].xyz;
             vel = vel + velocity_change;
 
-            // Apply damping to velocity component going into cave
+            // Apply damping to velocity component going into solid rock
             let vel_normal_mag = dot(vel, normal);
             if (vel_normal_mag < 0.0) {
                 vel = vel - normal * vel_normal_mag * cave_params.collision_damping;
@@ -294,7 +294,7 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
             velocities[cell_idx] = vec4<f32>(vel, velocities[cell_idx].w);
         }
     }
-    // If density >= threshold, cell is in open space - no collision forces
+    // If density <= threshold, cell is in cave tunnel - no collision forces needed
 }
 
 @compute @workgroup_size(256)

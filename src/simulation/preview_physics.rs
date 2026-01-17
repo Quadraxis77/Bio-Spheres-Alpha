@@ -161,7 +161,9 @@ pub fn apply_boundary_forces(state: &mut CanonicalState, config: &PhysicsConfig)
             state.positions[i] = r_hat * boundary_radius;
             let radial_velocity = state.velocities[i].dot(r_hat);
             if radial_velocity > 0.0 {
-                state.velocities[i] -= r_hat * radial_velocity * 2.0;
+                // Extremely aggressive energy loss (coefficient of restitution = 0.02)
+                // Cells lose 98% of their energy on boundary impact
+                state.velocities[i] -= r_hat * radial_velocity * 1.98;
             }
         }
     }

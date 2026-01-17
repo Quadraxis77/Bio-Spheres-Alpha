@@ -275,7 +275,7 @@ impl CaveSystemRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Front),  // Cull front faces to see inside cave
+                cull_mode: None,  // No culling - show both front and back faces
                 unclipped_depth: false,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
@@ -757,6 +757,27 @@ impl CaveSystemRenderer {
 // Marching Cubes Implementation
 // ============================================================================
 
+/// Compute triplanar UV coordinates for texture mapping
+    /// Encodes which plane to sample from and the UV coordinates
+    fn compute_triplanar_uv(position: Vec3, normal: Vec3) -> [f32; 2] {
+        // Determine which plane has the strongest influence based on normal
+        let abs_normal = normal.abs();
+        
+        // UV coordinate scale (adjust for texture density)
+        let uv_scale = 0.05;
+        
+        if abs_normal.x >= abs_normal.y && abs_normal.x >= abs_normal.z {
+            // X-plane dominant - use YZ coordinates
+            [position.y * uv_scale, position.z * uv_scale]
+        } else if abs_normal.y >= abs_normal.x && abs_normal.y >= abs_normal.z {
+            // Y-plane dominant - use XZ coordinates  
+            [position.x * uv_scale, position.z * uv_scale]
+        } else {
+            // Z-plane dominant - use XY coordinates
+            [position.x * uv_scale, position.y * uv_scale]
+        }
+    }
+
 impl CaveSystemRenderer {
     /// Process a single cube in the marching cubes algorithm
     fn process_cube(
@@ -837,22 +858,26 @@ impl CaveSystemRenderer {
             // Get base index for this triangle
             let base_index = vertices.len() as u32;
             
-            // Add vertices with the same normal for flat shading
-            // Use world position for UVs to avoid patterns
+            // Add vertices with triplanar UV coordinates
+            // UVs encode which plane to sample from and the coordinates
+            let uv0 = compute_triplanar_uv(v0, normal);
+            let uv1 = compute_triplanar_uv(v1, normal);
+            let uv2 = compute_triplanar_uv(v2, normal);
+            
             vertices.push(CaveVertex {
                 position: v0.to_array(),
                 normal: normal.to_array(),
-                uv: [v0.x, v0.y],
+                uv: uv0,
             });
             vertices.push(CaveVertex {
                 position: v1.to_array(),
                 normal: normal.to_array(),
-                uv: [v1.x, v1.y],
+                uv: uv1,
             });
             vertices.push(CaveVertex {
                 position: v2.to_array(),
                 normal: normal.to_array(),
-                uv: [v2.x, v2.y],
+                uv: uv2,
             });
             
             // Add indices
