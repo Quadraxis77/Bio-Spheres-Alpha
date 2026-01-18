@@ -110,12 +110,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Clamp new position to world boundary
+    // Smooth boundary clamping with lerping to prevent teleporting
     let boundary_radius = params.world_size * 0.5;
     let dist = length(new_position);
     var final_position = new_position;
+    
     if (dist > boundary_radius) {
-        final_position = normalize(new_position) * boundary_radius;
+        // Calculate penetration depth
+        let penetration = dist - boundary_radius;
+        
+        // Smooth lerp factor based on penetration depth
+        let max_penetration = 5.0; // Maximum penetration for full correction
+        let lerp_factor = clamp(penetration / max_penetration, 0.0, 1.0);
+        let smooth_lerp = lerp_factor * lerp_factor; // Quadratic for smoother transition
+        
+        // Calculate target position (just inside boundary)
+        let target_position = normalize(new_position) * boundary_radius * 0.99;
+        
+        // Smoothly lerp new position toward target position
+        final_position = mix(new_position, target_position, smooth_lerp);
     }
     
     // Create new position with preserved mass

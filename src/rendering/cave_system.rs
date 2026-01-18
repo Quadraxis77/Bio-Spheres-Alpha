@@ -584,19 +584,22 @@ impl CaveSystemRenderer {
         let world_center = Vec3::from(params.world_center);
         let world_radius = params.world_radius;
         
+        // Extend cave generation 3 units beyond world sphere
+        let cave_generation_radius = world_radius + 3.0;
+        
         // Create 3D grid of density values
         let grid_size = resolution + 1;
         let mut density_grid = vec![vec![vec![0.0f32; grid_size]; grid_size]; grid_size];
         
         // Sample density at each grid point
-        let cell_size = (world_radius * 2.0) / resolution as f32;
+        let cell_size = (cave_generation_radius * 2.0) / resolution as f32;
         for x in 0..grid_size {
             for y in 0..grid_size {
                 for z in 0..grid_size {
                     let pos = Vec3::new(
-                        world_center.x - world_radius + x as f32 * cell_size,
-                        world_center.y - world_radius + y as f32 * cell_size,
-                        world_center.z - world_radius + z as f32 * cell_size,
+                        world_center.x - cave_generation_radius + x as f32 * cell_size,
+                        world_center.y - cave_generation_radius + y as f32 * cell_size,
+                        world_center.z - cave_generation_radius + z as f32 * cell_size,
                     );
                     
                     density_grid[x][y][z] = Self::sample_density(pos, params);
@@ -615,7 +618,7 @@ impl CaveSystemRenderer {
                         x, y, z,
                         &density_grid,
                         cell_size,
-                        world_center - Vec3::splat(world_radius),
+                        world_center - Vec3::splat(cave_generation_radius),
                         params.threshold,
                         &mut vertices,
                         &mut indices,
@@ -730,9 +733,12 @@ impl CaveSystemRenderer {
         // Distance from world center (spherical constraint)
         let world_center = Vec3::from(params.world_center);
         let dist_from_center = (pos - world_center).length();
-        let sphere_sdf = dist_from_center - params.world_radius;
+        
+        // Extend cave generation 3 units beyond world sphere
+        let cave_generation_radius = params.world_radius + 3.0;
+        let sphere_sdf = dist_from_center - cave_generation_radius;
 
-        // Outside sphere = solid (high density)
+        // Outside extended sphere = solid (high density)
         if sphere_sdf > 0.0 {
             return 1.0;
         }

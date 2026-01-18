@@ -115,7 +115,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Simple position update
     let new_pos = pos + new_vel * params.delta_time;
     
-    // Simple boundary collision
+    // Smooth boundary collision with lerping to prevent teleporting
     let boundary_radius = params.world_size * 0.5;
     var final_pos = new_pos;
     var final_vel = new_vel;
@@ -123,15 +123,31 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Check if new position would violate boundary
     let dist_from_center = length(new_pos);
     if (dist_from_center > boundary_radius) {
-        // Push back inside boundary
-        final_pos = normalize(new_pos) * boundary_radius * 0.99;
+        // Calculate penetration depth
+        let penetration = dist_from_center - boundary_radius;
         
-        // Reflect velocity with damping
+        // Smooth lerp factor based on penetration (0.0 = no correction, 1.0 = full correction)
+        // Use a soft lerp that increases gradually with penetration depth
+        let max_penetration = 5.0; // Maximum penetration for full correction
+        let lerp_factor = clamp(penetration / max_penetration, 0.0, 1.0);
+        let smooth_lerp = lerp_factor * lerp_factor; // Quadratic for smoother transition
+        
+        // Calculate target position (just inside boundary)
+        let target_pos = normalize(new_pos) * boundary_radius * 0.99;
+        
+        // Smoothly lerp current position toward target position
+        final_pos = mix(new_pos, target_pos, smooth_lerp);
+        
+        // Apply gentle velocity damping instead of hard reflection
         let inward_dir = -normalize(new_pos);
         let vel_normal = dot(new_vel, inward_dir);
+        
         if (vel_normal < 0.0) {
-            let reflection = new_vel - 2.0 * vel_normal * inward_dir;
-            final_vel = reflection * 0.5; // 50% energy loss on boundary collision
+            // Reduce outward velocity smoothly based on penetration
+            let damping_factor = 1.0 - (smooth_lerp * 0.8); // Max 80% reduction
+            let vel_tangent = new_vel - vel_normal * inward_dir;
+            let vel_normal_damped = vel_normal * damping_factor;
+            final_vel = vel_tangent + vel_normal_damped * inward_dir;
         }
     }
     
