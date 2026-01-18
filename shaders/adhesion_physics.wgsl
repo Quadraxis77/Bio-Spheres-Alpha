@@ -121,7 +121,6 @@ var<storage, read_write> torque_accum_y: array<atomic<i32>>;
 var<storage, read_write> torque_accum_z: array<atomic<i32>>;
 
 const FIXED_POINT_SCALE: f32 = 1000.0;
-const MAX_FORCE: f32 = 1000000.0; // Clamp forces to prevent i32 overflow
 
 const PI: f32 = 3.14159265359;
 const MAX_ADHESIONS_PER_CELL: u32 = 10u;
@@ -473,9 +472,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         total_torque += result[1];
     }
     
-    // Clamp forces and torques to prevent instability and overflow
-    let max_force = MAX_FORCE;
-    let max_torque = MAX_FORCE;
+    // Clamp forces and torques to prevent instability
+    let max_force = 1000.0;
+    let max_torque = 100.0;
     let force_mag = length(total_force);
     let torque_mag = length(total_torque);
     

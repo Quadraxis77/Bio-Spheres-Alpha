@@ -2737,17 +2737,6 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 4: Birth times (read-only, for division readiness checks)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
             ],
         })
     }
@@ -2820,10 +2809,6 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: buffers.genome_ids.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: buffers.birth_times.as_entire_binding(),
                 },
             ],
         })

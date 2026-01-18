@@ -100,7 +100,6 @@ var<storage, read> rotations: array<vec4<f32>>;
 const MAX_CELLS_PER_GRID: u32 = 16u;
 const PI: f32 = 3.14159265359;
 const FIXED_POINT_SCALE: f32 = 1000.0;
-const MAX_FORCE: f32 = 1000000.0; // Clamp forces to prevent i32 overflow
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     return clamp(mass, 0.5, 2.0);
@@ -146,38 +145,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var force = vec3<f32>(0.0);
     var torque = vec3<f32>(0.0);
     
-    // Smooth boundary forces with lerping to prevent teleporting
+    // Boundary forces - soft spherical boundary (branchless)
     // Only apply if cell is near boundary AND there are cells in nearby grid cells
     let dist_from_center = length(pos);
     let boundary_radius = params.world_size * 0.5;
-    let soft_zone = 10.0; // Increased soft zone for smoother transitions
+    let soft_zone = 5.0;
     let soft_zone_start = boundary_radius - soft_zone;
     
     // Quick check: skip boundary forces if not in soft zone
     if (dist_from_center <= soft_zone_start) {
         // Skip boundary collision entirely - no cells nearby
     } else {
-        // Cell is in boundary soft zone - apply smooth boundary forces
+        // Cell is in boundary soft zone - apply boundary forces
         let penetration = (dist_from_center - soft_zone_start) / soft_zone;
         let clamped_pen = clamp(penetration, 0.0, 1.0);
-        
-        // Use smooth lerp factor instead of quadratic for gentler force application
-        let smooth_lerp = clamped_pen * clamped_pen * clamped_pen; // Cubic for even smoother transition
-        
-        // Safe distance calculation to avoid division by zero
+        // Use select to avoid branch - safe_dist avoids division by zero
         let safe_dist = max(dist_from_center, 0.001);
         let r_hat = pos / safe_dist;  // Outward radial direction
         let normal = -r_hat;  // Inward direction
+        // Only apply force when penetration > 0 (clamped_pen handles this naturally)
+        force += normal * clamped_pen * clamped_pen * 500.0;
         
-        // Apply smooth boundary force that increases gradually
-        let max_boundary_force = 300.0; // Reduced from 500 for gentler response
-        let boundary_force = normal * smooth_lerp * max_boundary_force;
-        
-        // Clamp boundary force to prevent overflow
-        force += clamp(boundary_force, vec3<f32>(-MAX_FORCE), vec3<f32>(MAX_FORCE));
-        
-        // Apply smooth torque to rotate cell to face inward
-        if (smooth_lerp > 0.01) { // Only apply when meaningful lerp
+        // Apply torque to rotate cell to face inward (matching BioSpheres-Q reference)
+        // Only apply when in the soft zone (clamped_pen > 0)
+        if (clamped_pen > 0.0) {
             // Get the cell's forward direction (local +Z axis)
             let rotation = rotations[cell_idx];
             let forward = quat_rotate(rotation, vec3<f32>(0.0, 0.0, 1.0));
@@ -197,13 +188,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let dot_product = clamp(dot(forward, desired_direction), -1.0, 1.0);
                 let angle = acos(dot_product);
                 
-                // Torque magnitude increases smoothly with penetration and angle
-                // Reduced from 50.0 for gentler rotation
-                let torque_magnitude = 25.0 * smooth_lerp * angle;
-                let torque_vector = normalized_axis * torque_magnitude;
+                // Torque magnitude increases with penetration and angle
+                // Matching BioSpheres-Q: torque_strength = 50.0 * penetration * angle
+                let torque_strength = 50.0 * clamped_pen * angle;
                 
-                // Clamp torque to prevent overflow
-                torque += clamp(torque_vector, vec3<f32>(-MAX_FORCE), vec3<f32>(MAX_FORCE));
+                // Apply torque to rotate toward center
+                torque += normalized_axis * torque_strength;
             }
         }
     }
@@ -286,11 +276,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let relative_vel = vel - other_vel;
                 let damping = dot(relative_vel, coll_normal) * 0.5;
                 
-                let collision_force = coll_normal * (coll_penetration * combined_stiffness - damping);
-                
-                // Clamp force to prevent i32 overflow in atomic operations
-                let clamped_force = clamp(collision_force, vec3<f32>(-MAX_FORCE), vec3<f32>(MAX_FORCE));
-                force += clamped_force;
+                force += coll_normal * (coll_penetration * combined_stiffness - damping);
             }
         }
     }
