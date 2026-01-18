@@ -862,7 +862,7 @@ impl GpuTripleBufferSystem {
     pub fn sync_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
         // Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval] (vec4)
         //                  [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
-        //                  [max_splits, padding, padding, padding] (vec4)
+        //                  [max_splits, split_ratio, padding, padding] (vec4)
         // Total: 12 floats = 48 bytes per mode
         let mut properties_data: Vec<[f32; 12]> = Vec::new();
         
@@ -880,7 +880,7 @@ impl GpuTripleBufferSystem {
                     mode.swim_force,
                     if mode.prioritize_when_low { 1.0 } else { 0.0 },
                     gpu_max_splits,
-                    0.0, // padding
+                    mode.split_ratio, // split_ratio instead of padding
                     0.0, // padding
                     0.0, // padding
                 ]);

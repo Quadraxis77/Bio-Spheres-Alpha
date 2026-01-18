@@ -158,8 +158,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Read mass from OUTPUT buffer (physics results)
-    let mass = positions_out[cell_idx].w;
+    // Read mass from INPUT buffer (previous frame's state)
+    // This ensures division decisions are based on consistent state, not partially updated current frame
+    let mass = positions_in[cell_idx].w;
     let birth_time = birth_times[cell_idx];
     let split_interval = split_intervals[cell_idx];
     let split_mass = split_masses[cell_idx];
@@ -211,100 +212,69 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // === DEFERRAL CHECK ===
+    // === PRIORITY-BASED DEFERRAL (matching reference) ===
     // Check if any neighbor (via adhesion) also wants to divide.
     // If so, the cell with the HIGHER index defers to avoid race conditions
-    // during adhesion inheritance in division_execute.
-    //
     // This ensures deterministic behavior: when two connected cells both want
     // to divide, only the one with the lower index divides this frame.
-    // The other will divide next frame after the adhesion inheritance is complete.
     
+    // Priority function (matching reference): use cell index directly
+    let my_priority = f32(cell_idx);
+    
+    // Check adhesions for deferral
     var should_defer = false;
-    // Note: adhesion_base already calculated above for adhesion count check
+    // Reuse adhesion_base calculated above for adhesion count check
     
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
         let adh_idx_signed = cell_adhesion_indices[adhesion_base + i];
         
         // Skip empty slots
-        if (adh_idx_signed < 0) {
+        if (adh_idx_signed < 0 || adh_idx_signed >= i32(arrayLength(&adhesion_connections))) {
             continue;
         }
         
-        let adh_idx = u32(adh_idx_signed);
-        let conn = adhesion_connections[adh_idx];
-        
-        // Skip inactive connections
-        if (conn.is_active == 0u) {
+        let adhesion = adhesion_connections[adh_idx_signed];
+        if (adhesion.is_active == 0u) {
             continue;
         }
         
-        // Get the neighbor's index
-        var neighbor_idx: u32;
-        if (conn.cell_a_index == cell_idx) {
-            neighbor_idx = conn.cell_b_index;
-        } else if (conn.cell_b_index == cell_idx) {
-            neighbor_idx = conn.cell_a_index;
-        } else {
-            // Connection doesn't involve this cell (shouldn't happen)
+        let other_cell_idx = select(adhesion.cell_b_index, adhesion.cell_a_index, adhesion.cell_a_index != cell_idx);
+        
+        if (other_cell_idx >= cell_count) {
             continue;
         }
         
-        // Skip if neighbor is out of bounds or dead
-        if (neighbor_idx >= cell_count || death_flags[neighbor_idx] == 1u) {
-            continue;
+        // Check if other cell also wants to divide
+        if (division_flags[other_cell_idx] == 0u) {
+            continue; // Other cell not interested in dividing
         }
         
-        // Check if neighbor is also ready to split (matching reference exactly)
-        // Need to check ALL division criteria, not just time readiness
-        let neighbor_birth_time = birth_times[neighbor_idx];
-        let neighbor_split_interval = split_intervals[neighbor_idx];
-        let neighbor_split_mass = split_masses[neighbor_idx];
-        let neighbor_mass = positions_out[neighbor_idx].w;
-        let neighbor_age = params.current_time - neighbor_birth_time;
-        let neighbor_current_splits = split_counts[neighbor_idx];
-        let neighbor_max_splits = max_splits[neighbor_idx];
-        
-        // Derive neighbor's cell_type from mode (always up-to-date)
-        let neighbor_mode_idx = mode_indices[neighbor_idx];
-        let neighbor_cell_type = mode_cell_types[neighbor_mode_idx];
-        
-        // Check if neighbor is set to "never split" (split_mass > 3.0)
-        if (neighbor_split_mass > 3.0) {
-            continue; // Neighbor will never split, no need to defer
-        }
-        
-        // Check all division criteria for neighbor
-        let neighbor_mass_ready = neighbor_mass >= neighbor_split_mass;
-        let neighbor_time_ready = (neighbor_cell_type == 1u) || (neighbor_age >= neighbor_split_interval);
-        let neighbor_splits_remaining = neighbor_current_splits < neighbor_max_splits || neighbor_max_splits == 0u;
-        
-        let neighbor_wants_to_divide = neighbor_mass_ready && neighbor_time_ready && neighbor_splits_remaining;
-        
-        // Skip if neighbor doesn't actually want to split
-        if (!neighbor_wants_to_divide) {
-            continue;
-        }
-        
-        // Neighbor wants to split - compare priority
-        // Lower index = higher priority (lower priority value)
-        // If neighbor has lower index (higher priority), we defer
-        if (neighbor_idx < cell_idx) {
+        // Compare priorities - defer if other cell has higher priority (lower index)
+        let other_priority = f32(other_cell_idx);
+        if (other_priority < my_priority) {
             should_defer = true;
             break;
         }
     }
     
-    // If we should defer, don't divide this frame
     if (should_defer) {
         division_flags[cell_idx] = 0u;
         return;
     }
     
-    // This cell can divide - write division flag and get reservation
-    division_flags[cell_idx] = 1u;
+    // === RESERVE DIVISION SLOT ===
+    // Use atomic counter to reserve a division slot
+    let reservation = atomicAdd(&lifecycle_counts[1], 1u);
+    let total_free_slots = lifecycle_counts[0];
     
-    // Atomically get a reservation index
-    let reservation_idx = atomicAdd(&lifecycle_counts[1], 1u);
-    division_slot_assignments[cell_idx] = reservation_idx;
+    if (reservation >= total_free_slots) {
+        // No free slots available, cancel division
+        atomicSub(&lifecycle_counts[1], 1u);
+        division_flags[cell_idx] = 0u;
+        return;
+    }
+    
+    // Mark for division and store reservation index
+    division_flags[cell_idx] = 1u;
+    division_slot_assignments[cell_idx] = reservation;
 }

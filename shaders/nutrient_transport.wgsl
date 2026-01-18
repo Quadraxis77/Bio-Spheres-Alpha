@@ -65,6 +65,9 @@ var<storage, read> mode_indices: array<u32>;
 @group(1) @binding(3)
 var<storage, read> genome_ids: array<u32>;
 
+@group(1) @binding(4)
+var<storage, read> birth_times: array<f32>;
+
 // Adhesion system bind group (group 2)
 @group(2) @binding(0)
 var<storage, read> adhesion_connections: array<AdhesionConnection>;
@@ -177,6 +180,32 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Step 3: Nutrient transport between adhesion-connected cells
+    // Skip nutrient transfer for cells that are ready to divide (matching reference)
+    // This prevents mass fluctuations during division attempts
+    if (mode_idx < arrayLength(&mode_properties)) {
+        let mode = mode_properties[mode_idx];
+        let mass = positions_out[cell_idx].w;
+        let birth_time = birth_times[cell_idx];
+        let age = params.current_time - birth_time;
+        let is_ready_to_divide = mass >= mode.split_mass && age >= mode.split_interval;
+        if (is_ready_to_divide) {
+            // Skip nutrient transport for cells ready to divide
+            // Apply only consumption results
+            let final_mass_delta = fixed_to_float(atomicLoad(&mass_deltas[cell_idx]));
+            let final_mass = current_mass + final_mass_delta;
+            
+            // Final death check after transport
+            if (final_mass < MIN_CELL_MASS) {
+                death_flags[cell_idx] = 1u;
+            }
+            
+            // Update mass in positions buffer
+            let pos = positions_out[cell_idx].xyz;
+            positions_out[cell_idx] = vec4<f32>(pos, max(final_mass, 0.0));
+            return;
+        }
+    }
+    
     // Process adhesions where this cell is cell_a (to avoid double processing)
     let adhesion_list = adhesion_indices[cell_idx];
     
@@ -201,9 +230,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
         
-        // Get masses (use original mass for both cells since we'll apply deltas atomically)
-        let mass_a = current_mass;
-        let mass_b = positions_out[cell_b_idx].w;
+        // Get masses (use input buffer for both cells to ensure consistency)
+        let mass_a = positions_in[cell_idx].w;
+        let mass_b = positions_in[cell_b_idx].w;
         
         // Get mode properties for both cells
         let mode_a_idx = mode_indices[cell_idx];

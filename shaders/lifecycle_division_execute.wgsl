@@ -138,7 +138,7 @@ var<storage, read> child_mode_indices: array<vec2<i32>>;
 
 // Mode properties: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval] (vec4)
 //                  [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
-//                  [max_splits, padding, padding, padding] (vec4)
+//                  [max_splits, split_ratio, padding, padding] (vec4)
 // Total 48 bytes (12 floats = 3 vec4s) per mode, indexed by mode_index * 3
 @group(2) @binding(17)
 var<storage, read> mode_properties: array<vec4<f32>>;
@@ -331,8 +331,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Calculate parent radius for offset calculation (before mass split)
     let parent_radius = calculate_radius_from_mass(parent_mass);
     
-    // Split mass 50/50
-    let child_mass = parent_mass * 0.5;
+    // Get split_ratio from parent mode properties (third vec4, y component)
+    let parent_props_2 = mode_properties[parent_mode_idx * 3u + 2u];
+    let split_ratio = clamp(parent_props_2.y, 0.0, 1.0); // Clamp to valid range
+    
+    // Split mass according to split_ratio (matches CPU division.rs logic)
+    let child_a_mass = parent_mass * split_ratio;
+    let child_b_mass = parent_mass * (1.0 - split_ratio);
     
     // Transform split direction from local to world space using parent rotation
     // If split direction is zero (default), use Z axis
@@ -350,7 +355,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_b_pos = parent_pos - split_dir * offset;
     
     // === Create Child A (overwrites parent slot) ===
-    positions_out[cell_idx] = vec4<f32>(child_a_pos, child_mass);
+    positions_out[cell_idx] = vec4<f32>(child_a_pos, child_a_mass);
     velocities_out[cell_idx] = vec4<f32>(parent_vel, 0.0);
     rotations_out[cell_idx] = child_a_rotation;
     
@@ -391,7 +396,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     max_splits[cell_idx] = u32(child_a_props_2.x);
     
     // === Create Child B (placed in assigned free slot) ===
-    positions_out[child_b_slot] = vec4<f32>(child_b_pos, child_mass);
+    positions_out[child_b_slot] = vec4<f32>(child_b_pos, child_b_mass);
     velocities_out[child_b_slot] = vec4<f32>(parent_vel, 0.0);
     rotations_out[child_b_slot] = child_b_rotation;
     
