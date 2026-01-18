@@ -84,21 +84,24 @@ var<storage, read> split_masses: array<f32>;
 var<storage, read> split_counts: array<u32>;
 
 @group(2) @binding(4)
+var<storage, read> split_ready_frame: array<i32>;
+
+@group(2) @binding(5)
 var<storage, read> max_splits: array<u32>;
 
 // Cell types: 0 = Test, 1 = Flagellocyte
 // DEPRECATED - use mode_cell_types instead for up-to-date values
-@group(2) @binding(5)
+@group(2) @binding(6)
 var<storage, read> cell_types: array<u32>;
 
 // Mode indices (per-cell mode index)
-@group(2) @binding(6)
+@group(2) @binding(7)
 var<storage, read> mode_indices: array<u32>;
 
 // Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
 // Always up-to-date with genome settings, unlike cell_types buffer
 // Flagellocytes split based on mass only (ignore split_interval)
-@group(2) @binding(7)
+@group(2) @binding(8)
 var<storage, read> mode_cell_types: array<u32>;
 
 // Adhesion bind group (group 3) - for checking neighbor division status

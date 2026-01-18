@@ -121,36 +121,39 @@ var<storage, read_write> split_masses: array<f32>;
 var<storage, read_write> split_counts: array<u32>;
 
 @group(2) @binding(4)
-var<storage, read_write> max_splits: array<u32>;
+var<storage, read_write> split_ready_frame: array<i32>;
 
 @group(2) @binding(5)
-var<storage, read_write> genome_ids: array<u32>;
+var<storage, read_write> max_splits: array<u32>;
 
 @group(2) @binding(6)
-var<storage, read_write> mode_indices: array<u32>;
+var<storage, read_write> genome_ids: array<u32>;
 
 @group(2) @binding(7)
-var<storage, read_write> cell_ids: array<u32>;
+var<storage, read_write> mode_indices: array<u32>;
 
 @group(2) @binding(8)
-var<storage, read_write> next_cell_id: array<atomic<u32>>;
+var<storage, read_write> cell_ids: array<u32>;
 
 @group(2) @binding(9)
-var<storage, read_write> nutrient_gain_rates: array<f32>;
+var<storage, read_write> next_cell_id: array<atomic<u32>>;
 
 @group(2) @binding(10)
-var<storage, read_write> max_cell_sizes: array<f32>;
+var<storage, read_write> nutrient_gain_rates: array<f32>;
 
 @group(2) @binding(11)
-var<storage, read_write> stiffnesses: array<f32>;
+var<storage, read_write> max_cell_sizes: array<f32>;
 
 @group(2) @binding(12)
-var<storage, read_write> death_flags: array<u32>;
+var<storage, read_write> stiffnesses: array<f32>;
 
 @group(2) @binding(13)
-var<storage, read_write> division_flags: array<u32>;
+var<storage, read_write> death_flags: array<u32>;
 
 @group(2) @binding(14)
+var<storage, read_write> division_flags: array<u32>;
+
+@group(2) @binding(15)
 var<storage, read_write> cell_types: array<u32>;
 
 @compute @workgroup_size(1, 1, 1)

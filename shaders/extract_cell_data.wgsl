@@ -109,24 +109,27 @@ var<storage, read> split_masses: array<f32>;
 var<storage, read> split_counts: array<u32>;
 
 @group(2) @binding(4)
-var<storage, read> max_splits: array<u32>;
+var<storage, read> split_ready_frame: array<i32>;
 
 @group(2) @binding(5)
-var<storage, read> genome_ids: array<u32>;
+var<storage, read> max_splits: array<u32>;
 
 @group(2) @binding(6)
-var<storage, read> mode_indices: array<u32>;
+var<storage, read> genome_ids: array<u32>;
 
 @group(2) @binding(7)
-var<storage, read> cell_ids: array<u32>;
+var<storage, read> mode_indices: array<u32>;
 
 @group(2) @binding(8)
-var<storage, read> nutrient_gain_rates: array<f32>;
+var<storage, read> cell_ids: array<u32>;
 
 @group(2) @binding(9)
-var<storage, read> max_cell_sizes: array<f32>;
+var<storage, read> nutrient_gain_rates: array<f32>;
 
 @group(2) @binding(10)
+var<storage, read> max_cell_sizes: array<f32>;
+
+@group(2) @binding(11)
 var<storage, read> stiffnesses: array<f32>;
 
 // Output buffer for extracted cell data

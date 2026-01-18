@@ -82,6 +82,9 @@ var<storage, read_write> death_flags: array<u32>;
 @group(3) @binding(2)
 var<storage, read> mode_properties: array<ModeProperties>;
 
+@group(3) @binding(3)
+var<storage, read> split_ready_frame: array<i32>;
+
 // Adhesion connection structure (exactly 96 bytes, matching reference)
 struct AdhesionConnection {
     cell_a_index: u32,
@@ -121,6 +124,7 @@ const DANGER_THRESHOLD: f32 = 0.6;
 const PRIORITY_BOOST: f32 = 10.0;
 const TRANSPORT_RATE: f32 = 0.5;
 const SWIM_CONSUMPTION_RATE: f32 = 0.2;  // 0.2 mass per second at full swim force
+const DEFER_FRAMES: i32 = 32;  // 0.5 seconds at 64 FPS = 32 frames
 
 // Fixed-point conversion for atomic operations (matching other shaders)
 const FIXED_POINT_SCALE: f32 = 1000.0;
@@ -131,6 +135,17 @@ fn float_to_fixed(value: f32) -> i32 {
 
 fn fixed_to_float(value: i32) -> f32 {
     return f32(value) / FIXED_POINT_SCALE;
+}
+
+// Check if a cell should be blocked from nutrient transfer due to split attempt delay
+fn is_cell_blocked_from_nutrients(cell_idx: u32) -> bool {
+    let ready_frame = split_ready_frame[cell_idx];
+    if (ready_frame < 0) {
+        return false; // Cell is not ready to split
+    }
+    
+    let frames_since_ready = params.current_frame - ready_frame;
+    return frames_since_ready < DEFER_FRAMES;
 }
 
 @compute @workgroup_size(256)
@@ -199,6 +214,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let cell_b_idx = adhesion.cell_b_index;
         if (cell_b_idx >= cell_count) {
             continue;
+        }
+        
+        // Check if either cell should be blocked from nutrient transfer due to split attempt delay
+        if (is_cell_blocked_from_nutrients(cell_idx) || is_cell_blocked_from_nutrients(cell_b_idx)) {
+            continue; // Skip nutrient transfer for blocked cells
         }
         
         // Get masses (use original mass for both cells since we'll apply deltas atomically)

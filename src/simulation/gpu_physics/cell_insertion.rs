@@ -135,46 +135,50 @@ impl GpuCellInsertion {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: buffers.max_splits.as_entire_binding(),
+                    resource: buffers.split_ready_frame.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: buffers.genome_ids.as_entire_binding(),
+                    resource: buffers.max_splits.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
-                    resource: buffers.mode_indices.as_entire_binding(),
+                    resource: buffers.genome_ids.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 7,
-                    resource: buffers.cell_ids.as_entire_binding(),
+                    resource: buffers.mode_indices.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 8,
-                    resource: buffers.next_cell_id.as_entire_binding(),
+                    resource: buffers.cell_ids.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 9,
-                    resource: buffers.nutrient_gain_rates.as_entire_binding(),
+                    resource: buffers.next_cell_id.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 10,
-                    resource: buffers.max_cell_sizes.as_entire_binding(),
+                    resource: buffers.nutrient_gain_rates.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 11,
-                    resource: buffers.stiffnesses.as_entire_binding(),
+                    resource: buffers.max_cell_sizes.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 12,
-                    resource: buffers.death_flags.as_entire_binding(),
+                    resource: buffers.stiffnesses.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 13,
-                    resource: buffers.division_flags.as_entire_binding(),
+                    resource: buffers.death_flags.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 14,
+                    resource: buffers.division_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
                     resource: buffers.cell_types.as_entire_binding(),
                 },
             ],

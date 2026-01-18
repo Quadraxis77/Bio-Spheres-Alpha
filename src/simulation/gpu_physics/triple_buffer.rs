@@ -244,6 +244,11 @@ pub struct GpuTripleBufferSystem {
     /// Current split counts
     pub split_counts: wgpu::Buffer,
     
+    /// Split ready frame tracking (for nutrient transfer delay)
+    /// -1 means cell is not ready to split
+    /// >= 0 means cell is ready and this is the frame number when it became ready
+    pub split_ready_frame: wgpu::Buffer,
+    
     /// Maximum splits allowed (0 = unlimited)
     pub max_splits: wgpu::Buffer,
     
@@ -422,6 +427,7 @@ impl GpuTripleBufferSystem {
         let split_intervals = Self::create_storage_buffer(device, f32_per_cell, "Split Intervals");
         let split_masses = Self::create_storage_buffer(device, f32_per_cell, "Split Masses");
         let split_counts = Self::create_storage_buffer(device, u32_per_cell, "Split Counts");
+        let split_ready_frame = Self::create_storage_buffer(device, u32_per_cell, "Split Ready Frame");
         let max_splits = Self::create_storage_buffer(device, u32_per_cell, "Max Splits");
         let genome_ids = Self::create_storage_buffer(device, u32_per_cell, "Genome IDs");
         let cell_types = Self::create_storage_buffer(device, u32_per_cell, "Cell Types");
@@ -487,6 +493,7 @@ impl GpuTripleBufferSystem {
             split_intervals,
             split_masses,
             split_counts,
+            split_ready_frame,
             max_splits,
             genome_ids,
             cell_types,
@@ -612,6 +619,10 @@ impl GpuTripleBufferSystem {
         // Split counts
         let split_counts: Vec<u32> = state.split_counts[..state.cell_count].iter().map(|&x| x as u32).collect();
         queue.write_buffer(&self.split_counts, 0, bytemuck::cast_slice(&split_counts));
+        
+        // Split ready frame - initialize to -1 (not ready to split)
+        let split_ready_frame: Vec<i32> = vec![-1; state.cell_count];
+        queue.write_buffer(&self.split_ready_frame, 0, bytemuck::cast_slice(&split_ready_frame));
         
         // Max splits, nutrient gain rates, max cell sizes, and stiffnesses (from genome modes)
         // Convert -1 (infinite) to 0 (unlimited in GPU)

@@ -768,18 +768,22 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: buffers.max_splits.as_entire_binding(),
+                    resource: buffers.split_ready_frame.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: buffers.cell_types.as_entire_binding(),
+                    resource: buffers.max_splits.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
-                    resource: buffers.mode_indices.as_entire_binding(),
+                    resource: buffers.cell_types.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 7,
+                    resource: buffers.mode_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
                     resource: buffers.mode_cell_types.as_entire_binding(),
                 },
             ],
@@ -816,59 +820,67 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: buffers.max_splits.as_entire_binding(),
+                    resource: buffers.split_ready_frame.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: buffers.genome_ids.as_entire_binding(),
+                    resource: buffers.max_splits.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
-                    resource: buffers.mode_indices.as_entire_binding(),
+                    resource: buffers.genome_ids.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 7,
-                    resource: buffers.cell_ids.as_entire_binding(),
+                    resource: buffers.mode_indices.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 8,
-                    resource: buffers.next_cell_id.as_entire_binding(),
+                    resource: buffers.cell_ids.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 9,
-                    resource: buffers.nutrient_gain_rates.as_entire_binding(),
+                    resource: buffers.next_cell_id.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 10,
-                    resource: buffers.max_cell_sizes.as_entire_binding(),
+                    resource: buffers.nutrient_gain_rates.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 11,
-                    resource: buffers.stiffnesses.as_entire_binding(),
+                    resource: buffers.max_cell_sizes.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 12,
-                    resource: buffers.rotations[buffer_index].as_entire_binding(),
+                    resource: buffers.stiffnesses.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 13,
-                    resource: buffers.rotations[output_index].as_entire_binding(),
+                    resource: buffers.rotations[buffer_index].as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 14,
-                    resource: buffers.genome_mode_data.as_entire_binding(),
+                    resource: buffers.rotations[output_index].as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 15,
-                    resource: buffers.parent_make_adhesion_flags.as_entire_binding(),
+                    resource: buffers.genome_mode_data.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 16,
-                    resource: buffers.child_mode_indices.as_entire_binding(),
+                    resource: buffers.parent_make_adhesion_flags.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 17,
+                    resource: buffers.child_mode_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 18,
                     resource: buffers.mode_properties.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 19,
+                    resource: buffers.cell_types.as_entire_binding(),
                 },
             ],
         })
@@ -1526,7 +1538,7 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Max splits
+                    // Split ready frame (for nutrient transfer delay)
                     wgpu::BindGroupLayoutEntry {
                         binding: 4,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -1537,7 +1549,7 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Cell types (0 = Test, 1 = Flagellocyte) - DEPRECATED, use mode_cell_types
+                    // Max splits
                     wgpu::BindGroupLayoutEntry {
                         binding: 5,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -1548,7 +1560,7 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Mode indices (per-cell mode index)
+                    // Cell types (0 = Test, 1 = Flagellocyte) - DEPRECATED, use mode_cell_types
                     wgpu::BindGroupLayoutEntry {
                         binding: 6,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -1559,9 +1571,20 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
+                    // Mode indices (per-cell mode index)
                     wgpu::BindGroupLayoutEntry {
                         binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -1621,7 +1644,7 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Max splits
+                    // Split ready frame (for nutrient transfer delay)
                     wgpu::BindGroupLayoutEntry {
                         binding: 4,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -1632,7 +1655,7 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Genome IDs
+                    // Max splits
                     wgpu::BindGroupLayoutEntry {
                         binding: 5,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -1643,7 +1666,7 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Mode indices
+                    // Genome IDs
                     wgpu::BindGroupLayoutEntry {
                         binding: 6,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -1654,7 +1677,7 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Cell IDs
+                    // Mode indices
                     wgpu::BindGroupLayoutEntry {
                         binding: 7,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -1665,7 +1688,7 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Next cell ID
+                    // Cell IDs
                     wgpu::BindGroupLayoutEntry {
                         binding: 8,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -1676,7 +1699,7 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Nutrient gain rates
+                    // Next cell ID
                     wgpu::BindGroupLayoutEntry {
                         binding: 9,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -1687,7 +1710,7 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Max cell sizes
+                    // Nutrient gain rates
                     wgpu::BindGroupLayoutEntry {
                         binding: 10,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -1698,7 +1721,7 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Stiffnesses (membrane stiffness per cell)
+                    // Max cell sizes
                     wgpu::BindGroupLayoutEntry {
                         binding: 11,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -1709,9 +1732,20 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Rotations input (read-only, from current buffer)
+                    // Stiffnesses (membrane stiffness per cell)
                     wgpu::BindGroupLayoutEntry {
                         binding: 12,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Rotations input (read-only, from current buffer)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 13,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -1722,7 +1756,7 @@ impl GpuPhysicsPipelines {
                     },
                     // Rotations output (read-write, to next buffer)
                     wgpu::BindGroupLayoutEntry {
-                        binding: 13,
+                        binding: 14,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -1733,7 +1767,7 @@ impl GpuPhysicsPipelines {
                     },
                     // Genome mode data (child orientations)
                     wgpu::BindGroupLayoutEntry {
-                        binding: 14,
+                        binding: 15,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -1744,7 +1778,7 @@ impl GpuPhysicsPipelines {
                     },
                     // Parent make adhesion flags
                     wgpu::BindGroupLayoutEntry {
-                        binding: 15,
+                        binding: 16,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -1755,7 +1789,7 @@ impl GpuPhysicsPipelines {
                     },
                     // Child mode indices (child_a_mode, child_b_mode per mode)
                     wgpu::BindGroupLayoutEntry {
-                        binding: 16,
+                        binding: 17,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -1766,10 +1800,21 @@ impl GpuPhysicsPipelines {
                     },
                     // Mode properties (nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass per mode)
                     wgpu::BindGroupLayoutEntry {
-                        binding: 17,
+                        binding: 18,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Cell types (0 = Test, 1 = Flagellocyte) - for cell insertion
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 19,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -2779,6 +2824,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 3: Split ready frame (read-only, for nutrient transfer delay)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -2835,6 +2891,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: buffers.mode_properties.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffers.split_ready_frame.as_entire_binding(),
                 },
             ],
         })
@@ -3041,7 +3101,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 4: Max splits
+                // Binding 4: Split ready frame (for nutrient transfer delay)
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3052,7 +3112,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 5: Genome IDs
+                // Binding 5: Max splits
                 wgpu::BindGroupLayoutEntry {
                     binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3063,7 +3123,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 6: Mode indices
+                // Binding 6: Genome IDs
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3074,7 +3134,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 7: Cell IDs
+                // Binding 7: Mode indices
                 wgpu::BindGroupLayoutEntry {
                     binding: 7,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3085,7 +3145,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 8: Next cell ID (atomic)
+                // Binding 8: Cell IDs
                 wgpu::BindGroupLayoutEntry {
                     binding: 8,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3096,7 +3156,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 9: Nutrient gain rates
+                // Binding 9: Next cell ID (atomic)
                 wgpu::BindGroupLayoutEntry {
                     binding: 9,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3107,7 +3167,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 10: Max cell sizes
+                // Binding 10: Nutrient gain rates
                 wgpu::BindGroupLayoutEntry {
                     binding: 10,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3118,7 +3178,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 11: Stiffnesses
+                // Binding 11: Max cell sizes
                 wgpu::BindGroupLayoutEntry {
                     binding: 11,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3129,7 +3189,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 12: Death flags
+                // Binding 12: Stiffnesses
                 wgpu::BindGroupLayoutEntry {
                     binding: 12,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3140,7 +3200,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 13: Division flags
+                // Binding 13: Death flags
                 wgpu::BindGroupLayoutEntry {
                     binding: 13,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3151,9 +3211,20 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 14: Cell types
+                // Binding 14: Division flags
                 wgpu::BindGroupLayoutEntry {
                     binding: 14,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 15: Cell types
+                wgpu::BindGroupLayoutEntry {
+                    binding: 15,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -3235,7 +3306,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 4: Max splits (read-only)
+                // Binding 4: Split ready frame (read-only, for nutrient transfer delay)
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3246,7 +3317,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 5: Genome IDs (read-only)
+                // Binding 5: Max splits (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3257,7 +3328,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 6: Mode indices (read-only)
+                // Binding 6: Genome IDs (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3268,7 +3339,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 7: Cell IDs (read-only)
+                // Binding 7: Mode indices (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 7,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3279,7 +3350,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 8: Nutrient gain rates (read-only)
+                // Binding 8: Cell IDs (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 8,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3290,7 +3361,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 9: Max cell sizes (read-only)
+                // Binding 9: Nutrient gain rates (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 9,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3301,9 +3372,20 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 10: Stiffnesses (read-only)
+                // Binding 10: Max cell sizes (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 10,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 11: Stiffnesses (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },

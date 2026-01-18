@@ -92,55 +92,58 @@ var<storage, read_write> split_masses: array<f32>;
 var<storage, read_write> split_counts: array<u32>;
 
 @group(2) @binding(4)
-var<storage, read_write> max_splits: array<u32>;
+var<storage, read_write> split_ready_frame: array<i32>;
 
 @group(2) @binding(5)
-var<storage, read_write> genome_ids: array<u32>;
+var<storage, read_write> max_splits: array<u32>;
 
 @group(2) @binding(6)
-var<storage, read_write> mode_indices: array<u32>;
+var<storage, read_write> genome_ids: array<u32>;
 
 @group(2) @binding(7)
-var<storage, read_write> cell_ids: array<u32>;
+var<storage, read_write> mode_indices: array<u32>;
 
 @group(2) @binding(8)
-var<storage, read_write> next_cell_id: array<atomic<u32>>;
+var<storage, read_write> cell_ids: array<u32>;
 
 @group(2) @binding(9)
-var<storage, read_write> nutrient_gain_rates: array<f32>;
+var<storage, read_write> next_cell_id: array<atomic<u32>>;
 
 @group(2) @binding(10)
-var<storage, read_write> max_cell_sizes: array<f32>;
+var<storage, read_write> nutrient_gain_rates: array<f32>;
 
 @group(2) @binding(11)
+var<storage, read_write> max_cell_sizes: array<f32>;
+
+@group(2) @binding(12)
 var<storage, read_write> stiffnesses: array<f32>;
 
 // Rotations input (from current buffer)
-@group(2) @binding(12)
+@group(2) @binding(13)
 var<storage, read> rotations_in: array<vec4<f32>>;
 
 // Rotations output (to next buffer)
-@group(2) @binding(13)
+@group(2) @binding(14)
 var<storage, read_write> rotations_out: array<vec4<f32>>;
 
 // Genome mode data: [child_a_orientation (vec4), child_b_orientation (vec4), split_direction (vec4)] per mode
 // Total 48 bytes per mode, indexed by mode_index
-@group(2) @binding(14)
+@group(2) @binding(15)
 var<storage, read> genome_mode_data: array<vec4<f32>>;
 
 // Parent make adhesion flags: one bool per mode (stored as u32)
-@group(2) @binding(15)
+@group(2) @binding(16)
 var<storage, read> parent_make_adhesion_flags: array<u32>;
 
 // Child mode indices: [child_a_mode, child_b_mode] per mode (stored as i32)
-@group(2) @binding(16)
+@group(2) @binding(17)
 var<storage, read> child_mode_indices: array<vec2<i32>>;
 
 // Mode properties: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval] (vec4)
 //                  [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
 //                  [max_splits, padding, padding, padding] (vec4)
 // Total 48 bytes (12 floats = 3 vec4s) per mode, indexed by mode_index * 3
-@group(2) @binding(17)
+@group(2) @binding(18)
 var<storage, read> mode_properties: array<vec4<f32>>;
 
 // Adhesion creation buffers (group 3)
