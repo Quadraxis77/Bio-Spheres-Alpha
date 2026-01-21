@@ -1,8 +1,15 @@
-# 4-Fluid Simulation System - Detailed Implementation Plan
+# GPU-Only 4-Fluid Simulation System - Implementation Plan
 
 ## Executive Summary
 
-This document outlines the complete implementation plan for integrating a 4-fluid simulation system (lava, water, steam, air) into the Bio-Spheres GPU scene. The system uses a 128³ voxel grid with cave SDF constraints, runs at 30 FPS, and maintains perfect mass conservation for water and lava.
+This document outlines a **pure GPU implementation** of a 4-fluid simulation system (lava, water, steam, air) for Bio-Spheres. The system follows the GPU scene architecture with **zero CPU readbacks**, **zero synchronization**, and **triple-buffered execution** for maximum performance.
+
+**Core Principles:**
+- **Absolutely zero CPU physics** - All computation on GPU
+- **Zero CPU readbacks** - No GPU-to-CPU data transfer during simulation
+- **Triple buffering** - Lock-free parallel execution
+- **GPU-only rendering** - Extract instances directly on GPU
+- **Deterministic execution** - Reproducible results
 
 ---
 
@@ -48,73 +55,91 @@ This document outlines the complete implementation plan for integrating a 4-flui
 - **Update rate**: 30 FPS (every other frame at 60 FPS base)
 - **Pressure solver**: Jacobi iteration, 20 iterations per frame
 - **Boundary conditions**: Free-slip at all solid surfaces
-- **Mass conservation**: Perfect for water + lava (steam = water phase change)
+- **Mass conservation**: GPU-tracked atomic counters (no CPU validation)
 - **Phase change model**: Direct contact only (no temperature tracking)
+- **Buffer management**: Triple-buffered for zero-sync performance
 
-### Memory Budget
+### Memory Budget (Triple Buffered)
 
-Per 128³ grid:
-- Cave solid mask: 2 MB (u32 per cell)
-- Fluid densities: 8 MB (vec4<f32>: lava, water, steam, air)
-- Fluid velocity: 8 MB (vec4<f32>: vx, vy, vz, padding)
-- Fluid pressure: 2 MB (f32 per cell)
-- **Total**: ~20 MB GPU memory
+Per 128³ grid with triple buffering:
+- Cave solid mask: 2 MB (u32 per cell, static)
+- Fluid densities: 24 MB (vec4<f32> × 3 buffer sets)
+- Fluid velocity: 24 MB (vec4<f32> × 3 buffer sets)
+- Fluid pressure: 6 MB (f32 × 3 buffer sets for ping-pong)
+- Divergence temp: 2 MB (f32 per cell)
+- Instance extraction: 16 MB (GPU instance buffer)
+- **Total**: ~74 MB GPU memory
 
 ---
 
-## Procedural Initialization
+## GPU-Only Initialization
 
-### User-Defined Distribution
+### User-Defined Distribution (CPU Parameters Only)
 
-UI sliders control initial fluid distribution (must sum to 100%):
+UI sliders set GPU uniform parameters (no CPU computation):
 - **Cave density**: 50-70% (typical, determines solid space)
-- **Water**: 10-30%
-- **Lava**: 5-15%
-- **Air**: Remaining percentage (fills rest of volume)
+- **Water percentage**: 10-30%
+- **Lava percentage**: 5-15%
+- **Air**: Computed on GPU as remainder
 
-### Initialization Algorithm
+### GPU Initialization Pipeline
 
-```
-1. Generate cave voxel grid from SDF (marks solid cells)
-2. Count available fluid cells (non-solid)
-3. Calculate target counts:
-   - water_cells = available_cells × water_percentage
-   - lava_cells = available_cells × lava_percentage
-   - air_cells = available_cells - water_cells - lava_cells
+**All initialization happens in compute shaders:**
 
-4. Determine gravity direction (world_center → up)
-5. Classify open cells by hemisphere:
-   - Top hemisphere: dot(cell_pos - world_center, gravity_up) > 0
-   - Bottom hemisphere: dot(cell_pos - world_center, gravity_up) < 0
-
-6. Fill cells:
-   - Water → Top hemisphere cells (furthest from center first)
-   - Lava → Bottom hemisphere cells (furthest from center first)
-   - Air → All remaining open cells
-   
-7. Set initial densities:
-   - Water cells: density = 1.0
-   - Lava cells: density = 1.0
-   - Air cells: density = 1.0
-   - Steam: density = 0.0 (none at start)
-   
-8. Initialize velocity = 0 everywhere
-9. Initialize pressure = 0 everywhere
-```
-
-### Mass Conservation Tracking
-
-```rust
-struct FluidMassTracker {
-    initial_water_mass: f32,
-    initial_lava_mass: f32,
-    current_water_mass: f32,
-    current_steam_mass: f32,
-    current_lava_mass: f32,
+```wgsl
+// Stage 1: Cave voxel grid generation (GPU compute)
+@compute @workgroup_size(64)
+fn generate_cave_grid() {
+    // Sample cave SDF on GPU
+    // Mark solid vs fluid cells
+    // No CPU involvement
 }
 
-// Invariant: current_water_mass + current_steam_mass == initial_water_mass
-// Invariant: current_lava_mass == initial_lava_mass
+// Stage 2: Hemisphere classification (GPU compute)
+@compute @workgroup_size(64)
+fn classify_hemispheres() {
+    // Classify each cell as top/bottom hemisphere
+    // Store in temporary buffer
+}
+
+// Stage 3: Fluid distribution (GPU compute)
+@compute @workgroup_size(64)
+fn initialize_fluids() {
+    // Water → Top hemisphere
+    // Lava → Bottom hemisphere
+    // Air → Remainder
+    // All densities initialized on GPU
+}
+
+// Stage 4: Initialize velocity and pressure (GPU compute)
+@compute @workgroup_size(64)
+fn initialize_dynamics() {
+    // velocity = vec3(0.0)
+    // pressure = 0.0
+}
+```
+
+### GPU Mass Conservation Tracking
+
+**No CPU readbacks - use GPU atomic counters:**
+
+```wgsl
+// GPU-side mass tracking buffer
+struct MassCounters {
+    initial_water: atomic<u32>,    // Fixed-point representation
+    initial_lava: atomic<u32>,
+    current_water: atomic<u32>,
+    current_steam: atomic<u32>,
+    current_lava: atomic<u32>,
+}
+
+// Validation shader (runs on GPU, no CPU readback)
+@compute @workgroup_size(64)
+fn validate_mass_conservation() {
+    // Check: current_water + current_steam == initial_water
+    // Check: current_lava == initial_lava
+    // Store error flags in GPU buffer for UI display
+}
 ```
 
 ---
@@ -315,29 +340,46 @@ if (steam_density > 0.0 && has_solid_neighbor) {
 
 ---
 
-## Fluid-Cell Interaction
+## GPU-Only Fluid-Cell Interaction
 
-### Fluids Affect Cells
+### Fluids Affect Cells (GPU Compute)
 
-1. **Buoyancy Forces**
-   - Cells in fluid experience buoyancy based on fluid density
-   - Force = `(fluid_density - cell_density) × gravity × cell_volume`
-   - Applied in cell physics shader
+**Cell physics shader reads fluid data directly from GPU buffers:**
 
-2. **Drag Forces**
-   - Cells experience drag proportional to relative velocity
-   - Force = `drag_coefficient × (fluid_velocity - cell_velocity)`
-
-3. **Lava Damage** (Optional future feature)
-   - Cells in lava lose mass over time
-   - Not implemented in initial phases
+```wgsl
+// In cell_physics_spatial.wgsl
+@compute @workgroup_size(64)
+fn cell_physics_with_fluids() {
+    let cell_pos = positions_in[cell_idx].xyz;
+    
+    // Sample fluid grid at cell position (GPU-to-GPU)
+    let fluid_idx = world_pos_to_fluid_grid_index(cell_pos);
+    let fluid_density = fluid_densities[fluid_idx];
+    let fluid_velocity = fluid_velocities[fluid_idx].xyz;
+    
+    // 1. Buoyancy force
+    let buoyancy = (fluid_density.y - cell_density) * gravity * cell_volume;
+    force += buoyancy;
+    
+    // 2. Drag force
+    let relative_vel = fluid_velocity - cell_velocity;
+    let drag = drag_coefficient * relative_vel;
+    force += drag;
+    
+    // 3. Lava damage (optional)
+    if (fluid_density.x > 0.5) {  // In lava
+        mass_loss += lava_damage_rate * dt;
+    }
+}
+```
 
 ### Cells Do NOT Affect Fluids
 
 - Cells do not displace fluid
 - Cells do not consume/produce fluid
 - Cells are "ghosts" to the fluid simulation
-- Simplifies implementation and maintains determinism
+- **Zero coupling from cells to fluids** - maintains determinism
+- One-way interaction: fluids → cells only
 
 ---
 
@@ -402,51 +444,88 @@ if (fluid_neighbor_count > 0) {
 
 ---
 
-## Rendering: Smoothed Voxel Visualization
+## GPU-Only Rendering: Zero CPU Readback
 
-### Marching Cubes Approach
+### GPU Instance Extraction (No CPU Involvement)
 
-Generate a smooth isosurface for each fluid type:
+**Extract rendering instances directly on GPU:**
 
-1. **Density Threshold**
-   - Extract isosurface where `density > 0.5`
-   - Separate mesh for each fluid type (water, lava, steam)
-
-2. **Smoothing**
-   - Trilinear interpolation of density values
-   - Smooth normals from density gradient
-
-3. **Mesh Generation**
-   - Run marching cubes on 128³ grid
-   - Generate vertices, indices, normals
-   - Update mesh every frame (or every N frames for performance)
-
-4. **Rendering**
-   - Water: Blue, semi-transparent
-   - Lava: Orange/red, emissive
-   - Steam: White/gray, very transparent
-   - Air: Invisible (not rendered)
-
-### Alternative: Instanced Cubes (Simpler for Phase 1)
-
-For initial implementation:
-
-```rust
-// Extract non-zero density cells
-for each cell in grid {
-    if (water_density > threshold) {
-        instances.push(Instance {
-            position: grid_to_world(cell_coords),
-            scale: cell_size,
-            color: vec4(0.2, 0.4, 0.8, 0.6),  // Blue water
-        });
+```wgsl
+// Compute shader extracts instances from fluid grid
+@compute @workgroup_size(64)
+fn extract_fluid_instances() {
+    let idx = global_id.x;
+    
+    if (solid_mask[idx] != 0u) {
+        return;
+    }
+    
+    let density = fluid_densities[idx];
+    let coords = grid_index_to_coords(idx);
+    let world_pos = grid_coords_to_world(coords);
+    
+    // Water instances
+    if (density.y > 0.1) {
+        let instance_idx = atomicAdd(&water_instance_count, 1u);
+        water_instances[instance_idx] = FluidInstance {
+            position: world_pos,
+            scale: params.cell_size,
+            color: vec4<f32>(0.2, 0.4, 0.8, 0.6 * density.y),
+        };
+    }
+    
+    // Lava instances
+    if (density.x > 0.1) {
+        let instance_idx = atomicAdd(&lava_instance_count, 1u);
+        lava_instances[instance_idx] = FluidInstance {
+            position: world_pos,
+            scale: params.cell_size,
+            color: vec4<f32>(1.0, 0.3, 0.0, density.x),
+        };
+    }
+    
+    // Steam instances
+    if (density.z > 0.1) {
+        let instance_idx = atomicAdd(&steam_instance_count, 1u);
+        steam_instances[instance_idx] = FluidInstance {
+            position: world_pos,
+            scale: params.cell_size,
+            color: vec4<f32>(0.9, 0.9, 0.9, 0.3 * density.z),
+        };
     }
 }
-
-// Render as instanced cubes
 ```
 
-Later upgrade to marching cubes for smooth surfaces.
+### Triple-Buffered Instance Rendering
+
+**Rendering uses instances from 2 frames ago (no sync stalls):**
+
+```rust
+// Render pipeline uses triple-buffered instance data
+pub fn render_fluids(&self, encoder: &mut CommandEncoder, view: &TextureView) {
+    let render_buffer_set = self.triple_buffer.get_render_index();
+    
+    // Render water
+    render_pass.set_vertex_buffer(0, self.water_instances[render_buffer_set].slice(..));
+    render_pass.draw_indirect(&self.water_draw_args[render_buffer_set], 0);
+    
+    // Render lava
+    render_pass.set_vertex_buffer(0, self.lava_instances[render_buffer_set].slice(..));
+    render_pass.draw_indirect(&self.lava_draw_args[render_buffer_set], 0);
+    
+    // Render steam
+    render_pass.set_vertex_buffer(0, self.steam_instances[render_buffer_set].slice(..));
+    render_pass.draw_indirect(&self.steam_draw_args[render_buffer_set], 0);
+}
+```
+
+### Future: GPU Marching Cubes
+
+**Phase 5 upgrade - still GPU-only:**
+- Marching cubes compute shader
+- Generate mesh vertices/indices on GPU
+- Use indirect draw for dynamic mesh
+- Zero CPU mesh generation
 
 ---
 
@@ -456,72 +535,123 @@ Later upgrade to marching cubes for smooth surfaces.
 
 **Goal**: Single fluid type (water) with cave constraints, surface adhesion, and basic visualization
 
-#### Step 1.1: Cave Voxel Grid Generation
-**File**: `src/rendering/cave_system.rs`
+#### Step 1.1: GPU Cave Voxel Grid Generation
+**File**: `shaders/fluid/generate_cave_grid.wgsl` (new file)
 
-```rust
-impl CaveSystemRenderer {
-    /// Generate 128³ boolean grid marking solid vs open space
-    pub fn generate_fluid_collision_grid(
-        params: &CaveParams,
-        grid_resolution: u32,
-    ) -> Vec<u32> {
-        let total_cells = (grid_resolution.pow(3)) as usize;
-        let mut solid_mask = vec![0u32; total_cells];
-        
-        let world_center = Vec3::from(params.world_center);
-        let world_radius = params.world_radius;
-        let cell_size = (world_radius * 2.0) / grid_resolution as f32;
-        
-        for z in 0..grid_resolution {
-            for y in 0..grid_resolution {
-                for x in 0..grid_resolution {
-                    let grid_pos = Vec3::new(
-                        world_center.x - world_radius + (x as f32 + 0.5) * cell_size,
-                        world_center.y - world_radius + (y as f32 + 0.5) * cell_size,
-                        world_center.z - world_radius + (z as f32 + 0.5) * cell_size,
-                    );
-                    
-                    let density = Self::sample_density(grid_pos, params);
-                    let is_solid = density > params.threshold;
-                    
-                    let idx = x + y * grid_resolution + z * grid_resolution * grid_resolution;
-                    solid_mask[idx as usize] = if is_solid { 1 } else { 0 };
-                }
-            }
-        }
-        
-        solid_mask
+**Generate cave grid entirely on GPU:**
+
+```wgsl
+struct CaveParams {
+    world_center: vec3<f32>,
+    world_radius: f32,
+    grid_resolution: u32,
+    threshold: f32,
+    noise_scale: f32,
+    noise_octaves: u32,
+}
+
+@group(0) @binding(0) var<uniform> cave_params: CaveParams;
+@group(0) @binding(1) var<storage, read_write> solid_mask: array<u32>;
+@group(0) @binding(2) var<storage, read_write> stats: array<atomic<u32>, 2>;  // [solid_count, fluid_count]
+
+// Cave SDF sampling (same as CPU version)
+fn sample_cave_density(pos: vec3<f32>) -> f32 {
+    // Implement cave SDF on GPU
+    // Use noise functions for procedural generation
+    // Return density value
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    let total_cells = cave_params.grid_resolution * cave_params.grid_resolution * cave_params.grid_resolution;
+    
+    if (idx >= total_cells) {
+        return;
     }
     
-    /// Create GPU buffer for fluid collision grid
-    pub fn create_fluid_collision_buffer(
-        &mut self,
-        device: &wgpu::Device,
-        grid_resolution: u32,
-    ) -> wgpu::Buffer {
-        let solid_mask = Self::generate_fluid_collision_grid(&self.params, grid_resolution);
-        
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Fluid Collision Grid"),
-            contents: bytemuck::cast_slice(&solid_mask),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        })
+    // Convert linear index to 3D coordinates
+    let res = i32(cave_params.grid_resolution);
+    let z = i32(idx) / (res * res);
+    let y = (i32(idx) - z * res * res) / res;
+    let x = i32(idx) - z * res * res - y * res;
+    
+    // Convert grid coords to world position
+    let cell_size = (cave_params.world_radius * 2.0) / f32(cave_params.grid_resolution);
+    let grid_pos = cave_params.world_center - vec3<f32>(cave_params.world_radius) + 
+                   vec3<f32>(f32(x), f32(y), f32(z)) * cell_size + 
+                   vec3<f32>(cell_size * 0.5);
+    
+    // Sample cave density
+    let density = sample_cave_density(grid_pos);
+    let is_solid = density > cave_params.threshold;
+    
+    // Store result
+    solid_mask[idx] = select(0u, 1u, is_solid);
+    
+    // Update statistics atomically (GPU-only tracking)
+    if (is_solid) {
+        atomicAdd(&stats[0], 1u);  // solid_count
+    } else {
+        atomicAdd(&stats[1], 1u);  // fluid_count
     }
 }
 ```
 
-**Validation**: Print statistics
-- Total cells: 2,097,152
-- Solid cells: ~1,048,576 (50%)
-- Fluid cells: ~1,048,576 (50%)
+**Rust integration (no CPU computation):**
 
-#### Step 1.2: Fluid GPU Buffers
+```rust
+impl CaveSystemRenderer {
+    /// Generate cave grid on GPU (no CPU computation)
+    pub fn generate_fluid_collision_buffer_gpu(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        grid_resolution: u32,
+    ) -> (wgpu::Buffer, wgpu::Buffer) {
+        // Create output buffers
+        let total_cells = grid_resolution.pow(3) as u64;
+        let solid_mask = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Fluid Collision Grid"),
+            size: total_cells * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        
+        let stats = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Cave Grid Stats"),
+            size: 8,  // 2 × u32
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        
+        // Execute GPU generation
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.cave_grid_pipeline);
+            pass.set_bind_group(0, &self.cave_grid_bind_group, &[]);
+            pass.dispatch_workgroups((total_cells as u32 + 63) / 64, 1, 1);
+        }
+        queue.submit(Some(encoder.finish()));
+        
+        // No CPU readback - stats buffer can be read by UI shader if needed
+        (solid_mask, stats)
+    }
+}
+```
+
+**Validation**: GPU stats buffer (no CPU readback)
+- Stats displayed via UI shader reading GPU buffer
+- Optional: Copy stats to staging buffer only for UI display
+
+#### Step 1.2: Triple-Buffered Fluid GPU Buffers
 **File**: `src/gpu_buffers/fluid_buffers.rs` (new file)
 
 ```rust
 use wgpu;
 use bytemuck::{Pod, Zeroable};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -540,83 +670,133 @@ pub struct FluidParams {
     viscosity: f32,
     dt: f32,  // 1/30 for 30 FPS
     
-    phase_change_rate: f32,  // Water → steam conversion rate (0.0-1.0)
-    water_adhesion_strength: f32,  // Surface wetting strength (0.0-1.0)
-    droplet_threshold: f32,  // Water density threshold for droplet formation
-    droplet_detach_force: f32,  // Force needed to detach droplet from ceiling
+    phase_change_rate: f32,
+    water_adhesion_strength: f32,
+    droplet_threshold: f32,
+    droplet_detach_force: f32,
     
     // Padding to 256 bytes
     _padding: [f32; 46],
 }
 
+/// Triple-buffered fluid simulation buffers (zero CPU sync)
 pub struct FluidSimulationBuffers {
-    // Fluid state (128³ cells)
-    pub densities: wgpu::Buffer,        // vec4<f32>: (lava, water, steam, air)
-    pub velocity: wgpu::Buffer,         // vec4<f32>: (vx, vy, vz, padding)
-    pub pressure: wgpu::Buffer,         // f32
+    // Triple-buffered fluid state (128³ cells × 3)
+    pub densities: [wgpu::Buffer; 3],        // vec4<f32>: (lava, water, steam, air)
+    pub velocity: [wgpu::Buffer; 3],         // vec4<f32>: (vx, vy, vz, padding)
+    pub pressure: [wgpu::Buffer; 3],         // f32 (for ping-pong in pressure solve)
     
-    // Temporary buffers for compute
-    pub divergence: wgpu::Buffer,       // f32
-    pub densities_temp: wgpu::Buffer,   // vec4<f32> for advection
-    pub velocity_temp: wgpu::Buffer,    // vec4<f32> for advection
-    pub pressure_temp: wgpu::Buffer,    // f32 for Jacobi ping-pong
+    // Temporary buffers (single copy)
+    pub divergence: wgpu::Buffer,            // f32
+    pub pressure_temp: wgpu::Buffer,         // f32 for Jacobi ping-pong
     
-    // Cave collision
-    pub solid_mask: wgpu::Buffer,       // u32 (from CaveSystemRenderer)
+    // Cave collision (static, single copy)
+    pub solid_mask: wgpu::Buffer,            // u32
     
-    // Parameters
-    pub params: wgpu::Buffer,           // FluidParams uniform
+    // Triple-buffered instance extraction
+    pub water_instances: [wgpu::Buffer; 3],  // FluidInstance array
+    pub lava_instances: [wgpu::Buffer; 3],   // FluidInstance array
+    pub steam_instances: [wgpu::Buffer; 3],  // FluidInstance array
+    pub instance_counts: [wgpu::Buffer; 3],  // Atomic counters for each fluid type
+    pub draw_args: [wgpu::Buffer; 3],        // Indirect draw arguments
+    
+    // Mass conservation tracking (GPU-only)
+    pub mass_counters: wgpu::Buffer,         // Atomic counters for mass tracking
+    
+    // Parameters (uniform)
+    pub params: wgpu::Buffer,                // FluidParams uniform
+    
+    // Triple buffer rotation (CPU atomic for index management)
+    current_physics_index: AtomicUsize,
+    current_render_index: AtomicUsize,
 }
 
 impl FluidSimulationBuffers {
     pub fn new(
         device: &wgpu::Device,
         grid_resolution: u32,
-        solid_mask_data: &[u32],
+        solid_mask_buffer: wgpu::Buffer,  // From GPU cave generation
     ) -> Self {
         let total_cells = (grid_resolution.pow(3)) as u64;
-        let vec4_size = std::mem::size_of::<[f32; 4]>() as u64;
-        let f32_size = std::mem::size_of::<f32>() as u64;
-        let u32_size = std::mem::size_of::<u32>() as u64;
+        let vec4_size = 16u64;
+        let f32_size = 4u64;
+        let max_instances = total_cells;  // Worst case: all cells have fluid
         
-        let densities = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Fluid Densities"),
-            size: total_cells * vec4_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // Helper to create triple-buffered array
+        let create_triple_buffer = |label: &str, size: u64, usage: wgpu::BufferUsages| {
+            [
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("{} 0", label)),
+                    size,
+                    usage,
+                    mapped_at_creation: false,
+                }),
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("{} 1", label)),
+                    size,
+                    usage,
+                    mapped_at_creation: false,
+                }),
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("{} 2", label)),
+                    size,
+                    usage,
+                    mapped_at_creation: false,
+                }),
+            ]
+        };
         
-        let velocity = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Fluid Velocity"),
-            size: total_cells * vec4_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let densities = create_triple_buffer(
+            "Fluid Densities",
+            total_cells * vec4_size,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        );
         
-        let pressure = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Fluid Pressure"),
-            size: total_cells * f32_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let velocity = create_triple_buffer(
+            "Fluid Velocity",
+            total_cells * vec4_size,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        );
+        
+        let pressure = create_triple_buffer(
+            "Fluid Pressure",
+            total_cells * f32_size,
+            wgpu::BufferUsages::STORAGE,
+        );
+        
+        let water_instances = create_triple_buffer(
+            "Water Instances",
+            max_instances * 32,  // FluidInstance size
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
+        );
+        
+        let lava_instances = create_triple_buffer(
+            "Lava Instances",
+            max_instances * 32,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
+        );
+        
+        let steam_instances = create_triple_buffer(
+            "Steam Instances",
+            max_instances * 32,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
+        );
+        
+        let instance_counts = create_triple_buffer(
+            "Instance Counts",
+            12,  // 3 × u32 (water, lava, steam)
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        );
+        
+        let draw_args = create_triple_buffer(
+            "Draw Args",
+            20,  // wgpu::util::DrawIndirectArgs size
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT,
+        );
         
         let divergence = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Fluid Divergence"),
             size: total_cells * f32_size,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        
-        let densities_temp = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Fluid Densities Temp"),
-            size: total_cells * vec4_size,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        
-        let velocity_temp = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Fluid Velocity Temp"),
-            size: total_cells * vec4_size,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
@@ -628,15 +808,16 @@ impl FluidSimulationBuffers {
             mapped_at_creation: false,
         });
         
-        let solid_mask = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Fluid Solid Mask"),
-            contents: bytemuck::cast_slice(solid_mask_data),
-            usage: wgpu::BufferUsages::STORAGE,
+        let mass_counters = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Mass Conservation Counters"),
+            size: 20,  // 5 × u32 atomic counters
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
         });
         
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Fluid Params"),
-            size: std::mem::size_of::<FluidParams>() as u64,
+            size: 256,  // FluidParams aligned to 256 bytes
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -646,12 +827,35 @@ impl FluidSimulationBuffers {
             velocity,
             pressure,
             divergence,
-            densities_temp,
-            velocity_temp,
             pressure_temp,
-            solid_mask,
+            solid_mask: solid_mask_buffer,
+            water_instances,
+            lava_instances,
+            steam_instances,
+            instance_counts,
+            draw_args,
+            mass_counters,
             params,
+            current_physics_index: AtomicUsize::new(0),
+            current_render_index: AtomicUsize::new(2),
         }
+    }
+    
+    /// Rotate triple buffers atomically (zero sync)
+    pub fn rotate_buffers(&self) -> (usize, usize) {
+        let physics = self.current_physics_index.fetch_add(1, Ordering::Relaxed) % 3;
+        let render = self.current_render_index.fetch_add(1, Ordering::Relaxed) % 3;
+        (physics, render)
+    }
+    
+    /// Get current physics buffer index
+    pub fn physics_index(&self) -> usize {
+        self.current_physics_index.load(Ordering::Relaxed) % 3
+    }
+    
+    /// Get current render buffer index (2 frames behind)
+    pub fn render_index(&self) -> usize {
+        self.current_render_index.load(Ordering::Relaxed) % 3
     }
 }
 ```
@@ -1318,57 +1522,100 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 ---
 
-### Phase 4: Air Displacement + Integration
+### Phase 4: Complete GPU Pipeline Integration
 
-**Goal**: Add air dynamics and integrate into GpuScene at 30 FPS
+**Goal**: Integrate fluid system into GpuScene with zero CPU dependencies
 
-#### Step 4.1: Air Displacement Logic
+#### Step 4.1: Complete GPU Fluid Pipeline
 
-Air fills volume not occupied by other fluids:
-
-```wgsl
-// After advection and phase changes
-let total_liquid_gas = density.x + density.y + density.z;  // lava + water + steam
-density.w = max(0.0, 1.0 - total_liquid_gas);  // Air fills remainder
-```
-
-#### Step 4.2: Mass Conservation Validation
-
-Add CPU-side tracking:
+**File**: `src/simulation/fluid_simulation.rs` (new file)
 
 ```rust
-pub struct FluidMassTracker {
-    initial_water: f32,
-    initial_lava: f32,
+pub struct FluidSimulation {
+    buffers: FluidSimulationBuffers,
+    pipelines: FluidPipelines,
+    bind_groups: FluidBindGroups,
+    workgroup_count: u32,
 }
 
-impl FluidMassTracker {
-    pub fn validate(&self, current_densities: &[Vec4]) -> bool {
-        let mut water_mass = 0.0;
-        let mut steam_mass = 0.0;
-        let mut lava_mass = 0.0;
+impl FluidSimulation {
+    /// Execute complete fluid pipeline on GPU (zero CPU sync)
+    pub fn step(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        // Rotate triple buffers atomically
+        let (physics_idx, render_idx) = self.buffers.rotate_buffers();
         
-        for density in current_densities {
-            lava_mass += density.x;
-            water_mass += density.y;
-            steam_mass += density.z;
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Fluid Simulation Pipeline"),
+            timestamp_writes: None,
+        });
+        
+        // Stage 1: Clear instance counters
+        pass.set_pipeline(&self.pipelines.clear_instance_counts);
+        pass.set_bind_group(0, &self.bind_groups.instance_counts[physics_idx], &[]);
+        pass.dispatch_workgroups(1, 1, 1);
+        
+        // Stage 2: Apply forces (gravity, buoyancy, adhesion)
+        pass.set_pipeline(&self.pipelines.apply_forces);
+        pass.set_bind_group(0, &self.bind_groups.main[physics_idx], &[]);
+        pass.dispatch_workgroups(self.workgroup_count, 1, 1);
+        
+        // Stage 3: Advect densities (semi-Lagrangian)
+        pass.set_pipeline(&self.pipelines.advect_density);
+        pass.dispatch_workgroups(self.workgroup_count, 1, 1);
+        
+        // Stage 4: Advect velocity
+        pass.set_pipeline(&self.pipelines.advect_velocity);
+        pass.dispatch_workgroups(self.workgroup_count, 1, 1);
+        
+        // Stage 5: Phase changes (water ↔ steam)
+        pass.set_pipeline(&self.pipelines.phase_change);
+        pass.dispatch_workgroups(self.workgroup_count, 1, 1);
+        
+        // Stage 6: Air displacement
+        pass.set_pipeline(&self.pipelines.air_displacement);
+        pass.dispatch_workgroups(self.workgroup_count, 1, 1);
+        
+        // Stage 7: Compute divergence
+        pass.set_pipeline(&self.pipelines.compute_divergence);
+        pass.dispatch_workgroups(self.workgroup_count, 1, 1);
+        
+        // Stage 8-27: Pressure solve (20 Jacobi iterations with ping-pong)
+        for i in 0..20 {
+            pass.set_pipeline(&self.pipelines.jacobi_pressure);
+            let src_idx = i % 2;
+            pass.set_bind_group(0, &self.bind_groups.pressure[src_idx], &[]);
+            pass.dispatch_workgroups(self.workgroup_count, 1, 1);
         }
         
-        let water_total = water_mass + steam_mass;
-        let water_error = (water_total - self.initial_water).abs() / self.initial_water;
-        let lava_error = (lava_mass - self.initial_lava).abs() / self.initial_lava;
+        // Stage 28: Subtract pressure gradient
+        pass.set_pipeline(&self.pipelines.subtract_gradient);
+        pass.set_bind_group(0, &self.bind_groups.main[physics_idx], &[]);
+        pass.dispatch_workgroups(self.workgroup_count, 1, 1);
         
-        println!("Water conservation error: {:.2}%", water_error * 100.0);
-        println!("Lava conservation error: {:.2}%", lava_error * 100.0);
+        // Stage 29: Enforce boundaries (free-slip)
+        pass.set_pipeline(&self.pipelines.enforce_boundaries);
+        pass.dispatch_workgroups(self.workgroup_count, 1, 1);
         
-        water_error < 0.01 && lava_error < 0.01  // 1% tolerance
+        // Stage 30: Update mass counters (GPU-only validation)
+        pass.set_pipeline(&self.pipelines.update_mass_counters);
+        pass.set_bind_group(0, &self.bind_groups.mass_tracking, &[]);
+        pass.dispatch_workgroups(self.workgroup_count, 1, 1);
+        
+        // Stage 31: Extract rendering instances (GPU-to-GPU)
+        pass.set_pipeline(&self.pipelines.extract_instances);
+        pass.set_bind_group(0, &self.bind_groups.instance_extraction[physics_idx], &[]);
+        pass.dispatch_workgroups(self.workgroup_count, 1, 1);
+        
+        // Stage 32: Build indirect draw arguments
+        pass.set_pipeline(&self.pipelines.build_draw_args);
+        pass.dispatch_workgroups(1, 1, 1);
     }
 }
 ```
 
-#### Step 4.3: GpuScene Integration
+#### Step 4.2: GpuScene Integration (Zero CPU Sync)
 
-**File**: `src/scene/gpu_scene.rs`
+**File**: `src/scene/gpu_scene.rs` (modified)
 
 ```rust
 pub struct GpuScene {
@@ -1378,128 +1625,200 @@ pub struct GpuScene {
     frame_counter: u32,
 }
 
-impl GpuScene {
-    pub fn step_physics(&mut self, dt: f32) {
-        // Existing cell physics at 60 FPS
-        self.run_cell_physics_pipeline();
+impl Scene for GpuScene {
+    fn step_physics(&mut self, dt: f32) {
+        let mut encoder = self.device.create_command_encoder(&Default::default());
         
-        // Fluid physics at 30 FPS
+        // Cell physics at 60 FPS (existing 15-stage pipeline)
+        self.execute_cell_physics_pipeline(&mut encoder);
+        
+        // Fluid physics at 30 FPS (every other frame)
         self.frame_counter += 1;
         if self.frame_counter % 2 == 0 {
             if let Some(ref mut fluid) = self.fluid_system {
-                fluid.step(dt * 2.0);  // Double dt for 30 FPS
+                fluid.step(&mut encoder);  // 32-stage fluid pipeline
             }
+        }
+        
+        // Single submission for both systems
+        self.queue.submit(Some(encoder.finish()));
+        
+        // ZERO CPU SYNCHRONIZATION - no readbacks, no waits
+    }
+    
+    fn render(&self, encoder: &mut CommandEncoder, view: &TextureView) {
+        // Render cells (existing)
+        self.render_cells(encoder, view);
+        
+        // Render fluids using triple-buffered instances (2 frames behind)
+        if let Some(ref fluid) = self.fluid_system {
+            fluid.render(encoder, view);
         }
     }
 }
 ```
 
-#### Step 4.4: Fluid Simulation Pipeline
+#### Step 4.3: GPU Mass Conservation Validation
 
-**File**: `src/simulation/fluid_simulation.rs` (new file)
+**File**: `shaders/fluid/update_mass_counters.wgsl` (new file)
 
-```rust
-pub struct FluidSimulation {
-    buffers: FluidSimulationBuffers,
-    pipelines: FluidPipelines,
-    mass_tracker: FluidMassTracker,
+```wgsl
+struct MassCounters {
+    initial_water: atomic<u32>,
+    initial_lava: atomic<u32>,
+    current_water: atomic<u32>,
+    current_steam: atomic<u32>,
+    current_lava: atomic<u32>,
 }
 
+@group(0) @binding(0) var<storage, read_write> mass_counters: MassCounters;
+@group(0) @binding(1) var<storage, read> densities: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> solid_mask: array<u32>;
+@group(0) @binding(3) var<uniform> params: FluidParams;
+
+// Clear current counters
+@compute @workgroup_size(1)
+fn clear_current_mass() {
+    atomicStore(&mass_counters.current_water, 0u);
+    atomicStore(&mass_counters.current_steam, 0u);
+    atomicStore(&mass_counters.current_lava, 0u);
+}
+
+// Accumulate mass from all cells
+@compute @workgroup_size(64)
+fn accumulate_mass(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    let total_cells = params.grid_resolution * params.grid_resolution * params.grid_resolution;
+    
+    if (idx >= total_cells || solid_mask[idx] != 0u) {
+        return;
+    }
+    
+    let density = densities[idx];
+    
+    // Convert to fixed-point (multiply by 1000 for precision)
+    let lava_fixed = u32(density.x * 1000.0);
+    let water_fixed = u32(density.y * 1000.0);
+    let steam_fixed = u32(density.z * 1000.0);
+    
+    atomicAdd(&mass_counters.current_lava, lava_fixed);
+    atomicAdd(&mass_counters.current_water, water_fixed);
+    atomicAdd(&mass_counters.current_steam, steam_fixed);
+}
+```
+
+#### Step 4.4: GPU-Only UI Display
+
+**Optional: Display mass conservation stats in UI without CPU readback**
+
+```rust
+// UI can optionally copy mass counters to staging buffer for display
+// This is ONLY for UI display, not for validation
 impl FluidSimulation {
-    pub fn step(&mut self, dt: f32) {
-        let mut encoder = self.device.create_command_encoder(&Default::default());
-        
-        {
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            
-            // 1. Apply forces (gravity, buoyancy)
-            pass.set_pipeline(&self.pipelines.apply_forces);
-            pass.set_bind_group(0, &self.bind_groups.main, &[]);
-            pass.dispatch_workgroups(self.workgroup_count, 1, 1);
-            
-            // 2. Advect densities
-            pass.set_pipeline(&self.pipelines.advect_density);
-            pass.dispatch_workgroups(self.workgroup_count, 1, 1);
-            
-            // 3. Advect velocity
-            pass.set_pipeline(&self.pipelines.advect_velocity);
-            pass.dispatch_workgroups(self.workgroup_count, 1, 1);
-            
-            // 4. Phase changes
-            pass.set_pipeline(&self.pipelines.phase_change);
-            pass.dispatch_workgroups(self.workgroup_count, 1, 1);
-            
-            // 5. Compute divergence
-            pass.set_pipeline(&self.pipelines.compute_divergence);
-            pass.dispatch_workgroups(self.workgroup_count, 1, 1);
-            
-            // 6. Pressure solve (20 Jacobi iterations)
-            for _ in 0..20 {
-                pass.set_pipeline(&self.pipelines.jacobi_pressure);
-                pass.dispatch_workgroups(self.workgroup_count, 1, 1);
-                // Swap pressure buffers
-            }
-            
-            // 7. Subtract pressure gradient
-            pass.set_pipeline(&self.pipelines.subtract_gradient);
-            pass.dispatch_workgroups(self.workgroup_count, 1, 1);
-            
-            // 8. Enforce boundaries
-            pass.set_pipeline(&self.pipelines.enforce_boundaries);
-            pass.dispatch_workgroups(self.workgroup_count, 1, 1);
+    pub fn copy_stats_for_ui(&self, encoder: &mut CommandEncoder) {
+        // Only if UI panel is open
+        if self.ui_stats_visible {
+            encoder.copy_buffer_to_buffer(
+                &self.buffers.mass_counters,
+                0,
+                &self.staging_buffer,
+                0,
+                20,
+            );
         }
-        
-        self.queue.submit(Some(encoder.finish()));
     }
 }
 ```
 
 **Validation**:
 - Runs at 30 FPS (every other frame)
-- Mass conservation maintained
+- Zero CPU synchronization during simulation
+- Mass conservation tracked on GPU
 - Visual inspection of fluid behavior
 
 ---
 
-### Phase 5: UI Controls + Polish
+### Phase 5: UI Controls + Polish (GPU-Only)
 
-**Goal**: Add user controls for fluid generation parameters
+**Goal**: Add user controls that trigger GPU reinitialization
 
-#### Step 5.1: UI Sliders
+#### Step 5.1: UI Sliders (CPU Parameters → GPU Uniforms)
 
 **File**: `src/ui/fluid_controls.rs` (new file)
 
 ```rust
 pub struct FluidGenerationParams {
-    pub cave_density: f32,    // 0.0 - 1.0
-    pub water_percent: f32,   // 0.0 - 1.0
-    pub lava_percent: f32,    // 0.0 - 1.0
-    // air_percent computed as remainder
+    pub cave_density: f32,
+    pub water_percent: f32,
+    pub lava_percent: f32,
+    pub water_adhesion: f32,
+    pub droplet_threshold: f32,
 }
 
 impl FluidGenerationParams {
-    pub fn ui(&mut self, ui: &mut egui::Ui) {
+    pub fn ui(&mut self, ui: &mut egui::Ui, fluid_system: &mut FluidSimulation) -> bool {
         ui.heading("Fluid Generation");
         
-        ui.add(egui::Slider::new(&mut self.cave_density, 0.0..=1.0)
+        let mut regenerate = false;
+        
+        ui.add(egui::Slider::new(&mut self.cave_density, 0.5..=0.7)
             .text("Cave Density"));
         
         let remaining = 1.0 - self.cave_density;
         
-        ui.add(egui::Slider::new(&mut self.water_percent, 0.0..=remaining)
+        ui.add(egui::Slider::new(&mut self.water_percent, 0.1..=remaining)
             .text("Water %"));
         
         let remaining_after_water = remaining - self.water_percent;
         
-        ui.add(egui::Slider::new(&mut self.lava_percent, 0.0..=remaining_after_water)
+        ui.add(egui::Slider::new(&mut self.lava_percent, 0.05..=remaining_after_water)
             .text("Lava %"));
         
         let air_percent = remaining_after_water - self.lava_percent;
         ui.label(format!("Air: {:.1}%", air_percent * 100.0));
         
-        if ui.button("Regenerate Fluids").clicked() {
-            // Trigger fluid regeneration
+        ui.separator();
+        ui.heading("Fluid Behavior");
+        
+        if ui.add(egui::Slider::new(&mut self.water_adhesion, 0.0..=1.0)
+            .text("Water Adhesion")).changed() {
+            // Update GPU uniform immediately
+            fluid_system.update_adhesion_param(self.water_adhesion);
         }
+        
+        if ui.add(egui::Slider::new(&mut self.droplet_threshold, 0.5..=2.0)
+            .text("Droplet Threshold")).changed() {
+            fluid_system.update_droplet_param(self.droplet_threshold);
+        }
+        
+        if ui.button("Regenerate Fluids").clicked() {
+            regenerate = true;
+        }
+        
+        regenerate
+    }
+}
+
+impl FluidSimulation {
+    /// Regenerate fluids entirely on GPU
+    pub fn regenerate_gpu(&mut self, encoder: &mut CommandEncoder, params: &FluidGenerationParams) {
+        // Update GPU uniform parameters
+        self.queue.write_buffer(&self.buffers.params, 0, bytemuck::bytes_of(&FluidParams {
+            water_percent: params.water_percent,
+            lava_percent: params.lava_percent,
+            water_adhesion_strength: params.water_adhesion,
+            droplet_threshold: params.droplet_threshold,
+            // ... other params
+        }));
+        
+        // Execute GPU initialization pipeline
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        
+        pass.set_pipeline(&self.pipelines.initialize_fluids);
+        pass.set_bind_group(0, &self.bind_groups.init, &[]);
+        pass.dispatch_workgroups(self.workgroup_count, 1, 1);
+        
+        // No CPU involvement in regeneration
     }
 }
 ```
@@ -1538,63 +1857,96 @@ impl FluidMarchingCubes {
 
 ---
 
-## Performance Considerations
+## Performance Considerations (GPU-Only)
 
-### GPU Memory Usage
+### GPU Memory Usage (Triple Buffered)
 
-Total for 128³ grid:
-- Cave solid mask: 2 MB
-- Fluid densities: 8 MB
-- Fluid velocity: 8 MB
-- Fluid pressure: 2 MB (×2 for ping-pong)
+Total for 128³ grid with triple buffering:
+- Cave solid mask: 2 MB (static)
+- Fluid densities: 24 MB (×3 buffer sets)
+- Fluid velocity: 24 MB (×3 buffer sets)
+- Fluid pressure: 6 MB (×3 for ping-pong)
+- Instance buffers: 48 MB (×3 for water/lava/steam)
 - Divergence: 2 MB
-- Temp buffers: 16 MB
-- **Total: ~40 MB**
+- Mass counters: 20 bytes
+- **Total: ~106 MB**
 
-### Compute Performance
+### Compute Performance (Zero CPU Sync)
 
 At 30 FPS with 128³ grid:
-- Advection: ~2M cells
-- Pressure solve: 20 iterations × ~1M fluid cells
-- Phase changes: ~1M fluid cells
-- **Estimated**: 2-5ms per frame on modern GPU
+- 32-stage GPU pipeline per frame
+- Advection: ~1M fluid cells (skip solids)
+- Pressure solve: 20 Jacobi iterations
+- Instance extraction: GPU-to-GPU atomic operations
+- **Estimated**: 3-6ms per frame on modern GPU
+- **Zero CPU overhead** - no readbacks, no synchronization
+
+### Triple Buffering Benefits
+
+1. **Physics computation** - Uses buffer set N
+2. **Instance extraction** - Uses buffer set N-1
+3. **Rendering** - Uses buffer set N-2
+4. **Zero stalls** - All stages run in parallel
+5. **Maximum throughput** - GPU never waits for CPU
 
 ### Optimization Opportunities
 
-1. **Skip solid cells early** - 50% reduction in work
-2. **Adaptive pressure solve** - Fewer iterations in stable regions
-3. **Async mesh generation** - Don't block simulation
-4. **LOD for distant fluids** - Lower resolution far from camera
+1. **Early solid cell rejection** - 50% work reduction
+2. **Workgroup size tuning** - Optimize for GPU architecture
+3. **Coalesced memory access** - SoA layout for cache efficiency
+4. **Atomic operation minimization** - Batch updates where possible
+5. **Indirect draw** - GPU-driven rendering without CPU
 
 ---
 
-## Testing & Validation Strategy
+## Testing & Validation Strategy (GPU-Only)
 
 ### Visual Inspection Tests
 
-1. **Water settling**: Water should flow downward and pool at bottom
-2. **Ceiling droplets**: Water on horizontal ceilings accumulates then falls as discrete blobs/droplets
-3. **Wall streaming**: Water on vertical walls clings and trickles downward in thin streams
-4. **Slanted surface flow**: Water on angled surfaces follows surface contour while flowing down
-5. **Lava-water interaction**: Steam should form at interface
-6. **Steam rising**: Steam should rise and condense at ceiling/walls
-7. **Condensation patterns**: Steam condensing on ceiling forms droplets, on walls forms streams
+1. **Water settling**: Water flows downward and pools at bottom
+2. **Ceiling droplets**: Water accumulates on ceilings → forms droplets → falls
+3. **Wall streaming**: Water clings to walls and trickles downward
+4. **Slanted surface flow**: Water follows surface contours
+5. **Lava-water interaction**: Steam forms at lava-water interface
+6. **Steam rising**: Steam rises and condenses at boundaries
+7. **Condensation patterns**: Ceiling droplets, wall streams
 8. **Boundary respect**: No fluid penetration into cave walls
-9. **Mass conservation**: Total water+steam constant over time
+9. **Mass conservation**: Total water+steam visually constant
 
-### Quantitative Tests
+### GPU-Only Quantitative Tests
 
-1. **Mass conservation**: Track total mass each frame, error < 1%
-2. **Divergence**: Measure velocity divergence after pressure solve
-3. **Performance**: Maintain 30 FPS fluid update, 60 FPS overall
-4. **Memory**: Stay within 50 MB GPU memory budget
+1. **Mass conservation**: GPU atomic counters track mass (no CPU readback)
+2. **Performance**: Maintain 30 FPS fluid, 60 FPS overall
+3. **Memory**: Stay within 110 MB GPU memory budget
+4. **Triple buffer rotation**: Verify atomic index management
+5. **Instance extraction**: Verify GPU-to-GPU instance generation
 
-### Debug Visualization
+### Debug Visualization (GPU-Only)
 
-1. **Density slices**: 2D cross-sections of density field
-2. **Velocity arrows**: Vector field visualization
-3. **Pressure heatmap**: Pressure distribution
-4. **Solid mask overlay**: Verify cave boundaries
+**All debug visualization uses GPU compute shaders:**
+
+```wgsl
+// Debug shader: Extract 2D slice for visualization
+@compute @workgroup_size(64)
+fn extract_debug_slice() {
+    // Extract density slice at Z=64
+    // Write to debug texture (GPU-to-GPU)
+    // No CPU readback required
+}
+
+// Debug shader: Velocity field arrows
+@compute @workgroup_size(64)
+fn generate_velocity_arrows() {
+    // Generate arrow instances on GPU
+    // Use indirect draw for rendering
+}
+```
+
+**Debug features:**
+1. **Density slices**: GPU-generated 2D cross-sections
+2. **Velocity arrows**: GPU-generated vector field instances
+3. **Pressure heatmap**: GPU-generated color-coded visualization
+4. **Mass counters**: Display GPU atomic counter values in UI
 
 ---
 
