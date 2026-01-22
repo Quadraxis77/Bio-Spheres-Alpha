@@ -738,6 +738,26 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
                 state.set_panel_locked(&cave_name, !cave_locked);
             }
         });
+        
+        // Fluid Settings (GPU mode only)
+        let fluid_open = is_panel_open(dock_manager.current_tree(), &Panel::FluidSettings);
+        let fluid_name = format!("{:?}", Panel::FluidSettings);
+        let fluid_locked = state.is_panel_locked(&fluid_name);
+        
+        ui.horizontal(|ui| {
+            if ui.selectable_label(fluid_open, "  Fluid System").clicked() {
+                if fluid_open {
+                    close_panel(dock_manager.current_tree_mut(), &Panel::FluidSettings);
+                } else {
+                    open_panel(dock_manager.current_tree_mut(), &Panel::FluidSettings);
+                }
+            }
+            
+            let lock_icon = if fluid_locked { "🔒" } else { "🔓" };
+            if ui.small_button(lock_icon).clicked() {
+                state.set_panel_locked(&fluid_name, !fluid_locked);
+            }
+        });
     }
 
     ui.separator();

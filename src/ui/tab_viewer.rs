@@ -60,6 +60,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::PerformanceMonitor => render_performance_monitor(ui, self.context, self.state),
             Panel::RenderingControls => render_rendering_controls(ui),
             Panel::CaveSystem => render_cave_system(ui, self.context),
+            Panel::FluidSettings => render_fluid_settings(ui, self.context),
             Panel::TimeScrubber => render_time_scrubber(ui, self.context),
             Panel::ThemeEditor => render_theme_editor(ui),
             Panel::CameraSettings => render_camera_settings(ui, self.context),
@@ -1019,6 +1020,65 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 context.editor_state.save_cave_settings();
             }
         }
+    }
+}
+
+/// Render the Fluid Settings panel for fluid simulation controls and visualization.
+fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
+    ui.heading("Fluid System");
+    ui.separator();
+    
+    // Check if we're in GPU mode
+    if !context.is_gpu_mode() {
+        ui.label("Fluid system is only available in GPU mode.");
+        return;
+    }
+    
+    // Check if fluid system exists
+    let has_fluid_system = context.scene_manager.gpu_scene()
+        .map(|scene| scene.fluid_buffers.is_some())
+        .unwrap_or(false);
+    
+    if !has_fluid_system {
+        ui.label("Fluid system not initialized.");
+        ui.add_space(5.0);
+        ui.label("The fluid system should auto-initialize when switching to GPU mode.");
+        return;
+    }
+    
+    // Fluid system exists - show grid info and controls
+    ui.label("Grid Information:");
+    ui.add_space(5.0);
+    
+    // Show actual grid info from fluid buffers
+    if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
+        if let Some(ref fluid_buffers) = gpu_scene.fluid_buffers {
+            ui.label(format!("  Resolution: 128³"));
+            ui.label(format!("  Total Voxels: {}", 128 * 128 * 128));
+            ui.label(format!("  Memory Usage: {:.2} MB", fluid_buffers.memory_usage_mb()));
+        }
+    }
+    
+    ui.add_space(10.0);
+    ui.separator();
+    ui.add_space(5.0);
+    
+    // Toggle for test voxels visibility
+    ui.checkbox(&mut context.editor_state.fluid_show_test_voxels, "Show Test Voxels");
+    
+    ui.add_space(5.0);
+    
+    ui.label("Test voxel pattern (5 cubes × 27 voxels):");
+    ui.label("  • Green (solid)");
+    ui.label("  • Purple (test)");
+    ui.label("  • Blue (water)");
+    ui.label("  • Orange/Red (lava)");
+    ui.label("  • Grey/White (steam)");
+    
+    ui.add_space(10.0);
+    
+    if ui.button("🔄 Regenerate Test Voxels").clicked() {
+        *context.scene_request = crate::ui::panel_context::SceneModeRequest::RegenerateFluidVoxels;
     }
 }
 

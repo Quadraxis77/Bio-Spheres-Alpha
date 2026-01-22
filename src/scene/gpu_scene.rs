@@ -4,12 +4,26 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, HizGenerator, InstanceBuilder, TailRenderer, WorldSphereRenderer};
+use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, HizGenerator, InstanceBuilder, TailRenderer, VoxelRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
+use crate::simulation::fluid_simulation::FluidBuffers;
 use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager};
 use crate::ui::camera::CameraController;
+use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
+use wgpu::util::DeviceExt;
+
+/// Camera uniform for voxel rendering
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct CameraUniform {
+    view_proj: [[f32; 4]; 4],
+    view: [[f32; 4]; 4],
+    proj: [[f32; 4]; 4],
+    camera_pos: [f32; 3],
+    _padding: f32,
+}
 
 /// Pending GPU query operation to be executed during render phase
 #[derive(Debug, Clone)]
@@ -140,6 +154,14 @@ pub struct GpuScene {
     cave_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// Track previous world diameter to detect changes for cave regeneration
     previous_world_diameter: f32,
+    /// Fluid simulation buffers (128³ voxel grid)
+    pub fluid_buffers: Option<FluidBuffers>,
+    /// Voxel renderer for fluid visualization
+    pub voxel_renderer: Option<VoxelRenderer>,
+    /// Whether fluid visualization is enabled
+    pub show_fluid_voxels: bool,
+    /// Current voxel instance count for rendering
+    voxel_instance_count: u32,
 }
 
 impl GpuScene {
@@ -269,6 +291,10 @@ impl GpuScene {
             cave_params_dirty: false,
             cave_physics_bind_groups: None,
             previous_world_diameter: 400.0, // Default world diameter
+            fluid_buffers: None,
+            voxel_renderer: None,
+            show_fluid_voxels: false,
+            voxel_instance_count: 0,
         }
     }
     
@@ -1434,6 +1460,338 @@ impl GpuScene {
         })
     }
     
+    /// Create camera uniform for rendering
+    fn create_camera_uniform(&self) -> CameraUniform {
+        let camera_pos = self.camera.position();
+        let camera_rotation = self.camera.rotation;
+        
+        // Use NEG_Z for forward direction (consistent with other renderers)
+        let view_matrix = Mat4::look_at_rh(
+            camera_pos,
+            camera_pos + camera_rotation * glam::Vec3::NEG_Z,
+            camera_rotation * glam::Vec3::Y,
+        );
+        let aspect = self.renderer.width as f32 / self.renderer.height as f32;
+        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
+        let view_proj = proj_matrix * view_matrix;
+        
+        CameraUniform {
+            view_proj: view_proj.to_cols_array_2d(),
+            view: view_matrix.to_cols_array_2d(),
+            proj: proj_matrix.to_cols_array_2d(),
+            camera_pos: camera_pos.to_array(),
+            _padding: 0.0,
+        }
+    }
+    
+    
+    /// Initialize the fluid simulation system
+    pub fn initialize_fluid_system(
+        &mut self,
+        device: &wgpu::Device,
+        surface_format: wgpu::TextureFormat,
+        camera_bind_group_layout: &wgpu::BindGroupLayout,
+    ) -> bool {
+        if self.fluid_buffers.is_some() {
+            return false; // Already initialized
+        }
+        
+        // Get world parameters from config
+        let world_radius = self.config.sphere_radius;
+        let world_center = glam::Vec3::ZERO;
+        
+        // Create fluid buffers
+        let fluid_buffers = FluidBuffers::new(device, world_radius, world_center);
+        
+        // Validate memory budget
+        if let Err(e) = fluid_buffers.validate_memory_budget() {
+            log::error!("Fluid system memory budget exceeded: {}", e);
+            return false;
+        }
+        
+        log::info!(
+            "Fluid system initialized: {:.2} MB memory usage",
+            fluid_buffers.memory_usage_mb()
+        );
+        
+        // Create voxel renderer
+        let max_voxel_instances = 100_000; // Maximum voxels to render at once
+        let voxel_renderer = VoxelRenderer::new(
+            device,
+            surface_format,
+            camera_bind_group_layout,
+            max_voxel_instances,
+        );
+        
+        self.fluid_buffers = Some(fluid_buffers);
+        self.voxel_renderer = Some(voxel_renderer);
+        self.show_fluid_voxels = true;
+        
+        true
+    }
+    
+    /// Generate test voxels for visualization
+    pub fn generate_test_voxels(&mut self, queue: &wgpu::Queue) {
+        use crate::rendering::VoxelInstance;
+        use crate::simulation::fluid_simulation::{FluidType, GRID_RESOLUTION};
+        
+        if self.fluid_buffers.is_none() || self.voxel_renderer.is_none() {
+            return;
+        }
+        
+        let voxel_renderer = self.voxel_renderer.as_ref().unwrap();
+        
+        // Calculate grid parameters from world size
+        let world_diameter = self.config.sphere_radius * 2.0;
+        let cell_size = world_diameter / GRID_RESOLUTION as f32;
+        let world_center = glam::Vec3::ZERO;
+        
+        // Helper function to convert grid indices to world position
+        let grid_to_world = |i: u32, j: u32, k: u32| -> glam::Vec3 {
+            // Grid origin is at world_center - (world_diameter / 2)
+            let grid_origin = world_center - glam::Vec3::splat(world_diameter / 2.0);
+            // Cell center is at grid_origin + (i + 0.5) * cell_size
+            grid_origin + glam::Vec3::new(
+                (i as f32 + 0.5) * cell_size,
+                (j as f32 + 0.5) * cell_size,
+                (k as f32 + 0.5) * cell_size,
+            )
+        };
+        
+        let mut instances = Vec::new();
+        // Voxel size is half-extent. For contiguous voxels:
+        // - Grid cells are cell_size apart (center to center)
+        // - Full voxel width must equal cell_size
+        // - Therefore half-extent = cell_size / 2
+        // BUT the size parameter might be full extent, not half-extent. Let's use cell_size.
+        let voxel_size = cell_size; // Full extent for rendering
+        
+        // ===== SOLID (Green) - Cave/Terrain Patterns =====
+        // Pattern 1: Single isolated voxel (obstacle)
+        let solid_single = (30, 64, 64);
+        instances.push(VoxelInstance {
+            position: grid_to_world(solid_single.0, solid_single.1, solid_single.2).to_array(),
+            voxel_type: FluidType::Solid as u32,
+            color: [0.2, 0.8, 0.2, 0.9],
+            size: voxel_size,
+            _padding: [0.0; 3],
+        });
+        
+        // Pattern 2: Horizontal wall (5x1x3 plane)
+        let solid_wall_base = (35, 64, 62);
+        for x in 0..5 {
+            for z in 0..3 {
+                instances.push(VoxelInstance {
+                    position: grid_to_world(solid_wall_base.0 + x, solid_wall_base.1, solid_wall_base.2 + z).to_array(),
+                    voxel_type: FluidType::Solid as u32,
+                    color: [0.2, 0.8, 0.2, 0.9],
+                    size: voxel_size,
+                    _padding: [0.0; 3],
+                });
+            }
+        }
+        
+        // Pattern 3: Vertical pillar (1x5x1 column)
+        let solid_pillar_base = (42, 60, 64);
+        for y in 0..5 {
+            instances.push(VoxelInstance {
+                position: grid_to_world(solid_pillar_base.0, solid_pillar_base.1 + y, solid_pillar_base.2).to_array(),
+                voxel_type: FluidType::Solid as u32,
+                color: [0.15, 0.7, 0.15, 0.9],
+                size: voxel_size,
+                _padding: [0.0; 3],
+            });
+        }
+        
+        // ===== WATER (Blue) - Liquid Patterns =====
+        // Pattern 1: Single droplet
+        let water_droplet = (50, 68, 64);
+        instances.push(VoxelInstance {
+            position: grid_to_world(water_droplet.0, water_droplet.1, water_droplet.2).to_array(),
+            voxel_type: FluidType::Water as u32,
+            color: [0.2, 0.5, 1.0, 0.7],
+            size: voxel_size,
+            _padding: [0.0; 3],
+        });
+        
+        // Pattern 2: Horizontal pool (6x1x4 shallow water)
+        let water_pool_base = (52, 60, 62);
+        for x in 0..6 {
+            for z in 0..4 {
+                instances.push(VoxelInstance {
+                    position: grid_to_world(water_pool_base.0 + x, water_pool_base.1, water_pool_base.2 + z).to_array(),
+                    voxel_type: FluidType::Water as u32,
+                    color: [0.2, 0.4, 0.9, 0.7],
+                    size: voxel_size,
+                    _padding: [0.0; 3],
+                });
+            }
+        }
+        
+        // Pattern 3: Vertical stream (1x6x1 falling water)
+        let water_stream_base = (60, 62, 64);
+        for y in 0..6 {
+            instances.push(VoxelInstance {
+                position: grid_to_world(water_stream_base.0, water_stream_base.1 + y, water_stream_base.2).to_array(),
+                voxel_type: FluidType::Water as u32,
+                color: [0.3, 0.6, 1.0, 0.6],
+                size: voxel_size,
+                _padding: [0.0; 3],
+            });
+        }
+        
+        // Pattern 4: Small cube (3x3x3 water body)
+        let water_cube_base = (63, 62, 62);
+        for x in 0..3 {
+            for y in 0..3 {
+                for z in 0..3 {
+                    instances.push(VoxelInstance {
+                        position: grid_to_world(water_cube_base.0 + x, water_cube_base.1 + y, water_cube_base.2 + z).to_array(),
+                        voxel_type: FluidType::Water as u32,
+                        color: [0.2, 0.4, 0.9, 0.7],
+                        size: voxel_size,
+                        _padding: [0.0; 3],
+                    });
+                }
+            }
+        }
+        
+        // ===== LAVA (Orange/Red) - Viscous Liquid Patterns =====
+        // Pattern 1: Single lava blob
+        let lava_blob = (72, 64, 64);
+        instances.push(VoxelInstance {
+            position: grid_to_world(lava_blob.0, lava_blob.1, lava_blob.2).to_array(),
+            voxel_type: FluidType::Lava as u32,
+            color: [1.0, 0.3, 0.0, 0.95],
+            size: voxel_size,
+            _padding: [0.0; 3],
+        });
+        
+        // Pattern 2: Lava flow (7x1x2 horizontal flow)
+        let lava_flow_base = (74, 60, 63);
+        for x in 0..7 {
+            for z in 0..2 {
+                let color = if x % 2 == 0 {
+                    [1.0, 0.4, 0.0, 0.9] // Orange
+                } else {
+                    [0.9, 0.1, 0.0, 0.9] // Red
+                };
+                instances.push(VoxelInstance {
+                    position: grid_to_world(lava_flow_base.0 + x, lava_flow_base.1, lava_flow_base.2 + z).to_array(),
+                    voxel_type: FluidType::Lava as u32,
+                    color,
+                    size: voxel_size,
+                    _padding: [0.0; 3],
+                });
+            }
+        }
+        
+        // Pattern 3: Lava pillar (1x4x1 rising lava)
+        let lava_pillar_base = (83, 62, 64);
+        for y in 0..4 {
+            instances.push(VoxelInstance {
+                position: grid_to_world(lava_pillar_base.0, lava_pillar_base.1 + y, lava_pillar_base.2).to_array(),
+                voxel_type: FluidType::Lava as u32,
+                color: [0.95, 0.2, 0.0, 0.9],
+                size: voxel_size,
+                _padding: [0.0; 3],
+            });
+        }
+        
+        // Pattern 4: Lava pool (4x2x3 thick lava)
+        let lava_pool_base = (85, 62, 62);
+        for x in 0..4 {
+            for y in 0..2 {
+                for z in 0..3 {
+                    let color = if (x + y + z) % 2 == 0 {
+                        [1.0, 0.4, 0.0, 0.9]
+                    } else {
+                        [0.9, 0.1, 0.0, 0.9]
+                    };
+                    instances.push(VoxelInstance {
+                        position: grid_to_world(lava_pool_base.0 + x, lava_pool_base.1 + y, lava_pool_base.2 + z).to_array(),
+                        voxel_type: FluidType::Lava as u32,
+                        color,
+                        size: voxel_size,
+                        _padding: [0.0; 3],
+                    });
+                }
+            }
+        }
+        
+        // ===== STEAM (Grey/White) - Gas Patterns =====
+        // Pattern 1: Single steam particle
+        let steam_particle = (95, 68, 64);
+        instances.push(VoxelInstance {
+            position: grid_to_world(steam_particle.0, steam_particle.1, steam_particle.2).to_array(),
+            voxel_type: FluidType::Steam as u32,
+            color: [0.9, 0.9, 0.9, 0.4],
+            size: voxel_size,
+            _padding: [0.0; 3],
+        });
+        
+        // Pattern 2: Steam cloud (5x3x4 dispersed gas)
+        let steam_cloud_base = (92, 64, 62);
+        for x in 0..5 {
+            for y in 0..3 {
+                for z in 0..4 {
+                    // Sparse pattern - only 50% filled
+                    if (x + y + z) % 2 == 0 {
+                        let alpha = 0.3 + (y as f32 * 0.1); // More transparent at top
+                        instances.push(VoxelInstance {
+                            position: grid_to_world(steam_cloud_base.0 + x, steam_cloud_base.1 + y, steam_cloud_base.2 + z).to_array(),
+                            voxel_type: FluidType::Steam as u32,
+                            color: [0.85, 0.85, 0.85, alpha],
+                            size: voxel_size,
+                            _padding: [0.0; 3],
+                        });
+                    }
+                }
+            }
+        }
+        
+        // Pattern 3: Rising steam column (1x7x1 vertical plume)
+        let steam_plume_base = (90, 60, 64);
+        for y in 0..7 {
+            let alpha = 0.6 - (y as f32 * 0.05); // Fade out as it rises
+            instances.push(VoxelInstance {
+                position: grid_to_world(steam_plume_base.0, steam_plume_base.1 + y, steam_plume_base.2).to_array(),
+                voxel_type: FluidType::Steam as u32,
+                color: [0.95, 0.95, 0.95, alpha],
+                size: voxel_size,
+                _padding: [0.0; 3],
+            });
+        }
+        
+        // Pattern 4: Scattered steam particles (random sparse pattern)
+        let steam_scatter_base = (98, 62, 62);
+        for x in 0..4 {
+            for y in 0..4 {
+                for z in 0..4 {
+                    // Very sparse - only 25% filled
+                    if (x * 7 + y * 3 + z * 5) % 4 == 0 {
+                        instances.push(VoxelInstance {
+                            position: grid_to_world(steam_scatter_base.0 + x, steam_scatter_base.1 + y, steam_scatter_base.2 + z).to_array(),
+                            voxel_type: FluidType::Steam as u32,
+                            color: [0.8, 0.8, 0.8, 0.35],
+                            size: voxel_size,
+                            _padding: [0.0; 3],
+                        });
+                    }
+                }
+            }
+        }
+        
+        log::info!(
+            "Generated {} diverse fluid pattern voxels aligned to 128³ grid (cell_size: {:.4})",
+            instances.len(),
+            cell_size
+        );
+        log::info!("Patterns: Solid (wall/pillar), Water (droplet/pool/stream/cube), Lava (blob/flow/pillar/pool), Steam (particle/cloud/plume/scatter)");
+        self.voxel_instance_count = instances.len() as u32;
+        voxel_renderer.update_instances(queue, &instances);
+    }
+    
     /// Apply cave parameters from editor state
     pub fn apply_cave_params_from_editor(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
         if !editor_state.cave_params_dirty {
@@ -1918,6 +2276,69 @@ impl Scene for GpuScene {
                 self.camera.position(),
                 self.camera.rotation,
             );
+        }
+        
+        // Render fluid voxels if enabled
+        if self.show_fluid_voxels {
+            if let (Some(ref voxel_renderer), Some(ref _fluid_buffers)) = (&self.voxel_renderer, &self.fluid_buffers) {
+                // Create camera bind group for voxel rendering
+                // We need to create this each frame since we don't store it
+                let camera_uniform = self.create_camera_uniform();
+                let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Voxel Camera Buffer"),
+                    contents: bytemuck::cast_slice(&[camera_uniform]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
+                
+                let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("Voxel Camera Layout"),
+                    entries: &[wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    }],
+                });
+                
+                let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Voxel Camera Bind Group"),
+                    layout: &camera_bind_group_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: camera_buffer.as_entire_binding(),
+                    }],
+                });
+                
+                let mut voxel_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Voxel Rendering Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load, // Preserve previous rendering
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.renderer.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load, // Use existing depth
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                
+                // Render voxels with tracked instance count
+                voxel_renderer.render(&mut voxel_pass, &camera_bind_group, self.voxel_instance_count);
+            }
         }
 
         // Render adhesion lines if enabled

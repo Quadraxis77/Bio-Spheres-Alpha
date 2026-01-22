@@ -136,6 +136,7 @@ pub mod skybox;
 pub mod split_rings;
 pub mod tail_renderer;
 pub mod volumetric_fog;
+pub mod voxel_renderer;
 pub mod world_sphere;
 
 pub use adhesion_lines::AdhesionLineRenderer;
@@ -147,4 +148,5 @@ pub use instance_builder::{CellInstance, CullingMode, CullingStats, InstanceBuil
 pub use orientation_gizmo::OrientationGizmoRenderer;
 pub use split_rings::SplitRingRenderer;
 pub use tail_renderer::{TailRenderer, TailInstance};
+pub use voxel_renderer::{VoxelRenderer, VoxelInstance};
 pub use world_sphere::{WorldSphereRenderer, WorldSphereParams};

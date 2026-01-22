@@ -34,6 +34,8 @@ pub enum SceneModeRequest {
     SetSpeed(f32),
     /// Request to set simulation speed and unpause
     SetSpeedAndUnpause(f32),
+    /// Request to regenerate fluid test voxels
+    RegenerateFluidVoxels,
 }
 
 impl SceneModeRequest {
@@ -142,6 +144,38 @@ pub struct GenomeEditorState {
     pub cave_substeps: u32,
     pub cave_params_dirty: bool,
     
+    // Fluid simulation parameters
+    pub fluid_gravity: f32,
+    pub fluid_gravity_x: bool,
+    pub fluid_gravity_y: bool,
+    pub fluid_gravity_z: bool,
+    pub fluid_vorticity_epsilon: f32,
+    pub fluid_pressure_iterations: u32,
+    
+    // Fluid visualization
+    pub fluid_show_voxel_grid: bool,
+    pub fluid_show_solid_only: bool,
+    pub fluid_show_wireframe: bool,
+    pub fluid_color_mode: u32,
+    
+    // Fluid statistics (read-only, updated from GPU)
+    pub fluid_solid_count: u32,
+    pub fluid_empty_count: u32,
+    pub fluid_water_count: u32,
+    pub fluid_lava_count: u32,
+    pub fluid_steam_count: u32,
+    pub fluid_memory_usage_mb: f32,
+    pub fluid_water_mass: f32,
+    pub fluid_lava_mass: f32,
+    pub fluid_steam_mass: f32,
+    
+    // Fluid initialization
+    pub fluid_water_percent: f32,
+    pub fluid_lava_percent: f32,
+    
+    // Fluid visualization toggle
+    pub fluid_show_test_voxels: bool,
+    
     // Orientation gizmo state
     /// Whether the orientation gizmo is visible
     pub gizmo_visible: bool,
@@ -222,6 +256,28 @@ impl GenomeEditorState {
             cave_collision_damping,
             cave_substeps,
             cave_params_dirty: false,
+            fluid_gravity: 9.8,
+            fluid_gravity_x: false,
+            fluid_gravity_y: true,
+            fluid_gravity_z: false,
+            fluid_vorticity_epsilon: 0.05,
+            fluid_pressure_iterations: 10,
+            fluid_show_voxel_grid: true,
+            fluid_show_solid_only: false,
+            fluid_show_wireframe: false,
+            fluid_color_mode: 0,
+            fluid_solid_count: 0,
+            fluid_empty_count: 0,
+            fluid_water_count: 0,
+            fluid_lava_count: 0,
+            fluid_steam_count: 0,
+            fluid_memory_usage_mb: 0.0,
+            fluid_water_mass: 0.0,
+            fluid_lava_mass: 0.0,
+            fluid_steam_mass: 0.0,
+            fluid_water_percent: 25.0,
+            fluid_lava_percent: 25.0,
+            fluid_show_test_voxels: true,
             gizmo_visible: true,
             split_rings_visible: true,
             radial_menu: crate::ui::radial_menu::RadialMenuState::new(),

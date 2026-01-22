@@ -4,6 +4,7 @@
 
 pub mod adhesion_inheritance;
 pub mod canonical_state;
+pub mod fluid_simulation;
 pub mod gpu_physics;
 pub mod physics_config;
 pub mod preview_physics;

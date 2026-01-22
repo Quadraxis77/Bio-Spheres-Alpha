@@ -409,6 +409,9 @@ impl App {
                     // Clear the dirty flag in editor state
                     self.editor_state.cave_params_dirty = false;
                 }
+                
+                // Sync fluid voxel visibility toggle
+                gpu_scene.show_fluid_voxels = self.editor_state.fluid_show_test_voxels;
             }
         }
         
@@ -633,6 +636,14 @@ impl App {
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                         gpu_scene.time_scale = speed;
                         gpu_scene.paused = false;
+                    }
+                }
+                crate::ui::panel_context::SceneModeRequest::RegenerateFluidVoxels => {
+                    if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                        if gpu_scene.fluid_buffers.is_some() {
+                            gpu_scene.generate_test_voxels(&self.queue);
+                            log::info!("Regenerated fluid test voxels");
+                        }
                     }
                 }
                 _ => {

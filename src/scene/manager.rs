@@ -84,6 +84,35 @@ impl SceneManager {
                     let mut gpu_scene = GpuScene::with_capacity(device, queue, config, cell_capacity);
                     // Initialize cave system automatically
                     let cave_initialized = gpu_scene.initialize_cave_system(device, config.format, world_diameter);
+                    
+                    // Initialize fluid system automatically
+                    // Create camera bind group layout for voxel rendering
+                    let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                        label: Some("Voxel Camera Layout"),
+                        entries: &[wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        }],
+                    });
+                    
+                    let fluid_initialized = gpu_scene.initialize_fluid_system(
+                        device,
+                        config.format,
+                        &camera_bind_group_layout,
+                    );
+                    
+                    if fluid_initialized {
+                        log::info!("Fluid system auto-initialized on GPU scene creation");
+                        // Generate test voxels
+                        gpu_scene.generate_test_voxels(queue);
+                    }
+                    
                     self.gpu_scene = Some(gpu_scene);
                     self.current_mode = mode;
                     return cave_initialized; // Return true if cave was just initialized
@@ -116,6 +145,35 @@ impl SceneManager {
         let mut gpu_scene = GpuScene::with_capacity(device, queue, config, capacity);
         // Initialize cave system automatically
         let _cave_initialized = gpu_scene.initialize_cave_system(device, config.format, world_diameter);
+        
+        // Initialize fluid system automatically
+        // Create camera bind group layout for voxel rendering
+        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Voxel Camera Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        
+        let fluid_initialized = gpu_scene.initialize_fluid_system(
+            device,
+            config.format,
+            &camera_bind_group_layout,
+        );
+        
+        if fluid_initialized {
+            log::info!("Fluid system auto-initialized on GPU scene recreation");
+            // Generate test voxels
+            gpu_scene.generate_test_voxels(queue);
+        }
+        
         self.gpu_scene = Some(gpu_scene);
     }
 
