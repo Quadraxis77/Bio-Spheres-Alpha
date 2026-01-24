@@ -4,7 +4,7 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, FluidMeshRenderer, FluidMeshParams, GpuAdhesionLineRenderer, HizGenerator, InstanceBuilder, SurfaceNetsParams, TailRenderer, VoxelRenderer, WorldSphereRenderer};
+use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, TailRenderer, VoxelRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::FluidBuffers;
@@ -162,10 +162,10 @@ pub struct GpuScene {
     pub show_fluid_voxels: bool,
     /// Current voxel instance count for rendering
     voxel_instance_count: u32,
-    /// Fluid mesh renderer using surface nets
-    pub fluid_mesh_renderer: Option<FluidMeshRenderer>,
-    /// Whether to render fluid as mesh (vs voxels)
-    pub show_fluid_mesh: bool,
+        /// GPU-based surface nets renderer for density field visualization
+    pub gpu_surface_nets: Option<GpuSurfaceNets>,
+    /// Whether to show GPU surface nets density mesh
+    pub show_gpu_density_mesh: bool,
 }
 
 impl GpuScene {
@@ -299,8 +299,8 @@ impl GpuScene {
             voxel_renderer: None,
             show_fluid_voxels: false,
             voxel_instance_count: 0,
-            fluid_mesh_renderer: None,
-            show_fluid_mesh: false,
+            gpu_surface_nets: None,
+            show_gpu_density_mesh: false,
         }
     }
     
@@ -1529,20 +1529,8 @@ impl GpuScene {
             max_voxel_instances,
         );
         
-        // Create fluid mesh renderer using surface nets
-        let fluid_mesh_renderer = FluidMeshRenderer::new(
-            device,
-            surface_format,
-            wgpu::TextureFormat::Depth32Float,
-            world_radius,
-            world_center,
-            self.renderer.width,
-            self.renderer.height,
-        );
-        
         self.fluid_buffers = Some(fluid_buffers);
         self.voxel_renderer = Some(voxel_renderer);
-        self.fluid_mesh_renderer = Some(fluid_mesh_renderer);
         self.show_fluid_voxels = true;
         
         true
@@ -1810,445 +1798,175 @@ impl GpuScene {
         voxel_renderer.update_instances(queue, &instances);
     }
     
-    /// Generate test fluid mesh using surface nets with irregular shapes
-    pub fn generate_test_fluid_mesh(&mut self, queue: &wgpu::Queue) {
-        use crate::simulation::fluid_simulation::{FluidType, GRID_RESOLUTION, TOTAL_VOXELS};
-        
-        if self.fluid_mesh_renderer.is_none() {
-            log::warn!("Fluid mesh renderer not initialized");
+    /// Initialize GPU-based surface nets renderer for density field visualization
+    pub fn initialize_gpu_surface_nets(
+        &mut self,
+        device: &wgpu::Device,
+        surface_format: wgpu::TextureFormat,
+    ) {
+        if self.gpu_surface_nets.is_some() {
             return;
         }
         
-        // Create test voxel data arrays
-        let mut voxel_types = vec![FluidType::Empty as u32; TOTAL_VOXELS];
-        let mut fill_fractions = vec![0.0f32; TOTAL_VOXELS];
+        let gpu_surface_nets = GpuSurfaceNets::new(
+            device,
+            surface_format,
+            wgpu::TextureFormat::Depth32Float,
+            self.config.sphere_radius,
+            glam::Vec3::ZERO,
+            self.renderer.width,
+            self.renderer.height,
+        );
         
-        let grid_index = |x: u32, y: u32, z: u32| -> usize {
-            (x + y * GRID_RESOLUTION + z * GRID_RESOLUTION * GRID_RESOLUTION) as usize
+        self.gpu_surface_nets = Some(gpu_surface_nets);
+        self.show_gpu_density_mesh = true;
+        
+        log::info!("GPU surface nets renderer initialized");
+    }
+    
+    /// Generate test density data for GPU surface nets with multiple fluid types
+    pub fn generate_test_density(&mut self, queue: &wgpu::Queue) {
+        use crate::simulation::fluid_simulation::GRID_RESOLUTION;
+        
+        if self.gpu_surface_nets.is_none() {
+            log::warn!("GPU surface nets not initialized");
+            return;
+        }
+        
+        let world_radius = self.config.sphere_radius;
+        let world_center = glam::Vec3::ZERO;
+        let world_diameter = world_radius * 2.0;
+        let cell_size = world_diameter / GRID_RESOLUTION as f32;
+        let grid_origin = world_center - glam::Vec3::splat(world_diameter / 2.0);
+        let total_voxels = (GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION) as usize;
+        
+        let mut density = vec![0.0f32; total_voxels];
+        let mut fluid_types = vec![0u32; total_voxels]; // 0=none, 1=water, 2=lava, 3=steam
+        
+        // Helper to convert grid coords to world position
+        let grid_to_world = |x: u32, y: u32, z: u32| -> glam::Vec3 {
+            grid_origin + glam::Vec3::new(
+                (x as f32 + 0.5) * cell_size,
+                (y as f32 + 0.5) * cell_size,
+                (z as f32 + 0.5) * cell_size,
+            )
         };
         
-        let center = GRID_RESOLUTION as f32 / 2.0;
-        
-        // Simple hash function for pseudo-random noise
-        let hash = |x: i32, y: i32, z: i32| -> f32 {
-            let n = x.wrapping_mul(374761393)
-                .wrapping_add(y.wrapping_mul(668265263))
-                .wrapping_add(z.wrapping_mul(1274126177));
-            let n = n ^ (n >> 13);
-            let n = n.wrapping_mul(1103515245);
-            ((n & 0x7fffffff) as f32) / (0x7fffffff as f32)
+        // Metaball contribution function
+        let metaball = |pos: glam::Vec3, center: glam::Vec3, radius: f32| -> f32 {
+            let dist = (pos - center).length();
+            if dist < radius * 2.0 {
+                let r = dist / radius;
+                (1.0 - r * r).max(0.0)
+            } else {
+                0.0
+            }
         };
         
-        // 3D noise function using trilinear interpolation
-        let noise3d = |x: f32, y: f32, z: f32, scale: f32| -> f32 {
-            let sx = x / scale;
-            let sy = y / scale;
-            let sz = z / scale;
-            
-            let x0 = sx.floor() as i32;
-            let y0 = sy.floor() as i32;
-            let z0 = sz.floor() as i32;
-            
-            let fx = sx - sx.floor();
-            let fy = sy - sy.floor();
-            let fz = sz - sz.floor();
-            
-            // Smoothstep
-            let fx = fx * fx * (3.0 - 2.0 * fx);
-            let fy = fy * fy * (3.0 - 2.0 * fy);
-            let fz = fz * fz * (3.0 - 2.0 * fz);
-            
-            // Trilinear interpolation
-            let c000 = hash(x0, y0, z0);
-            let c100 = hash(x0 + 1, y0, z0);
-            let c010 = hash(x0, y0 + 1, z0);
-            let c110 = hash(x0 + 1, y0 + 1, z0);
-            let c001 = hash(x0, y0, z0 + 1);
-            let c101 = hash(x0 + 1, y0, z0 + 1);
-            let c011 = hash(x0, y0 + 1, z0 + 1);
-            let c111 = hash(x0 + 1, y0 + 1, z0 + 1);
-            
-            let c00 = c000 * (1.0 - fx) + c100 * fx;
-            let c10 = c010 * (1.0 - fx) + c110 * fx;
-            let c01 = c001 * (1.0 - fx) + c101 * fx;
-            let c11 = c011 * (1.0 - fx) + c111 * fx;
-            
-            let c0 = c00 * (1.0 - fy) + c10 * fy;
-            let c1 = c01 * (1.0 - fy) + c11 * fy;
-            
-            c0 * (1.0 - fz) + c1 * fz
-        };
+        // === WATER: Large pool at bottom with droplets ===
+        let water_pool_center = glam::Vec3::new(0.0, -world_radius * 0.4, 0.0);
+        let water_pool_radius = world_radius * 0.5;
         
-        // === Scattered water droplets (various sizes) ===
-        let droplet_positions: [(f32, f32, f32, f32); 15] = [
-            // (x_offset, y_offset, z_offset, radius)
-            // Single voxel droplets
-            (center - 30.0, center + 10.0, center, 1.2),
-            (center - 28.0, center + 8.0, center + 3.0, 1.0),
-            (center - 32.0, center + 12.0, center - 2.0, 1.1),
-            // Small droplets (2-3 voxels)
-            (center - 25.0, center + 5.0, center + 5.0, 2.0),
-            (center - 27.0, center + 15.0, center - 4.0, 2.2),
-            (center - 22.0, center + 8.0, center - 6.0, 1.8),
-            // Medium droplets
-            (center - 20.0, center + 3.0, center, 3.5),
-            (center - 18.0, center + 12.0, center + 8.0, 3.0),
-            // Larger droplets (falling/elongated would be nice but spherical for now)
-            (center - 15.0, center, center - 5.0, 4.5),
-            (center - 12.0, center + 6.0, center + 3.0, 4.0),
-            // Droplet cluster (close together, about to merge)
-            (center - 35.0, center - 5.0, center, 2.5),
-            (center - 33.0, center - 4.0, center + 1.5, 2.3),
-            (center - 34.0, center - 6.0, center - 1.0, 2.0),
-            // Tiny mist droplets
-            (center - 38.0, center + 2.0, center + 2.0, 0.8),
-            (center - 36.0, center + 4.0, center - 3.0, 0.9),
+        // Water droplets
+        let water_droplets = vec![
+            (glam::Vec3::new(-world_radius * 0.3, -world_radius * 0.1, world_radius * 0.2), world_radius * 0.12),
+            (glam::Vec3::new(-world_radius * 0.25, 0.0, world_radius * 0.15), world_radius * 0.08),
+            (glam::Vec3::new(-world_radius * 0.35, world_radius * 0.1, world_radius * 0.1), world_radius * 0.06),
         ];
         
+        // === LAVA: Blob cluster on one side ===
+        let lava_blobs = vec![
+            (glam::Vec3::new(world_radius * 0.5, -world_radius * 0.2, 0.0), world_radius * 0.25),
+            (glam::Vec3::new(world_radius * 0.4, -world_radius * 0.1, world_radius * 0.15), world_radius * 0.18),
+            (glam::Vec3::new(world_radius * 0.55, 0.0, -world_radius * 0.1), world_radius * 0.15),
+            (glam::Vec3::new(world_radius * 0.35, -world_radius * 0.3, -world_radius * 0.1), world_radius * 0.2),
+        ];
+        
+        // === STEAM: Rising wisps at top ===
+        let steam_wisps = vec![
+            (glam::Vec3::new(-world_radius * 0.1, world_radius * 0.5, -world_radius * 0.2), world_radius * 0.15),
+            (glam::Vec3::new(world_radius * 0.05, world_radius * 0.6, -world_radius * 0.1), world_radius * 0.12),
+            (glam::Vec3::new(-world_radius * 0.15, world_radius * 0.45, 0.0), world_radius * 0.1),
+            (glam::Vec3::new(0.0, world_radius * 0.7, -world_radius * 0.15), world_radius * 0.08),
+            (glam::Vec3::new(world_radius * 0.1, world_radius * 0.55, world_radius * 0.1), world_radius * 0.1),
+        ];
+        
+        // Fill density grid with fluid types
         for z in 0..GRID_RESOLUTION {
             for y in 0..GRID_RESOLUTION {
                 for x in 0..GRID_RESOLUTION {
-                    let fx = x as f32;
-                    let fy = y as f32;
-                    let fz = z as f32;
-                    let idx = grid_index(x, y, z);
+                    let idx = (x + y * GRID_RESOLUTION + z * GRID_RESOLUTION * GRID_RESOLUTION) as usize;
+                    let pos = grid_to_world(x, y, z);
                     
-                    // === Water droplets ===
-                    for (dx_off, dy_off, dz_off, radius) in droplet_positions.iter() {
-                        let dx = fx - dx_off;
-                        let dy = fy - dy_off;
-                        let dz = fz - dz_off;
-                        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-                        
-                        if dist < *radius && voxel_types[idx] == FluidType::Empty as u32 {
-                            voxel_types[idx] = FluidType::Water as u32;
-                            fill_fractions[idx] = (1.0 - dist / radius).max(0.0).min(1.0);
+                    // Track density contribution from each fluid type
+                    let mut water_d = 0.0f32;
+                    let mut lava_d = 0.0f32;
+                    let mut steam_d = 0.0f32;
+                    
+                    // Water pool (flattened ellipsoid)
+                    let water_pos = pos - water_pool_center;
+                    let water_dist = (water_pos.x * water_pos.x + water_pos.y * water_pos.y * 4.0 + water_pos.z * water_pos.z).sqrt();
+                    if water_dist < water_pool_radius {
+                        water_d += (1.0 - water_dist / water_pool_radius).max(0.0);
+                    }
+                    
+                    // Water droplets
+                    for (center, radius) in &water_droplets {
+                        water_d += metaball(pos, *center, *radius);
+                    }
+                    
+                    // Lava blobs
+                    for (center, radius) in &lava_blobs {
+                        lava_d += metaball(pos, *center, *radius);
+                    }
+                    
+                    // Steam wisps
+                    for (center, radius) in &steam_wisps {
+                        steam_d += metaball(pos, *center, *radius);
+                    }
+                    
+                    // Total density is sum of all contributions
+                    let total_d = (water_d + lava_d + steam_d).min(1.0);
+                    density[idx] = total_d;
+                    
+                    // Assign fluid type based on dominant contribution
+                    if total_d > 0.01 {
+                        if water_d >= lava_d && water_d >= steam_d {
+                            fluid_types[idx] = 1; // Water
+                        } else if lava_d >= water_d && lava_d >= steam_d {
+                            fluid_types[idx] = 2; // Lava
+                        } else {
+                            fluid_types[idx] = 3; // Steam
                         }
-                    }
-                    
-                    // === Wavy water surface / puddle ===
-                    let puddle_center_x = center + 10.0;
-                    let puddle_center_z = center;
-                    let puddle_base_y = center - 20.0;
-                    let puddle_radius = 20.0;
-                    
-                    let dx_puddle = fx - puddle_center_x;
-                    let dz_puddle = fz - puddle_center_z;
-                    let horiz_dist = (dx_puddle * dx_puddle + dz_puddle * dz_puddle).sqrt();
-                    
-                    if horiz_dist < puddle_radius {
-                        // Wavy surface using multiple sine waves
-                        let wave1 = (fx * 0.5).sin() * 1.5;
-                        let wave2 = (fz * 0.4).cos() * 1.2;
-                        let wave3 = ((fx + fz) * 0.3).sin() * 0.8;
-                        let ripple = ((horiz_dist * 0.8).sin()) * 1.0; // Circular ripples
-                        let surface_height = puddle_base_y + 3.0 + wave1 + wave2 + wave3 + ripple;
-                        
-                        // Puddle edge falloff
-                        let edge_falloff = 1.0 - (horiz_dist / puddle_radius).powf(2.0);
-                        let adjusted_height = puddle_base_y + (surface_height - puddle_base_y) * edge_falloff;
-                        
-                        if fy < adjusted_height && fy > puddle_base_y - 2.0 
-                           && voxel_types[idx] == FluidType::Empty as u32 {
-                            let depth = adjusted_height - fy;
-                            voxel_types[idx] = FluidType::Water as u32;
-                            fill_fractions[idx] = (depth / 3.0).min(1.0).max(0.3);
-                        }
-                    }
-                    
-                    // === Flowing stream with varying width ===
-                    let stream_center_x = center - 5.0;
-                    let stream_start_z = center - 30.0;
-                    let stream_end_z = center + 30.0;
-                    
-                    if fz > stream_start_z && fz < stream_end_z {
-                        // Stream meanders using sine
-                        let meander = (fz * 0.15).sin() * 5.0;
-                        let stream_x = stream_center_x + meander;
-                        let dx_stream = fx - stream_x;
-                        
-                        // Width varies along length
-                        let width_variation = 2.0 + (fz * 0.1).sin() * 1.0;
-                        let stream_width = width_variation;
-                        
-                        // Stream bed height varies
-                        let bed_height = center - 10.0 + (fz * 0.08).cos() * 1.5;
-                        let surface_ripple = (fz * 0.5).sin() * 0.5 + (fx * 0.3).cos() * 0.3;
-                        let water_height = bed_height + 2.5 + surface_ripple;
-                        
-                        if dx_stream.abs() < stream_width && fy > bed_height && fy < water_height
-                           && voxel_types[idx] == FluidType::Empty as u32 {
-                            let edge_dist = 1.0 - (dx_stream.abs() / stream_width);
-                            voxel_types[idx] = FluidType::Water as u32;
-                            fill_fractions[idx] = edge_dist.max(0.3);
-                        }
-                    }
-                    
-                    // === Splashing droplets (above puddle) ===
-                    let splash_positions: [(f32, f32, f32, f32); 8] = [
-                        (center + 8.0, center - 14.0, center + 2.0, 1.5),
-                        (center + 12.0, center - 13.0, center - 3.0, 1.8),
-                        (center + 6.0, center - 12.0, center + 5.0, 1.2),
-                        (center + 15.0, center - 15.0, center, 2.0),
-                        (center + 10.0, center - 11.0, center - 5.0, 1.0),
-                        (center + 14.0, center - 10.0, center + 4.0, 1.3),
-                        (center + 5.0, center - 16.0, center - 2.0, 1.6),
-                        (center + 18.0, center - 12.0, center + 1.0, 1.1),
-                    ];
-                    
-                    for (sx, sy, sz, sr) in splash_positions.iter() {
-                        let dx = fx - sx;
-                        let dy = fy - sy;
-                        let dz = fz - sz;
-                        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-                        
-                        if dist < *sr && voxel_types[idx] == FluidType::Empty as u32 {
-                            voxel_types[idx] = FluidType::Water as u32;
-                            fill_fractions[idx] = (1.0 - dist / sr).max(0.0);
-                        }
-                    }
-                    
-                    // === Dripping stalactite water ===
-                    let drip_x = center + 30.0;
-                    let drip_z = center;
-                    let drip_top = center + 20.0;
-                    
-                    let dx_drip = fx - drip_x;
-                    let dz_drip = fz - drip_z;
-                    let horiz_drip = (dx_drip * dx_drip + dz_drip * dz_drip).sqrt();
-                    
-                    // Elongated teardrop shape
-                    if horiz_drip < 2.0 && fy < drip_top && fy > drip_top - 12.0 {
-                        let y_progress = (drip_top - fy) / 12.0; // 0 at top, 1 at bottom
-                        let radius_at_y = 0.5 + y_progress * 1.5; // Wider at bottom
-                        
-                        if horiz_drip < radius_at_y && voxel_types[idx] == FluidType::Empty as u32 {
-                            voxel_types[idx] = FluidType::Water as u32;
-                            fill_fractions[idx] = (1.0 - horiz_drip / radius_at_y).max(0.0);
-                        }
-                    }
-                    
-                    // Detached droplet below
-                    let detached_y = drip_top - 18.0;
-                    let dy_detached = fy - detached_y;
-                    let dist_detached = (dx_drip * dx_drip + dy_detached * dy_detached + dz_drip * dz_drip).sqrt();
-                    if dist_detached < 2.5 && voxel_types[idx] == FluidType::Empty as u32 {
-                        voxel_types[idx] = FluidType::Water as u32;
-                        fill_fractions[idx] = (1.0 - dist_detached / 2.5).max(0.0);
-                    }
-                    
-                    // === Merging blobs (metaballs) ===
-                    let merge_centers = [
-                        (center + 35.0, center, center, 5.0),
-                        (center + 40.0, center + 2.0, center + 3.0, 4.0),
-                        (center + 37.0, center - 3.0, center - 2.0, 3.5),
-                    ];
-                    let mut meta_value = 0.0f32;
-                    for (bx, by, bz, strength) in merge_centers.iter() {
-                        let dx = fx - bx;
-                        let dy = fy - by;
-                        let dz = fz - bz;
-                        let dist_sq = dx * dx + dy * dy + dz * dz;
-                        if dist_sq > 0.01 {
-                            meta_value += strength * strength / dist_sq;
-                        }
-                    }
-                    
-                    if meta_value > 1.0 && voxel_types[idx] == FluidType::Empty as u32 {
-                        voxel_types[idx] = FluidType::Water as u32;
-                        fill_fractions[idx] = ((meta_value - 1.0) / 1.5).min(1.0);
-                    }
-                    
-                    // === Thin water film / coating on surface ===
-                    let film_center_y = center + 15.0;
-                    let film_thickness = 1.5;
-                    let film_extent = 15.0;
-                    
-                    let dx_film = fx - center;
-                    let dz_film = fz - (center + 25.0);
-                    let horiz_film = (dx_film * dx_film + dz_film * dz_film).sqrt();
-                    
-                    // Undulating thin surface
-                    let film_wave = (fx * 0.4).sin() * 0.3 + (fz * 0.5).cos() * 0.2;
-                    let film_y = film_center_y + film_wave;
-                    
-                    if horiz_film < film_extent && (fy - film_y).abs() < film_thickness
-                       && voxel_types[idx] == FluidType::Empty as u32 {
-                        let edge_fade = 1.0 - (horiz_film / film_extent).powf(2.0);
-                        let y_fade = 1.0 - ((fy - film_y).abs() / film_thickness);
-                        voxel_types[idx] = FluidType::Water as u32;
-                        fill_fractions[idx] = (edge_fade * y_fade).max(0.2);
-                    }
-                    
-                    // ============= LAVA SHAPES =============
-                    
-                    // === Lava pool with bubbling surface ===
-                    let lava_pool_x = center - 35.0;
-                    let lava_pool_z = center - 20.0;
-                    let lava_pool_y = center - 25.0;
-                    let lava_pool_radius = 12.0;
-                    
-                    let dx_lava = fx - lava_pool_x;
-                    let dz_lava = fz - lava_pool_z;
-                    let horiz_lava = (dx_lava * dx_lava + dz_lava * dz_lava).sqrt();
-                    
-                    if horiz_lava < lava_pool_radius {
-                        // Bubbling surface
-                        let bubble1 = ((fx * 0.8 + 10.0).sin() * (fz * 0.7).cos()) * 1.5;
-                        let bubble2 = ((fx * 1.2).cos() * (fz * 0.9 + 5.0).sin()) * 1.0;
-                        let lava_surface = lava_pool_y + 4.0 + bubble1 + bubble2;
-                        let edge_fall = 1.0 - (horiz_lava / lava_pool_radius).powf(1.5);
-                        let adjusted_surface = lava_pool_y + (lava_surface - lava_pool_y) * edge_fall;
-                        
-                        if fy < adjusted_surface && fy > lava_pool_y - 3.0
-                           && voxel_types[idx] == FluidType::Empty as u32 {
-                            voxel_types[idx] = FluidType::Lava as u32;
-                            fill_fractions[idx] = ((adjusted_surface - fy) / 4.0).min(1.0).max(0.4);
-                        }
-                    }
-                    
-                    // === Lava flow / river ===
-                    let lava_flow_x = center - 45.0;
-                    let lava_flow_start_z = center - 10.0;
-                    let lava_flow_end_z = center + 25.0;
-                    
-                    if fz > lava_flow_start_z && fz < lava_flow_end_z {
-                        let flow_meander = (fz * 0.12).sin() * 3.0;
-                        let flow_x = lava_flow_x + flow_meander;
-                        let dx_flow = fx - flow_x;
-                        let flow_width = 3.0 + (fz * 0.08).cos() * 0.5;
-                        let flow_bed = center - 15.0;
-                        let flow_height = flow_bed + 2.0;
-                        
-                        if dx_flow.abs() < flow_width && fy > flow_bed && fy < flow_height
-                           && voxel_types[idx] == FluidType::Empty as u32 {
-                            voxel_types[idx] = FluidType::Lava as u32;
-                            fill_fractions[idx] = (1.0 - dx_flow.abs() / flow_width).max(0.5);
-                        }
-                    }
-                    
-                    // === Lava droplets (volcanic spatter) ===
-                    let lava_droplets: [(f32, f32, f32, f32); 6] = [
-                        (center - 38.0, center - 18.0, center - 18.0, 2.0),
-                        (center - 32.0, center - 20.0, center - 22.0, 1.5),
-                        (center - 40.0, center - 16.0, center - 15.0, 1.8),
-                        (center - 35.0, center - 22.0, center - 25.0, 1.2),
-                        (center - 42.0, center - 19.0, center - 20.0, 1.6),
-                        (center - 30.0, center - 17.0, center - 19.0, 2.2),
-                    ];
-                    
-                    for (lx, ly, lz, lr) in lava_droplets.iter() {
-                        let dx = fx - lx;
-                        let dy = fy - ly;
-                        let dz = fz - lz;
-                        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-                        
-                        if dist < *lr && voxel_types[idx] == FluidType::Empty as u32 {
-                            voxel_types[idx] = FluidType::Lava as u32;
-                            fill_fractions[idx] = (1.0 - dist / lr).max(0.0);
-                        }
-                    }
-                    
-                    // ============= STEAM SHAPES =============
-                    
-                    // === Rising steam plume ===
-                    let steam_base_x = center + 40.0;
-                    let steam_base_z = center - 10.0;
-                    let steam_base_y = center - 10.0;
-                    
-                    let dx_steam = fx - steam_base_x;
-                    let dz_steam = fz - steam_base_z;
-                    let dy_steam = fy - steam_base_y;
-                    
-                    if dy_steam > 0.0 && dy_steam < 30.0 {
-                        // Plume expands and drifts as it rises
-                        let expansion = 1.0 + dy_steam * 0.15;
-                        let drift_x = (dy_steam * 0.1).sin() * 3.0;
-                        let drift_z = (dy_steam * 0.08).cos() * 2.0;
-                        let plume_x = steam_base_x + drift_x;
-                        let plume_z = steam_base_z + drift_z;
-                        let dx_p = fx - plume_x;
-                        let dz_p = fz - plume_z;
-                        let horiz_steam = (dx_p * dx_p + dz_p * dz_p).sqrt();
-                        let plume_radius = 4.0 * expansion;
-                        
-                        if horiz_steam < plume_radius && voxel_types[idx] == FluidType::Empty as u32 {
-                            let fade = 1.0 - (horiz_steam / plume_radius);
-                            let height_fade = 1.0 - (dy_steam / 30.0).powf(0.5);
-                            voxel_types[idx] = FluidType::Steam as u32;
-                            fill_fractions[idx] = (fade * height_fade).max(0.2);
-                        }
-                    }
-                    
-                    // === Steam wisps / tendrils ===
-                    let wisp_positions: [(f32, f32, f32, f32); 5] = [
-                        (center + 35.0, center + 5.0, center - 5.0, 3.0),
-                        (center + 42.0, center + 10.0, center - 8.0, 2.5),
-                        (center + 38.0, center + 15.0, center - 12.0, 2.0),
-                        (center + 45.0, center + 8.0, center - 15.0, 2.8),
-                        (center + 37.0, center + 20.0, center - 6.0, 1.8),
-                    ];
-                    
-                    for (wx, wy, wz, wr) in wisp_positions.iter() {
-                        let dx = fx - wx;
-                        let dy = fy - wy;
-                        let dz = fz - wz;
-                        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-                        
-                        if dist < *wr && voxel_types[idx] == FluidType::Empty as u32 {
-                            voxel_types[idx] = FluidType::Steam as u32;
-                            fill_fractions[idx] = (1.0 - dist / wr).max(0.0) * 0.7;
-                        }
-                    }
-                    
-                    // === Steam cloud (large diffuse area) ===
-                    let cloud_x = center + 50.0;
-                    let cloud_y = center + 10.0;
-                    let cloud_z = center;
-                    let cloud_radius = 10.0;
-                    
-                    let dx_cloud = fx - cloud_x;
-                    let dy_cloud = fy - cloud_y;
-                    let dz_cloud = fz - cloud_z;
-                    let dist_cloud = (dx_cloud * dx_cloud + dy_cloud * dy_cloud + dz_cloud * dz_cloud).sqrt();
-                    
-                    // Add noise to make it look more cloud-like
-                    let cloud_noise = (fx * 0.5).sin() * (fy * 0.4).cos() * (fz * 0.6).sin() * 2.0;
-                    let effective_radius = cloud_radius + cloud_noise;
-                    
-                    if dist_cloud < effective_radius && voxel_types[idx] == FluidType::Empty as u32 {
-                        let fade = 1.0 - (dist_cloud / effective_radius).powf(1.5);
-                        voxel_types[idx] = FluidType::Steam as u32;
-                        fill_fractions[idx] = (fade * 0.6).max(0.15);
                     }
                 }
             }
         }
         
-        // Update the mesh renderer
-        let fluid_mesh_renderer = self.fluid_mesh_renderer.as_mut().unwrap();
+        let gpu_surface_nets = self.gpu_surface_nets.as_ref().unwrap();
+        gpu_surface_nets.upload_density(queue, &density);
+        gpu_surface_nets.upload_fluid_types(queue, &fluid_types);
         
-        // Extract mesh for all fluid types (no filter)
-        fluid_mesh_renderer.update_mesh(queue, &voxel_types, &fill_fractions, None);
-        
-        log::info!(
-            "Generated fluid mesh: {} vertices, {} triangles (organic fluid shapes)",
-            fluid_mesh_renderer.vertex_count(),
-            fluid_mesh_renderer.triangle_count()
-        );
+        log::info!("Generated multi-fluid test density: water pool + {} droplets, {} lava blobs, {} steam wisps",
+            water_droplets.len(), lava_blobs.len(), steam_wisps.len());
     }
     
-    /// Update fluid mesh parameters
-    pub fn update_fluid_mesh_params(&self, queue: &wgpu::Queue, params: &FluidMeshParams) {
-        if let Some(ref renderer) = self.fluid_mesh_renderer {
-            renderer.update_params(queue, params);
+    /// Extract mesh from density field using GPU compute shaders
+    pub fn extract_gpu_density_mesh(&mut self, _device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
+            gpu_surface_nets.extract_mesh(encoder);
         }
     }
     
-    /// Update surface nets parameters (iso level, etc.)
-    pub fn update_surface_nets_params(&mut self, params: SurfaceNetsParams) {
-        if let Some(ref mut renderer) = self.fluid_mesh_renderer {
-            renderer.update_surface_nets_params(params);
+    /// Read back mesh counts from GPU (call after command buffer submission)
+    pub fn read_gpu_mesh_counts(&mut self, device: &wgpu::Device) {
+        if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
+            gpu_surface_nets.read_counts(device);
+            log::trace!(
+                "GPU mesh: {} vertices, {} triangles",
+                gpu_surface_nets.vertex_count,
+                gpu_surface_nets.triangle_count()
+            );
         }
     }
     
@@ -2801,10 +2519,14 @@ impl Scene for GpuScene {
             }
         }
         
-        // Render fluid mesh using surface nets if enabled
-        if self.show_fluid_mesh {
-            if let Some(ref fluid_mesh_renderer) = self.fluid_mesh_renderer {
-                fluid_mesh_renderer.render(
+        // Extract and render GPU density mesh if enabled
+        if self.show_gpu_density_mesh {
+            if let Some(ref gpu_surface_nets) = self.gpu_surface_nets {
+                // Run compute shaders to extract mesh from density buffer
+                gpu_surface_nets.extract_mesh(&mut encoder);
+                
+                // Render the extracted mesh
+                gpu_surface_nets.render(
                     &mut encoder,
                     queue,
                     view,

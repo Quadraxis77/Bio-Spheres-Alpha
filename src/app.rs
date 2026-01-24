@@ -413,80 +413,32 @@ impl App {
                 // Sync fluid voxel visibility toggle
                 gpu_scene.show_fluid_voxels = self.editor_state.fluid_show_test_voxels;
                 
-                // Sync fluid mesh visibility toggle
-                gpu_scene.show_fluid_mesh = self.editor_state.fluid_show_mesh;
+                // Sync GPU density mesh visibility toggle
+                gpu_scene.show_gpu_density_mesh = self.editor_state.fluid_show_mesh;
                 
-                // Sync fluid mesh params if dirty
-                if self.editor_state.fluid_mesh_params_dirty {
-                    if let Some(ref renderer) = gpu_scene.fluid_mesh_renderer {
-                        let params = crate::rendering::FluidMeshParams {
-                            water_color: [
-                                self.editor_state.fluid_water_color[0],
-                                self.editor_state.fluid_water_color[1],
-                                self.editor_state.fluid_water_color[2],
-                                0.8,
-                            ],
-                            lava_color: [
-                                self.editor_state.fluid_lava_color[0],
-                                self.editor_state.fluid_lava_color[1],
-                                self.editor_state.fluid_lava_color[2],
-                                0.95,
-                            ],
-                            steam_color: [
-                                self.editor_state.fluid_steam_color[0],
-                                self.editor_state.fluid_steam_color[1],
-                                self.editor_state.fluid_steam_color[2],
-                                0.4,
-                            ],
+                // Update GPU surface nets params when changed
+                if self.editor_state.fluid_mesh_needs_regen || self.editor_state.fluid_mesh_params_dirty {
+                    if let Some(ref mut surface_nets) = gpu_scene.gpu_surface_nets {
+                        // Update iso level
+                        surface_nets.set_iso_level(&self.queue, self.editor_state.fluid_iso_level);
+                        
+                        // Update render params
+                        let params = crate::rendering::DensityMeshParams {
+                            base_color: self.editor_state.fluid_water_color,
                             ambient: self.editor_state.fluid_ambient,
                             diffuse: self.editor_state.fluid_diffuse,
-                            specular_intensity: self.editor_state.fluid_specular,
+                            specular: self.editor_state.fluid_specular,
                             shininess: self.editor_state.fluid_shininess,
-                            fresnel_strength: self.editor_state.fluid_fresnel,
+                            fresnel: self.editor_state.fluid_fresnel,
                             fresnel_power: self.editor_state.fluid_fresnel_power,
+                            rim: self.editor_state.fluid_rim,
                             reflection: self.editor_state.fluid_reflection,
                             alpha: self.editor_state.fluid_alpha,
-                            emissive: self.editor_state.fluid_emissive,
-                            rim_strength: self.editor_state.fluid_rim,
-                            fluid_type: 1,
-                            ssr_enabled: if self.editor_state.fluid_ssr_enabled { 1.0 } else { 0.0 },
-                            ssr_max_steps: self.editor_state.fluid_ssr_steps,
-                            ssr_step_size: self.editor_state.fluid_ssr_step_size,
-                            ssr_max_distance: self.editor_state.fluid_ssr_max_distance,
-                            ssr_thickness: self.editor_state.fluid_ssr_thickness,
-                            ssr_intensity: self.editor_state.fluid_ssr_intensity,
-                            ssr_fade_start: self.editor_state.fluid_ssr_fade_start,
-                            ssr_fade_end: self.editor_state.fluid_ssr_fade_end,
-                            ssr_roughness: self.editor_state.fluid_ssr_roughness,
                         };
-                        renderer.update_params(&self.queue, &params);
-                    }
-                    
-                    // Update surface nets iso level if changed
-                    if let Some(ref mut renderer) = gpu_scene.fluid_mesh_renderer {
-                        renderer.update_surface_nets_params(crate::rendering::SurfaceNetsParams {
-                            iso_level: self.editor_state.fluid_iso_level,
-                            ..Default::default()
-                        });
-                    }
-                    
-                    self.editor_state.fluid_mesh_params_dirty = false;
-                }
-                
-                // Auto-regenerate mesh when iso level changes
-                if self.editor_state.fluid_mesh_needs_regen {
-                    if gpu_scene.fluid_mesh_renderer.is_some() {
-                        // Update iso level first
-                        if let Some(ref mut renderer) = gpu_scene.fluid_mesh_renderer {
-                            renderer.update_surface_nets_params(crate::rendering::SurfaceNetsParams {
-                                iso_level: self.editor_state.fluid_iso_level,
-                                ..Default::default()
-                            });
-                        }
-                        // Regenerate mesh
-                        gpu_scene.generate_test_fluid_mesh(&self.queue);
+                        surface_nets.update_render_params(&self.queue, &params);
                     }
                     self.editor_state.fluid_mesh_needs_regen = false;
+                    self.editor_state.fluid_mesh_params_dirty = false;
                 }
             }
         }
@@ -724,9 +676,9 @@ impl App {
                 }
                 crate::ui::panel_context::SceneModeRequest::RegenerateFluidMesh => {
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
-                        if gpu_scene.fluid_mesh_renderer.is_some() {
-                            gpu_scene.generate_test_fluid_mesh(&self.queue);
-                            log::info!("Regenerated fluid mesh using surface nets");
+                        if gpu_scene.gpu_surface_nets.is_some() {
+                            gpu_scene.generate_test_density(&self.queue);
+                            log::info!("Generated test density field for GPU surface nets");
                         }
                     }
                 }

@@ -136,7 +136,7 @@ pub mod skybox;
 pub mod split_rings;
 pub mod tail_renderer;
 pub mod volumetric_fog;
-pub mod surface_nets;
+pub mod gpu_surface_nets;
 pub mod voxel_renderer;
 pub mod world_sphere;
 
@@ -149,6 +149,6 @@ pub use instance_builder::{CellInstance, CullingMode, CullingStats, InstanceBuil
 pub use orientation_gizmo::OrientationGizmoRenderer;
 pub use split_rings::SplitRingRenderer;
 pub use tail_renderer::{TailRenderer, TailInstance};
-pub use surface_nets::{FluidMeshRenderer, FluidMeshParams, FluidVertex, SurfaceNets, SurfaceNetsParams};
+pub use gpu_surface_nets::{GpuSurfaceNets, GpuVertex, DensityMeshParams, generate_test_density_sphere, generate_test_density_metaballs, generate_test_density_noise};
 pub use voxel_renderer::{VoxelRenderer, VoxelInstance};
 pub use world_sphere::{WorldSphereRenderer, WorldSphereParams};

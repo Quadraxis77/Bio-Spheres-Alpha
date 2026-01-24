@@ -113,6 +113,10 @@ impl SceneManager {
                         gpu_scene.generate_test_voxels(queue);
                     }
                     
+                    // Initialize GPU surface nets for density mesh rendering
+                    gpu_scene.initialize_gpu_surface_nets(device, config.format);
+                    gpu_scene.generate_test_density(queue);
+                    
                     self.gpu_scene = Some(gpu_scene);
                     self.current_mode = mode;
                     return cave_initialized; // Return true if cave was just initialized
@@ -173,6 +177,10 @@ impl SceneManager {
             // Generate test voxels
             gpu_scene.generate_test_voxels(queue);
         }
+        
+        // Initialize GPU surface nets for density mesh rendering
+        gpu_scene.initialize_gpu_surface_nets(device, config.format);
+        gpu_scene.generate_test_density(queue);
         
         self.gpu_scene = Some(gpu_scene);
     }

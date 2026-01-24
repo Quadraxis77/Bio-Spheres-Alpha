@@ -1082,7 +1082,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
         *context.scene_request = crate::ui::panel_context::SceneModeRequest::RegenerateFluidVoxels;
     }
     
-    if ui.button("🔄 Generate Test Mesh").clicked() {
+    if ui.button("🔄 Generate Test Density").clicked() {
         *context.scene_request = crate::ui::panel_context::SceneModeRequest::RegenerateFluidMesh;
     }
     
@@ -1091,11 +1091,11 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
     // Show mesh stats and settings if mesh is enabled
     if context.editor_state.fluid_show_mesh {
         if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
-            if let Some(ref renderer) = gpu_scene.fluid_mesh_renderer {
+            if let Some(ref renderer) = gpu_scene.gpu_surface_nets {
                 ui.separator();
                 ui.add_space(5.0);
                 ui.label("Mesh Statistics:");
-                ui.label(format!("  Vertices: {}", renderer.vertex_count()));
+                ui.label(format!("  Vertices: {}", renderer.vertex_count));
                 ui.label(format!("  Triangles: {}", renderer.triangle_count()));
             }
         }
@@ -1110,9 +1110,9 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
         
         // Iso level slider
         let iso_changed = ui.add(
-            egui::Slider::new(&mut context.editor_state.fluid_iso_level, 0.1..=0.9)
+            egui::Slider::new(&mut context.editor_state.fluid_iso_level, 0.01..=1.0)
                 .text("Iso Level")
-                .step_by(0.05)
+                .step_by(0.01)
         ).changed();
         
         // Auto-regenerate mesh when iso level changes
