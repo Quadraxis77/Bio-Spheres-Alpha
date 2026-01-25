@@ -9,7 +9,7 @@ struct FluidParams {
     direction: u32,  // 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z
 
     grid_origin: vec3<f32>,
-    phase: u32,  // 0 or 1 for checkered
+    // phase removed - using atomic operations instead
 
     _pad0: u32,
     _pad1: u32,
@@ -18,7 +18,7 @@ struct FluidParams {
 }
 
 @group(0) @binding(0) var<uniform> params: FluidParams;
-@group(0) @binding(1) var<storage, read_write> voxels: array<u32>;
+@group(0) @binding(1) var<storage, read_write> voxels: array<atomic<u32>>;
 
 fn grid_index(x: u32, y: u32, z: u32) -> u32 {
     let res = params.grid_resolution;
@@ -27,6 +27,38 @@ fn grid_index(x: u32, y: u32, z: u32) -> u32 {
 
 fn get_fluid_type(state: u32) -> u32 {
     return state & 0xFFFFu;
+}
+
+fn count_surrounding_water(x: u32, y: u32, z: u32) -> u32 {
+    let res = params.grid_resolution;
+    var count = 0u;
+    
+    // Check 6 neighbors (not up/down, just horizontal)
+    let offsets = array<vec3<i32>, 6>(
+        vec3<i32>(1, 0, 0),   // +X
+        vec3<i32>(-1, 0, 0),  // -X
+        vec3<i32>(0, 0, 1),   // +Z
+        vec3<i32>(0, 0, -1),  // -Z
+        vec3<i32>(0, 1, 0),   // +Y (same level)
+        vec3<i32>(0, -1, 0)   // -Y (below)
+    );
+    
+    for (var i = 0; i < 6; i++) {
+        let offset = offsets[i];
+        let nx = i32(x) + offset.x;
+        let ny = i32(y) + offset.y;
+        let nz = i32(z) + offset.z;
+        
+        if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
+            let neighbor_idx = grid_index(u32(nx), u32(ny), u32(nz));
+            let neighbor_state = atomicLoad(&voxels[neighbor_idx]);
+            if get_fluid_type(neighbor_state) == 1u {
+                count++;
+            }
+        }
+    }
+    
+    return count;
 }
 
 fn grid_to_world(x: u32, y: u32, z: u32) -> vec3<f32> {
@@ -38,7 +70,19 @@ fn grid_to_world(x: u32, y: u32, z: u32) -> vec3<f32> {
 }
 
 fn is_in_bounds(pos: vec3<f32>) -> bool {
-    return length(pos) < params.world_radius * 0.95;
+    return length(pos) < params.world_radius * 0.98; // Reduced dead zone near boundaries
+}
+
+// Simple hash function for pseudo-randomness based on position
+fn hash3d(pos: vec3<u32>) -> u32 {
+    let p = pos * vec3<u32>(73856093u, 19349663u, 83492791u);
+    return (p.x + p.y + p.z) ^ (p.x * p.y * p.z);
+}
+
+// Get pseudo-random value for this voxel-direction pair
+fn voxel_random(pos: vec3<u32>, direction: u32) -> f32 {
+    let hash = hash3d(pos + vec3<u32>(direction, direction * 2, direction * 3));
+    return f32(hash % 10000u) / 10000.0; // Normalize to [0,1]
 }
 
 // Direction offsets: +X, -X, +Y, -Y, +Z, -Z
@@ -62,7 +106,7 @@ fn get_checker_coord(pos: vec3<u32>, dir: u32) -> u32 {
     }
 }
 
-// Main swap pass - process pairs in given direction
+// Main simulation pass - GPU handles all movement with proper physics order
 @compute @workgroup_size(4, 4, 4)
 fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = params.grid_resolution;
@@ -71,14 +115,73 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Checkered processing: only process cells matching current phase
-    let checker = get_checker_coord(gid, params.direction);
-    if (checker % 2u) != params.phase {
-        return;
+    // Process gravity completely first, then horizontal spreading
+    // This ensures water falls straight down without slant bias
+    
+    // Phase 1: Process both vertical directions for proper gravity
+    // Gravity needs both -Y and +Y to work correctly
+    process_direction(gid, 3u); // -Y (downward)
+    process_direction(gid, 2u); // +Y (upward prevention)
+    
+    // Phase 2: Always process horizontal spreading (water spreads while falling)
+    // Real water spreads horizontally as it falls, not just when it hits bottom
+    var horizontal_dirs = array<u32, 4>(0u, 1u, 4u, 5u); // +X, -X, +Z, -Z
+    
+    // Fisher-Yates shuffle using voxel-specific randomization
+    var voxel_hash = hash3d(gid) + 12345u; // Different hash from gravity
+    for (var i = 3; i >= 0; i--) {
+        let j = (voxel_hash % u32(i + 1));
+        // Manual swap since WGSL doesn't have array.swap()
+        let temp = horizontal_dirs[i];
+        horizontal_dirs[i] = horizontal_dirs[j];
+        horizontal_dirs[j] = temp;
+        voxel_hash = hash3d(vec3<u32>(voxel_hash, voxel_hash >> 8, voxel_hash >> 16));
+    }
+    
+    // Process horizontal directions in random order
+    for (var i = 0; i < 4; i++) {
+        let direction = horizontal_dirs[i];
+        process_direction(gid, direction);
+    }
+}
+
+// Check if vertical swap is possible from this position
+fn can_swap_vertical(gid: vec3<u32>, direction: u32) -> bool {
+    let res = params.grid_resolution;
+    let offset = get_offset(direction);
+    let nx = i32(gid.x) + offset.x;
+    let ny = i32(gid.y) + offset.y;
+    let nz = i32(gid.z) + offset.z;
+
+    // Bounds check
+    if nx < 0 || nx >= i32(res) || ny < 0 || ny >= i32(res) || nz < 0 || nz >= i32(res) {
+        return false;
     }
 
-    // Get neighbor position
-    let offset = get_offset(params.direction);
+    let idx_a = grid_index(gid.x, gid.y, gid.z);
+    let idx_b = grid_index(u32(nx), u32(ny), u32(nz));
+
+    let state_a = atomicLoad(&voxels[idx_a]);
+    let state_b = atomicLoad(&voxels[idx_b]);
+
+    let type_a = get_fluid_type(state_a);
+    let type_b = get_fluid_type(state_b);
+
+    // Check if this is a valid water-empty vertical pair
+    if direction == 3u {
+        // -Y: water above, empty below
+        return type_a == 1u && type_b == 0u;
+    } else if direction == 2u {
+        // +Y: empty below, water above
+        return type_a == 0u && type_b == 1u;
+    }
+    
+    return false;
+}
+
+fn process_direction(gid: vec3<u32>, direction: u32) {
+    let res = params.grid_resolution;
+    let offset = get_offset(direction);
     let nx = i32(gid.x) + offset.x;
     let ny = i32(gid.y) + offset.y;
     let nz = i32(gid.z) + offset.z;
@@ -91,8 +194,13 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx_a = grid_index(gid.x, gid.y, gid.z);
     let idx_b = grid_index(u32(nx), u32(ny), u32(nz));
 
-    let state_a = voxels[idx_a];
-    let state_b = voxels[idx_b];
+    // Only process if A < B to avoid duplicate work
+    if idx_a >= idx_b {
+        return;
+    }
+
+    let state_a = atomicLoad(&voxels[idx_a]);
+    let state_b = atomicLoad(&voxels[idx_b]);
 
     let type_a = get_fluid_type(state_a);
     let type_b = get_fluid_type(state_b);
@@ -108,23 +216,34 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // For Y direction (gravity): only swap if water is above empty
-    // direction 3 = -Y (looking down), so cell A is above cell B
-    // direction 2 = +Y (looking up), so cell A is below cell B
-    if params.direction == 3u {
-        // -Y pass: A is current cell, B is below
-        // Swap if A has water and B is empty (water falls)
-        if !(a_is_water && b_is_empty) {
-            return;
+    // For Y directions: pure deterministic gravity - no randomization
+    // This ensures water falls straight down without any slant bias
+    if direction == 2u || direction == 3u {
+        // For Y direction (gravity): only swap if water is above empty
+        // direction 3 = -Y (looking down), so cell A is above cell B
+        // direction 2 = +Y (looking up), so cell A is below cell B
+        if direction == 3u {
+            // -Y pass: A is current cell, B is below
+            // Swap if A has water and B is empty (water falls)
+            if !(a_is_water && b_is_empty) {
+                return;
+            }
+        } else if direction == 2u {
+            // +Y pass: A is current cell, B is above
+            // Swap if A is empty and B has water (water falls from above)
+            if !(a_is_empty && b_is_water) {
+                return;
+            }
         }
-    } else if params.direction == 2u {
-        // +Y pass: A is current cell, B is above
-        // Swap if A is empty and B has water (water falls from above)
-        if !(a_is_empty && b_is_water) {
-            return;
-        }
+        // No randomization for vertical movement - pure deterministic gravity
     }
-    // For X/Z directions: always allow swap (spreading)
+    
+    // For X/Z directions: no additional randomization needed
+    // True random direction ordering provides unbiased movement
+    if direction == 0u || direction == 1u || direction == 4u || direction == 5u {
+        // X/Z directions - simple water-empty swaps only
+        // Random direction order eliminates all bias
+    }
 
     // Check world boundaries for both cells
     let world_a = grid_to_world(gid.x, gid.y, gid.z);
@@ -133,9 +252,24 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Swap!
-    voxels[idx_a] = state_b;
-    voxels[idx_b] = state_a;
+    // Atomic swap using compare-and-exchange
+    // First try to claim cell A
+    let result_a = atomicCompareExchangeWeak(&voxels[idx_a], state_a, 0xFFFFFFFFu);
+    if !result_a.exchanged {
+        return; // Someone else modified it
+    }
+    
+    // Try to claim cell B
+    let result_b = atomicCompareExchangeWeak(&voxels[idx_b], state_b, 0xFFFFFFFFu);
+    if !result_b.exchanged {
+        // Restore cell A and abort
+        atomicExchange(&voxels[idx_a], state_a);
+        return;
+    }
+    
+    // Both cells claimed, perform the swap
+    atomicStore(&voxels[idx_a], state_b);
+    atomicStore(&voxels[idx_b], state_a);
 }
 
 // Initialize a sphere of water
@@ -158,9 +292,9 @@ fn fluid_init_sphere(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     if dist < sphere_radius && is_in_bounds(world_pos) {
         // Water: type=1, fill=1.0 -> packed as (65535 << 16) | 1
-        voxels[idx] = (65535u << 16u) | 1u;
+        atomicStore(&voxels[idx], (65535u << 16u) | 1u);
     } else {
-        voxels[idx] = 0u;
+        atomicStore(&voxels[idx], 0u);
     }
 }
 
@@ -174,7 +308,7 @@ fn fluid_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let idx = grid_index(gid.x, gid.y, gid.z);
-    voxels[idx] = 0u;
+    atomicStore(&voxels[idx], 0u);
 }
 
 // === Density extraction for Surface Nets ===
@@ -187,7 +321,7 @@ struct ExtractParams {
 }
 
 @group(0) @binding(0) var<uniform> extract_params: ExtractParams;
-@group(0) @binding(1) var<storage, read> fluid_state: array<u32>;
+@group(0) @binding(1) var<storage, read> fluid_state: array<atomic<u32>>;
 @group(0) @binding(2) var<storage, read_write> density_out: array<f32>;
 @group(0) @binding(3) var<storage, read_write> fluid_type_out: array<u32>;
 
@@ -200,7 +334,7 @@ fn extract_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let idx = gid.x + gid.y * res + gid.z * res * res;
-    let state = fluid_state[idx];
+    let state = atomicLoad(&fluid_state[idx]);
 
     let fluid_type = state & 0xFFFFu;
     let fill = f32((state >> 16u) & 0xFFFFu) / 65535.0;

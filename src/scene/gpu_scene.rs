@@ -1983,7 +1983,7 @@ impl GpuScene {
         }
 
         // Create GPU fluid simulator
-        let mut simulator = GpuFluidSimulator::new(device, self.config.sphere_radius, glam::Vec3::ZERO);
+        let simulator = GpuFluidSimulator::new(device, self.config.sphere_radius, glam::Vec3::ZERO);
 
         // Initialize with water sphere via compute shader
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
