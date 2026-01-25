@@ -7,7 +7,7 @@ use crate::genome::Genome;
 use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, TailRenderer, VoxelRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
-use crate::simulation::fluid_simulation::FluidBuffers;
+use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator};
 use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager};
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
@@ -166,6 +166,8 @@ pub struct GpuScene {
     pub gpu_surface_nets: Option<GpuSurfaceNets>,
     /// Whether to show GPU surface nets density mesh
     pub show_gpu_density_mesh: bool,
+    /// GPU fluid simulator for falling/stacking water
+    pub fluid_simulator: Option<GpuFluidSimulator>,
 }
 
 impl GpuScene {
@@ -301,6 +303,7 @@ impl GpuScene {
             voxel_instance_count: 0,
             gpu_surface_nets: None,
             show_gpu_density_mesh: false,
+            fluid_simulator: None,
         }
     }
     
@@ -342,9 +345,11 @@ impl GpuScene {
         queue.write_buffer(&self.gpu_triple_buffers.next_cell_id, 0, bytemuck::cast_slice(&next_id));
         // Reset deterministic cell addition system
         self.gpu_triple_buffers.reset_slot_allocator();
-        
+
         // Mark GPU buffers as needing sync (will be no-op since cell_count is 0)
         self.gpu_triple_buffers.mark_needs_sync();
+
+        // Note: Fluid reset is handled separately via reset_fluid() which requires encoder
     }
     
     /// Remove unused genomes from the end of the genomes list.
@@ -1969,7 +1974,60 @@ impl GpuScene {
             );
         }
     }
-    
+
+    /// Initialize the GPU fluid simulator with a test water sphere
+    pub fn initialize_fluid_simulator(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
+        // First ensure surface nets is initialized
+        if self.gpu_surface_nets.is_none() {
+            self.initialize_gpu_surface_nets(device, surface_format);
+        }
+
+        // Create GPU fluid simulator
+        let mut simulator = GpuFluidSimulator::new(device, self.config.sphere_radius, glam::Vec3::ZERO);
+
+        // Initialize with water sphere via compute shader
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Fluid Init Encoder"),
+        });
+        simulator.init_water_sphere(device, queue, &mut encoder);
+        queue.submit(std::iter::once(encoder.finish()));
+
+        self.fluid_simulator = Some(simulator);
+        self.show_gpu_density_mesh = true;
+
+        log::info!("GPU fluid simulator initialized with test water sphere");
+    }
+
+    /// Step the GPU fluid simulation
+    pub fn step_fluid_simulation(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, dt: f32) {
+        if let Some(ref mut simulator) = self.fluid_simulator {
+            simulator.step(device, queue, encoder, dt);
+        }
+    }
+
+    /// Clear all fluid
+    pub fn clear_fluid(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(ref mut simulator) = self.fluid_simulator {
+            simulator.clear(device, queue, encoder);
+        }
+    }
+
+    /// Reset fluid and respawn water sphere
+    pub fn reset_fluid(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(ref mut simulator) = self.fluid_simulator {
+            simulator.clear(device, queue, encoder);
+            simulator.init_water_sphere(device, queue, encoder);
+        }
+    }
+
+    /// Toggle fluid simulation pause state
+    pub fn toggle_fluid_pause(&mut self) {
+        if let Some(ref mut simulator) = self.fluid_simulator {
+            simulator.paused = !simulator.paused;
+            log::info!("Fluid simulation {}", if simulator.paused { "paused" } else { "resumed" });
+        }
+    }
+
     /// Apply cave parameters from editor state
     pub fn apply_cave_params_from_editor(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
         if !editor_state.cave_params_dirty {
@@ -2262,7 +2320,13 @@ impl Scene for GpuScene {
 
         // Update cave parameters if dirty
         self.update_cave_params(device, queue);
-        
+
+        // Step fluid simulation (GPU compute)
+        if self.fluid_simulator.is_some() && !self.paused {
+            let dt = 1.0 / 60.0; // Fixed timestep for fluid
+            self.step_fluid_simulation(device, queue, &mut encoder, dt);
+        }
+
         // Process any pending cell insertion from input handling
         let cell_inserted = self.process_pending_insertion(device, &mut encoder, queue);
 
@@ -2521,10 +2585,20 @@ impl Scene for GpuScene {
         
         // Extract and render GPU density mesh if enabled
         if self.show_gpu_density_mesh {
+            // First extract density from fluid simulator to surface nets buffers
+            if let (Some(ref fluid_sim), Some(ref gpu_surface_nets)) = (&self.fluid_simulator, &self.gpu_surface_nets) {
+                fluid_sim.extract_to_surface_nets(
+                    device,
+                    &mut encoder,
+                    gpu_surface_nets.density_buffer(),
+                    gpu_surface_nets.fluid_type_buffer(),
+                );
+            }
+
             if let Some(ref gpu_surface_nets) = self.gpu_surface_nets {
                 // Run compute shaders to extract mesh from density buffer
                 gpu_surface_nets.extract_mesh(&mut encoder);
-                
+
                 // Render the extracted mesh
                 gpu_surface_nets.render(
                     &mut encoder,

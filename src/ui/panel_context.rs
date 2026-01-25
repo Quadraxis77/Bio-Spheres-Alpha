@@ -339,7 +339,7 @@ impl GenomeEditorState {
             fluid_water_percent: 25.0,
             fluid_lava_percent: 25.0,
             fluid_show_test_voxels: false,
-            fluid_show_mesh: false,
+            fluid_show_mesh: true,
             fluid_iso_level: 0.5,
             fluid_water_color: [0.2, 0.5, 0.9],
             fluid_lava_color: [1.0, 0.3, 0.0],

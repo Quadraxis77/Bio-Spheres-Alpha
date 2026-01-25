@@ -647,7 +647,14 @@ impl App {
                     // Reset the GPU scene
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                         gpu_scene.reset(&self.queue);
-                        
+
+                        // Reset fluid simulation
+                        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Fluid Reset Encoder"),
+                        });
+                        gpu_scene.reset_fluid(&self.device, &self.queue, &mut encoder);
+                        self.queue.submit(std::iter::once(encoder.finish()));
+
                         // Reapply saved cave settings after reset
                         self.editor_state.cave_params_dirty = true;
                         gpu_scene.apply_cave_params_from_editor(&self.editor_state);

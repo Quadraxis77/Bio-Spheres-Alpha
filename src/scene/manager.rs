@@ -115,8 +115,10 @@ impl SceneManager {
                     
                     // Initialize GPU surface nets for density mesh rendering
                     gpu_scene.initialize_gpu_surface_nets(device, config.format);
-                    gpu_scene.generate_test_density(queue);
-                    
+
+                    // Initialize fluid simulator with test water sphere
+                    gpu_scene.initialize_fluid_simulator(device, queue, config.format);
+
                     self.gpu_scene = Some(gpu_scene);
                     self.current_mode = mode;
                     return cave_initialized; // Return true if cave was just initialized
@@ -180,8 +182,10 @@ impl SceneManager {
         
         // Initialize GPU surface nets for density mesh rendering
         gpu_scene.initialize_gpu_surface_nets(device, config.format);
-        gpu_scene.generate_test_density(queue);
-        
+
+        // Initialize fluid simulator with test water sphere
+        gpu_scene.initialize_fluid_simulator(device, queue, config.format);
+
         self.gpu_scene = Some(gpu_scene);
     }
 

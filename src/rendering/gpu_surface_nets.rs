@@ -557,7 +557,17 @@ impl GpuSurfaceNets {
         assert_eq!(fluid_types.len(), TOTAL_VOXELS);
         queue.write_buffer(&self.fluid_type_buffer, 0, bytemuck::cast_slice(fluid_types));
     }
-    
+
+    /// Get density buffer for GPU writes
+    pub fn density_buffer(&self) -> &wgpu::Buffer {
+        &self.density_buffer
+    }
+
+    /// Get fluid type buffer for GPU writes
+    pub fn fluid_type_buffer(&self) -> &wgpu::Buffer {
+        &self.fluid_type_buffer
+    }
+
     /// Update iso level
     pub fn set_iso_level(&mut self, queue: &wgpu::Queue, iso_level: f32) {
         self.iso_level = iso_level;
