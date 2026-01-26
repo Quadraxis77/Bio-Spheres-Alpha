@@ -5,7 +5,7 @@
     persistence: 0.1,
     threshold: 1.0,
     smoothness: 1.0,
-    seed: 9465,
+    seed: 152,
     resolution: 128,
     collision_enabled: true,
     collision_stiffness: 10000.0,

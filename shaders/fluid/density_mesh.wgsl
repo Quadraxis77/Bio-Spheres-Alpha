@@ -66,12 +66,12 @@ fn get_fluid_color(fluid_type: f32) -> vec3<f32> {
     return vec3<f32>(0.5, 0.5, 0.5); // Default gray
 }
 
-fn get_fluid_alpha(fluid_type: f32) -> f32 {
+fn get_fluid_alpha(fluid_type: f32, base_alpha: f32) -> f32 {
     let ft = u32(fluid_type + 0.5);
-    if ft == 1u { return 0.85; } // Water - semi-transparent
-    if ft == 2u { return 0.95; } // Lava - mostly opaque
-    if ft == 3u { return 0.5; }  // Steam - very transparent
-    return 0.8;
+    if ft == 1u { return base_alpha; } // Water - use user setting
+    if ft == 2u { return min(base_alpha + 0.1, 1.0); } // Lava - slightly more opaque
+    if ft == 3u { return base_alpha * 0.6; } // Steam - more transparent
+    return base_alpha;
 }
 
 @fragment
@@ -81,7 +81,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     // Get base color from fluid type
     let base_color = get_fluid_color(in.fluid_type);
-    let alpha = get_fluid_alpha(in.fluid_type);
+    let alpha = get_fluid_alpha(in.fluid_type, params.alpha);
     
     // Light direction
     let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.3));

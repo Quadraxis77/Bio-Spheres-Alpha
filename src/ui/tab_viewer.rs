@@ -1179,124 +1179,21 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
                 .step_by(0.05)
         ).changed();
         
-        let emissive_changed = ui.add(
-            egui::Slider::new(&mut context.editor_state.fluid_emissive, 0.0..=1.0)
-                .text("Emissive (Lava)")
-                .step_by(0.05)
-        ).changed();
-        
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(5.0);
         
-        // SSR Settings
-        ui.label("Screen Space Reflections:");
-        ui.add_space(3.0);
-        
-        let ssr_enabled_changed = ui.checkbox(&mut context.editor_state.fluid_ssr_enabled, "Enable SSR").changed();
-        
-        let mut ssr_changed = false;
-        if context.editor_state.fluid_ssr_enabled {
-            ssr_changed |= ui.add(
-                egui::Slider::new(&mut context.editor_state.fluid_ssr_intensity, 0.0..=1.5)
-                    .text("Intensity")
-                    .step_by(0.05)
-            ).changed();
-            
-            ssr_changed |= ui.add(
-                egui::Slider::new(&mut context.editor_state.fluid_ssr_steps, 8.0..=64.0)
-                    .text("Quality (Steps)")
-                    .step_by(4.0)
-            ).changed();
-            
-            ssr_changed |= ui.add(
-                egui::Slider::new(&mut context.editor_state.fluid_ssr_max_distance, 10.0..=100.0)
-                    .text("Max Distance")
-                    .step_by(5.0)
-            ).changed();
-            
-            ssr_changed |= ui.add(
-                egui::Slider::new(&mut context.editor_state.fluid_ssr_roughness, 0.0..=1.0)
-                    .text("Roughness")
-                    .step_by(0.05)
-            ).changed();
-            
-            ui.collapsing("Advanced SSR", |ui| {
-                ssr_changed |= ui.add(
-                    egui::Slider::new(&mut context.editor_state.fluid_ssr_step_size, 0.01..=0.5)
-                        .text("Step Size")
-                        .step_by(0.01)
-                ).changed();
-                
-                ssr_changed |= ui.add(
-                    egui::Slider::new(&mut context.editor_state.fluid_ssr_thickness, 0.1..=2.0)
-                        .text("Thickness")
-                        .step_by(0.1)
-                ).changed();
-                
-                ssr_changed |= ui.add(
-                    egui::Slider::new(&mut context.editor_state.fluid_ssr_fade_start, 0.0..=1.0)
-                        .text("Fade Start")
-                        .step_by(0.05)
-                ).changed();
-                
-                ssr_changed |= ui.add(
-                    egui::Slider::new(&mut context.editor_state.fluid_ssr_fade_end, 0.0..=1.0)
-                        .text("Fade End")
-                        .step_by(0.05)
-                ).changed();
-            });
-        }
-        
-        ui.add_space(10.0);
-        ui.separator();
-        ui.label("Fluid Colors:");
-        ui.add_space(3.0);
-        
-        // Water color
-        let mut water_color = context.editor_state.fluid_water_color;
-        let water_changed = ui.horizontal(|ui| {
-            ui.label("Water:");
-            ui.color_edit_button_rgb(&mut water_color).changed()
-        }).inner;
-        if water_changed {
-            context.editor_state.fluid_water_color = water_color;
-        }
-        
-        // Lava color
-        let mut lava_color = context.editor_state.fluid_lava_color;
-        let lava_changed = ui.horizontal(|ui| {
-            ui.label("Lava:");
-            ui.color_edit_button_rgb(&mut lava_color).changed()
-        }).inner;
-        if lava_changed {
-            context.editor_state.fluid_lava_color = lava_color;
-        }
-        
-        // Steam color
-        let mut steam_color = context.editor_state.fluid_steam_color;
-        let steam_changed = ui.horizontal(|ui| {
-            ui.label("Steam:");
-            ui.color_edit_button_rgb(&mut steam_color).changed()
-        }).inner;
-        if steam_changed {
-            context.editor_state.fluid_steam_color = steam_color;
-        }
-        
         // Mark params dirty if any setting changed
         let any_changed = iso_changed || ambient_changed || diffuse_changed || specular_changed 
             || shininess_changed || fresnel_changed || fresnel_power_changed || reflection_changed 
-            || rim_changed || alpha_changed || emissive_changed || water_changed || lava_changed || steam_changed
-            || ssr_enabled_changed || ssr_changed;
+            || rim_changed || alpha_changed;
         if any_changed {
             context.editor_state.fluid_mesh_params_dirty = true;
         }
         
-        ui.add_space(10.0);
-        
         // Reset button
         if ui.button("Reset to Defaults").clicked() {
-            context.editor_state.fluid_iso_level = 0.5;
+            context.editor_state.fluid_iso_level = 0.15;
             context.editor_state.fluid_ambient = 0.15;
             context.editor_state.fluid_diffuse = 0.6;
             context.editor_state.fluid_specular = 0.8;
@@ -1305,20 +1202,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
             context.editor_state.fluid_fresnel_power = 3.0;
             context.editor_state.fluid_reflection = 0.3;
             context.editor_state.fluid_rim = 0.5;
-            context.editor_state.fluid_alpha = 0.8;
-            context.editor_state.fluid_emissive = 0.4;
-            context.editor_state.fluid_ssr_enabled = true;
-            context.editor_state.fluid_ssr_steps = 32.0;
-            context.editor_state.fluid_ssr_step_size = 0.1;
-            context.editor_state.fluid_ssr_max_distance = 50.0;
-            context.editor_state.fluid_ssr_thickness = 0.5;
-            context.editor_state.fluid_ssr_intensity = 0.8;
-            context.editor_state.fluid_ssr_fade_start = 0.6;
-            context.editor_state.fluid_ssr_fade_end = 1.0;
-            context.editor_state.fluid_ssr_roughness = 0.1;
-            context.editor_state.fluid_water_color = [0.2, 0.5, 0.9];
-            context.editor_state.fluid_lava_color = [1.0, 0.3, 0.0];
-            context.editor_state.fluid_steam_color = [0.9, 0.9, 0.9];
+            context.editor_state.fluid_alpha = 0.25;
             context.editor_state.fluid_mesh_params_dirty = true;
         }
     }

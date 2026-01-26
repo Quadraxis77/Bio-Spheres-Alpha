@@ -424,7 +424,7 @@ impl App {
                         
                         // Update render params
                         let params = crate::rendering::DensityMeshParams {
-                            base_color: self.editor_state.fluid_water_color,
+                            base_color: [0.2, 0.5, 0.9], // Default water blue color
                             ambient: self.editor_state.fluid_ambient,
                             diffuse: self.editor_state.fluid_diffuse,
                             specular: self.editor_state.fluid_specular,

@@ -185,13 +185,6 @@ pub struct GenomeEditorState {
     // Fluid mesh settings
     /// Iso level for surface extraction (0.0-1.0)
     pub fluid_iso_level: f32,
-    /// Water color RGB
-    pub fluid_water_color: [f32; 3],
-    /// Lava color RGB
-    pub fluid_lava_color: [f32; 3],
-    /// Steam color RGB
-    pub fluid_steam_color: [f32; 3],
-    
     // Fluid lighting settings
     /// Ambient light strength
     pub fluid_ambient: f32,
@@ -209,30 +202,8 @@ pub struct GenomeEditorState {
     pub fluid_reflection: f32,
     /// Overall alpha/transparency
     pub fluid_alpha: f32,
-    /// Emissive strength (lava glow)
-    pub fluid_emissive: f32,
     /// Rim light strength
     pub fluid_rim: f32,
-    
-    // SSR settings
-    /// SSR enabled
-    pub fluid_ssr_enabled: bool,
-    /// SSR max ray march steps
-    pub fluid_ssr_steps: f32,
-    /// SSR ray step size
-    pub fluid_ssr_step_size: f32,
-    /// SSR max distance
-    pub fluid_ssr_max_distance: f32,
-    /// SSR thickness threshold
-    pub fluid_ssr_thickness: f32,
-    /// SSR intensity
-    pub fluid_ssr_intensity: f32,
-    /// SSR fade start
-    pub fluid_ssr_fade_start: f32,
-    /// SSR fade end
-    pub fluid_ssr_fade_end: f32,
-    /// SSR roughness
-    pub fluid_ssr_roughness: f32,
     
     /// Flag to indicate mesh params need update
     pub fluid_mesh_params_dirty: bool,
@@ -343,10 +314,7 @@ impl GenomeEditorState {
             fluid_show_test_voxels: false,
             fluid_show_mesh: true,
             fluid_continuous_spawn: false,
-            fluid_iso_level: 0.5,
-            fluid_water_color: [0.2, 0.5, 0.9],
-            fluid_lava_color: [1.0, 0.3, 0.0],
-            fluid_steam_color: [0.9, 0.9, 0.9],
+            fluid_iso_level: 0.15,
             fluid_ambient: 0.15,
             fluid_diffuse: 0.6,
             fluid_specular: 0.8,
@@ -354,18 +322,8 @@ impl GenomeEditorState {
             fluid_fresnel: 0.5,
             fluid_fresnel_power: 3.0,
             fluid_reflection: 0.3,
-            fluid_alpha: 0.8,
-            fluid_emissive: 0.4,
+            fluid_alpha: 0.25,
             fluid_rim: 0.5,
-            fluid_ssr_enabled: true,
-            fluid_ssr_steps: 32.0,
-            fluid_ssr_step_size: 0.1,
-            fluid_ssr_max_distance: 50.0,
-            fluid_ssr_thickness: 0.5,
-            fluid_ssr_intensity: 0.8,
-            fluid_ssr_fade_start: 0.6,
-            fluid_ssr_fade_end: 1.0,
-            fluid_ssr_roughness: 0.1,
             fluid_mesh_params_dirty: false,
             fluid_mesh_needs_regen: false,
             gizmo_visible: true,
