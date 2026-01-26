@@ -601,6 +601,23 @@ impl GpuSurfaceNets {
         queue.write_buffer(&self.render_params_buffer, 0, bytemuck::cast_slice(&[*params]));
     }
     
+    /// Set initial render params from editor state (called once during initialization)
+    pub fn set_initial_params(&self, queue: &wgpu::Queue, editor_state: &crate::ui::panel_context::GenomeEditorState) {
+        let params = DensityMeshParams {
+            base_color: [0.2, 0.5, 0.9], // Default water blue color
+            ambient: editor_state.fluid_ambient,
+            diffuse: editor_state.fluid_diffuse,
+            specular: editor_state.fluid_specular,
+            shininess: editor_state.fluid_shininess,
+            fresnel: editor_state.fluid_fresnel,
+            fresnel_power: editor_state.fluid_fresnel_power,
+            rim: editor_state.fluid_rim,
+            reflection: editor_state.fluid_reflection,
+            alpha: editor_state.fluid_alpha,
+        };
+        self.update_render_params(queue, &params);
+    }
+    
     /// Update params buffer
     fn update_params(&self, queue: &wgpu::Queue) {
         let world_diameter = self.world_radius * 2.0;

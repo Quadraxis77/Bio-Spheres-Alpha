@@ -48,8 +48,9 @@ impl SceneManager {
         config: &wgpu::SurfaceConfiguration,
         world_diameter: f32,
         cell_capacity: u32,
+        editor_state: &crate::ui::panel_context::GenomeEditorState,
     ) -> bool {
-        self.switch_mode_with_capacity(mode, device, queue, config, world_diameter, cell_capacity)
+        self.switch_mode_with_capacity(mode, device, queue, config, world_diameter, cell_capacity, editor_state)
     }
     
     /// Switch to a different simulation mode with specified GPU scene capacity.
@@ -61,6 +62,7 @@ impl SceneManager {
         config: &wgpu::SurfaceConfiguration,
         world_diameter: f32,
         cell_capacity: u32,
+        editor_state: &crate::ui::panel_context::GenomeEditorState,
     ) -> bool {
         if mode == self.current_mode {
             return false;
@@ -118,6 +120,11 @@ impl SceneManager {
                     
                     // Initialize GPU surface nets for density mesh rendering
                     gpu_scene.initialize_gpu_surface_nets(device, config.format);
+                    
+                    // Set initial render parameters from editor state
+                    if let Some(ref surface_nets) = gpu_scene.gpu_surface_nets {
+                        surface_nets.set_initial_params(queue, &editor_state);
+                    }
 
                     // Initialize fluid simulator with test water sphere
                     gpu_scene.initialize_fluid_simulator(device, queue, config.format);
@@ -142,6 +149,7 @@ impl SceneManager {
         config: &wgpu::SurfaceConfiguration,
         world_diameter: f32,
         capacity: u32,
+        editor_state: &crate::ui::panel_context::GenomeEditorState,
     ) {
         // Only recreate if capacity actually changed
         if let Some(ref scene) = self.gpu_scene {
@@ -187,6 +195,11 @@ impl SceneManager {
         
         // Initialize GPU surface nets for density mesh rendering
         gpu_scene.initialize_gpu_surface_nets(device, config.format);
+        
+        // Set initial render parameters from editor state
+        if let Some(ref surface_nets) = gpu_scene.gpu_surface_nets {
+            surface_nets.set_initial_params(queue, editor_state);
+        }
 
         // Initialize fluid simulator with test water sphere
         gpu_scene.initialize_fluid_simulator(device, queue, config.format);

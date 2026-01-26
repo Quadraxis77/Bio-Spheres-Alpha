@@ -642,6 +642,7 @@ impl App {
                         &self.config,
                         self.ui.state.world_diameter,
                         capacity,
+                        &self.editor_state,
                     );
                     
                     // Reset the GPU scene
@@ -708,7 +709,7 @@ impl App {
                     }
                 }
                 
-                let cave_initialized = self.scene_manager.switch_mode(requested_mode, &self.device, &self.queue, &self.config, self.ui.state.world_diameter, self.ui.state.cell_capacity);
+                let cave_initialized = self.scene_manager.switch_mode(requested_mode, &self.device, &self.queue, &self.config, self.ui.state.world_diameter, self.ui.state.cell_capacity, &self.editor_state);
                 if cave_initialized {
                     // Cave was just initialized, mark params as dirty so they get applied
                     self.editor_state.cave_params_dirty = true;
@@ -737,7 +738,7 @@ impl App {
                     self.working_genome = preview_scene.genome.clone();
                 }
             }
-            let cave_initialized = self.scene_manager.switch_mode(dock_mode, &self.device, &self.queue, &self.config, self.ui.state.world_diameter, self.ui.state.cell_capacity);
+            let cave_initialized = self.scene_manager.switch_mode(dock_mode, &self.device, &self.queue, &self.config, self.ui.state.world_diameter, self.ui.state.cell_capacity, &self.editor_state);
             if cave_initialized {
                 // Cave was just initialized, mark params as dirty so they get applied
                 self.editor_state.cave_params_dirty = true;
