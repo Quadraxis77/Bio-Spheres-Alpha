@@ -179,6 +179,8 @@ pub struct GenomeEditorState {
     pub fluid_show_test_voxels: bool,
     /// Whether to render fluid as smooth mesh (surface nets)
     pub fluid_show_mesh: bool,
+    /// Whether to enable continuous fluid spawning
+    pub fluid_continuous_spawn: bool,
     
     // Fluid mesh settings
     /// Iso level for surface extraction (0.0-1.0)
@@ -340,6 +342,7 @@ impl GenomeEditorState {
             fluid_lava_percent: 25.0,
             fluid_show_test_voxels: false,
             fluid_show_mesh: true,
+            fluid_continuous_spawn: false,
             fluid_iso_level: 0.5,
             fluid_water_color: [0.2, 0.5, 0.9],
             fluid_lava_color: [1.0, 0.3, 0.0],
@@ -525,7 +528,7 @@ pub struct PanelContext<'a> {
     /// Genome editor UI state
     pub editor_state: &'a mut GenomeEditorState,
     /// Scene manager for accessing simulation state
-    pub scene_manager: &'a SceneManager,
+    pub scene_manager: &'a mut SceneManager,
     /// Camera controller (mutable for camera settings panel)
     pub camera: &'a mut CameraController,
     /// Request for scene mode changes
@@ -541,7 +544,7 @@ impl<'a> PanelContext<'a> {
     pub fn new(
         genome: &'a mut Genome,
         editor_state: &'a mut GenomeEditorState,
-        scene_manager: &'a SceneManager,
+        scene_manager: &'a mut SceneManager,
         camera: &'a mut CameraController,
         scene_request: &'a mut SceneModeRequest,
         current_mode: SimulationMode,

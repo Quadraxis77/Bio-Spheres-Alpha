@@ -586,7 +586,7 @@ impl App {
                 &mut self.dock_manager,
                 &mut self.working_genome,
                 &mut self.editor_state,
-                &self.scene_manager,
+                &mut self.scene_manager,
                 &mut dummy_camera,
                 &mut scene_request,
                 &self.performance,

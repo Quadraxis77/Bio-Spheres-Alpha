@@ -36,6 +36,46 @@ fn get_fluid_type(state: u32) -> u32 {
     return state & 0xFFFFu;
 }
 
+// Check if a voxel is encapsulated (surrounded on all 6 sides by solids or water)
+// If true, this voxel can be skipped during processing as it cannot move
+fn is_encapsulated(x: u32, y: u32, z: u32) -> bool {
+    let res = params.grid_resolution;
+    
+    // Check all 6 neighbors
+    let offsets = array<vec3<i32>, 6>(
+        vec3<i32>(1, 0, 0),   // +X
+        vec3<i32>(-1, 0, 0),  // -X
+        vec3<i32>(0, 1, 0),   // +Y
+        vec3<i32>(0, -1, 0),  // -Y
+        vec3<i32>(0, 0, 1),   // +Z
+        vec3<i32>(0, 0, -1)   // -Z
+    );
+    
+    // If any neighbor is empty (0), this voxel is not encapsulated
+    for (var i = 0u; i < 6u; i++) {
+        let nx = i32(x) + offsets[i].x;
+        let ny = i32(y) + offsets[i].y;
+        let nz = i32(z) + offsets[i].z;
+        
+        // Bounds check - if at boundary, consider not encapsulated
+        if nx < 0 || nx >= i32(res) || ny < 0 || ny >= i32(res) || nz < 0 || nz >= i32(res) {
+            return false;
+        }
+        
+        let neighbor_idx = grid_index(u32(nx), u32(ny), u32(nz));
+        let neighbor_state = atomicLoad(&voxels[neighbor_idx]);
+        let neighbor_type = get_fluid_type(neighbor_state);
+        
+        // If any neighbor is empty (0), this voxel can potentially move
+        if neighbor_type == 0u {
+            return false;
+        }
+    }
+    
+    // All 6 neighbors are either water (1) or solids (2+), so this voxel is encapsulated
+    return true;
+}
+
 fn count_surrounding_water(x: u32, y: u32, z: u32) -> u32 {
     let res = params.grid_resolution;
     var count = 0u;
@@ -261,6 +301,12 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = params.grid_resolution;
 
     if gid.x >= res || gid.y >= res || gid.z >= res {
+        return;
+    }
+
+    // Optimization: Skip processing encapsulated voxels
+    // These voxels are surrounded on all 6 sides by solids or water and cannot move
+    if is_encapsulated(gid.x, gid.y, gid.z) {
         return;
     }
 
@@ -549,6 +595,49 @@ fn fluid_init_sphere(@builtin(global_invocation_id) gid: vec3<u32>) {
         atomicStore(&voxels[idx], (65535u << 16u) | 1u);
     } else {
         atomicStore(&voxels[idx], 0u);
+    }
+}
+
+// Continuous water spawn function
+@compute @workgroup_size(4, 4, 4)
+fn fluid_spawn_continuous(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let res = params.grid_resolution;
+
+    if gid.x >= res || gid.y >= res || gid.z >= res {
+        return;
+    }
+
+    let idx = grid_index(gid.x, gid.y, gid.z);
+    let world_pos = grid_to_world(gid.x, gid.y, gid.z);
+
+    // Spawn zone: horizontal plane at top of world, centered
+    let spawn_center = vec3<f32>(0.0, params.world_radius * 0.8, 0.0);
+    let spawn_radius = params.world_radius * 0.15;
+    let spawn_thickness = params.cell_size * 2.0; // 2-voxel thick spawn plane
+
+    let horizontal_dist = length(world_pos.xz - spawn_center.xz);
+    let vertical_dist = abs(world_pos.y - spawn_center.y);
+
+    // Check if position is within spawn zone (circular area)
+    if horizontal_dist < spawn_radius && vertical_dist < spawn_thickness && is_in_bounds(world_pos) {
+        // Use time-based animation for pulsing effect
+        let pulse = sin(params.time * 2.0) * 0.5 + 0.5; // Oscillates between 0 and 1
+        let spawn_probability = 0.3 + pulse * 0.4; // 30% to 70% chance
+        
+        // Hash-based randomization for natural flow
+        let pos_hash = hash_position(gid);
+        let time_hash = u32(params.time * 1000.0);
+        let combined_hash = pos_hash ^ time_hash;
+        
+        // Spawn water based on probability
+        if (combined_hash & 255u) < u32(spawn_probability * 255.0) {
+            // Only spawn if current cell is empty
+            let current_state = atomicLoad(&voxels[idx]);
+            if get_fluid_type(current_state) == 0u {
+                // Water: type=1, fill=1.0 -> packed as (65535 << 16) | 1
+                atomicStore(&voxels[idx], (65535u << 16u) | 1u);
+            }
+        }
     }
 }
 

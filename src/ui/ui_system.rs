@@ -214,7 +214,7 @@ impl UiSystem {
         dock_manager: &mut crate::ui::dock::DockManager,
         genome: &mut crate::genome::Genome,
         editor_state: &mut crate::ui::panel_context::GenomeEditorState,
-        scene_manager: &crate::scene::SceneManager,
+        scene_manager: &mut crate::scene::SceneManager,
         camera: &mut crate::ui::camera::CameraController,
         scene_request: &mut crate::ui::panel_context::SceneModeRequest,
         performance: &crate::ui::performance::PerformanceMetrics,

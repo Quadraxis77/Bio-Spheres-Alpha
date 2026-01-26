@@ -57,10 +57,14 @@ pub struct GpuFluidSimulator {
     world_radius: f32,
     world_center: Vec3,
     time: std::cell::Cell<f32>,  // Time for wave animations (mutable)
+    
+    // Continuous spawning control
+    continuous_spawn_enabled: std::cell::Cell<bool>,
 
     // Compute pipelines
     swap_pipeline: wgpu::ComputePipeline,
     init_sphere_pipeline: wgpu::ComputePipeline,
+    spawn_continuous_pipeline: wgpu::ComputePipeline,
     clear_pipeline: wgpu::ComputePipeline,
 
     // Density extraction
@@ -174,6 +178,15 @@ impl GpuFluidSimulator {
             cache: None,
         });
 
+        let spawn_continuous_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Fluid Spawn Continuous Pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("fluid_spawn_continuous"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         let clear_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Fluid Clear Pipeline"),
             layout: Some(&pipeline_layout),
@@ -264,8 +277,10 @@ impl GpuFluidSimulator {
             world_radius,
             world_center,
             time: std::cell::Cell::new(0.0),
+            continuous_spawn_enabled: std::cell::Cell::new(false),
             swap_pipeline,
             init_sphere_pipeline,
+            spawn_continuous_pipeline,
             clear_pipeline,
             extract_pipeline,
             extract_params_buffer,
@@ -344,6 +359,21 @@ impl GpuFluidSimulator {
         pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
     }
 
+    /// Continuously spawn water at the top of the world
+    pub fn spawn_continuous(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, time: f32) {
+        self.update_params(queue, 0, time, 9.8, [false, true, false]);
+        let bind_group = self.create_bind_group(device);
+        let workgroup_count = (GRID_RESOLUTION + 3) / 4;
+
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Fluid Spawn Continuous"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.spawn_continuous_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+    }
+
     /// Clear all fluid
     pub fn clear(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
         self.update_params(queue, 0, 0.0, 9.8, [false, true, false]);
@@ -357,6 +387,16 @@ impl GpuFluidSimulator {
         pass.set_pipeline(&self.clear_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+    }
+
+    /// Set continuous spawning enabled/disabled
+    pub fn set_continuous_spawn(&self, enabled: bool) {
+        self.continuous_spawn_enabled.set(enabled);
+    }
+
+    /// Get continuous spawning enabled state
+    pub fn is_continuous_spawn_enabled(&self) -> bool {
+        self.continuous_spawn_enabled.get()
     }
 
     /// Step the simulation - 100% GPU with zero CPU logic
@@ -380,6 +420,18 @@ impl GpuFluidSimulator {
             label: Some("Fluid GPU Encoder"),
         });
 
+        // First: spawn continuous water (only if enabled)
+        if self.continuous_spawn_enabled.get() {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Fluid Spawn Continuous Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.spawn_continuous_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+        }
+
+        // Then: run fluid simulation
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Fluid GPU Pass"),

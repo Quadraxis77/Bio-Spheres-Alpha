@@ -1975,7 +1975,7 @@ impl GpuScene {
         }
     }
 
-    /// Initialize the GPU fluid simulator with a test water sphere
+    /// Initialize the GPU fluid simulator (starts empty)
     pub fn initialize_fluid_simulator(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
         // First ensure surface nets is initialized
         if self.gpu_surface_nets.is_none() {
@@ -1985,17 +1985,13 @@ impl GpuScene {
         // Create GPU fluid simulator
         let simulator = GpuFluidSimulator::new(device, self.config.sphere_radius, glam::Vec3::ZERO);
 
-        // Initialize with water sphere via compute shader
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Fluid Init Encoder"),
-        });
-        simulator.init_water_sphere(device, queue, &mut encoder);
-        queue.submit(std::iter::once(encoder.finish()));
+        // Start with empty fluid - no initial sphere spawn
+        // Fluid will only appear when continuous spawning is enabled
 
         self.fluid_simulator = Some(simulator);
         self.show_gpu_density_mesh = true;
 
-        log::info!("GPU fluid simulator initialized with test water sphere");
+        log::info!("GPU fluid simulator initialized (empty - waiting for continuous spawn)");
     }
 
     /// Step the GPU fluid simulation
