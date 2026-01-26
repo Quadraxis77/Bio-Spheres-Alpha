@@ -665,7 +665,7 @@ fn fluid_init_sphere(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let dist = length(world_pos - sphere_center);
 
-    if dist < sphere_radius && is_in_bounds(world_pos) {
+    if dist < sphere_radius && is_in_bounds(world_pos) && !is_solid(gid.x, gid.y, gid.z) {
         // Water: type=1, fill=1.0 -> packed as (65535 << 16) | 1
         atomicStore(&voxels[idx], (65535u << 16u) | 1u);
     } else {
@@ -694,7 +694,7 @@ fn fluid_spawn_continuous(@builtin(global_invocation_id) gid: vec3<u32>) {
     let vertical_dist = abs(world_pos.y - spawn_center.y);
 
     // Check if position is within spawn zone (circular area)
-    if horizontal_dist < spawn_radius && vertical_dist < spawn_thickness && is_in_bounds(world_pos) {
+    if horizontal_dist < spawn_radius && vertical_dist < spawn_thickness && is_in_bounds(world_pos) && !is_solid(gid.x, gid.y, gid.z) {
         // Use time-based animation for pulsing effect
         let pulse = sin(params.time * 2.0) * 0.5 + 0.5; // Oscillates between 0 and 1
         let spawn_probability = 0.3 + pulse * 0.4; // 30% to 70% chance
