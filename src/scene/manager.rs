@@ -111,6 +111,9 @@ impl SceneManager {
                         log::info!("Fluid system auto-initialized on GPU scene creation");
                         // Generate test voxels
                         gpu_scene.generate_test_voxels(queue);
+                        
+                        // Update solid mask after fluid system is initialized
+                        gpu_scene.update_solid_mask(queue);
                     }
                     
                     // Initialize GPU surface nets for density mesh rendering
@@ -178,6 +181,8 @@ impl SceneManager {
             log::info!("Fluid system auto-initialized on GPU scene recreation");
             // Generate test voxels
             gpu_scene.generate_test_voxels(queue);
+            // Update solid mask now that all required components exist
+            gpu_scene.update_solid_mask(queue);
         }
         
         // Initialize GPU surface nets for density mesh rendering

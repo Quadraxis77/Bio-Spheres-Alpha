@@ -59,6 +59,7 @@ pub struct GpuSurfaceNets {
     fluid_type_buffer: wgpu::Buffer,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
+    #[allow(dead_code)]
     vertex_map_buffer: wgpu::Buffer,
     counter_buffer: wgpu::Buffer,
     counter_staging_buffer: wgpu::Buffer,

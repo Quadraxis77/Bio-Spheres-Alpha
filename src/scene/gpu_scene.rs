@@ -1990,7 +1990,7 @@ impl GpuScene {
     }
 
     /// Initialize the GPU fluid simulator (starts empty)
-    pub fn initialize_fluid_simulator(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
+    pub fn initialize_fluid_simulator(&mut self, device: &wgpu::Device, _queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
         // First ensure surface nets is initialized
         if self.gpu_surface_nets.is_none() {
             self.initialize_gpu_surface_nets(device, surface_format);
