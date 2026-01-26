@@ -2001,7 +2001,7 @@ impl GpuScene {
     /// Step the GPU fluid simulation
     pub fn step_fluid_simulation(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, dt: f32) {
         if let Some(ref mut simulator) = self.fluid_simulator {
-            simulator.step(device, queue, encoder, dt);
+            simulator.step(device, queue, encoder, dt, self.gravity, self.gravity_dir);
         }
     }
 

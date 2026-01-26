@@ -8,13 +8,20 @@ struct FluidParams {
     cell_size: f32,
     direction: u32,  // 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z
 
-    grid_origin: vec3<f32>,
+    grid_origin_x: f32,
+    grid_origin_y: f32,
+    grid_origin_z: f32,
     time: f32,  // Time for wave animations
+
+    // Gravity parameters
+    gravity_magnitude: f32,
+    gravity_dir_x: f32,
+    gravity_dir_y: f32,
+    gravity_dir_z: f32,
 
     _pad0: u32,
     _pad1: u32,
     _pad2: u32,
-    _pad3: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: FluidParams;
@@ -62,11 +69,11 @@ fn count_surrounding_water(x: u32, y: u32, z: u32) -> u32 {
 }
 
 fn grid_to_world(x: u32, y: u32, z: u32) -> vec3<f32> {
-    return params.grid_origin + vec3<f32>(
-        f32(x) + 0.5,
-        f32(y) + 0.5,
-        f32(z) + 0.5
-    ) * params.cell_size;
+    return vec3<f32>(
+        params.grid_origin_x + (f32(x) + 0.5) * params.cell_size,
+        params.grid_origin_y + (f32(y) + 0.5) * params.cell_size,
+        params.grid_origin_z + (f32(z) + 0.5) * params.cell_size
+    );
 }
 
 fn is_in_bounds(pos: vec3<f32>) -> bool {
@@ -216,8 +223,8 @@ fn hash_position(pos: vec3<u32>) -> u32 {
     return (pos.x * 73856093u ^ pos.y * 19349663u ^ pos.z * 83492791u) & 0xFFFFFFFFu;
 }
 
-// Get randomized horizontal direction order based on position and time
-fn get_horizontal_direction_order(gid: vec3<u32>, time: f32) -> array<u32, 4> {
+// Get randomized horizontal direction order based on position and time, relative to gravity
+fn get_horizontal_direction_order(gid: vec3<u32>, time: f32, gravity_dir_index: u32) -> array<u32, 4> {
     let pos_hash = hash_position(gid);
     let time_hash = u32(time * 1000.0) & 0xFFFFFFFFu;
     let combined_hash = pos_hash ^ time_hash;
@@ -225,8 +232,19 @@ fn get_horizontal_direction_order(gid: vec3<u32>, time: f32) -> array<u32, 4> {
     // Use hash to determine starting offset in direction array
     let start_offset = combined_hash & 3u;
     
-    // Define all 4 horizontal directions
-    let all_directions = array<u32, 4>(0u, 1u, 4u, 5u); // +X, -X, +Z, -Z
+    // Define horizontal directions based on gravity axis
+    var all_directions: array<u32, 4>;
+    
+    if gravity_dir_index == 2u || gravity_dir_index == 3u {
+        // Y gravity - use X and Z directions
+        all_directions = array<u32, 4>(0u, 1u, 4u, 5u); // +X, -X, +Z, -Z
+    } else if gravity_dir_index == 0u || gravity_dir_index == 1u {
+        // X gravity - use Y and Z directions
+        all_directions = array<u32, 4>(2u, 3u, 4u, 5u); // +Y, -Y, +Z, -Z
+    } else {
+        // Z gravity - use X and Y directions
+        all_directions = array<u32, 4>(0u, 1u, 2u, 3u); // +X, -X, +Y, -Y
+    }
     
     // Create rotated order based on hash
     var order: array<u32, 4>;
@@ -246,13 +264,29 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Phase 1: Process gravity (vertical movement)
-    // This ensures water falls straight down without slant bias
-    process_direction(gid, 3u); // -Y (downward)
-    process_direction(gid, 2u); // +Y (upward prevention)
+    // Phase 1: Process gravity (primary movement direction)
+    // Use gravity direction from parameters instead of hardcoded -Y
+    let grav_dir = vec3<f32>(params.gravity_dir_x, params.gravity_dir_y, params.gravity_dir_z);
+    
+    // Find the primary gravity axis and direction
+    var gravity_dir_index = 3u; // Default to -Y
+    if abs(grav_dir.x) > abs(grav_dir.y) && abs(grav_dir.x) > abs(grav_dir.z) {
+        gravity_dir_index = select(1u, 0u, grav_dir.x > 0.0); // -X or +X
+    } else if abs(grav_dir.y) > abs(grav_dir.z) {
+        gravity_dir_index = select(3u, 2u, grav_dir.y > 0.0); // -Y or +Y
+    } else if abs(grav_dir.z) > 0.0 {
+        gravity_dir_index = select(5u, 4u, grav_dir.z > 0.0); // -Z or +Z
+    }
+    
+    // Process gravity direction first (highest priority)
+    process_direction(gid, gravity_dir_index);
+    
+    // Process opposite direction for upward prevention
+    let opposite_dir = gravity_dir_index ^ 1u; // Flip last bit to get opposite
+    process_direction(gid, opposite_dir);
     
     // Phase 2: Accelerated horizontal spreading for faster settling
-    let horizontal_order = get_horizontal_direction_order(gid, params.time);
+    let horizontal_order = get_horizontal_direction_order(gid, params.time, gravity_dir_index);
     
     // Process all 4 horizontal directions with increased probability
     for (var i = 0u; i < 4u; i++) {
@@ -409,30 +443,51 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
         return;
     }
 
-    // For Y directions: pure deterministic gravity - no randomization
-    // This ensures water falls straight down without any slant bias
-    if direction == 2u || direction == 3u {
-        // For Y direction (gravity): only swap if water is above empty
-        // direction 3 = -Y (looking down), so cell A is above cell B
-        // direction 2 = +Y (looking up), so cell A is below cell B
-        if direction == 3u {
-            // -Y pass: A is current cell, B is below
-            // Swap if A has water and B is empty (water falls)
+    // Check if this direction aligns with gravity
+    let grav_dir = vec3<f32>(params.gravity_dir_x, params.gravity_dir_y, params.gravity_dir_z);
+    
+    // Simple dot product to check if direction aligns with gravity
+    let dir_vec = get_offset(direction);
+    let alignment = dot(grav_dir, vec3<f32>(f32(dir_vec.x), f32(dir_vec.y), f32(dir_vec.z)));
+    
+    // If alignment is positive, this direction flows with gravity
+    // If alignment is negative, this direction flows against gravity
+    // If alignment is zero, this direction is perpendicular to gravity
+    
+    // For gravity-aligned directions: use magnitude for probability
+    if abs(alignment) > 0.1 {
+        let gravity_strength = length(grav_dir);
+        // Higher gravity magnitude = higher probability of movement
+        let gravity_probability = min(1.0, gravity_strength / 10.0);
+        
+        // Use hash-based probability for gravity direction
+        let time_hash = u32(params.time * 1000.0) + direction * 12345u;
+        let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
+        let combined_hash = time_hash ^ pos_hash;
+        
+        // Skip movement based on gravity strength (lower gravity = less movement)
+        if (combined_hash & 255u) > u32(gravity_probability * 255.0) {
+            return;
+        }
+        
+        // If alignment is positive: water flows with gravity (current to neighbor)
+        if alignment > 0.0 {
+            // Movement with gravity: water flows from current cell to neighbor
             if !(a_is_water && b_is_empty) {
                 return;
             }
-        } else if direction == 2u {
-            // +Y pass: A is current cell, B is above
-            // Swap if A is empty and B has water (water falls from above)
+        }
+        // If alignment is negative: water flows against gravity (neighbor to current)
+        else {
+            // Movement against gravity: water flows from neighbor to current cell
             if !(a_is_empty && b_is_water) {
                 return;
             }
         }
-        // No randomization for vertical movement - pure deterministic gravity
     }
     
-    // For X/Z directions: Use higher probability for faster horizontal spreading
-    if direction == 0u || direction == 1u || direction == 4u || direction == 5u {
+    // For non-gravity directions: Use higher probability for faster horizontal spreading
+    if abs(alignment) <= 0.5 {
         // Increased probability from 50% to 87.5% for much faster horizontal movement
         let time_hash = u32(params.time * 1000.0) + direction * 12345u;
         let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;

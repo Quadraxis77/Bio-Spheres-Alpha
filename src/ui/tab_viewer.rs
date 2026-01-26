@@ -627,9 +627,27 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             ui.add(egui::Slider::new(&mut state.gravity, -50.0..=50.0).suffix(" m/s²"));
             ui.horizontal(|ui| {
                 ui.label("Direction:");
-                ui.checkbox(&mut state.gravity_x, "X");
-                ui.checkbox(&mut state.gravity_y, "Y");
-                ui.checkbox(&mut state.gravity_z, "Z");
+                
+                // Radio button logic for gravity axis selection
+                let selected_x = state.gravity_x;
+                let selected_y = state.gravity_y;
+                let selected_z = state.gravity_z;
+                
+                if ui.selectable_label(selected_x, "X").clicked() {
+                    state.gravity_x = true;
+                    state.gravity_y = false;
+                    state.gravity_z = false;
+                }
+                if ui.selectable_label(selected_y, "Y").clicked() {
+                    state.gravity_x = false;
+                    state.gravity_y = true;
+                    state.gravity_z = false;
+                }
+                if ui.selectable_label(selected_z, "Z").clicked() {
+                    state.gravity_x = false;
+                    state.gravity_y = false;
+                    state.gravity_z = true;
+                }
             });
 
             ui.add_space(4.0);
