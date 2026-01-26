@@ -26,6 +26,7 @@ struct FluidParams {
 
 @group(0) @binding(0) var<uniform> params: FluidParams;
 @group(0) @binding(1) var<storage, read_write> voxels: array<atomic<u32>>;
+@group(0) @binding(2) var<storage, read> solid_mask: array<u32>;
 
 fn grid_index(x: u32, y: u32, z: u32) -> u32 {
     let res = params.grid_resolution;
@@ -34,6 +35,12 @@ fn grid_index(x: u32, y: u32, z: u32) -> u32 {
 
 fn get_fluid_type(state: u32) -> u32 {
     return state & 0xFFFFu;
+}
+
+// Check if a grid position is solid based on the solid mask
+fn is_solid(x: u32, y: u32, z: u32) -> bool {
+    let idx = grid_index(x, y, z);
+    return solid_mask[idx] == 1u;
 }
 
 // Check if a voxel is encapsulated (surrounded on all 6 sides by solids or water)
@@ -310,6 +317,59 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
+    // Special case: Push water out of solid voxels
+    // If water is trapped in a solid voxel, force it to move to the nearest non-solid voxel
+    let idx = grid_index(gid.x, gid.y, gid.z);
+    let state = atomicLoad(&voxels[idx]);
+    let fluid_type = get_fluid_type(state);
+    
+    // If this voxel contains water but is marked as solid, push it out
+    if fluid_type == 1u && is_solid(gid.x, gid.y, gid.z) {
+        // Try all 6 directions to find an escape route
+        let directions = array<vec3<i32>, 6>(
+            vec3<i32>(1, 0, 0),   // +X
+            vec3<i32>(-1, 0, 0),  // -X
+            vec3<i32>(0, 1, 0),   // +Y
+            vec3<i32>(0, -1, 0),  // -Y
+            vec3<i32>(0, 0, 1),   // +Z
+            vec3<i32>(0, 0, -1)   // -Z
+        );
+        
+        // Check each direction for an escape
+        for (var i = 0u; i < 6u; i++) {
+            let nx = i32(gid.x) + directions[i].x;
+            let ny = i32(gid.y) + directions[i].y;
+            let nz = i32(gid.z) + directions[i].z;
+            
+            // Bounds check
+            if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
+                let neighbor_idx = grid_index(u32(nx), u32(ny), u32(nz));
+                let neighbor_state = atomicLoad(&voxels[neighbor_idx]);
+                let neighbor_type = get_fluid_type(neighbor_state);
+                
+                // If neighbor is empty and not solid, move water there
+                if neighbor_type == 0u && !is_solid(u32(nx), u32(ny), u32(nz)) {
+                    // Try to claim both voxels atomically
+                    let result_current = atomicCompareExchangeWeak(&voxels[idx], state, 0xFFFFFFFFu);
+                    if result_current.exchanged {
+                        let result_neighbor = atomicCompareExchangeWeak(&voxels[neighbor_idx], neighbor_state, state);
+                        if result_neighbor.exchanged {
+                            // Successfully moved water
+                            atomicStore(&voxels[idx], neighbor_state);
+                            return;
+                        } else {
+                            // Failed to claim neighbor, restore current
+                            atomicStore(&voxels[idx], state);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // If no escape route found, stay in place (don't process further)
+        return;
+    }
+
     // Phase 1: Process gravity (primary movement direction)
     // Use gravity direction from parameters instead of hardcoded -Y
     let grav_dir = vec3<f32>(params.gravity_dir_x, params.gravity_dir_y, params.gravity_dir_z);
@@ -353,6 +413,11 @@ fn can_swap_vertical(gid: vec3<u32>, direction: u32) -> bool {
         return false;
     }
 
+    // Check solid mask - prevent movement from or into solid voxels
+    if is_solid(gid.x, gid.y, gid.z) || is_solid(u32(nx), u32(ny), u32(nz)) {
+        return false;
+    }
+
     let idx_a = grid_index(gid.x, gid.y, gid.z);
     let idx_b = grid_index(u32(nx), u32(ny), u32(nz));
 
@@ -384,6 +449,11 @@ fn process_direction_fast(gid: vec3<u32>, direction: u32) {
 
     // Bounds check
     if nx < 0 || nx >= i32(res) || ny < 0 || ny >= i32(res) || nz < 0 || nz >= i32(res) {
+        return;
+    }
+
+    // Check solid mask - prevent movement from or into solid voxels
+    if is_solid(gid.x, gid.y, gid.z) || is_solid(u32(nx), u32(ny), u32(nz)) {
         return;
     }
 
@@ -464,6 +534,11 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
 
     let idx_a = grid_index(gid.x, gid.y, gid.z);
     let idx_b = grid_index(u32(nx), u32(ny), u32(nz));
+
+    // Check solid mask - prevent movement from or into solid voxels
+    if is_solid(gid.x, gid.y, gid.z) || is_solid(u32(nx), u32(ny), u32(nz)) {
+        return;
+    }
 
     // Use simple checkerboard pattern based on grid position to avoid duplicate work
     // This is more predictable than hash-based checkering

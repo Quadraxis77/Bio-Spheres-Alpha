@@ -7,7 +7,7 @@ use crate::genome::Genome;
 use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, TailRenderer, VoxelRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
-use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator};
+use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
 use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager};
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
@@ -168,6 +168,8 @@ pub struct GpuScene {
     pub show_gpu_density_mesh: bool,
     /// GPU fluid simulator for falling/stacking water
     pub fluid_simulator: Option<GpuFluidSimulator>,
+    /// Solid mask generator for fluid system
+    solid_mask_generator: Option<SolidMaskGenerator>,
 }
 
 impl GpuScene {
@@ -304,6 +306,7 @@ impl GpuScene {
             gpu_surface_nets: None,
             show_gpu_density_mesh: false,
             fluid_simulator: None,
+            solid_mask_generator: None,
         }
     }
     
@@ -1352,7 +1355,7 @@ impl GpuScene {
         self.cave_renderer.is_some()
     }
     
-    pub fn initialize_cave_system(&mut self, device: &wgpu::Device, surface_format: wgpu::TextureFormat, world_diameter: f32) -> bool {
+    pub fn initialize_cave_system(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat, world_diameter: f32) -> bool {
         if self.cave_renderer.is_none() {
             let width = self.renderer.width;
             let height = self.renderer.height;
@@ -1364,6 +1367,9 @@ impl GpuScene {
             
             // Create cave-specific physics bind groups
             self.create_cave_physics_bind_groups(device);
+            
+            // Update solid mask after cave system is initialized
+            self.update_solid_mask(&queue); // Note: This needs queue parameter
             
             return true; // Cave was just initialized, params need to be applied
         }
@@ -1537,6 +1543,14 @@ impl GpuScene {
         self.fluid_buffers = Some(fluid_buffers);
         self.voxel_renderer = Some(voxel_renderer);
         self.show_fluid_voxels = true;
+        
+        // Create solid mask generator
+        let solid_mask_generator = SolidMaskGenerator::new(
+            crate::simulation::fluid_simulation::GRID_RESOLUTION,
+            world_center,
+            world_radius,
+        );
+        self.solid_mask_generator = Some(solid_mask_generator);
         
         true
     }
@@ -1983,7 +1997,16 @@ impl GpuScene {
         }
 
         // Create GPU fluid simulator
-        let simulator = GpuFluidSimulator::new(device, self.config.sphere_radius, glam::Vec3::ZERO);
+        // Get solid mask buffer from fluid buffers
+        let solid_mask_buffer = if let Some(ref fluid_buffers) = self.fluid_buffers {
+            fluid_buffers.solid_mask().clone()
+        } else {
+            // This should not happen if fluid system is properly initialized
+            log::error!("Fluid buffers not initialized when creating fluid simulator");
+            return;
+        };
+        
+        let simulator = GpuFluidSimulator::new(device, self.config.sphere_radius, glam::Vec3::ZERO, solid_mask_buffer);
 
         // Start with empty fluid - no initial sphere spawn
         // Fluid will only appear when continuous spawning is enabled
@@ -1991,7 +2014,7 @@ impl GpuScene {
         self.fluid_simulator = Some(simulator);
         self.show_gpu_density_mesh = true;
 
-        log::info!("GPU fluid simulator initialized (empty - waiting for continuous spawn)");
+        log::info!("GPU fluid simulator initialized with solid mask (empty - waiting for continuous spawn)");
     }
 
     /// Step the GPU fluid simulation
@@ -2063,6 +2086,25 @@ impl GpuScene {
             let params = *cave_renderer.params();
             cave_renderer.update_params(device, queue, params);
             self.cave_params_dirty = false;
+            
+            // Update solid mask when cave parameters change
+            self.update_solid_mask(queue);
+        }
+    }
+    
+    /// Update solid mask based on current cave parameters
+    pub fn update_solid_mask(&mut self, queue: &wgpu::Queue) {
+        if let (Some(ref fluid_buffers), Some(ref solid_mask_generator), Some(ref cave_renderer)) = 
+            (&self.fluid_buffers, &self.solid_mask_generator, &self.cave_renderer) {
+            
+            let cave_params = cave_renderer.params();
+            let solid_mask = solid_mask_generator.generate_solid_mask(cave_params);
+            
+            // Update the solid mask buffer
+            fluid_buffers.update_solid_mask(queue, &solid_mask);
+            
+            log::info!("Updated solid mask with {} solid voxels", 
+                solid_mask.iter().sum::<u32>());
         }
     }
     

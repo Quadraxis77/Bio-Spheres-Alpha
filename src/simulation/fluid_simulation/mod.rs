@@ -7,9 +7,11 @@
 
 pub mod buffers;
 pub mod gpu_simulator;
+pub mod solid_mask;
 
 pub use buffers::{FluidBuffers, FluidParams, FluidType};
 pub use gpu_simulator::GpuFluidSimulator;
+pub use solid_mask::SolidMaskGenerator;
 
 /// Grid resolution (hardcoded)
 pub const GRID_RESOLUTION: u32 = 128;

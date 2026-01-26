@@ -83,7 +83,7 @@ impl SceneManager {
                 if self.gpu_scene.is_none() {
                     let mut gpu_scene = GpuScene::with_capacity(device, queue, config, cell_capacity);
                     // Initialize cave system automatically
-                    let cave_initialized = gpu_scene.initialize_cave_system(device, config.format, world_diameter);
+                    let cave_initialized = gpu_scene.initialize_cave_system(device, queue, config.format, world_diameter);
                     
                     // Initialize fluid system automatically
                     // Create camera bind group layout for voxel rendering
@@ -150,7 +150,7 @@ impl SceneManager {
         log::info!("Recreating GPU scene with capacity: {}", capacity);
         let mut gpu_scene = GpuScene::with_capacity(device, queue, config, capacity);
         // Initialize cave system automatically
-        let _cave_initialized = gpu_scene.initialize_cave_system(device, config.format, world_diameter);
+        let _cave_initialized = gpu_scene.initialize_cave_system(device, queue, config.format, world_diameter);
         
         // Initialize fluid system automatically
         // Create camera bind group layout for voxel rendering

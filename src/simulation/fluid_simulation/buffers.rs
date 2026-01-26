@@ -291,6 +291,11 @@ impl FluidBuffers {
     pub fn update_params(&self, queue: &wgpu::Queue, params: &FluidParams) {
         queue.write_buffer(&self.params, 0, bytemuck::cast_slice(&[*params]));
     }
+    
+    /// Update solid mask data
+    pub fn update_solid_mask(&self, queue: &wgpu::Queue, solid_mask: &[u32]) {
+        queue.write_buffer(&self.solid_mask, 0, bytemuck::cast_slice(solid_mask));
+    }
 }
 
 

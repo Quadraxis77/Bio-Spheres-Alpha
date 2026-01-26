@@ -51,6 +51,9 @@ pub struct ExtractParams {
 pub struct GpuFluidSimulator {
     // Single voxel state buffer
     state_buffer: wgpu::Buffer,
+    
+    // Solid mask buffer
+    solid_mask_buffer: wgpu::Buffer,
 
     // Parameters
     params_buffer: wgpu::Buffer,
@@ -80,7 +83,7 @@ pub struct GpuFluidSimulator {
 }
 
 impl GpuFluidSimulator {
-    pub fn new(device: &wgpu::Device, world_radius: f32, world_center: Vec3) -> Self {
+    pub fn new(device: &wgpu::Device, world_radius: f32, world_center: Vec3, solid_mask_buffer: wgpu::Buffer) -> Self {
         let world_diameter = world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = world_center - Vec3::splat(world_diameter / 2.0);
@@ -119,7 +122,7 @@ impl GpuFluidSimulator {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Create bind group layout (simpler: just params + single buffer)
+        // Create bind group layout (params + voxel buffer + solid mask)
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Fluid Sim Bind Group Layout"),
             entries: &[
@@ -138,6 +141,16 @@ impl GpuFluidSimulator {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -273,6 +286,7 @@ impl GpuFluidSimulator {
 
         Self {
             state_buffer,
+            solid_mask_buffer,
             params_buffer,
             world_radius,
             world_center,
@@ -303,6 +317,10 @@ impl GpuFluidSimulator {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: self.state_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.solid_mask_buffer.as_entire_binding(),
                 },
             ],
         })
