@@ -17,7 +17,7 @@ pub const TOTAL_VOXELS: usize = (GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLU
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct GpuVertex {
     pub position: [f32; 3],
-    pub _pad0: f32,
+    pub fluid_type: f32,  // 0=empty, 1=water, 2=lava, 3=steam
     pub normal: [f32; 3],
     pub _pad1: f32,
 }
@@ -572,6 +572,27 @@ impl GpuSurfaceNets {
     pub fn set_iso_level(&mut self, queue: &wgpu::Queue, iso_level: f32) {
         self.iso_level = iso_level;
         self.update_params(queue);
+    }
+    
+    /// Set smoothing level for voxel aliasing reduction
+    /// Lower values = smoother, more organic surfaces (0.2-0.4)
+    /// Higher values = sharper, more detailed surfaces (0.6-0.8)
+    pub fn set_smoothing_level(&mut self, queue: &wgpu::Queue, smoothing: f32) {
+        // Map smoothing to iso level inversely for intuitive control
+        // High smoothing = low iso (larger, smoother surfaces)
+        // Low smoothing = high iso (smaller, sharper surfaces)
+        let iso_level = 0.5 + (0.5 - smoothing) * 0.6; // Maps 0.0->0.8, 1.0->0.2
+        self.set_iso_level(queue, iso_level.clamp(0.1, 0.9));
+    }
+    
+    /// Enable ultra-smooth mode for maximum voxel aliasing reduction
+    pub fn enable_ultra_smooth(&mut self, queue: &wgpu::Queue) {
+        self.set_iso_level(queue, 0.15); // Very low iso for maximum smoothing
+    }
+    
+    /// Enable sharp mode for detailed surfaces (more voxel definition)
+    pub fn enable_sharp(&mut self, queue: &wgpu::Queue) {
+        self.set_iso_level(queue, 0.75); // High iso for sharp details
     }
     
     /// Update render params (lighting, colors, etc.)

@@ -9,7 +9,7 @@ struct FluidParams {
     direction: u32,  // 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z
 
     grid_origin: vec3<f32>,
-    // phase removed - using atomic operations instead
+    time: f32,  // Time for wave animations
 
     _pad0: u32,
     _pad1: u32,
@@ -73,16 +73,121 @@ fn is_in_bounds(pos: vec3<f32>) -> bool {
     return length(pos) < params.world_radius * 0.98; // Reduced dead zone near boundaries
 }
 
-// Simple hash function for pseudo-randomness based on position
-fn hash3d(pos: vec3<u32>) -> u32 {
-    let p = pos * vec3<u32>(73856093u, 19349663u, 83492791u);
-    return (p.x + p.y + p.z) ^ (p.x * p.y * p.z);
+// Perlin noise implementation
+fn fade(t: f32) -> f32 {
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
 }
 
-// Get pseudo-random value for this voxel-direction pair
-fn voxel_random(pos: vec3<u32>, direction: u32) -> f32 {
-    let hash = hash3d(pos + vec3<u32>(direction, direction * 2, direction * 3));
-    return f32(hash % 10000u) / 10000.0; // Normalize to [0,1]
+fn lerp(t: f32, a: f32, b: f32) -> f32 {
+    return a + t * (b - a);
+}
+
+fn grad(hash: u32, x: f32, y: f32, z: f32) -> f32 {
+    let h = hash & 15u;
+    var u: f32;
+    var v: f32;
+    
+    if h < 8u {
+        u = x;
+    } else {
+        u = y;
+    }
+    
+    if h < 4u {
+        v = y;
+    } else if h == 12u || h == 14u {
+        v = x;
+    } else {
+        v = z;
+    }
+    
+    var result: f32;
+    if (h & 1u) == 0u {
+        result = u;
+    } else {
+        result = -u;
+    }
+    
+    if (h & 2u) == 0u {
+        result = result + v;
+    } else {
+        result = result - v;
+    }
+    
+    return result;
+}
+
+fn perlin_noise(pos: vec3<f32>) -> f32 {
+    // Convert to integer lattice points
+    let X = u32(floor(pos.x)) & 255u;
+    let Y = u32(floor(pos.y)) & 255u;
+    let Z = u32(floor(pos.z)) & 255u;
+    
+    // Relative position within lattice cell
+    let x = pos.x - floor(pos.x);
+    let y = pos.y - floor(pos.y);
+    let z = pos.z - floor(pos.z);
+    
+    // Fade curves
+    let u = fade(x);
+    let v = fade(y);
+    let w = fade(z);
+    
+    // Hash coordinates for the 8 corners of the cube
+    let A = u32(X) + 1u;
+    let B = u32(Y) + 1u;
+    let C = u32(Z) + 1u;
+    
+    let h000 = (u32(X) + u32(Y) + u32(Z)) * 73856093u ^ 19349663u;
+    let h001 = (u32(X) + u32(Y) + u32(C)) * 73856093u ^ 83492791u;
+    let h010 = (u32(X) + u32(B) + u32(Z)) * 73856093u ^ 12673291u;
+    let h011 = (u32(X) + u32(B) + u32(C)) * 73856093u ^ 52328767u;
+    let h100 = (u32(A) + u32(Y) + u32(Z)) * 73856093u ^ 29537387u;
+    let h101 = (u32(A) + u32(Y) + u32(C)) * 73856093u ^ 97284321u;
+    let h110 = (u32(A) + u32(B) + u32(Z)) * 73856093u ^ 41283947u;
+    let h111 = (u32(A) + u32(B) + u32(C)) * 73856093u ^ 62348719u;
+    
+    // Interpolate
+    let n000 = grad(h000, x, y, z);
+    let n001 = grad(h001, x, y, z - 1.0);
+    let n010 = grad(h010, x, y - 1.0, z);
+    let n011 = grad(h011, x, y - 1.0, z - 1.0);
+    let n100 = grad(h100, x - 1.0, y, z);
+    let n101 = grad(h101, x - 1.0, y, z - 1.0);
+    let n110 = grad(h110, x - 1.0, y - 1.0, z);
+    let n111 = grad(h111, x - 1.0, y - 1.0, z - 1.0);
+    
+    let n00 = lerp(u, n000, n100);
+    let n01 = lerp(u, n001, n101);
+    let n10 = lerp(u, n010, n110);
+    let n11 = lerp(u, n011, n111);
+    
+    let n0 = lerp(v, n00, n10);
+    let n1 = lerp(v, n01, n11);
+    
+    return lerp(w, n0, n1);
+}
+
+// Get wave-based flow direction for smooth water surface movement
+fn get_wave_flow_direction(gid: vec3<u32>, time: f32) -> f32 {
+    // Use world position for wave patterns
+    let world_pos = grid_to_world(gid.x, gid.y, gid.z);
+    
+    // Create traveling waves in XZ plane
+    let wave_speed = 0.5;
+    let wave_frequency = 0.1;
+    
+    // Primary wave in X direction
+    let wave_x = sin(world_pos.x * wave_frequency + time * wave_speed);
+    
+    // Secondary wave in Z direction (90 degrees out of phase)
+    let wave_z = cos(world_pos.z * wave_frequency + time * wave_speed * 0.7);
+    
+    // Combine waves to create circular/elliptical flow patterns
+    let combined_wave = (wave_x + wave_z) * 0.5;
+    
+    // Normalize to [0, 1] for direction selection
+    return (combined_wave + 1.0) * 0.5;
 }
 
 // Direction offsets: +X, -X, +Y, -Y, +Z, -Z
@@ -106,6 +211,32 @@ fn get_checker_coord(pos: vec3<u32>, dir: u32) -> u32 {
     }
 }
 
+// Hash-based randomization for fair direction competition
+fn hash_position(pos: vec3<u32>) -> u32 {
+    return (pos.x * 73856093u ^ pos.y * 19349663u ^ pos.z * 83492791u) & 0xFFFFFFFFu;
+}
+
+// Get randomized horizontal direction order based on position and time
+fn get_horizontal_direction_order(gid: vec3<u32>, time: f32) -> array<u32, 4> {
+    let pos_hash = hash_position(gid);
+    let time_hash = u32(time * 1000.0) & 0xFFFFFFFFu;
+    let combined_hash = pos_hash ^ time_hash;
+    
+    // Use hash to determine starting offset in direction array
+    let start_offset = combined_hash & 3u;
+    
+    // Define all 4 horizontal directions
+    let all_directions = array<u32, 4>(0u, 1u, 4u, 5u); // +X, -X, +Z, -Z
+    
+    // Create rotated order based on hash
+    var order: array<u32, 4>;
+    for (var i = 0u; i < 4u; i++) {
+        order[i] = all_directions[(start_offset + i) & 3u];
+    }
+    
+    return order;
+}
+
 // Main simulation pass - GPU handles all movement with proper physics order
 @compute @workgroup_size(4, 4, 4)
 fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -115,33 +246,17 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Process gravity completely first, then horizontal spreading
+    // Phase 1: Process gravity (vertical movement)
     // This ensures water falls straight down without slant bias
-    
-    // Phase 1: Process both vertical directions for proper gravity
-    // Gravity needs both -Y and +Y to work correctly
     process_direction(gid, 3u); // -Y (downward)
     process_direction(gid, 2u); // +Y (upward prevention)
     
-    // Phase 2: Always process horizontal spreading (water spreads while falling)
-    // Real water spreads horizontally as it falls, not just when it hits bottom
-    var horizontal_dirs = array<u32, 4>(0u, 1u, 4u, 5u); // +X, -X, +Z, -Z
+    // Phase 2: Accelerated horizontal spreading for faster settling
+    let horizontal_order = get_horizontal_direction_order(gid, params.time);
     
-    // Fisher-Yates shuffle using voxel-specific randomization
-    var voxel_hash = hash3d(gid) + 12345u; // Different hash from gravity
-    for (var i = 3; i >= 0; i--) {
-        let j = (voxel_hash % u32(i + 1));
-        // Manual swap since WGSL doesn't have array.swap()
-        let temp = horizontal_dirs[i];
-        horizontal_dirs[i] = horizontal_dirs[j];
-        horizontal_dirs[j] = temp;
-        voxel_hash = hash3d(vec3<u32>(voxel_hash, voxel_hash >> 8, voxel_hash >> 16));
-    }
-    
-    // Process horizontal directions in random order
-    for (var i = 0; i < 4; i++) {
-        let direction = horizontal_dirs[i];
-        process_direction(gid, direction);
+    // Process all 4 horizontal directions with increased probability
+    for (var i = 0u; i < 4u; i++) {
+        process_direction(gid, horizontal_order[i]);
     }
 }
 
@@ -179,6 +294,82 @@ fn can_swap_vertical(gid: vec3<u32>, direction: u32) -> bool {
     return false;
 }
 
+// Fast horizontal processing for accelerated settling
+fn process_direction_fast(gid: vec3<u32>, direction: u32) {
+    let res = params.grid_resolution;
+    let offset = get_offset(direction);
+    let nx = i32(gid.x) + offset.x;
+    let ny = i32(gid.y) + offset.y;
+    let nz = i32(gid.z) + offset.z;
+
+    // Bounds check
+    if nx < 0 || nx >= i32(res) || ny < 0 || ny >= i32(res) || nz < 0 || nz >= i32(res) {
+        return;
+    }
+
+    let idx_a = grid_index(gid.x, gid.y, gid.z);
+    let idx_b = grid_index(u32(nx), u32(ny), u32(nz));
+
+    // Use checkerboard pattern to avoid duplicate work
+    let checker_coord = get_checker_coord(gid, direction);
+    if (checker_coord & 1u) == 0u {
+        return;
+    }
+
+    let state_a = atomicLoad(&voxels[idx_a]);
+    let state_b = atomicLoad(&voxels[idx_b]);
+
+    let type_a = get_fluid_type(state_a);
+    let type_b = get_fluid_type(state_b);
+
+    // Only consider swaps involving water (1) and empty (0)
+    let a_is_water = type_a == 1u;
+    let b_is_water = type_b == 1u;
+    let a_is_empty = type_a == 0u;
+    let b_is_empty = type_b == 0u;
+
+    // Skip if both same (both water or both empty) or neither water/empty
+    if !((a_is_water && b_is_empty) || (a_is_empty && b_is_water)) {
+        return;
+    }
+
+    // For horizontal directions: Use higher probability for faster spreading
+    if direction == 0u || direction == 1u || direction == 4u || direction == 5u {
+        // Increased probability from 50% to 80% for faster horizontal movement
+        let time_hash = u32(params.time * 1000.0) + direction * 12345u;
+        let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
+        let combined_hash = time_hash ^ pos_hash;
+        
+        // Only skip with 20% probability (was 50%)
+        if (combined_hash & 1u) == 0u && (combined_hash & 2u) == 0u {
+            return;
+        }
+    }
+
+    // Check world boundaries for both cells
+    let world_a = grid_to_world(gid.x, gid.y, gid.z);
+    let world_b = grid_to_world(u32(nx), u32(ny), u32(nz));
+    if !is_in_bounds(world_a) || !is_in_bounds(world_b) {
+        return;
+    }
+
+    // Atomic swap using compare-and-exchange
+    let result_a = atomicCompareExchangeWeak(&voxels[idx_a], state_a, 0xFFFFFFFFu);
+    if !result_a.exchanged {
+        return;
+    }
+    
+    let result_b = atomicCompareExchangeWeak(&voxels[idx_b], state_b, 0xFFFFFFFFu);
+    if !result_b.exchanged {
+        atomicExchange(&voxels[idx_a], state_a);
+        return;
+    }
+    
+    // Both cells claimed, perform the swap
+    atomicStore(&voxels[idx_a], state_b);
+    atomicStore(&voxels[idx_b], state_a);
+}
+
 fn process_direction(gid: vec3<u32>, direction: u32) {
     let res = params.grid_resolution;
     let offset = get_offset(direction);
@@ -194,8 +385,10 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
     let idx_a = grid_index(gid.x, gid.y, gid.z);
     let idx_b = grid_index(u32(nx), u32(ny), u32(nz));
 
-    // Only process if A < B to avoid duplicate work
-    if idx_a >= idx_b {
+    // Use simple checkerboard pattern based on grid position to avoid duplicate work
+    // This is more predictable than hash-based checkering
+    let checker_coord = get_checker_coord(gid, direction);
+    if (checker_coord & 1u) == 0u {
         return;
     }
 
@@ -238,11 +431,17 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
         // No randomization for vertical movement - pure deterministic gravity
     }
     
-    // For X/Z directions: no additional randomization needed
-    // True random direction ordering provides unbiased movement
+    // For X/Z directions: Use higher probability for faster horizontal spreading
     if direction == 0u || direction == 1u || direction == 4u || direction == 5u {
-        // X/Z directions - simple water-empty swaps only
-        // Random direction order eliminates all bias
+        // Increased probability from 50% to 87.5% for much faster horizontal movement
+        let time_hash = u32(params.time * 1000.0) + direction * 12345u;
+        let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
+        let combined_hash = time_hash ^ pos_hash;
+        
+        // Only skip with 12.5% probability (was 25%)
+        if (combined_hash & 1u) == 0u && (combined_hash & 2u) == 0u && (combined_hash & 4u) == 0u {
+            return;
+        }
     }
 
     // Check world boundaries for both cells

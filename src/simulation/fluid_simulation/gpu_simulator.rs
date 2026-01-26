@@ -19,15 +19,17 @@ pub struct GpuFluidParams {
     pub cell_size: f32,
     pub direction: u32,  // 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z
 
+    // vec3<f32> grid_origin - needs to match WGSL layout exactly
     pub grid_origin_x: f32,
     pub grid_origin_y: f32,
     pub grid_origin_z: f32,
-    pub _pad0: f32,  // vec3<f32> needs padding to 16-byte alignment
+    pub time: f32,  // Time for wave animations
 
+    // Additional padding to match WGSL struct size
+    pub _pad0: u32,
     pub _pad1: u32,
     pub _pad2: u32,
     pub _pad3: u32,
-    pub _pad4: u32,
 }
 
 /// Extract params (must match shader)
@@ -49,6 +51,7 @@ pub struct GpuFluidSimulator {
     params_buffer: wgpu::Buffer,
     world_radius: f32,
     world_center: Vec3,
+    time: std::cell::Cell<f32>,  // Time for wave animations (mutable)
 
     // Compute pipelines
     swap_pipeline: wgpu::ComputePipeline,
@@ -91,11 +94,11 @@ impl GpuFluidSimulator {
             grid_origin_x: grid_origin.x,
             grid_origin_y: grid_origin.y,
             grid_origin_z: grid_origin.z,
-            _pad0: 0.0,
+            time: 0.0,
+            _pad0: 0,
             _pad1: 0,
             _pad2: 0,
             _pad3: 0,
-            _pad4: 0,
         };
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -252,6 +255,7 @@ impl GpuFluidSimulator {
             params_buffer,
             world_radius,
             world_center,
+            time: std::cell::Cell::new(0.0),
             swap_pipeline,
             init_sphere_pipeline,
             clear_pipeline,
@@ -282,7 +286,7 @@ impl GpuFluidSimulator {
     }
 
     /// Update params buffer
-    fn update_params(&self, queue: &wgpu::Queue, direction: u32) {
+    fn update_params(&self, queue: &wgpu::Queue, direction: u32, time: f32) {
         let world_diameter = self.world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
@@ -295,11 +299,11 @@ impl GpuFluidSimulator {
             grid_origin_x: grid_origin.x,
             grid_origin_y: grid_origin.y,
             grid_origin_z: grid_origin.z,
-            _pad0: 0.0,
+            time,
+            _pad0: 0,
             _pad1: 0,
             _pad2: 0,
             _pad3: 0,
-            _pad4: 0,
         };
 
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
@@ -307,7 +311,7 @@ impl GpuFluidSimulator {
 
     /// Initialize with a water sphere
     pub fn init_water_sphere(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
-        self.update_params(queue, 0);
+        self.update_params(queue, 0, 0.0);
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
@@ -322,7 +326,7 @@ impl GpuFluidSimulator {
 
     /// Clear all fluid
     pub fn clear(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
-        self.update_params(queue, 0);
+        self.update_params(queue, 0, 0.0);
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
@@ -336,16 +340,20 @@ impl GpuFluidSimulator {
     }
 
     /// Step the simulation - 100% GPU with zero CPU logic
-    pub fn step(&self, device: &wgpu::Device, queue: &wgpu::Queue, _encoder: &mut wgpu::CommandEncoder, _dt: f32) {
+    pub fn step(&self, device: &wgpu::Device, queue: &wgpu::Queue, _encoder: &mut wgpu::CommandEncoder, dt: f32) {
         if self.paused {
             return;
         }
 
+        // Update time for wave animations
+        let current_time = self.time.get() + dt;
+        self.time.set(current_time);
+        
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
         let bind_group = self.create_bind_group(device);
 
         // Update parameters for GPU (required for shader logic)
-        self.update_params(queue, 3); // Set direction to -Y for gravity
+        self.update_params(queue, 3, current_time); // Set direction to -Y for gravity
 
         // Pure GPU dispatch - no CPU direction processing whatsoever
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

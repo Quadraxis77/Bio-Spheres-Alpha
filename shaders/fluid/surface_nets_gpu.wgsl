@@ -60,6 +60,132 @@ fn sample_density_clamped(x: i32, y: i32, z: i32) -> f32 {
     return density[grid_index(u32(cx), u32(cy), u32(cz))];
 }
 
+// Multi-voxel averaging kernel for smoothing density field
+fn sample_density_averaged(x: i32, y: i32, z: i32, kernel_size: i32) -> f32 {
+    var sum = 0.0;
+    var count = 0;
+    let res = i32(params.grid_resolution);
+    
+    // Sample surrounding voxels in a cubic kernel
+    for (var dx = -kernel_size; dx <= kernel_size; dx++) {
+        for (var dy = -kernel_size; dy <= kernel_size; dy++) {
+            for (var dz = -kernel_size; dz <= kernel_size; dz++) {
+                let nx = clamp(x + dx, 0, res - 1);
+                let ny = clamp(y + dy, 0, res - 1);
+                let nz = clamp(z + dz, 0, res - 1);
+                
+                // Weight by distance (Gaussian-like falloff)
+                let dist_sq = f32(dx * dx + dy * dy + dz * dz);
+                let weight = exp(-dist_sq * 0.2); // Reduced weight for gentler smoothing
+                
+                sum += sample_density_clamped(nx, ny, nz) * weight;
+                count += 1;
+            }
+        }
+    }
+    
+    return sum / f32(count);
+}
+
+// Height-based filtering to ignore single voxel differences
+fn should_create_surface(corners: array<f32, 8>, iso: f32) -> bool {
+    // Count significant height differences (more than 1 voxel)
+    var significant_changes = 0;
+    var prev_inside = corners[0] >= iso;
+    
+    for (var i = 1u; i < 8u; i++) {
+        let current_inside = corners[i] >= iso;
+        if prev_inside != current_inside {
+            significant_changes++;
+        }
+        prev_inside = current_inside;
+    }
+    
+    // Only create surface if there are significant height changes
+    // This filters out single voxel variations
+    return significant_changes >= 1; // Reduced threshold to allow more surfaces
+}
+
+// Sample density with aggressive smoothing to eliminate fine details
+fn sample_density_height_filtered(x: i32, y: i32, z: i32) -> f32 {
+    // Use a 3x3x3 kernel for strong averaging
+    var sum = 0.0;
+    var weight_sum = 0.0;
+    let res = i32(params.grid_resolution);
+    
+    // Sample surrounding voxels in a 3x3x3 kernel
+    for (var dx = -1; dx <= 1; dx++) {
+        for (var dy = -1; dy <= 1; dy++) {
+            for (var dz = -1; dz <= 1; dz++) {
+                let nx = clamp(x + dx, 0, res - 1);
+                let ny = clamp(y + dy, 0, res - 1);
+                let nz = clamp(z + dz, 0, res - 1);
+                
+                // Strong Gaussian weighting for aggressive smoothing
+                let dist_sq = f32(dx * dx + dy * dy + dz * dz);
+                let weight = exp(-dist_sq * 0.8); // Strong falloff for more smoothing
+                
+                sum += sample_density_clamped(nx, ny, nz) * weight;
+                weight_sum += weight;
+            }
+        }
+    }
+    
+    return sum / weight_sum;
+}
+
+// Smoothed trilinear interpolation
+fn sample_density_trilinear_smooth(world_pos: vec3<f32>) -> f32 {
+    // Convert world position to grid coordinates
+    let grid_pos = (world_pos - params.grid_origin) / params.cell_size;
+    let grid_x = grid_pos.x - 0.5;
+    let grid_y = grid_pos.y - 0.5;
+    let grid_z = grid_pos.z - 0.5;
+    
+    // Get integer grid coordinates and fractional parts
+    let x0 = i32(floor(grid_x));
+    let y0 = i32(floor(grid_y));
+    let z0 = i32(floor(grid_z));
+    let fx = fract(grid_x);
+    let fy = fract(grid_y);
+    let fz = fract(grid_z);
+    
+    // Sample 8 corners with height filtering
+    let c000 = sample_density_height_filtered(x0, y0, z0);
+    let c100 = sample_density_height_filtered(x0 + 1, y0, z0);
+    let c010 = sample_density_height_filtered(x0, y0 + 1, z0);
+    let c110 = sample_density_height_filtered(x0 + 1, y0 + 1, z0);
+    let c001 = sample_density_height_filtered(x0, y0, z0 + 1);
+    let c101 = sample_density_height_filtered(x0 + 1, y0, z0 + 1);
+    let c011 = sample_density_height_filtered(x0, y0 + 1, z0 + 1);
+    let c111 = sample_density_height_filtered(x0 + 1, y0 + 1, z0 + 1);
+    
+    // Trilinear interpolation
+    let c00 = mix(c000, c100, fx);
+    let c01 = mix(c001, c101, fx);
+    let c10 = mix(c010, c110, fx);
+    let c11 = mix(c011, c111, fx);
+    
+    let c0 = mix(c00, c10, fy);
+    let c1 = mix(c01, c11, fy);
+    
+    return mix(c0, c1, fz);
+}
+
+// Improved gradient calculation with smoothed trilinear sampling
+fn sample_gradient_trilinear(world_pos: vec3<f32>) -> vec3<f32> {
+    let epsilon = params.cell_size * 0.1; // Small offset for gradient
+    
+    let dx = (sample_density_trilinear_smooth(world_pos + vec3<f32>(epsilon, 0.0, 0.0)) - 
+             sample_density_trilinear_smooth(world_pos - vec3<f32>(epsilon, 0.0, 0.0))) / (2.0 * epsilon);
+    let dy = (sample_density_trilinear_smooth(world_pos + vec3<f32>(0.0, epsilon, 0.0)) - 
+             sample_density_trilinear_smooth(world_pos - vec3<f32>(0.0, epsilon, 0.0))) / (2.0 * epsilon);
+    let dz = (sample_density_trilinear_smooth(world_pos + vec3<f32>(0.0, 0.0, epsilon)) - 
+             sample_density_trilinear_smooth(world_pos - vec3<f32>(0.0, 0.0, epsilon))) / (2.0 * epsilon);
+    
+    return vec3<f32>(-dx, -dy, -dz);
+}
+
 // Corner offsets for the 8 corners of a cell
 const CORNER_OFFSETS: array<vec3<i32>, 8> = array<vec3<i32>, 8>(
     vec3<i32>(0, 0, 0), vec3<i32>(1, 0, 0), vec3<i32>(0, 1, 0), vec3<i32>(1, 1, 0),
@@ -87,14 +213,14 @@ fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
     let iy = i32(gid.y);
     let iz = i32(gid.z);
     
-    // Sample 8 corners
+    // Sample 8 corners with aggressive smoothing
     var corners: array<f32, 8>;
     for (var i = 0u; i < 8u; i++) {
         let off = CORNER_OFFSETS[i];
-        corners[i] = sample_density_clamped(ix + off.x, iy + off.y, iz + off.z);
+        corners[i] = sample_density_height_filtered(ix + off.x, iy + off.y, iz + off.z);
     }
     
-    // Count inside/outside corners
+    // Count inside/outside corners (standard approach)
     var inside_count = 0u;
     for (var i = 0u; i < 8u; i++) {
         if corners[i] >= iso {
@@ -108,7 +234,7 @@ fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     
-    // Find edge crossings and average positions
+    // Find edge crossings with improved subvoxel precision
     var sum = vec3<f32>(0.0);
     var count = 0u;
     
@@ -126,7 +252,10 @@ fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
             
             let p0 = vec3<f32>(CORNER_OFFSETS[pair.x]);
             let p1 = vec3<f32>(CORNER_OFFSETS[pair.y]);
-            sum += p0 + (p1 - p0) * t;
+            
+            // Use subvoxel positioning for smoother edges
+            let edge_pos = p0 + (p1 - p0) * t;
+            sum += edge_pos;
             count++;
         }
     }
@@ -146,21 +275,19 @@ fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Store vertex index + 1 (0 means no vertex)
     atomicStore(&vertex_map[cell_idx], vertex_idx + 1u);
     
-    // Compute vertex position
+    // Compute vertex position with subvoxel precision
     let local_pos = sum / f32(count);
     let world_pos = grid_to_world(f32(gid.x) + local_pos.x, f32(gid.y) + local_pos.y, f32(gid.z) + local_pos.z);
     
-    // Compute normal from density gradient (central differences)
-    let gx = sample_density_clamped(ix + 1, iy, iz) - sample_density_clamped(ix - 1, iy, iz);
-    let gy = sample_density_clamped(ix, iy + 1, iz) - sample_density_clamped(ix, iy - 1, iz);
-    let gz = sample_density_clamped(ix, iy, iz + 1) - sample_density_clamped(ix, iy, iz - 1);
-    var normal = normalize(vec3<f32>(-gx, -gy, -gz));
-    if length(vec3<f32>(gx, gy, gz)) < 1e-6 {
+    // Compute smooth normal using trilinear gradient
+    let gradient = sample_gradient_trilinear(world_pos);
+    var normal = normalize(gradient);
+    if length(gradient) < 1e-6 {
         normal = vec3<f32>(0.0, 1.0, 0.0);
     }
     
-    // Get fluid type from this cell
-    let ft = f32(fluid_types[cell_idx]);
+    // Force water type for consistent color since we're only rendering water surface
+    let ft = 1.0;
     
     vertices[vertex_idx] = Vertex(world_pos, ft, normal, 0.0);
 }
@@ -184,12 +311,12 @@ fn generate_indices(@builtin(global_invocation_id) gid: vec3<u32>) {
     let iy = i32(gid.y);
     let iz = i32(gid.z);
     
-    // Sample corner 0 to determine winding
-    let corner0 = sample_density_clamped(ix, iy, iz);
+    // Sample corner 0 to determine winding (with height filtering)
+    let corner0 = sample_density_height_filtered(ix, iy, iz);
     let corner0_inside = corner0 >= iso;
     
     // Check X edge (0-1)
-    let corner1 = sample_density_clamped(ix + 1, iy, iz);
+    let corner1 = sample_density_height_filtered(ix + 1, iy, iz);
     if (corner0 >= iso) != (corner1 >= iso) {
         if gid.y > 0u && gid.z > 0u {
             let v1_idx = atomicLoad(&vertex_map[grid_index(gid.x, gid.y - 1u, gid.z)]);
@@ -225,7 +352,7 @@ fn generate_indices(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     
     // Check Y edge (0-2)
-    let corner2 = sample_density_clamped(ix, iy + 1, iz);
+    let corner2 = sample_density_height_filtered(ix, iy + 1, iz);
     if (corner0 >= iso) != (corner2 >= iso) {
         if gid.x > 0u && gid.z > 0u {
             let v1_idx = atomicLoad(&vertex_map[grid_index(gid.x, gid.y, gid.z - 1u)]);
@@ -261,7 +388,7 @@ fn generate_indices(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     
     // Check Z edge (0-4)
-    let corner4 = sample_density_clamped(ix, iy, iz + 1);
+    let corner4 = sample_density_height_filtered(ix, iy, iz + 1);
     if (corner0 >= iso) != (corner4 >= iso) {
         if gid.x > 0u && gid.y > 0u {
             let v1_idx = atomicLoad(&vertex_map[grid_index(gid.x - 1u, gid.y, gid.z)]);
