@@ -57,6 +57,7 @@ pub struct GpuSurfaceNets {
     // Buffers
     density_buffer: wgpu::Buffer,
     fluid_type_buffer: wgpu::Buffer,
+    solid_mask_buffer: wgpu::Buffer,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     #[allow(dead_code)]
@@ -179,6 +180,13 @@ impl GpuSurfaceNets {
             mapped_at_creation: false,
         });
         
+        let solid_mask_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Solid Mask Buffer"),
+            size: (TOTAL_VOXELS * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Surface Nets Vertex Buffer"),
             size: (max_vertices as usize * std::mem::size_of::<GpuVertex>()) as u64,
@@ -294,7 +302,7 @@ impl GpuSurfaceNets {
                     binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -340,6 +348,16 @@ impl GpuSurfaceNets {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         
@@ -350,11 +368,12 @@ impl GpuSurfaceNets {
                 wgpu::BindGroupEntry { binding: 0, resource: params_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: density_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: fluid_type_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: vertex_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: index_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: vertex_map_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: counter_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 7, resource: indirect_draw_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: solid_mask_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: vertex_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: index_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: vertex_map_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: counter_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8, resource: indirect_draw_buffer.as_entire_binding() },
             ],
         });
         
@@ -535,6 +554,7 @@ impl GpuSurfaceNets {
             render_pipeline,
             density_buffer,
             fluid_type_buffer,
+            solid_mask_buffer,
             vertex_buffer,
             index_buffer,
             vertex_map_buffer,
@@ -568,6 +588,12 @@ impl GpuSurfaceNets {
     pub fn upload_fluid_types(&self, queue: &wgpu::Queue, fluid_types: &[u32]) {
         assert_eq!(fluid_types.len(), TOTAL_VOXELS);
         queue.write_buffer(&self.fluid_type_buffer, 0, bytemuck::cast_slice(fluid_types));
+    }
+    
+    /// Upload solid mask data to GPU
+    pub fn upload_solid_mask(&self, queue: &wgpu::Queue, solid_mask: &[u32]) {
+        assert_eq!(solid_mask.len(), TOTAL_VOXELS);
+        queue.write_buffer(&self.solid_mask_buffer, 0, bytemuck::cast_slice(solid_mask));
     }
 
     /// Get density buffer for GPU writes

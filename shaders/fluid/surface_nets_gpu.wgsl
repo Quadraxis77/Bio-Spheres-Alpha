@@ -37,11 +37,12 @@ struct IndirectDraw {
 @group(0) @binding(0) var<uniform> params: SurfaceNetsParams;
 @group(0) @binding(1) var<storage, read> density: array<f32>;
 @group(0) @binding(2) var<storage, read> fluid_types: array<u32>;
-@group(0) @binding(3) var<storage, read_write> vertices: array<Vertex>;
-@group(0) @binding(4) var<storage, read_write> indices: array<u32>;
-@group(0) @binding(5) var<storage, read_write> vertex_map: array<atomic<u32>>;
-@group(0) @binding(6) var<storage, read_write> counters: Counter;
-@group(0) @binding(7) var<storage, read_write> indirect_draw: IndirectDraw;
+@group(0) @binding(3) var<storage, read> solid_mask: array<u32>;
+@group(0) @binding(4) var<storage, read_write> vertices: array<Vertex>;
+@group(0) @binding(5) var<storage, read_write> indices: array<u32>;
+@group(0) @binding(6) var<storage, read_write> vertex_map: array<atomic<u32>>;
+@group(0) @binding(7) var<storage, read_write> counters: Counter;
+@group(0) @binding(8) var<storage, read_write> indirect_draw: IndirectDraw;
 
 fn grid_index(x: u32, y: u32, z: u32) -> u32 {
     let res = params.grid_resolution;
@@ -58,6 +59,77 @@ fn sample_density_clamped(x: i32, y: i32, z: i32) -> f32 {
     let cy = clamp(y, 0, res - 1);
     let cz = clamp(z, 0, res - 1);
     return density[grid_index(u32(cx), u32(cy), u32(cz))];
+}
+
+// Check if a position is solid (from solid mask)
+fn is_solid(x: u32, y: u32, z: u32) -> bool {
+    let idx = grid_index(x, y, z);
+    return solid_mask[idx] == 1u;
+}
+
+// Check if a position is at world boundary
+fn is_at_boundary(x: i32, y: i32, z: i32) -> bool {
+    let res = i32(params.grid_resolution);
+    return x < 0 || x >= res || y < 0 || y >= res || z < 0 || z >= res;
+}
+
+// GREEDY APPROACH: Only create surface if water touches empty space (not solid or boundary)
+fn should_create_water_surface(x: i32, y: i32, z: i32) -> bool {
+    // First check if this voxel actually contains water
+    if x < 0 || y < 0 || z < 0 {
+        return false;
+    }
+    
+    let res = i32(params.grid_resolution);
+    if x >= res || y >= res || z >= res {
+        return false;
+    }
+    
+    let idx = grid_index(u32(x), u32(y), u32(z));
+    let water_density = density[idx];
+    
+    // Must have water to create surface
+    if water_density <= params.iso_level {
+        return false;
+    }
+    
+    // Check all 6 neighbors - if ANY is empty space, create surface
+    // If ALL neighbors are either water or solid/boundary, DON'T create surface
+    let offsets = array<vec3<i32>, 6>(
+        vec3<i32>(1, 0, 0),   // +X
+        vec3<i32>(-1, 0, 0),  // -X
+        vec3<i32>(0, 1, 0),   // +Y
+        vec3<i32>(0, -1, 0),  // -Y
+        vec3<i32>(0, 0, 1),   // +Z
+        vec3<i32>(0, 0, -1)   // -Z
+    );
+    
+    for (var i = 0u; i < 6u; i++) {
+        let nx = x + offsets[i].x;
+        let ny = y + offsets[i].y;
+        let nz = z + offsets[i].z;
+        
+        // If neighbor is outside boundary, this water touches world boundary - NO SURFACE
+        if is_at_boundary(nx, ny, nz) {
+            continue; // Skip this neighbor, don't create surface for boundary contact
+        }
+        
+        // If neighbor is solid, water touches solid - NO SURFACE
+        if is_solid(u32(nx), u32(ny), u32(nz)) {
+            continue; // Skip this neighbor, don't create surface for solid contact
+        }
+        
+        // If neighbor is empty (no water), water touches air - CREATE SURFACE
+        let neighbor_idx = grid_index(u32(nx), u32(ny), u32(nz));
+        let neighbor_density = density[neighbor_idx];
+        
+        if neighbor_density <= params.iso_level {
+            return true; // Water touches empty space - create surface!
+        }
+    }
+    
+    // All neighbors are either water, solid, or boundary - NO SURFACE
+    return false;
 }
 
 // Multi-voxel averaging kernel for smoothing density field
@@ -212,6 +284,26 @@ fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ix = i32(gid.x);
     let iy = i32(gid.y);
     let iz = i32(gid.z);
+    
+    // GREEDY APPROACH: Check if any corner of this cell should create a surface
+    var should_create_surface = false;
+    for (var cx = 0; cx < 2; cx++) {
+        for (var cy = 0; cy < 2; cy++) {
+            for (var cz = 0; cz < 2; cz++) {
+                if should_create_water_surface(ix + cx, iy + cy, iz + cz) {
+                    should_create_surface = true;
+                    break;
+                }
+            }
+            if should_create_surface { break; }
+        }
+        if should_create_surface { break; }
+    }
+    
+    if !should_create_surface {
+        atomicStore(&vertex_map[cell_idx], 0u);
+        return;
+    }
     
     // Sample 8 corners with aggressive smoothing
     var corners: array<f32, 8>;

@@ -2115,11 +2115,17 @@ impl GpuScene {
             // Update the solid mask buffer
             fluid_buffers.update_solid_mask(queue, &solid_mask);
             
+            // Also update surface nets with the solid mask for greedy water surface generation
+            if let Some(ref gpu_surface_nets) = self.gpu_surface_nets {
+                gpu_surface_nets.upload_solid_mask(queue, &solid_mask);
+            }
+            
             log::info!("Updated solid mask with {} solid voxels", 
                 solid_mask.iter().sum::<u32>());
         }
     }
     
+// ... (rest of the code remains the same)
     /// Check and update cave world radius if world diameter changed
     pub fn check_world_diameter_change(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, world_diameter: f32) {
         // Check if world diameter changed significantly (more than 0.1 units)
