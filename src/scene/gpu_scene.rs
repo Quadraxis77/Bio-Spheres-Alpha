@@ -2043,11 +2043,11 @@ impl GpuScene {
         }
     }
 
-    /// Reset fluid and respawn water sphere
+    /// Reset fluid (clear only, no sphere respawn)
     pub fn reset_fluid(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
         if let Some(ref mut simulator) = self.fluid_simulator {
             simulator.clear(device, queue, encoder);
-            simulator.init_water_sphere(device, queue, encoder);
+            // Removed automatic sphere generation - fluid stays empty after reset
         }
     }
 
