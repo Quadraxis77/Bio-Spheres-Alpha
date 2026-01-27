@@ -6,21 +6,30 @@ use crate::simulation::adhesion_inheritance::inherit_adhesions_on_division;
 use crate::genome::Genome;
 
 /// Deterministic pseudo-random rotation for cell division
-/// Generates small rotation perturbations (0.001 radians) for visual variety
+/// Generates small rotation perturbations for visual variety
 fn pseudo_random_rotation(cell_id: u32, rng_seed: u64) -> Quat {
-    // Simple deterministic hash for pseudo-randomness
-    let hash = ((cell_id as u64).wrapping_mul(2654435761).wrapping_add(rng_seed)) % 1000;
-    let angle = (hash as f32 / 1000.0) * 0.001; // 0.001 radian max perturbation
+    // Better deterministic hash for more variety
+    let hash1 = ((cell_id as u64).wrapping_mul(2654435761).wrapping_add(rng_seed)) % 1000000;
+    let hash2 = ((cell_id as u64).wrapping_mul(1597334677).wrapping_add(rng_seed.wrapping_mul(3))) % 1000000;
     
-    // Random axis
-    let axis_hash = hash.wrapping_mul(7919) % 3;
-    let axis = match axis_hash {
-        0 => Vec3::X,
-        1 => Vec3::Y,
-        _ => Vec3::Z,
+    // Generate angle in range [0.001, 0.1] radians for more visible variety
+    let angle = (hash1 as f32 / 1000000.0) * 0.099 + 0.001;
+    
+    // Generate random axis using both hashes for more variety
+    let x = (hash2 as f32 / 1000000.0) * 2.0 - 1.0; // [-1, 1]
+    let y = ((hash2.wrapping_mul(7) % 1000000) as f32 / 1000000.0) * 2.0 - 1.0; // [-1, 1]
+    let z = ((hash2.wrapping_mul(13) % 1000000) as f32 / 1000000.0) * 2.0 - 1.0; // [-1, 1]
+    
+    let axis = Vec3::new(x, y, z).normalize_or_zero();
+    
+    // Fallback to a default axis if normalization fails (very unlikely)
+    let final_axis = if axis.length_squared() > 0.001 {
+        axis
+    } else {
+        Vec3::new(1.0, 0.0, 0.0)
     };
     
-    Quat::from_axis_angle(axis, angle)
+    Quat::from_axis_angle(final_axis, angle)
 }
 
 /// Cell division step - processes all cells ready to divide

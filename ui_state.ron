@@ -6,6 +6,36 @@
     lock_tabs: false,
     lock_close_buttons: false,
     scene_configs: {
+        Preview: (
+            visibility: (
+                show_cell_inspector: false,
+                show_genome_editor: true,
+                show_scene_manager: false,
+                show_performance_monitor: false,
+                show_rendering_controls: false,
+                show_time_scrubber: false,
+                show_theme_editor: false,
+                show_camera_settings: false,
+                show_lighting_settings: false,
+            ),
+            locked_windows: [
+                "Modes",
+                "SceneManager",
+                "QuaternionBall",
+                "LeftPanel",
+                "TimeSlider",
+                "BottomPanel",
+                "RightPanel",
+                "Viewport",
+                "CircleSliders",
+                "NameTypeEditor",
+            ],
+            lock_settings: (
+                lock_tab_bar: false,
+                lock_tabs: false,
+                lock_close_buttons: false,
+            ),
+        ),
         Gpu: (
             visibility: (
                 show_cell_inspector: true,
@@ -22,36 +52,6 @@
                 "RightPanel",
                 "SceneManager",
                 "Viewport",
-            ],
-            lock_settings: (
-                lock_tab_bar: false,
-                lock_tabs: false,
-                lock_close_buttons: false,
-            ),
-        ),
-        Preview: (
-            visibility: (
-                show_cell_inspector: false,
-                show_genome_editor: true,
-                show_scene_manager: false,
-                show_performance_monitor: false,
-                show_rendering_controls: false,
-                show_time_scrubber: false,
-                show_theme_editor: false,
-                show_camera_settings: false,
-                show_lighting_settings: false,
-            ),
-            locked_windows: [
-                "Modes",
-                "QuaternionBall",
-                "SceneManager",
-                "RightPanel",
-                "NameTypeEditor",
-                "Viewport",
-                "BottomPanel",
-                "LeftPanel",
-                "CircleSliders",
-                "TimeSlider",
             ],
             lock_settings: (
                 lock_tab_bar: false,
