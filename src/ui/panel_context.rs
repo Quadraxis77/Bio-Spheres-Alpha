@@ -153,6 +153,7 @@ pub struct GenomeEditorState {
     pub fluid_gravity_z: bool,
     pub fluid_vorticity_epsilon: f32,
     pub fluid_pressure_iterations: u32,
+    pub fluid_lateral_flow_probability: f32,
     
     // Fluid visualization
     pub fluid_show_voxel_grid: bool,
@@ -296,6 +297,7 @@ impl GenomeEditorState {
             fluid_gravity_z: false,
             fluid_vorticity_epsilon: 0.05,
             fluid_pressure_iterations: 10,
+            fluid_lateral_flow_probability: 0.8,
             fluid_show_voxel_grid: true,
             fluid_show_solid_only: false,
             fluid_show_wireframe: false,

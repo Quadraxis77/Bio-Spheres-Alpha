@@ -31,10 +31,12 @@ pub struct GpuFluidParams {
     pub gravity_dir_y: f32,
     pub gravity_dir_z: f32,
 
+    // Lateral flow probability (0.0 to 1.0)
+    pub lateral_flow_probability: f32,
+
     // Additional padding to match WGSL struct size
     pub _pad0: u32,
     pub _pad1: u32,
-    pub _pad2: u32,
 }
 
 /// Extract params (must match shader)
@@ -142,9 +144,9 @@ impl GpuFluidSimulator {
             gravity_dir_x: 0.0,
             gravity_dir_y: -9.8,  // Default gravity pointing down (-Y)
             gravity_dir_z: 0.0,
+            lateral_flow_probability: 0.8,  // Default 80% probability
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -463,7 +465,7 @@ impl GpuFluidSimulator {
     }
 
     /// Update params buffer
-    fn update_params(&self, queue: &wgpu::Queue, direction: u32, time: f32, gravity_magnitude: f32, gravity_dir: [bool; 3]) {
+    fn update_params(&self, queue: &wgpu::Queue, direction: u32, time: f32, gravity_magnitude: f32, gravity_dir: [bool; 3], lateral_flow_probability: f32) {
         let world_diameter = self.world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
@@ -490,9 +492,9 @@ impl GpuFluidSimulator {
             gravity_dir_x: grav_x,
             gravity_dir_y: grav_y,
             gravity_dir_z: grav_z,
+            lateral_flow_probability,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
 
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
@@ -500,7 +502,7 @@ impl GpuFluidSimulator {
 
     /// Initialize with a water sphere
     pub fn init_water_sphere(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
-        self.update_params(queue, 0, 0.0, 9.8, [false, true, false]);
+        self.update_params(queue, 0, 0.0, 9.8, [false, true, false], 0.8);
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
@@ -515,7 +517,7 @@ impl GpuFluidSimulator {
 
     /// Continuously spawn water at the top of the world
     pub fn spawn_continuous(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, time: f32) {
-        self.update_params(queue, 0, time, 9.8, [false, true, false]);
+        self.update_params(queue, 0, time, 9.8, [false, true, false], 0.8);
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
@@ -530,7 +532,7 @@ impl GpuFluidSimulator {
 
     /// Clear all fluid
     pub fn clear(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
-        self.update_params(queue, 0, 0.0, 9.8, [false, true, false]);
+        self.update_params(queue, 0, 0.0, 9.8, [false, true, false], 0.8);
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
@@ -554,7 +556,7 @@ impl GpuFluidSimulator {
     }
 
     /// Step the simulation - 100% GPU with zero CPU logic
-    pub fn step(&self, device: &wgpu::Device, queue: &wgpu::Queue, _encoder: &mut wgpu::CommandEncoder, dt: f32, gravity_magnitude: f32, gravity_dir: [bool; 3]) {
+    pub fn step(&self, device: &wgpu::Device, queue: &wgpu::Queue, _encoder: &mut wgpu::CommandEncoder, dt: f32, gravity_magnitude: f32, gravity_dir: [bool; 3], lateral_flow_probability: f32) {
         if self.paused {
             return;
         }
@@ -567,7 +569,7 @@ impl GpuFluidSimulator {
         let bind_group = self.create_bind_group(device);
 
         // Update parameters for GPU (required for shader logic)
-        self.update_params(queue, 3, current_time, gravity_magnitude, gravity_dir); // Set direction to -Y for gravity
+        self.update_params(queue, 3, current_time, gravity_magnitude, gravity_dir, lateral_flow_probability); // Set direction to -Y for gravity
 
         // Pure GPU dispatch - no CPU direction processing whatsoever
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

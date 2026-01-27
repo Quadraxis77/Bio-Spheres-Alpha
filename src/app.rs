@@ -486,6 +486,9 @@ impl App {
                 self.ui.state.gravity_z,
             ];
 
+            // Apply lateral flow probability from UI
+            gpu_scene.lateral_flow_probability = self.editor_state.fluid_lateral_flow_probability;
+
             // Set culling mode based on enabled flags
             let culling_mode = match (self.ui.state.frustum_enabled, self.ui.state.occlusion_enabled) {
                 (true, true) => crate::rendering::CullingMode::FrustumAndOcclusion,

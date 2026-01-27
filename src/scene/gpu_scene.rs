@@ -140,6 +140,8 @@ pub struct GpuScene {
     pub gravity: f32,
     /// Gravity direction flags (X, Y, Z)
     pub gravity_dir: [bool; 3],
+    /// Lateral flow probability for fluid simulation (0.0 to 1.0)
+    pub lateral_flow_probability: f32,
     /// Current cell count (tracked on GPU, no CPU canonical state)
     pub current_cell_count: u32,
     /// Next cell ID for deterministic cell creation
@@ -292,6 +294,7 @@ impl GpuScene {
             lod_debug_colors: false,
             gravity: 0.0,
             gravity_dir: [false, true, false],
+            lateral_flow_probability: 0.8,
             current_cell_count: 0,
             next_cell_id: 0,
             tail_renderer,
@@ -2030,7 +2033,7 @@ impl GpuScene {
     /// Step the GPU fluid simulation and update water bitfield for cell buoyancy
     pub fn step_fluid_simulation(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, dt: f32) {
         if let Some(ref simulator) = self.fluid_simulator {
-            simulator.step(device, queue, encoder, dt, self.gravity, self.gravity_dir);
+            simulator.step(device, queue, encoder, dt, self.gravity, self.gravity_dir, self.lateral_flow_probability);
             // Update water bitfield for cell physics (compressed 32x for fast lookup)
             simulator.update_water_bitfield(device, encoder);
         }

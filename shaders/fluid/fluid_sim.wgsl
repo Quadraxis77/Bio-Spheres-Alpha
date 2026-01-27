@@ -19,9 +19,11 @@ struct FluidParams {
     gravity_dir_y: f32,
     gravity_dir_z: f32,
 
+    // Lateral flow probability (0.0 to 1.0)
+    lateral_flow_probability: f32,
+
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: FluidParams;
@@ -483,15 +485,16 @@ fn process_direction_fast(gid: vec3<u32>, direction: u32) {
         return;
     }
 
-    // For horizontal directions: Use higher probability for faster spreading
+    // For horizontal directions: Use configurable probability for lateral movement
     if direction == 0u || direction == 1u || direction == 4u || direction == 5u {
-        // Increased probability from 50% to 80% for faster horizontal movement
+        // Use the configurable lateral flow probability
         let time_hash = u32(params.time * 1000.0) + direction * 12345u;
         let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
         let combined_hash = time_hash ^ pos_hash;
         
-        // Only skip with 20% probability (was 50%)
-        if (combined_hash & 1u) == 0u && (combined_hash & 2u) == 0u {
+        // Skip movement based on lateral flow probability (0.0 = never, 1.0 = always)
+        let probability_threshold = params.lateral_flow_probability * 255.0;
+        if (combined_hash & 255u) > u32(probability_threshold) {
             return;
         }
     }
@@ -607,15 +610,16 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
         }
     }
     
-    // For non-gravity directions: Use higher probability for faster horizontal spreading
+    // For non-gravity directions: Use configurable probability for lateral spreading
     if abs(alignment) <= 0.5 {
-        // Increased probability from 50% to 87.5% for much faster horizontal movement
+        // Use the configurable lateral flow probability
         let time_hash = u32(params.time * 1000.0) + direction * 12345u;
         let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
         let combined_hash = time_hash ^ pos_hash;
         
-        // Only skip with 12.5% probability (was 25%)
-        if (combined_hash & 1u) == 0u && (combined_hash & 2u) == 0u && (combined_hash & 4u) == 0u {
+        // Skip movement based on lateral flow probability (0.0 = never, 1.0 = always)
+        let probability_threshold = params.lateral_flow_probability * 255.0;
+        if (combined_hash & 255u) > u32(probability_threshold) {
             return;
         }
     }

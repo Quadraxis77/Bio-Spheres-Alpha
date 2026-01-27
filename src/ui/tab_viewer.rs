@@ -1055,6 +1055,29 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
     }
     
     ui.add_space(10.0);
+    
+    // Lateral flow probability control
+    ui.separator();
+    ui.label("Lateral Flow Control:");
+    ui.add_space(3.0);
+    
+    ui.horizontal(|ui| {
+        ui.label("Probability:");
+        let mut probability = context.editor_state.fluid_lateral_flow_probability;
+        if ui.add(egui::Slider::new(&mut probability, 0.0..=1.0)
+            .step_by(0.01)
+            .fixed_decimals(2)
+            .suffix(" (0.0 = never, 1.0 = always)")
+        ).changed() {
+            context.editor_state.fluid_lateral_flow_probability = probability;
+        }
+    });
+    
+    ui.add_space(5.0);
+    ui.label(format!("Current: {:.0}% chance of lateral movement", context.editor_state.fluid_lateral_flow_probability * 100.0));
+    ui.label("Lower values = more vertical flow, Higher values = more spreading");
+    
+    ui.add_space(10.0);
 }
 
 /// Render the TimeScrubber panel (placeholder).
