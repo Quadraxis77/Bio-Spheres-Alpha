@@ -149,15 +149,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         fixed_to_float(force_accum_z[cell_idx])
     );
 
-    // Check if cell is in water - if so, reverse gravity for buoyancy
+    // Check if cell is in water - if so, reduce gravity by 95%
     let in_water = is_in_water(pos);
     var gravity_multiplier = 1.0;
     if (in_water) {
-        // Reverse gravity when in water (cell floats up)
-        gravity_multiplier = -water_params.buoyancy_multiplier;
+        // Reduce gravity to 5% when in water (95% less influenced)
+        gravity_multiplier = 0.05;
     }
 
-    // Apply gravity (F = mg) in selected directions, reversed if in water
+    // Apply gravity (F = mg) in selected directions, reduced if in water
     let gravity_force = params.gravity * mass * gravity_multiplier;
     force.x += gravity_force * params.gravity_dir_x;
     force.y += gravity_force * params.gravity_dir_y;
