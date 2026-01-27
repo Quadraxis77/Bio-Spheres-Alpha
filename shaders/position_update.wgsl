@@ -26,6 +26,18 @@ struct PhysicsParams {
     gravity_dir_z: f32,
 }
 
+// Water grid parameters for buoyancy (must match WaterGridParams in Rust)
+struct WaterGridParams {
+    grid_resolution: u32,
+    cell_size: f32,
+    grid_origin_x: f32,
+    grid_origin_y: f32,
+    grid_origin_z: f32,
+    buoyancy_multiplier: f32,
+    _pad0: f32,
+    _pad1: f32,
+}
+
 @group(0) @binding(0)
 var<uniform> params: PhysicsParams;
 
@@ -65,11 +77,56 @@ var<storage, read> force_accum_z: array<i32>;
 @group(2) @binding(3)
 var<storage, read_write> prev_accelerations: array<vec4<f32>>;
 
+// Water bitfield for buoyancy (group 2, bindings 4-5) - 32x compressed water detection
+// Each u32 contains 32 voxels packed as bits (1 = water, 0 = not water)
+@group(2) @binding(4)
+var<uniform> water_params: WaterGridParams;
+
+@group(2) @binding(5)
+var<storage, read> water_bitfield: array<u32>;
+
 const FIXED_POINT_SCALE: f32 = 1000.0;
+const WATER_GRID_X_GROUPS: u32 = 4u;  // 128 / 32 = 4 u32s per row
 
 // Convert fixed-point i32 back to float
 fn fixed_to_float(v: i32) -> f32 {
     return f32(v) / FIXED_POINT_SCALE;
+}
+
+// Check if a world position is inside water using the compressed bitfield
+// Returns true if the cell is in a water voxel
+fn is_in_water(world_pos: vec3<f32>) -> bool {
+    let res = water_params.grid_resolution;
+
+    // Convert world position to grid coordinates
+    let grid_pos = vec3<f32>(
+        (world_pos.x - water_params.grid_origin_x) / water_params.cell_size,
+        (world_pos.y - water_params.grid_origin_y) / water_params.cell_size,
+        (world_pos.z - water_params.grid_origin_z) / water_params.cell_size
+    );
+
+    // Bounds check - outside grid means not in water
+    if (grid_pos.x < 0.0 || grid_pos.x >= f32(res) ||
+        grid_pos.y < 0.0 || grid_pos.y >= f32(res) ||
+        grid_pos.z < 0.0 || grid_pos.z >= f32(res)) {
+        return false;
+    }
+
+    // Convert to integer grid coordinates
+    let gx = u32(grid_pos.x);
+    let gy = u32(grid_pos.y);
+    let gz = u32(grid_pos.z);
+
+    // Calculate bitfield index
+    // Bitfield layout: each u32 contains 32 consecutive voxels along X axis
+    // bitfield_idx = (x / 32) + y * 4 + z * 4 * 128
+    let x_group = gx / 32u;
+    let bit_index = gx % 32u;
+    let bitfield_idx = x_group + gy * WATER_GRID_X_GROUPS + gz * WATER_GRID_X_GROUPS * res;
+
+    // Read the u32 containing this voxel and extract the bit
+    let bits = water_bitfield[bitfield_idx];
+    return (bits & (1u << bit_index)) != 0u;
 }
 
 @compute @workgroup_size(256)
@@ -92,8 +149,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         fixed_to_float(force_accum_z[cell_idx])
     );
 
-    // Apply gravity (F = mg) in selected directions
-    let gravity_force = params.gravity * mass;
+    // Check if cell is in water - if so, reverse gravity for buoyancy
+    let in_water = is_in_water(pos);
+    var gravity_multiplier = 1.0;
+    if (in_water) {
+        // Reverse gravity when in water (cell floats up)
+        gravity_multiplier = -water_params.buoyancy_multiplier;
+    }
+
+    // Apply gravity (F = mg) in selected directions, reversed if in water
+    let gravity_force = params.gravity * mass * gravity_multiplier;
     force.x += gravity_force * params.gravity_dir_x;
     force.y += gravity_force * params.gravity_dir_y;
     force.z += gravity_force * params.gravity_dir_z;

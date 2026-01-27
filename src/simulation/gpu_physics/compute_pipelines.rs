@@ -49,6 +49,16 @@
 //! | Binding | Type | Buffer |
 //! |---------|------|--------|
 //! | 0 | Storage (read) | nutrient_gain_rates |
+//!
+//! ### Position Update Force Accum Bind Group (Group 2 for position_update shader)
+//! | Binding | Type | Buffer |
+//! |---------|------|--------|
+//! | 0 | Storage (read) | force_accum_x |
+//! | 1 | Storage (read) | force_accum_y |
+//! | 2 | Storage (read) | force_accum_z |
+//! | 3 | Storage (read_write) | prev_accelerations |
+//! | 4 | Uniform | water_grid_params |
+//! | 5 | Storage (read) | water_bitfield |
 
 use super::GpuTripleBufferSystem;
 
@@ -364,7 +374,7 @@ impl GpuPhysicsPipelines {
         // Create swim force bind group layouts
         let swim_force_force_accum_layout = Self::create_swim_force_force_accum_bind_group_layout(device);
         let swim_force_cell_data_layout = Self::create_swim_force_cell_data_bind_group_layout(device);
-        
+
         // Create cell insertion bind group layouts
         let cell_insertion_physics_layout = Self::create_cell_insertion_physics_bind_group_layout(device);
         let cell_insertion_params_layout = Self::create_cell_insertion_params_bind_group_layout(device);
@@ -1040,7 +1050,14 @@ impl GpuPhysicsPipelines {
         ];
         
         // Position update force accum bind group (same for all frames)
-        let position_update_force_accum = self.create_position_update_force_accum_bind_group(device, adhesion_buffers, buffers);
+        // Water buffers are None - will use default empty buffers
+        let position_update_force_accum = self.create_position_update_force_accum_bind_group(
+            device, 
+            adhesion_buffers, 
+            buffers, 
+            None, 
+            None
+        );
         
         // Velocity update angular bind group (same for all frames)
         let velocity_update_angular = self.create_velocity_update_angular_bind_group(device, adhesion_buffers, buffers);
@@ -1056,7 +1073,11 @@ impl GpuPhysicsPipelines {
             self.create_swim_force_force_accum_bind_group(device, adhesion_buffers, buffers, 2),
         ];
         let swim_force_cell_data = self.create_swim_force_cell_data_bind_group(device, buffers);
-        
+
+        // Create default empty water bitfield bind group
+        // This ensures the shader always has valid data even when fluid system is not initialized
+        // Note: Water buffers are now part of position_update_force_accum bind group
+
         CachedBindGroups {
             physics,
             spatial_grid,
@@ -2517,6 +2538,28 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 4: Water grid params (uniform)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: Water bitfield (read-only storage)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -2673,7 +2716,57 @@ impl GpuPhysicsPipelines {
         device: &wgpu::Device,
         adhesion_buffers: &super::AdhesionBuffers,
         triple_buffers: &GpuTripleBufferSystem,
+        water_grid_params_buffer: Option<&wgpu::Buffer>,
+        water_bitfield_buffer: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
+        use wgpu::util::DeviceExt;
+
+        // Create default water buffers if not provided
+        let (water_grid_params_buffer, water_bitfield_buffer) = match (water_grid_params_buffer, water_bitfield_buffer) {
+            (Some(params), Some(bitfield)) => (params.clone(), bitfield.clone()),
+            _ => {
+                // Default params with grid_resolution=0 which will cause all position lookups to be out of bounds
+                #[repr(C)]
+                #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+                struct DefaultWaterGridParams {
+                    grid_resolution: u32,
+                    cell_size: f32,
+                    grid_origin_x: f32,
+                    grid_origin_y: f32,
+                    grid_origin_z: f32,
+                    buoyancy_multiplier: f32,
+                    _pad0: f32,
+                    _pad1: f32,
+                }
+
+                let default_params = DefaultWaterGridParams {
+                    grid_resolution: 0,  // Zero resolution = no valid grid cells = no water detection
+                    cell_size: 1.0,
+                    grid_origin_x: 0.0,
+                    grid_origin_y: 0.0,
+                    grid_origin_z: 0.0,
+                    buoyancy_multiplier: 0.0,
+                    _pad0: 0.0,
+                    _pad1: 0.0,
+                };
+
+                let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Default Water Grid Params Buffer"),
+                    contents: bytemuck::cast_slice(&[default_params]),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+
+                // Minimal bitfield buffer (just 4 bytes to satisfy buffer requirements)
+                let bitfield_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Default Water Bitfield Buffer"),
+                    contents: &[0u8; 4],
+                    usage: wgpu::BufferUsages::STORAGE,
+                });
+
+                (params_buffer, bitfield_buffer)
+            }
+        };
+
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Position Update Force Accum Bind Group"),
             layout: &self.position_update_force_accum_layout,
@@ -2693,6 +2786,15 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: triple_buffers.prev_accelerations.as_entire_binding(),
+                },
+                // Water buffers (bindings 4 and 5)
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: water_grid_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: water_bitfield_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -3702,6 +3804,28 @@ impl GpuPhysicsPipelines {
                 },
             ],
         })
+    }
+}
+
+impl CachedBindGroups {
+    /// Update the position update force accum bind group with real water buffers
+    /// This should be called after the fluid simulator is initialized
+    pub fn update_water_buffers(
+        &mut self,
+        device: &wgpu::Device,
+        pipelines: &GpuPhysicsPipelines,
+        adhesion_buffers: &super::AdhesionBuffers,
+        triple_buffers: &GpuTripleBufferSystem,
+        water_grid_params_buffer: &wgpu::Buffer,
+        water_bitfield_buffer: &wgpu::Buffer,
+    ) {
+        self.position_update_force_accum = pipelines.create_position_update_force_accum_bind_group(
+            device,
+            adhesion_buffers,
+            triple_buffers,
+            Some(water_grid_params_buffer),
+            Some(water_bitfield_buffer),
+        );
     }
 }
 

@@ -2008,19 +2008,31 @@ impl GpuScene {
         
         let simulator = GpuFluidSimulator::new(device, self.config.sphere_radius, glam::Vec3::ZERO, solid_mask_buffer);
 
+        // Update the position update force accum bind group with real water buffers
+        self.cached_bind_groups.update_water_buffers(
+            device,
+            &self.gpu_physics_pipelines,
+            &self.adhesion_buffers,
+            &self.gpu_triple_buffers,
+            simulator.water_grid_params_buffer(),
+            simulator.water_bitfield_buffer(),
+        );
+
         // Start with empty fluid - no initial sphere spawn
         // Fluid will only appear when continuous spawning is enabled
 
         self.fluid_simulator = Some(simulator);
         self.show_gpu_density_mesh = true;
 
-        log::info!("GPU fluid simulator initialized with solid mask (empty - waiting for continuous spawn)");
+        log::info!("GPU fluid simulator initialized with solid mask and water bitfield for cell buoyancy");
     }
 
-    /// Step the GPU fluid simulation
+    /// Step the GPU fluid simulation and update water bitfield for cell buoyancy
     pub fn step_fluid_simulation(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, dt: f32) {
-        if let Some(ref mut simulator) = self.fluid_simulator {
+        if let Some(ref simulator) = self.fluid_simulator {
             simulator.step(device, queue, encoder, dt, self.gravity, self.gravity_dir);
+            // Update water bitfield for cell physics (compressed 32x for fast lookup)
+            simulator.update_water_bitfield(device, encoder);
         }
     }
 

@@ -10,7 +10,7 @@ pub mod gpu_simulator;
 pub mod solid_mask;
 
 pub use buffers::{FluidBuffers, FluidParams, FluidType};
-pub use gpu_simulator::GpuFluidSimulator;
+pub use gpu_simulator::{GpuFluidSimulator, WaterGridParams};
 pub use solid_mask::SolidMaskGenerator;
 
 /// Grid resolution (hardcoded)

@@ -47,11 +47,35 @@ pub struct ExtractParams {
     pub _pad2: u32,
 }
 
+/// Bitfield params (must match shader)
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct BitfieldParams {
+    pub grid_resolution: u32,
+    pub _pad0: u32,
+    pub _pad1: u32,
+    pub _pad2: u32,
+}
+
+/// Water bitfield grid params for cell physics (must match position_update.wgsl)
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct WaterGridParams {
+    pub grid_resolution: u32,
+    pub cell_size: f32,
+    pub grid_origin_x: f32,
+    pub grid_origin_y: f32,
+    pub grid_origin_z: f32,
+    pub buoyancy_multiplier: f32,  // How strongly to reverse gravity in water (1.0 = full reversal)
+    pub _pad0: f32,
+    pub _pad1: f32,
+}
+
 /// GPU Fluid Simulator
 pub struct GpuFluidSimulator {
     // Single voxel state buffer
     state_buffer: wgpu::Buffer,
-    
+
     // Solid mask buffer
     solid_mask_buffer: wgpu::Buffer,
 
@@ -60,7 +84,7 @@ pub struct GpuFluidSimulator {
     world_radius: f32,
     world_center: Vec3,
     time: std::cell::Cell<f32>,  // Time for wave animations (mutable)
-    
+
     // Continuous spawning control
     continuous_spawn_enabled: std::cell::Cell<bool>,
 
@@ -77,6 +101,13 @@ pub struct GpuFluidSimulator {
 
     // Bind group layout
     bind_group_layout: wgpu::BindGroupLayout,
+
+    // Water bitfield for fast cell-water detection (32x compressed)
+    water_bitfield_buffer: wgpu::Buffer,
+    water_grid_params_buffer: wgpu::Buffer,
+    bitfield_params_buffer: wgpu::Buffer,
+    bitfield_pipeline: wgpu::ComputePipeline,
+    bitfield_bind_group_layout: wgpu::BindGroupLayout,
 
     /// Whether simulation is paused
     pub paused: bool,
@@ -284,6 +315,106 @@ impl GpuFluidSimulator {
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
+        // === Water Bitfield for fast cell-water detection ===
+        // 128³ / 32 = 65536 u32 values (256KB instead of 8MB)
+        let bitfield_size = (TOTAL_VOXELS / 32) as u64 * std::mem::size_of::<u32>() as u64;
+        let water_bitfield_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Water Bitfield Buffer"),
+            size: bitfield_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Bitfield generation params
+        let bitfield_params = BitfieldParams {
+            grid_resolution: GRID_RESOLUTION,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+
+        let bitfield_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Bitfield Params Buffer"),
+            contents: bytemuck::cast_slice(&[bitfield_params]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        // Water grid params for cell physics (world-space to grid-space conversion)
+        let water_grid_params = WaterGridParams {
+            grid_resolution: GRID_RESOLUTION,
+            cell_size,
+            grid_origin_x: grid_origin.x,
+            grid_origin_y: grid_origin.y,
+            grid_origin_z: grid_origin.z,
+            buoyancy_multiplier: 1.0,  // Full gravity reversal in water
+            _pad0: 0.0,
+            _pad1: 0.0,
+        };
+
+        let water_grid_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Water Grid Params Buffer"),
+            contents: bytemuck::cast_slice(&[water_grid_params]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Bitfield bind group layout
+        let bitfield_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Bitfield Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        // Bitfield shader and pipeline
+        let bitfield_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Water Bitfield Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/fluid/water_bitfield.wgsl").into()),
+        });
+
+        let bitfield_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Bitfield Pipeline Layout"),
+            bind_group_layouts: &[&bitfield_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let bitfield_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Generate Water Bitfield Pipeline"),
+            layout: Some(&bitfield_pipeline_layout),
+            module: &bitfield_shader,
+            entry_point: Some("generate_water_bitfield"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         Self {
             state_buffer,
             solid_mask_buffer,
@@ -300,6 +431,11 @@ impl GpuFluidSimulator {
             extract_params_buffer,
             extract_bind_group_layout,
             bind_group_layout,
+            water_bitfield_buffer,
+            water_grid_params_buffer,
+            bitfield_params_buffer,
+            bitfield_pipeline,
+            bitfield_bind_group_layout,
             paused: false,
         }
     }
@@ -513,5 +649,70 @@ impl GpuFluidSimulator {
         pass.set_pipeline(&self.extract_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+    }
+
+    /// Update the water bitfield from current voxel state
+    /// Call this after fluid simulation step, before cell physics
+    pub fn update_water_bitfield(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Bitfield Generation Bind Group"),
+            layout: &self.bitfield_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.bitfield_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.state_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.water_bitfield_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        // 65536 bitfield entries / 256 threads per workgroup = 256 workgroups
+        let bitfield_size = TOTAL_VOXELS / 32;
+        let workgroup_count = (bitfield_size as u32 + 255) / 256;
+
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Generate Water Bitfield"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.bitfield_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(workgroup_count, 1, 1);
+    }
+
+    /// Get the water bitfield buffer for cell physics
+    pub fn water_bitfield_buffer(&self) -> &wgpu::Buffer {
+        &self.water_bitfield_buffer
+    }
+
+    /// Get the water grid params buffer for cell physics
+    pub fn water_grid_params_buffer(&self) -> &wgpu::Buffer {
+        &self.water_grid_params_buffer
+    }
+
+    /// Update buoyancy multiplier
+    pub fn set_buoyancy_multiplier(&self, queue: &wgpu::Queue, multiplier: f32) {
+        let world_diameter = self.world_radius * 2.0;
+        let cell_size = world_diameter / GRID_RESOLUTION as f32;
+        let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
+
+        let water_grid_params = WaterGridParams {
+            grid_resolution: GRID_RESOLUTION,
+            cell_size,
+            grid_origin_x: grid_origin.x,
+            grid_origin_y: grid_origin.y,
+            grid_origin_z: grid_origin.z,
+            buoyancy_multiplier: multiplier,
+            _pad0: 0.0,
+            _pad1: 0.0,
+        };
+
+        queue.write_buffer(&self.water_grid_params_buffer, 0, bytemuck::cast_slice(&[water_grid_params]));
     }
 }
