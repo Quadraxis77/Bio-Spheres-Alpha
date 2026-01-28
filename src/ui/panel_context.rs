@@ -189,6 +189,14 @@ pub struct GenomeEditorState {
     /// Whether to enable continuous fluid spawning
     pub fluid_continuous_spawn: bool,
     
+    // Particle visualization
+    /// Whether to show steam particles
+    pub show_steam_particles: bool,
+    /// Whether to show water particles
+    pub show_water_particles: bool,
+    /// Water particle prominence factor (0.0-1.0)
+    pub water_particle_prominence: f32,
+    
     // Fluid mesh settings
     /// Iso level for surface extraction (0.0-1.0)
     pub fluid_iso_level: f32,
@@ -254,7 +262,7 @@ impl GenomeEditorState {
         
         let (fluid_gravity, fluid_gravity_x, fluid_gravity_y, fluid_gravity_z, 
              fluid_vorticity_epsilon, fluid_pressure_iterations, fluid_lateral_flow_probabilities,
-             fluid_continuous_spawn, selected_fluid_type) = Self::load_fluid_settings();
+             fluid_continuous_spawn, selected_fluid_type, show_steam_particles, show_water_particles, water_particle_prominence) = Self::load_fluid_settings();
         
         Self {
             renaming_mode: None,
@@ -328,6 +336,9 @@ impl GenomeEditorState {
             fluid_show_test_voxels: false,
             fluid_show_mesh: true,
             fluid_continuous_spawn,
+            show_steam_particles,
+            show_water_particles,
+            water_particle_prominence,
             fluid_iso_level: 0.15,
             fluid_ambient: 0.15,
             fluid_diffuse: 0.6,
@@ -391,6 +402,9 @@ impl GenomeEditorState {
             self.fluid_lateral_flow_probabilities,
             self.fluid_continuous_spawn,
             self.selected_fluid_type,
+            self.show_steam_particles,
+            self.show_water_particles,
+            self.water_particle_prominence,
         ) {
             log::error!("Failed to save fluid settings: {}", e);
         }
@@ -457,6 +471,9 @@ impl GenomeEditorState {
         lateral_flow_probabilities: [f32; 4],
         continuous_spawn: bool,
         selected_fluid_type: u32,
+        show_steam_particles: bool,
+        show_water_particles: bool,
+        water_particle_prominence: f32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct FluidSettings {
@@ -469,6 +486,9 @@ impl GenomeEditorState {
             lateral_flow_probabilities: [f32; 4],
             continuous_spawn: bool,
             selected_fluid_type: u32,
+            show_steam_particles: bool,
+            show_water_particles: bool,
+            water_particle_prominence: f32,
         }
         
         let settings = FluidSettings {
@@ -481,6 +501,9 @@ impl GenomeEditorState {
             lateral_flow_probabilities,
             continuous_spawn,
             selected_fluid_type,
+            show_steam_particles,
+            show_water_particles,
+            water_particle_prominence,
         };
         
         let path = PathBuf::from("fluid_settings.ron");
@@ -548,7 +571,7 @@ impl GenomeEditorState {
     }
     
     /// Load fluid settings from disk, or return defaults if file doesn't exist.
-    pub fn load_fluid_settings() -> (f32, bool, bool, bool, f32, u32, [f32; 4], bool, u32) {
+    pub fn load_fluid_settings() -> (f32, bool, bool, bool, f32, u32, [f32; 4], bool, u32, bool, bool, f32) {
         #[derive(serde::Deserialize)]
         struct FluidSettings {
             gravity: f32,
@@ -560,6 +583,9 @@ impl GenomeEditorState {
             lateral_flow_probabilities: [f32; 4],
             continuous_spawn: bool,
             selected_fluid_type: u32,
+            show_steam_particles: bool,
+            show_water_particles: bool,
+            water_particle_prominence: f32,
         }
         
         let path = PathBuf::from("fluid_settings.ron");
@@ -579,6 +605,9 @@ impl GenomeEditorState {
                                 settings.lateral_flow_probabilities,
                                 settings.continuous_spawn,
                                 settings.selected_fluid_type,
+                                settings.show_steam_particles,
+                                settings.show_water_particles,
+                                settings.water_particle_prominence,
                             );
                         }
                         Err(e) => {
@@ -593,7 +622,7 @@ impl GenomeEditorState {
         }
         
         // Return defaults
-        (9.8, false, true, false, 0.05, 10, [1.0, 0.8, 0.6, 0.9], false, 1)
+        (9.8, false, true, false, 0.05, 10, [1.0, 0.8, 0.6, 0.9], false, 1, true, false, 0.5)
     }
 }
 

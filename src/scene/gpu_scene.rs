@@ -4,7 +4,7 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, SteamParticleRenderer, TailRenderer, VoxelRenderer, WorldSphereRenderer};
+use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, SteamParticleRenderer, TailRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
@@ -181,6 +181,16 @@ pub struct GpuScene {
     steam_extract_bind_group: Option<wgpu::BindGroup>,
     /// Cached steam particle render bind group
     steam_render_bind_group: Option<wgpu::BindGroup>,
+    /// Water particle system renderer
+    pub water_particle_renderer: Option<WaterParticleRenderer>,
+    /// Whether to show water particles
+    pub show_water_particles: bool,
+    /// Water particle prominence factor (0.0-1.0)
+    pub water_particle_prominence: f32,
+    /// Cached water particle extract bind group (for compute)
+    water_extract_bind_group: Option<wgpu::BindGroup>,
+    /// Cached water particle render bind group
+    water_render_bind_group: Option<wgpu::BindGroup>,
 }
 
 impl GpuScene {
@@ -323,6 +333,11 @@ impl GpuScene {
             show_steam_particles: false,
             steam_extract_bind_group: None,
             steam_render_bind_group: None,
+            water_particle_renderer: None,
+            show_water_particles: false,
+            water_particle_prominence: 0.5,
+            water_extract_bind_group: None,
+            water_render_bind_group: None,
         }
     }
 
@@ -2043,6 +2058,9 @@ impl GpuScene {
         // Initialize steam particle renderer
         self.initialize_steam_particle_renderer(device, surface_format);
 
+        // Initialize water particle renderer
+        self.initialize_water_particle_renderer(device, surface_format);
+
         log::info!("GPU fluid simulator initialized with solid mask and water bitfield for cell buoyancy");
     }
 
@@ -2121,6 +2139,53 @@ impl GpuScene {
         log::info!("Steam particle renderer initialized (GPU-based)");
     }
 
+    /// Initialize the water particle renderer
+    pub fn initialize_water_particle_renderer(&mut self, device: &wgpu::Device, surface_format: wgpu::TextureFormat) {
+        if self.water_particle_renderer.is_some() {
+            return;
+        }
+
+        let depth_format = wgpu::TextureFormat::Depth32Float;
+
+        // Create camera bind group layout for water particles
+        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Water Particle Camera Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let mut water_particle_renderer = WaterParticleRenderer::new(
+            device,
+            surface_format,
+            depth_format,
+            &camera_layout,
+            self.renderer.width,
+            self.renderer.height,
+        );
+
+        // Set prominence factor
+        water_particle_renderer.set_prominence_factor(self.water_particle_prominence);
+
+        // Create render bind group
+        let water_particle_renderer = water_particle_renderer; // Make it immutable for the rest
+        self.water_render_bind_group = Some(water_particle_renderer.create_render_bind_group(device));
+
+        self.water_particle_renderer = Some(water_particle_renderer);
+        self.show_water_particles = true;
+
+        log::info!("Water particle renderer initialized (GPU-based)");
+    }
+
     /// Create or update steam extract bind group when fluid simulator is available
     fn ensure_steam_extract_bind_group(&mut self, device: &wgpu::Device) {
         if self.steam_extract_bind_group.is_some() {
@@ -2172,6 +2237,69 @@ impl GpuScene {
     pub fn poll_steam_particle_count(&mut self, device: &wgpu::Device) {
         if let Some(ref mut particle_renderer) = self.steam_particle_renderer {
             particle_renderer.poll_particle_count(device);
+        }
+    }
+
+    /// Create or update water extract bind group when fluid simulator is available
+    fn ensure_water_extract_bind_group(&mut self, device: &wgpu::Device) {
+        if self.water_extract_bind_group.is_some() {
+            return;
+        }
+
+        if let (Some(ref particle_renderer), Some(ref fluid_sim)) =
+            (&self.water_particle_renderer, &self.fluid_simulator) {
+            self.water_extract_bind_group = Some(
+                particle_renderer.create_extract_bind_group(device, fluid_sim.current_state_buffer(), fluid_sim.solid_mask_buffer())
+            );
+            log::info!("Water extract bind group created");
+        }
+    }
+
+    /// Run water particle extraction compute shader
+    pub fn extract_water_particles(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        dt: f32,
+    ) {
+        // Ensure bind group exists
+        self.ensure_water_extract_bind_group(device);
+
+        if let (Some(ref mut particle_renderer), Some(ref fluid_sim), Some(ref extract_bind_group)) =
+            (&mut self.water_particle_renderer, &self.fluid_simulator, &self.water_extract_bind_group) {
+
+            let (world_radius, world_center) = fluid_sim.grid_params();
+            let grid_resolution = 128u32;
+            let world_diameter = world_radius * 2.0;
+            let cell_size = world_diameter / grid_resolution as f32;
+            let grid_origin = world_center - glam::Vec3::splat(world_diameter / 2.0);
+
+            particle_renderer.extract_water_particles(
+                encoder,
+                queue,
+                extract_bind_group,
+                grid_resolution,
+                grid_origin,
+                cell_size,
+                world_radius,
+                dt,
+            );
+        }
+    }
+
+    /// Poll for water particle count after command buffer submission
+    pub fn poll_water_particle_count(&mut self, device: &wgpu::Device) {
+        if let Some(ref mut particle_renderer) = self.water_particle_renderer {
+            particle_renderer.poll_particle_count(device);
+        }
+    }
+
+    /// Set water particle prominence factor (0.0 = barely visible, 1.0 = very prominent)
+    pub fn set_water_particle_prominence(&mut self, prominence: f32) {
+        self.water_particle_prominence = prominence.clamp(0.0, 1.0);
+        if let Some(ref mut renderer) = self.water_particle_renderer {
+            renderer.set_prominence_factor(self.water_particle_prominence);
         }
     }
 
@@ -2502,6 +2630,11 @@ impl Scene for GpuScene {
             if self.show_steam_particles {
                 self.extract_steam_particles(&mut encoder, device, queue, dt);
             }
+
+            // Extract water particles from fluid state (GPU compute)
+            if self.show_water_particles {
+                self.extract_water_particles(&mut encoder, device, queue, dt);
+            }
         }
 
         // Process any pending cell insertion from input handling
@@ -2820,6 +2953,38 @@ impl Scene for GpuScene {
             }
         }
 
+        // Render water particles if enabled
+        if self.show_water_particles {
+            if let (Some(ref water_particle_renderer), Some(ref render_bind_group)) =
+                (&self.water_particle_renderer, &self.water_render_bind_group) {
+
+                // Create camera bind group for water particles
+                let camera_uniform = self.create_camera_uniform();
+                let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Water Particle Camera Buffer"),
+                    contents: bytemuck::cast_slice(&[camera_uniform]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
+
+                let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Water Particle Camera Bind Group"),
+                    layout: water_particle_renderer.camera_bind_group_layout(),
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: camera_buffer.as_entire_binding(),
+                    }],
+                });
+
+                water_particle_renderer.render(
+                    &mut encoder,
+                    view,
+                    &self.renderer.depth_view,
+                    &camera_bind_group,
+                    render_bind_group,
+                );
+            }
+        }
+
 
         // Render adhesion lines if enabled
         if self.show_adhesion_lines {
@@ -2899,6 +3064,11 @@ impl Scene for GpuScene {
         // Poll for steam particle count (GPU readback)
         if self.show_steam_particles {
             self.poll_steam_particle_count(device);
+        }
+
+        // Poll for water particle count (GPU readback)
+        if self.show_water_particles {
+            self.poll_water_particle_count(device);
         }
 
         // Mark that we now have Hi-Z data for next frame

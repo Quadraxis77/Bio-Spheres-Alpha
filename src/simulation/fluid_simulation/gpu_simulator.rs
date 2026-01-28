@@ -632,6 +632,11 @@ impl GpuFluidSimulator {
         &self.state_buffer
     }
 
+    /// Get solid mask buffer
+    pub fn solid_mask_buffer(&self) -> &wgpu::Buffer {
+        &self.solid_mask_buffer
+    }
+
     /// Get grid parameters for surface nets
     pub fn grid_params(&self) -> (f32, Vec3) {
         (self.world_radius, self.world_center)

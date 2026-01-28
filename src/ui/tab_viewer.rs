@@ -1080,6 +1080,45 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
         }
     }
     
+    // Particle visualization controls
+    ui.separator();
+    ui.heading("Particle Visualization");
+    
+    // Steam particles
+    let steam_changed = ui.checkbox(&mut context.editor_state.show_steam_particles, "Show Steam Particles").changed();
+    if steam_changed {
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            gpu_scene.show_steam_particles = context.editor_state.show_steam_particles;
+        }
+        context.editor_state.save_fluid_settings();
+    }
+    
+    // Water particles
+    let water_changed = ui.checkbox(&mut context.editor_state.show_water_particles, "Show Water Particles").changed();
+    if water_changed {
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            gpu_scene.show_water_particles = context.editor_state.show_water_particles;
+        }
+        context.editor_state.save_fluid_settings();
+    }
+    
+    // Water particle prominence (only show if water particles are enabled)
+    if context.editor_state.show_water_particles {
+        ui.horizontal(|ui| {
+            ui.label("Water Prominence:");
+            if ui.add(egui::Slider::new(&mut context.editor_state.water_particle_prominence, 0.0..=1.0)
+                .step_by(0.01)
+                .fixed_decimals(2)
+                .suffix(" (0.0 = subtle, 1.0 = very prominent)")
+            ).changed() {
+                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                    gpu_scene.set_water_particle_prominence(context.editor_state.water_particle_prominence);
+                }
+                context.editor_state.save_fluid_settings();
+            }
+        });
+    }
+    
     ui.add_space(10.0);
 }
 /// Render the TimeScrubber panel (placeholder).

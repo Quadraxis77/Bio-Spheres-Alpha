@@ -347,9 +347,9 @@ fn should_condense_steam(gid: vec3<u32>) -> bool {
     }
     
     // Higher condensation probability near boundaries (simulating cooling)
-    var condensation_probability = 0.01 + f32(adjacent_solids) * 0.005; // 1% to 3% for solids
+    var condensation_probability = 0.002 + f32(adjacent_solids) * 0.001; // 0.2% to 0.3% for solids
     if near_boundary {
-        condensation_probability = condensation_probability; // Same 1% to 3% for boundaries
+        condensation_probability = condensation_probability; // Same 0.2% to 0.3% for boundaries
     }
     
     // Use hash-based randomization for natural variation
@@ -358,6 +358,40 @@ fn should_condense_steam(gid: vec3<u32>) -> bool {
     let combined_hash = pos_hash ^ time_hash;
     
     return (combined_hash & 255u) < u32(condensation_probability * 255.0);
+}
+
+// Check if water voxel is in contact with other water or solid surfaces
+fn water_is_supported(gid: vec3<u32>) -> bool {
+    let res = params.grid_resolution;
+    
+    // Check all 6 neighbors for water or solid contact
+    let offsets = array<vec3<i32>, 6>(
+        vec3<i32>(1, 0, 0),   // +X
+        vec3<i32>(-1, 0, 0),  // -X
+        vec3<i32>(0, 1, 0),   // +Y
+        vec3<i32>(0, -1, 0),  // -Y
+        vec3<i32>(0, 0, 1),   // +Z
+        vec3<i32>(0, 0, -1)   // -Z
+    );
+    
+    for (var i = 0u; i < 6u; i++) {
+        let nx = i32(gid.x) + offsets[i].x;
+        let ny = i32(gid.y) + offsets[i].y;
+        let nz = i32(gid.z) + offsets[i].z;
+        
+        if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
+            let neighbor_idx = u32(nx) + u32(ny) * res + u32(nz) * res * res;
+            let neighbor_state = atomicLoad(&voxels[neighbor_idx]);
+            let neighbor_type = get_fluid_type(neighbor_state);
+            
+            // If neighbor is water or solid, water is supported
+            if neighbor_type == 1u || neighbor_type >= 2u {
+                return true;
+            }
+        }
+    }
+    
+    return false;
 }
 
 // Get randomized horizontal direction order based on position and time, relative to gravity
@@ -588,6 +622,16 @@ fn process_direction_fast(gid: vec3<u32>, direction: u32) {
 
     // For horizontal directions: Use configurable probability for lateral movement
     if direction == 0u || direction == 1u || direction == 4u || direction == 5u {
+        // Water can only move laterally if it's supported (touching other water or solids)
+        if a_is_water || b_is_water {
+            if a_is_water && !water_is_supported(gid) {
+                return; // Water not supported, no lateral movement
+            }
+            if b_is_water && !water_is_supported(vec3<u32>(u32(nx), u32(ny), u32(nz))) {
+                return; // Water not supported, no lateral movement
+            }
+        }
+        
         // Use the configurable lateral flow probability
         let time_hash = u32(params.time * 1000.0) + direction * 12345u;
         let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
@@ -698,7 +742,8 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
     if abs(alignment) > 0.1 {
         let gravity_strength = length(grav_dir);
         // Higher gravity magnitude = higher probability of movement
-        let gravity_probability = min(1.0, gravity_strength / 10.0);
+        // Halved fall rates for both water and steam
+        let gravity_probability = min(1.0, (gravity_strength / 10.0) * 0.5);
         
         // Use hash-based probability for gravity direction
         let time_hash = u32(params.time * 1000.0) + direction * 12345u;
@@ -734,6 +779,16 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
     
     // For non-gravity directions: Use configurable probability for lateral spreading
     if abs(alignment) <= 0.5 {
+        // Water can only move laterally if it's supported (touching other water or solids)
+        if a_is_water || b_is_water {
+            if a_is_water && !water_is_supported(gid) {
+                return; // Water not supported, no lateral movement
+            }
+            if b_is_water && !water_is_supported(vec3<u32>(u32(nx), u32(ny), u32(nz))) {
+                return; // Water not supported, no lateral movement
+            }
+        }
+        
         // Use the configurable lateral flow probability
         let time_hash = u32(params.time * 1000.0) + direction * 12345u;
         let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
