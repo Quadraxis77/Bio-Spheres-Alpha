@@ -290,6 +290,76 @@ fn hash_position(pos: vec3<u32>) -> u32 {
     return (pos.x * 73856093u ^ pos.y * 19349663u ^ pos.z * 83492791u) & 0xFFFFFFFFu;
 }
 
+// Enhanced dispersion for steam - makes steam spread out more like a gas
+fn get_steam_dispersion_bias(gid: vec3<u32>, direction: u32) -> f32 {
+    // Steam naturally wants to disperse and fill available space
+    let pos_hash = hash_position(gid);
+    let time_hash = u32(params.time * 1000.0);
+    
+    // Create different dispersion patterns based on direction
+    let direction_factor = f32(direction + 1u) * 0.3;
+    let dispersion_factor = sin(f32(pos_hash) * 0.001 + params.time * 2.0) * 0.3 + 0.7;
+    
+    // Steam has higher dispersion in horizontal directions (spreads out)
+    if direction == 0u || direction == 1u || direction == 4u || direction == 5u {
+        return dispersion_factor * 1.5; // Boost horizontal spreading
+    } else {
+        return dispersion_factor * 0.8; // Reduce vertical movement bias
+    }
+}
+
+// Condensation mechanic - steam can condense back to water when contacting solids or boundaries
+fn should_condense_steam(gid: vec3<u32>) -> bool {
+    let res = params.grid_resolution;
+    
+    // Check if steam voxel is near the spherical world boundary (edge of simulation)
+    let world_pos = grid_to_world(gid.x, gid.y, gid.z);
+    let distance_from_center = length(world_pos);
+    let boundary_threshold = params.world_radius * 0.95; // Near boundary threshold
+    let near_boundary = distance_from_center > boundary_threshold;
+    
+    // Check if steam voxel is adjacent to solid surfaces
+    let solid_neighbors = array<vec3<i32>, 6>(
+        vec3<i32>(1, 0, 0),   // +X
+        vec3<i32>(-1, 0, 0),  // -X
+        vec3<i32>(0, 1, 0),   // +Y
+        vec3<i32>(0, -1, 0),  // -Y
+        vec3<i32>(0, 0, 1),   // +Z
+        vec3<i32>(0, 0, -1)   // -Z
+    );
+    
+    var adjacent_solids = 0u;
+    for (var i = 0u; i < 6u; i++) {
+        let nx = i32(gid.x) + solid_neighbors[i].x;
+        let ny = i32(gid.y) + solid_neighbors[i].y;
+        let nz = i32(gid.z) + solid_neighbors[i].z;
+        
+        if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
+            if is_solid(u32(nx), u32(ny), u32(nz)) {
+                adjacent_solids++;
+            }
+        }
+    }
+    
+    // Condense if near boundary or adjacent to solids
+    if !near_boundary && adjacent_solids == 0u {
+        return false;
+    }
+    
+    // Higher condensation probability near boundaries (simulating cooling)
+    var condensation_probability = 0.01 + f32(adjacent_solids) * 0.005; // 1% to 3% for solids
+    if near_boundary {
+        condensation_probability = condensation_probability; // Same 1% to 3% for boundaries
+    }
+    
+    // Use hash-based randomization for natural variation
+    let pos_hash = hash_position(gid);
+    let time_hash = u32(params.time * 1000.0);
+    let combined_hash = pos_hash ^ time_hash;
+    
+    return (combined_hash & 255u) < u32(condensation_probability * 255.0);
+}
+
 // Get randomized horizontal direction order based on position and time, relative to gravity
 fn get_horizontal_direction_order(gid: vec3<u32>, time: f32, gravity_dir_index: u32) -> array<u32, 4> {
     let pos_hash = hash_position(gid);
@@ -337,13 +407,21 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Special case: Push water out of solid voxels
-    // If water is trapped in a solid voxel, force it to move to the nearest non-solid voxel
     let idx = grid_index(gid.x, gid.y, gid.z);
     let state = atomicLoad(&voxels[idx]);
     let fluid_type = get_fluid_type(state);
     
-    // If this voxel contains water but is marked as solid, push it out
+    // Steam condensation check - convert steam back to water when contacting solids
+    if fluid_type == 3u && should_condense_steam(gid) {
+        // Try to condense steam back to water
+        let result = atomicCompareExchangeWeak(&voxels[idx], state, (65535u << 16u) | 1u);
+        if result.exchanged {
+            return; // Successfully condensed, no further processing needed
+        }
+    }
+
+    // Special case: Push water out of solid voxels
+    // If water is trapped in a solid voxel, force it to move to the nearest non-solid voxel
     if fluid_type == 1u && is_solid(gid.x, gid.y, gid.z) {
         // Try all 6 directions to find an escape route
         let directions = array<vec3<i32>, 6>(
@@ -501,8 +579,10 @@ fn process_direction_fast(gid: vec3<u32>, direction: u32) {
     let b_is_empty = type_b == 0u;
 
     // Skip if both same or neither fluid/empty
+    // Now also allow steam-water exchanges
     if !((a_is_water && b_is_empty) || (a_is_empty && b_is_water) ||
-          (a_is_steam && b_is_empty) || (a_is_empty && b_is_steam)) {
+          (a_is_steam && b_is_empty) || (a_is_empty && b_is_steam) ||
+          (a_is_water && b_is_steam) || (a_is_steam && b_is_water)) {
         return;
     }
 
@@ -513,8 +593,12 @@ fn process_direction_fast(gid: vec3<u32>, direction: u32) {
         let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
         let combined_hash = time_hash ^ pos_hash;
         
-        // Skip movement based on fluid-type-specific lateral flow probability (0.0 = never, 1.0 = always)
-        let fluid_probability = get_lateral_flow_probability(type_a) * get_lateral_flow_probability(type_b);
+        // Apply steam dispersion bias for more gas-like behavior
+        var fluid_probability = get_lateral_flow_probability(type_a) * get_lateral_flow_probability(type_b);
+        if a_is_steam || b_is_steam {
+            fluid_probability = fluid_probability * get_steam_dispersion_bias(gid, direction);
+        }
+        
         let probability_threshold = fluid_probability * 255.0;
         if (combined_hash & 255u) > u32(probability_threshold) {
             return;
@@ -587,8 +671,10 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
     let b_is_empty = type_b == 0u;
 
     // Skip if both same or neither fluid/empty
+    // Now also allow steam-water exchanges
     if !((a_is_water && b_is_empty) || (a_is_empty && b_is_water) ||
-          (a_is_steam && b_is_empty) || (a_is_empty && b_is_steam)) {
+          (a_is_steam && b_is_empty) || (a_is_empty && b_is_steam) ||
+          (a_is_water && b_is_steam) || (a_is_steam && b_is_water)) {
         return;
     }
 
@@ -624,18 +710,24 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
             return;
         }
         
-        // If alignment is positive: fluid flows with gravity (current to neighbor)
-        if alignment > 0.0 {
-            // Movement with gravity: fluid flows from current cell to neighbor
-            if !((a_is_water && b_is_empty) || (a_is_steam && b_is_empty)) {
-                return;
+        // Allow steam-water exchanges regardless of gravity direction
+        if (a_is_water && b_is_steam) || (a_is_steam && b_is_water) {
+            // Steam-water exchanges can happen in any direction
+            // No gravity restrictions for fluid-to-fluid exchanges
+        } else {
+            // If alignment is positive: fluid flows with gravity (current to neighbor)
+            if alignment > 0.0 {
+                // Movement with gravity: fluid flows from current cell to neighbor
+                if !((a_is_water && b_is_empty) || (a_is_steam && b_is_empty)) {
+                    return;
+                }
             }
-        }
-        // If alignment is negative: fluid flows against gravity (neighbor to current)
-        else {
-            // Movement against gravity: fluid flows from neighbor to current cell
-            if !((a_is_empty && b_is_water) || (a_is_empty && b_is_steam)) {
-                return;
+            // If alignment is negative: fluid flows against gravity (neighbor to current)
+            else {
+                // Movement against gravity: fluid flows from neighbor to current cell
+                if !((a_is_empty && b_is_water) || (a_is_empty && b_is_steam)) {
+                    return;
+                }
             }
         }
     }
@@ -647,8 +739,12 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
         let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
         let combined_hash = time_hash ^ pos_hash;
         
-        // Skip movement based on fluid-type-specific lateral flow probability (0.0 = never, 1.0 = always)
-        let fluid_probability = get_lateral_flow_probability(type_a) * get_lateral_flow_probability(type_b);
+        // Apply steam dispersion bias for more gas-like behavior
+        var fluid_probability = get_lateral_flow_probability(type_a) * get_lateral_flow_probability(type_b);
+        if a_is_steam || b_is_steam {
+            fluid_probability = fluid_probability * get_steam_dispersion_bias(gid, direction);
+        }
+        
         let probability_threshold = fluid_probability * 255.0;
         if (combined_hash & 255u) > u32(probability_threshold) {
             return;
