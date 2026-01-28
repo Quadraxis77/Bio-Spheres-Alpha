@@ -153,7 +153,7 @@ impl GpuFluidSimulator {
             gravity_dir_x: 0.0,
             gravity_dir_y: -9.8,  // Default gravity pointing down (-Y)
             gravity_dir_z: 0.0,
-            lateral_flow_probability_empty: 0.0,
+            lateral_flow_probability_empty: 1.0,
             lateral_flow_probability_water: 0.8,
             lateral_flow_probability_lava: 0.6,
             lateral_flow_probability_steam: 0.9,  // [Empty, Water, Lava, Steam]
@@ -518,7 +518,7 @@ impl GpuFluidSimulator {
 
     /// Initialize with a water sphere
     pub fn init_water_sphere(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
-        self.update_params(queue, 0, 0.0, 9.8, [false, true, false], [0.0, 0.8, 0.6, 0.9]);
+        self.update_params(queue, 0, 0.0, 9.8, [false, true, false], [1.0, 0.8, 0.6, 0.9]);
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
@@ -533,7 +533,7 @@ impl GpuFluidSimulator {
 
     /// Continuously spawn water at the top of the world
     pub fn spawn_continuous(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, time: f32) {
-        self.update_params(queue, 0, time, 9.8, [false, true, false], [0.0, 0.8, 0.6, 0.9]);
+        self.update_params(queue, 0, time, 9.8, [false, true, false], [1.0, 0.8, 0.6, 0.9]);
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
@@ -548,7 +548,7 @@ impl GpuFluidSimulator {
 
     /// Clear all fluid
     pub fn clear(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
-        self.update_params(queue, 0, 0.0, 9.8, [false, true, false], [0.0, 0.8, 0.6, 0.9]);
+        self.update_params(queue, 0, 0.0, 9.8, [false, true, false], [1.0, 0.8, 0.6, 0.9]);
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 

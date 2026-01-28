@@ -999,12 +999,8 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the Fluid Settings panel for fluid simulation controls and visualization.
 fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
-    ui.heading("Fluid System");
-    ui.separator();
-    
     // Check if we're in GPU mode
     if !context.is_gpu_mode() {
-        ui.label("Fluid system is only available in GPU mode.");
         return;
     }
     
@@ -1014,35 +1010,11 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
         .unwrap_or(false);
     
     if !has_fluid_system {
-        ui.label("Fluid system not initialized.");
-        ui.add_space(5.0);
-        ui.label("The fluid system should auto-initialize when switching to GPU mode.");
         return;
     }
     
-    // Fluid system exists - show grid info and controls
-    ui.label("Grid Information:");
-    ui.add_space(5.0);
-    
-    // Show actual grid info from fluid buffers
-    if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
-        if let Some(ref fluid_buffers) = gpu_scene.fluid_buffers {
-            ui.label(format!("  Resolution: 128³"));
-            ui.label(format!("  Total Voxels: {}", 128 * 128 * 128));
-            ui.label(format!("  Memory Usage: {:.2} MB", fluid_buffers.memory_usage_mb()));
-        }
-    }
-    
-    ui.add_space(10.0);
-    ui.separator();
-    ui.add_space(5.0);
-    
-        
     // Continuous spawning controls
     ui.separator();
-    ui.label("Continuous Spawning:");
-    ui.add_space(3.0);
-    
     let spawn_changed = ui.checkbox(&mut context.editor_state.fluid_continuous_spawn, "Enable Continuous Stream").changed();
     
     if spawn_changed {
@@ -1054,12 +1026,8 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
         }
     }
     
-    ui.add_space(10.0);
-    
     // Fluid type selection
     ui.separator();
-    ui.label("Fluid Type Selection:");
-    ui.add_space(3.0);
     
     let fluid_type_changed = {
     let mut changed = false;
@@ -1079,35 +1047,20 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
             }
         }
     }
-    
-    ui.add_space(5.0);
-    ui.label("Selected fluid type affects spawning behavior:");
-    let behavior_text = match context.editor_state.selected_fluid_type {
-        1 => "  • Water flows downward with gravity",
-        2 => "  • Lava flows downward with gravity (denser)",
-        3 => "  • Steam rises upward (reverse gravity)",
-        _ => "  • Unknown fluid type",
-    };
-    ui.label(behavior_text);
 
-    ui.add_space(10.0);
-
-    // Lateral flow probability control
+    // Lateral flow probability control for selected fluid type
     ui.separator();
-    ui.label("Lateral Flow Control:");
-    ui.add_space(5.0);
+    ui.label("Lateral Flow Probability");
     
-    // Per-fluid-type lateral flow probabilities
-    ui.label("Per-Fluid-Type Lateral Flow Probabilities:");
+    // Show lateral flow probability only for the selected fluid type
+    let selected_fluid_type = context.editor_state.selected_fluid_type;
     
-    let fluid_names = ["Empty", "Water", "Lava", "Steam"];
-    let mut probabilities = context.editor_state.fluid_lateral_flow_probabilities;
-    let mut changed = false;
-    
-    for (i, fluid_name) in fluid_names.iter().enumerate() {
+    if selected_fluid_type > 0 && selected_fluid_type <= 3 {
+        let mut probabilities = context.editor_state.fluid_lateral_flow_probabilities;
+        let mut changed = false;
+        
         ui.horizontal(|ui| {
-            ui.label(format!("{}:", fluid_name));
-            if ui.add(egui::Slider::new(&mut probabilities[i], 0.0..=1.0)
+            if ui.add(egui::Slider::new(&mut probabilities[selected_fluid_type as usize], 0.0..=1.0)
                 .step_by(0.01)
                 .fixed_decimals(2)
                 .suffix(" (0.0 = never, 1.0 = always)")
@@ -1115,18 +1068,11 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
                 changed = true;
             }
         });
+        
+        if changed {
+            context.editor_state.fluid_lateral_flow_probabilities = probabilities;
+        }
     }
-    
-    if changed {
-        context.editor_state.fluid_lateral_flow_probabilities = probabilities;
-    }
-    
-    ui.add_space(5.0);
-    ui.label(format!("Water: {:.0}% chance, Lava: {:.0}% chance, Steam: {:.0}% chance", 
-        context.editor_state.fluid_lateral_flow_probabilities[1] * 100.0,
-        context.editor_state.fluid_lateral_flow_probabilities[2] * 100.0,
-        context.editor_state.fluid_lateral_flow_probabilities[3] * 100.0));
-    ui.label("Lower values = more vertical flow, Higher values = more spreading");
     
     ui.add_space(10.0);
 }

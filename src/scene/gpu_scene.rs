@@ -303,7 +303,7 @@ impl GpuScene {
             lod_debug_colors: false,
             gravity: 0.0,
             gravity_dir: [false, true, false],
-            lateral_flow_probabilities: [0.0, 0.8, 0.6, 0.9],
+            lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
             current_cell_count: 0,
             next_cell_id: 0,
             tail_renderer,

@@ -303,7 +303,7 @@ impl GenomeEditorState {
             fluid_gravity_z: false,
             fluid_vorticity_epsilon: 0.05,
             fluid_pressure_iterations: 10,
-            fluid_lateral_flow_probabilities: [0.0, 0.8, 0.6, 0.9],
+            fluid_lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
             fluid_show_voxel_grid: true,
             fluid_show_solid_only: false,
             fluid_show_wireframe: false,
