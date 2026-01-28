@@ -4,7 +4,7 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, SteamRenderer, TailRenderer, VoxelRenderer, WorldSphereRenderer};
+use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, SteamParticleRenderer, TailRenderer, VoxelRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
@@ -172,12 +172,14 @@ pub struct GpuScene {
     pub fluid_simulator: Option<GpuFluidSimulator>,
     /// Solid mask generator for fluid system
     solid_mask_generator: Option<SolidMaskGenerator>,
-    /// Steam ray marching renderer for volumetric steam
-    pub steam_renderer: Option<SteamRenderer>,
-    /// Whether to show steam ray marching (volumetric steam)
-    pub show_steam_raymarching: bool,
-    /// Cached steam bind group (recreated when fluid simulator changes)
-    steam_bind_group: Option<wgpu::BindGroup>,
+    /// Steam particle system renderer
+    pub steam_particle_renderer: Option<SteamParticleRenderer>,
+    /// Whether to show steam particles
+    pub show_steam_particles: bool,
+    /// Cached steam particle extract bind group (for compute)
+    steam_extract_bind_group: Option<wgpu::BindGroup>,
+    /// Cached steam particle render bind group
+    steam_render_bind_group: Option<wgpu::BindGroup>,
 }
 
 impl GpuScene {
@@ -316,9 +318,10 @@ impl GpuScene {
             show_gpu_density_mesh: false,
             fluid_simulator: None,
             solid_mask_generator: None,
-            steam_renderer: None,
-            show_steam_raymarching: false,
-            steam_bind_group: None,
+            steam_particle_renderer: None,
+            show_steam_particles: false,
+            steam_extract_bind_group: None,
+            steam_render_bind_group: None,
         }
     }
 
@@ -2002,7 +2005,7 @@ impl GpuScene {
     }
 
     /// Initialize the GPU fluid simulator (starts empty)
-    pub fn initialize_fluid_simulator(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
+    pub fn initialize_fluid_simulator(&mut self, device: &wgpu::Device, _queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
         // First ensure surface nets is initialized
         if self.gpu_surface_nets.is_none() {
             self.initialize_gpu_surface_nets(device, surface_format);
@@ -2036,9 +2039,8 @@ impl GpuScene {
         self.fluid_simulator = Some(simulator);
         self.show_gpu_density_mesh = true;
 
-        // Initialize steam ray marching renderer
-        self.initialize_steam_renderer(device, surface_format);
-        self.update_steam_bind_group(device, queue);
+        // Initialize steam particle renderer
+        self.initialize_steam_particle_renderer(device, surface_format);
 
         log::info!("GPU fluid simulator initialized with solid mask and water bitfield for cell buoyancy");
     }
@@ -2075,56 +2077,100 @@ impl GpuScene {
         }
     }
 
-    /// Initialize the steam ray marching renderer
-    pub fn initialize_steam_renderer(&mut self, device: &wgpu::Device, surface_format: wgpu::TextureFormat) {
-        if self.steam_renderer.is_some() {
+    /// Initialize the steam particle renderer
+    pub fn initialize_steam_particle_renderer(&mut self, device: &wgpu::Device, surface_format: wgpu::TextureFormat) {
+        if self.steam_particle_renderer.is_some() {
             return;
         }
 
         let depth_format = wgpu::TextureFormat::Depth32Float;
-        let world_radius = self.config.sphere_radius;
-        let world_center = glam::Vec3::ZERO;
 
-        let steam_renderer = SteamRenderer::new(
+        // Create camera bind group layout for steam particles
+        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Steam Particle Camera Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let steam_particle_renderer = SteamParticleRenderer::new(
             device,
             surface_format,
             depth_format,
-            world_radius,
-            world_center,
+            &camera_layout,
             self.renderer.width,
             self.renderer.height,
         );
 
-        self.steam_renderer = Some(steam_renderer);
-        self.show_steam_raymarching = true;
+        // Create render bind group
+        self.steam_render_bind_group = Some(steam_particle_renderer.create_render_bind_group(device));
 
-        log::info!("Steam ray marching renderer initialized");
+        self.steam_particle_renderer = Some(steam_particle_renderer);
+        self.show_steam_particles = true;
+
+        log::info!("Steam particle renderer initialized (GPU-based)");
     }
 
-    /// Update steam bind group when fluid simulator changes
-    pub fn update_steam_bind_group(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        if let (Some(ref mut steam_renderer), Some(ref fluid_sim)) = (&mut self.steam_renderer, &self.fluid_simulator) {
-            // Get grid params from fluid simulator to ensure they match
+    /// Create or update steam extract bind group when fluid simulator is available
+    fn ensure_steam_extract_bind_group(&mut self, device: &wgpu::Device) {
+        if self.steam_extract_bind_group.is_some() {
+            return;
+        }
+
+        if let (Some(ref particle_renderer), Some(ref fluid_sim)) =
+            (&self.steam_particle_renderer, &self.fluid_simulator) {
+            self.steam_extract_bind_group = Some(
+                particle_renderer.create_extract_bind_group(device, fluid_sim.current_state_buffer())
+            );
+            log::info!("Steam extract bind group created");
+        }
+    }
+
+    /// Run steam particle extraction compute shader
+    pub fn extract_steam_particles(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        dt: f32,
+    ) {
+        // Ensure bind group exists
+        self.ensure_steam_extract_bind_group(device);
+
+        if let (Some(ref mut particle_renderer), Some(ref fluid_sim), Some(ref extract_bind_group)) =
+            (&mut self.steam_particle_renderer, &self.fluid_simulator, &self.steam_extract_bind_group) {
+
             let (world_radius, world_center) = fluid_sim.grid_params();
             let grid_resolution = 128u32;
             let world_diameter = world_radius * 2.0;
             let cell_size = world_diameter / grid_resolution as f32;
             let grid_origin = world_center - glam::Vec3::splat(world_diameter / 2.0);
 
-            // Update steam params to match fluid simulator
-            let params = steam_renderer.params_mut();
-            params.grid_resolution = grid_resolution;
-            params.world_radius = world_radius;
-            params.cell_size = cell_size;
-            params.grid_origin = grid_origin.to_array();
+            particle_renderer.extract_steam_particles(
+                encoder,
+                queue,
+                extract_bind_group,
+                grid_resolution,
+                grid_origin,
+                cell_size,
+                dt,
+            );
+        }
+    }
 
-            // Upload params and create bind group
-            steam_renderer.upload_params(queue);
-            self.steam_bind_group = Some(steam_renderer.create_bind_group(device, fluid_sim.current_state_buffer()));
-            log::info!("Steam bind group created with grid_origin: {:?}, cell_size: {}", grid_origin, cell_size);
-        } else {
-            log::warn!("Could not create steam bind group: steam_renderer={}, fluid_sim={}",
-                self.steam_renderer.is_some(), self.fluid_simulator.is_some());
+    /// Poll for steam particle count after command buffer submission
+    pub fn poll_steam_particle_count(&mut self, device: &wgpu::Device) {
+        if let Some(ref mut particle_renderer) = self.steam_particle_renderer {
+            particle_renderer.poll_particle_count(device);
         }
     }
 
@@ -2450,6 +2496,11 @@ impl Scene for GpuScene {
         if self.fluid_simulator.is_some() && !self.paused {
             let dt = 1.0 / 60.0; // Fixed timestep for fluid
             self.step_fluid_simulation(device, queue, &mut encoder, dt);
+
+            // Extract steam particles from fluid state (GPU compute)
+            if self.show_steam_particles {
+                self.extract_steam_particles(&mut encoder, device, queue, dt);
+            }
         }
 
         // Process any pending cell insertion from input handling
@@ -2736,20 +2787,38 @@ impl Scene for GpuScene {
             }
         }
 
-        // Render steam with ray marching if enabled
-        if self.show_steam_raymarching {
-            if let (Some(ref steam_renderer), Some(ref bind_group)) = (&self.steam_renderer, &self.steam_bind_group) {
-                steam_renderer.render(
+        // Render steam particles if enabled
+        if self.show_steam_particles {
+            if let (Some(ref steam_particle_renderer), Some(ref render_bind_group)) =
+                (&self.steam_particle_renderer, &self.steam_render_bind_group) {
+
+                // Create camera bind group for steam particles
+                let camera_uniform = self.create_camera_uniform();
+                let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Steam Particle Camera Buffer"),
+                    contents: bytemuck::cast_slice(&[camera_uniform]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
+
+                let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Steam Particle Camera Bind Group"),
+                    layout: steam_particle_renderer.camera_bind_group_layout(),
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: camera_buffer.as_entire_binding(),
+                    }],
+                });
+
+                steam_particle_renderer.render(
                     &mut encoder,
-                    queue,
                     view,
                     &self.renderer.depth_view,
-                    bind_group,
-                    self.camera.position(),
-                    self.camera.rotation,
+                    &camera_bind_group,
+                    render_bind_group,
                 );
             }
         }
+
 
         // Render adhesion lines if enabled
         if self.show_adhesion_lines {
@@ -2825,7 +2894,12 @@ impl Scene for GpuScene {
         if let Some(count) = self.gpu_triple_buffers.poll_cell_count(device) {
             self.current_cell_count = count;
         }
-        
+
+        // Poll for steam particle count (GPU readback)
+        if self.show_steam_particles {
+            self.poll_steam_particle_count(device);
+        }
+
         // Mark that we now have Hi-Z data for next frame
         self.first_frame = false;
     }
@@ -2839,14 +2913,14 @@ impl Scene for GpuScene {
         self.instance_builder.reset_hiz(); // Reset Hi-Z config so bind group is recreated with new texture
         self.first_frame = true; // Need to regenerate Hi-Z
         
-        // Resize steam renderer if initialized
-        if let Some(ref mut steam_renderer) = self.steam_renderer {
-            steam_renderer.resize(width, height);
-        }
-        
         // Resize cave renderer if initialized
         if let Some(ref mut cave_renderer) = self.cave_renderer {
             cave_renderer.resize(width, height);
+        }
+        
+        // Resize steam particle renderer if initialized
+        if let Some(ref mut steam_particle_renderer) = self.steam_particle_renderer {
+            steam_particle_renderer.resize(width, height);
         }
     }
 
