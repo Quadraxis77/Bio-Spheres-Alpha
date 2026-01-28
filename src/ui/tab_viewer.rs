@@ -1095,27 +1095,41 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
     // Lateral flow probability control
     ui.separator();
     ui.label("Lateral Flow Control:");
-    ui.add_space(3.0);
+    ui.add_space(5.0);
     
-    ui.horizontal(|ui| {
-        ui.label("Probability:");
-        let mut probability = context.editor_state.fluid_lateral_flow_probability;
-        if ui.add(egui::Slider::new(&mut probability, 0.0..=1.0)
-            .step_by(0.01)
-            .fixed_decimals(2)
-            .suffix(" (0.0 = never, 1.0 = always)")
-        ).changed() {
-            context.editor_state.fluid_lateral_flow_probability = probability;
-        }
-    });
+    // Per-fluid-type lateral flow probabilities
+    ui.label("Per-Fluid-Type Lateral Flow Probabilities:");
+    
+    let fluid_names = ["Empty", "Water", "Lava", "Steam"];
+    let mut probabilities = context.editor_state.fluid_lateral_flow_probabilities;
+    let mut changed = false;
+    
+    for (i, fluid_name) in fluid_names.iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(format!("{}:", fluid_name));
+            if ui.add(egui::Slider::new(&mut probabilities[i], 0.0..=1.0)
+                .step_by(0.01)
+                .fixed_decimals(2)
+                .suffix(" (0.0 = never, 1.0 = always)")
+            ).changed() {
+                changed = true;
+            }
+        });
+    }
+    
+    if changed {
+        context.editor_state.fluid_lateral_flow_probabilities = probabilities;
+    }
     
     ui.add_space(5.0);
-    ui.label(format!("Current: {:.0}% chance of lateral movement", context.editor_state.fluid_lateral_flow_probability * 100.0));
+    ui.label(format!("Water: {:.0}% chance, Lava: {:.0}% chance, Steam: {:.0}% chance", 
+        context.editor_state.fluid_lateral_flow_probabilities[1] * 100.0,
+        context.editor_state.fluid_lateral_flow_probabilities[2] * 100.0,
+        context.editor_state.fluid_lateral_flow_probabilities[3] * 100.0));
     ui.label("Lower values = more vertical flow, Higher values = more spreading");
     
     ui.add_space(10.0);
 }
-
 /// Render the TimeScrubber panel (placeholder).
 fn render_time_scrubber(ui: &mut Ui, context: &mut PanelContext) {
     ui.heading("Time Scrubber");

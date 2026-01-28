@@ -19,19 +19,34 @@ struct FluidParams {
     gravity_dir_y: f32,
     gravity_dir_z: f32,
 
-    // Lateral flow probability (0.0 to 1.0)
-    lateral_flow_probability: f32,
+    // Per-fluid-type lateral flow probabilities (0.0 to 1.0)
+    // Index: 0=Empty (unused), 1=Water, 2=Lava, 3=Steam
+    lateral_flow_probability_empty: f32,
+    lateral_flow_probability_water: f32,
+    lateral_flow_probability_lava: f32,
+    lateral_flow_probability_steam: f32,
     
     // Fluid type for spawning (0=Empty, 1=Water, 2=Lava, 3=Steam)
     spawn_fluid_type: u32,
 
     _pad0: u32,
-    _pad1: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: FluidParams;
 @group(0) @binding(1) var<storage, read_write> voxels: array<atomic<u32>>;
 @group(0) @binding(2) var<storage, read> solid_mask: array<u32>;
+
+// Get lateral flow probability for a specific fluid type
+fn get_lateral_flow_probability(fluid_type: u32) -> f32 {
+    // Return probability based on fluid type
+    switch fluid_type {
+        case 0u: { return params.lateral_flow_probability_empty; }   // Empty (unused)
+        case 1u: { return params.lateral_flow_probability_water; }   // Water
+        case 2u: { return params.lateral_flow_probability_lava; }    // Lava
+        case 3u: { return params.lateral_flow_probability_steam; }   // Steam
+        default: { return params.lateral_flow_probability_water; }  // Default to water
+    }
+}
 
 fn grid_index(x: u32, y: u32, z: u32) -> u32 {
     let res = params.grid_resolution;
@@ -498,8 +513,9 @@ fn process_direction_fast(gid: vec3<u32>, direction: u32) {
         let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
         let combined_hash = time_hash ^ pos_hash;
         
-        // Skip movement based on lateral flow probability (0.0 = never, 1.0 = always)
-        let probability_threshold = params.lateral_flow_probability * 255.0;
+        // Skip movement based on fluid-type-specific lateral flow probability (0.0 = never, 1.0 = always)
+        let fluid_probability = get_lateral_flow_probability(type_a) * get_lateral_flow_probability(type_b);
+        let probability_threshold = fluid_probability * 255.0;
         if (combined_hash & 255u) > u32(probability_threshold) {
             return;
         }
@@ -631,8 +647,9 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
         let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
         let combined_hash = time_hash ^ pos_hash;
         
-        // Skip movement based on lateral flow probability (0.0 = never, 1.0 = always)
-        let probability_threshold = params.lateral_flow_probability * 255.0;
+        // Skip movement based on fluid-type-specific lateral flow probability (0.0 = never, 1.0 = always)
+        let fluid_probability = get_lateral_flow_probability(type_a) * get_lateral_flow_probability(type_b);
+        let probability_threshold = fluid_probability * 255.0;
         if (combined_hash & 255u) > u32(probability_threshold) {
             return;
         }
