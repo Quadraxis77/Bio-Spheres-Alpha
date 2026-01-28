@@ -252,6 +252,10 @@ impl GenomeEditorState {
              cave_smoothness, cave_seed, cave_resolution, cave_collision_enabled, cave_collision_stiffness, 
              cave_collision_damping, cave_substeps) = Self::load_cave_settings();
         
+        let (fluid_gravity, fluid_gravity_x, fluid_gravity_y, fluid_gravity_z, 
+             fluid_vorticity_epsilon, fluid_pressure_iterations, fluid_lateral_flow_probabilities,
+             fluid_continuous_spawn, selected_fluid_type) = Self::load_fluid_settings();
+        
         Self {
             renaming_mode: None,
             rename_buffer: String::new(),
@@ -297,13 +301,13 @@ impl GenomeEditorState {
             cave_collision_damping,
             cave_substeps,
             cave_params_dirty: false,
-            fluid_gravity: 9.8,
-            fluid_gravity_x: false,
-            fluid_gravity_y: true,
-            fluid_gravity_z: false,
-            fluid_vorticity_epsilon: 0.05,
-            fluid_pressure_iterations: 10,
-            fluid_lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
+            fluid_gravity,
+            fluid_gravity_x,
+            fluid_gravity_y,
+            fluid_gravity_z,
+            fluid_vorticity_epsilon,
+            fluid_pressure_iterations,
+            fluid_lateral_flow_probabilities,
             fluid_show_voxel_grid: true,
             fluid_show_solid_only: false,
             fluid_show_wireframe: false,
@@ -320,10 +324,10 @@ impl GenomeEditorState {
             fluid_water_percent: 25.0,
             fluid_lava_percent: 25.0,
             fluid_steam_percent: 25.0,
-            selected_fluid_type: 1u32, // Default to water
+            selected_fluid_type,
             fluid_show_test_voxels: false,
             fluid_show_mesh: true,
-            fluid_continuous_spawn: false,
+            fluid_continuous_spawn,
             fluid_iso_level: 0.15,
             fluid_ambient: 0.15,
             fluid_diffuse: 0.6,
@@ -375,6 +379,23 @@ impl GenomeEditorState {
         }
     }
     
+    /// Save fluid settings to disk.
+    pub fn save_fluid_settings(&self) {
+        if let Err(e) = Self::save_fluid_settings_to_file(
+            self.fluid_gravity,
+            self.fluid_gravity_x,
+            self.fluid_gravity_y,
+            self.fluid_gravity_z,
+            self.fluid_vorticity_epsilon,
+            self.fluid_pressure_iterations,
+            self.fluid_lateral_flow_probabilities,
+            self.fluid_continuous_spawn,
+            self.selected_fluid_type,
+        ) {
+            log::error!("Failed to save fluid settings: {}", e);
+        }
+    }
+    
     fn save_cave_settings_to_file(
         density: f32,
         scale: f32,
@@ -421,6 +442,48 @@ impl GenomeEditorState {
         };
         
         let path = PathBuf::from("cave_settings.ron");
+        let contents = ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default())?;
+        std::fs::write(path, contents)?;
+        Ok(())
+    }
+    
+    fn save_fluid_settings_to_file(
+        gravity: f32,
+        gravity_x: bool,
+        gravity_y: bool,
+        gravity_z: bool,
+        vorticity_epsilon: f32,
+        pressure_iterations: u32,
+        lateral_flow_probabilities: [f32; 4],
+        continuous_spawn: bool,
+        selected_fluid_type: u32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        #[derive(serde::Serialize)]
+        struct FluidSettings {
+            gravity: f32,
+            gravity_x: bool,
+            gravity_y: bool,
+            gravity_z: bool,
+            vorticity_epsilon: f32,
+            pressure_iterations: u32,
+            lateral_flow_probabilities: [f32; 4],
+            continuous_spawn: bool,
+            selected_fluid_type: u32,
+        }
+        
+        let settings = FluidSettings {
+            gravity,
+            gravity_x,
+            gravity_y,
+            gravity_z,
+            vorticity_epsilon,
+            pressure_iterations,
+            lateral_flow_probabilities,
+            continuous_spawn,
+            selected_fluid_type,
+        };
+        
+        let path = PathBuf::from("fluid_settings.ron");
         let contents = ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default())?;
         std::fs::write(path, contents)?;
         Ok(())
@@ -482,6 +545,55 @@ impl GenomeEditorState {
         
         // Return defaults
         (1.0, 10.0, 4u32, 0.5, 0.5, 0.1, 12345u32, 64u32, true, 1000.0, 0.5, 4u32)
+    }
+    
+    /// Load fluid settings from disk, or return defaults if file doesn't exist.
+    pub fn load_fluid_settings() -> (f32, bool, bool, bool, f32, u32, [f32; 4], bool, u32) {
+        #[derive(serde::Deserialize)]
+        struct FluidSettings {
+            gravity: f32,
+            gravity_x: bool,
+            gravity_y: bool,
+            gravity_z: bool,
+            vorticity_epsilon: f32,
+            pressure_iterations: u32,
+            lateral_flow_probabilities: [f32; 4],
+            continuous_spawn: bool,
+            selected_fluid_type: u32,
+        }
+        
+        let path = PathBuf::from("fluid_settings.ron");
+        
+        if path.exists() {
+            match std::fs::read_to_string(&path) {
+                Ok(contents) => {
+                    match ron::from_str::<FluidSettings>(&contents) {
+                        Ok(settings) => {
+                            return (
+                                settings.gravity,
+                                settings.gravity_x,
+                                settings.gravity_y,
+                                settings.gravity_z,
+                                settings.vorticity_epsilon,
+                                settings.pressure_iterations,
+                                settings.lateral_flow_probabilities,
+                                settings.continuous_spawn,
+                                settings.selected_fluid_type,
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to parse fluid settings: {}. Using defaults.", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to read fluid settings: {}. Using defaults.", e);
+                }
+            }
+        }
+        
+        // Return defaults
+        (9.8, false, true, false, 0.05, 10, [1.0, 0.8, 0.6, 0.9], false, 1)
     }
 }
 

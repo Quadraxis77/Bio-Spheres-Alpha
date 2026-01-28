@@ -1024,6 +1024,8 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
                 simulator.set_continuous_spawn(context.editor_state.fluid_continuous_spawn);
             }
         }
+        // Save fluid settings
+        context.editor_state.save_fluid_settings();
     }
     
     // Fluid type selection
@@ -1046,6 +1048,8 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
                 simulator.set_fluid_type(context.editor_state.selected_fluid_type);
             }
         }
+        // Save fluid settings
+        context.editor_state.save_fluid_settings();
     }
 
     // Lateral flow probability control for selected fluid type
@@ -1071,6 +1075,8 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
         
         if changed {
             context.editor_state.fluid_lateral_flow_probabilities = probabilities;
+            // Save fluid settings
+            context.editor_state.save_fluid_settings();
         }
     }
     
