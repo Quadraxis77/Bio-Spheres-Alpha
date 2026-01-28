@@ -175,6 +175,10 @@ pub struct GenomeEditorState {
     // Fluid initialization
     pub fluid_water_percent: f32,
     pub fluid_lava_percent: f32,
+    pub fluid_steam_percent: f32,
+    
+    // Fluid type selection
+    pub selected_fluid_type: u32, // 0=Empty, 1=Water, 2=Lava, 3=Steam
     
     // Fluid visualization toggle
     pub fluid_show_test_voxels: bool,
@@ -313,6 +317,8 @@ impl GenomeEditorState {
             fluid_steam_mass: 0.0,
             fluid_water_percent: 25.0,
             fluid_lava_percent: 25.0,
+            fluid_steam_percent: 25.0,
+            selected_fluid_type: 1u32, // Default to water
             fluid_show_test_voxels: false,
             fluid_show_mesh: true,
             fluid_continuous_spawn: false,

@@ -21,6 +21,9 @@ struct FluidParams {
 
     // Lateral flow probability (0.0 to 1.0)
     lateral_flow_probability: f32,
+    
+    // Fluid type for spawning (0=Empty, 1=Water, 2=Lava, 3=Steam)
+    spawn_fluid_type: u32,
 
     _pad0: u32,
     _pad1: u32,
@@ -474,14 +477,17 @@ fn process_direction_fast(gid: vec3<u32>, direction: u32) {
     let type_a = get_fluid_type(state_a);
     let type_b = get_fluid_type(state_b);
 
-    // Only consider swaps involving water (1) and empty (0)
+    // Only consider swaps involving water (1), steam (3), and empty (0)
     let a_is_water = type_a == 1u;
     let b_is_water = type_b == 1u;
+    let a_is_steam = type_a == 3u;
+    let b_is_steam = type_b == 3u;
     let a_is_empty = type_a == 0u;
     let b_is_empty = type_b == 0u;
 
-    // Skip if both same (both water or both empty) or neither water/empty
-    if !((a_is_water && b_is_empty) || (a_is_empty && b_is_water)) {
+    // Skip if both same or neither fluid/empty
+    if !((a_is_water && b_is_empty) || (a_is_empty && b_is_water) ||
+          (a_is_steam && b_is_empty) || (a_is_empty && b_is_steam)) {
         return;
     }
 
@@ -556,14 +562,17 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
     let type_a = get_fluid_type(state_a);
     let type_b = get_fluid_type(state_b);
 
-    // Only consider swaps involving water (1) and empty (0)
+    // Only consider swaps involving water (1), steam (3), and empty (0)
     let a_is_water = type_a == 1u;
     let b_is_water = type_b == 1u;
+    let a_is_steam = type_a == 3u;
+    let b_is_steam = type_b == 3u;
     let a_is_empty = type_a == 0u;
     let b_is_empty = type_b == 0u;
 
-    // Skip if both same (both water or both empty) or neither water/empty
-    if !((a_is_water && b_is_empty) || (a_is_empty && b_is_water)) {
+    // Skip if both same or neither fluid/empty
+    if !((a_is_water && b_is_empty) || (a_is_empty && b_is_water) ||
+          (a_is_steam && b_is_empty) || (a_is_empty && b_is_steam)) {
         return;
     }
 
@@ -572,7 +581,12 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
     
     // Simple dot product to check if direction aligns with gravity
     let dir_vec = get_offset(direction);
-    let alignment = dot(grav_dir, vec3<f32>(f32(dir_vec.x), f32(dir_vec.y), f32(dir_vec.z)));
+    var alignment = dot(grav_dir, vec3<f32>(f32(dir_vec.x), f32(dir_vec.y), f32(dir_vec.z)));
+    
+    // Reverse alignment for steam (steam flows against gravity)
+    if a_is_steam || b_is_steam {
+        alignment = -alignment;
+    }
     
     // If alignment is positive, this direction flows with gravity
     // If alignment is negative, this direction flows against gravity
@@ -594,17 +608,17 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
             return;
         }
         
-        // If alignment is positive: water flows with gravity (current to neighbor)
+        // If alignment is positive: fluid flows with gravity (current to neighbor)
         if alignment > 0.0 {
-            // Movement with gravity: water flows from current cell to neighbor
-            if !(a_is_water && b_is_empty) {
+            // Movement with gravity: fluid flows from current cell to neighbor
+            if !((a_is_water && b_is_empty) || (a_is_steam && b_is_empty)) {
                 return;
             }
         }
-        // If alignment is negative: water flows against gravity (neighbor to current)
+        // If alignment is negative: fluid flows against gravity (neighbor to current)
         else {
-            // Movement against gravity: water flows from neighbor to current cell
-            if !(a_is_empty && b_is_water) {
+            // Movement against gravity: fluid flows from neighbor to current cell
+            if !((a_is_empty && b_is_water) || (a_is_empty && b_is_steam)) {
                 return;
             }
         }
@@ -708,13 +722,13 @@ fn fluid_spawn_continuous(@builtin(global_invocation_id) gid: vec3<u32>) {
         let time_hash = u32(params.time * 1000.0);
         let combined_hash = pos_hash ^ time_hash;
         
-        // Spawn water based on probability
+        // Spawn fluid based on probability
         if (combined_hash & 255u) < u32(spawn_probability * 255.0) {
             // Only spawn if current cell is empty
             let current_state = atomicLoad(&voxels[idx]);
             if get_fluid_type(current_state) == 0u {
-                // Water: type=1, fill=1.0 -> packed as (65535 << 16) | 1
-                atomicStore(&voxels[idx], (65535u << 16u) | 1u);
+                // Spawn selected fluid type with full fill
+                atomicStore(&voxels[idx], (65535u << 16u) | params.spawn_fluid_type);
             }
         }
     }

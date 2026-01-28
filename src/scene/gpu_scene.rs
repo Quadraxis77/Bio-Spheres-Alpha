@@ -4,7 +4,7 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, TailRenderer, VoxelRenderer, WorldSphereRenderer};
+use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, SteamRenderer, TailRenderer, VoxelRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
@@ -172,6 +172,12 @@ pub struct GpuScene {
     pub fluid_simulator: Option<GpuFluidSimulator>,
     /// Solid mask generator for fluid system
     solid_mask_generator: Option<SolidMaskGenerator>,
+    /// Steam ray marching renderer for volumetric steam
+    pub steam_renderer: Option<SteamRenderer>,
+    /// Whether to show steam ray marching (volumetric steam)
+    pub show_steam_raymarching: bool,
+    /// Cached steam bind group (recreated when fluid simulator changes)
+    steam_bind_group: Option<wgpu::BindGroup>,
 }
 
 impl GpuScene {
@@ -310,9 +316,12 @@ impl GpuScene {
             show_gpu_density_mesh: false,
             fluid_simulator: None,
             solid_mask_generator: None,
+            steam_renderer: None,
+            show_steam_raymarching: false,
+            steam_bind_group: None,
         }
     }
-    
+
     /// Create a new GPU scene with default capacity (100k).
     pub fn new(
         device: &wgpu::Device,
@@ -1993,7 +2002,7 @@ impl GpuScene {
     }
 
     /// Initialize the GPU fluid simulator (starts empty)
-    pub fn initialize_fluid_simulator(&mut self, device: &wgpu::Device, _queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
+    pub fn initialize_fluid_simulator(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
         // First ensure surface nets is initialized
         if self.gpu_surface_nets.is_none() {
             self.initialize_gpu_surface_nets(device, surface_format);
@@ -2027,6 +2036,10 @@ impl GpuScene {
         self.fluid_simulator = Some(simulator);
         self.show_gpu_density_mesh = true;
 
+        // Initialize steam ray marching renderer
+        self.initialize_steam_renderer(device, surface_format);
+        self.update_steam_bind_group(device, queue);
+
         log::info!("GPU fluid simulator initialized with solid mask and water bitfield for cell buoyancy");
     }
 
@@ -2059,6 +2072,59 @@ impl GpuScene {
         if let Some(ref mut simulator) = self.fluid_simulator {
             simulator.paused = !simulator.paused;
             log::info!("Fluid simulation {}", if simulator.paused { "paused" } else { "resumed" });
+        }
+    }
+
+    /// Initialize the steam ray marching renderer
+    pub fn initialize_steam_renderer(&mut self, device: &wgpu::Device, surface_format: wgpu::TextureFormat) {
+        if self.steam_renderer.is_some() {
+            return;
+        }
+
+        let depth_format = wgpu::TextureFormat::Depth32Float;
+        let world_radius = self.config.sphere_radius;
+        let world_center = glam::Vec3::ZERO;
+
+        let steam_renderer = SteamRenderer::new(
+            device,
+            surface_format,
+            depth_format,
+            world_radius,
+            world_center,
+            self.renderer.width,
+            self.renderer.height,
+        );
+
+        self.steam_renderer = Some(steam_renderer);
+        self.show_steam_raymarching = true;
+
+        log::info!("Steam ray marching renderer initialized");
+    }
+
+    /// Update steam bind group when fluid simulator changes
+    pub fn update_steam_bind_group(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if let (Some(ref mut steam_renderer), Some(ref fluid_sim)) = (&mut self.steam_renderer, &self.fluid_simulator) {
+            // Get grid params from fluid simulator to ensure they match
+            let (world_radius, world_center) = fluid_sim.grid_params();
+            let grid_resolution = 128u32;
+            let world_diameter = world_radius * 2.0;
+            let cell_size = world_diameter / grid_resolution as f32;
+            let grid_origin = world_center - glam::Vec3::splat(world_diameter / 2.0);
+
+            // Update steam params to match fluid simulator
+            let params = steam_renderer.params_mut();
+            params.grid_resolution = grid_resolution;
+            params.world_radius = world_radius;
+            params.cell_size = cell_size;
+            params.grid_origin = grid_origin.to_array();
+
+            // Upload params and create bind group
+            steam_renderer.upload_params(queue);
+            self.steam_bind_group = Some(steam_renderer.create_bind_group(device, fluid_sim.current_state_buffer()));
+            log::info!("Steam bind group created with grid_origin: {:?}, cell_size: {}", grid_origin, cell_size);
+        } else {
+            log::warn!("Could not create steam bind group: steam_renderer={}, fluid_sim={}",
+                self.steam_renderer.is_some(), self.fluid_simulator.is_some());
         }
     }
 
@@ -2670,6 +2736,21 @@ impl Scene for GpuScene {
             }
         }
 
+        // Render steam with ray marching if enabled
+        if self.show_steam_raymarching {
+            if let (Some(ref steam_renderer), Some(ref bind_group)) = (&self.steam_renderer, &self.steam_bind_group) {
+                steam_renderer.render(
+                    &mut encoder,
+                    queue,
+                    view,
+                    &self.renderer.depth_view,
+                    bind_group,
+                    self.camera.position(),
+                    self.camera.rotation,
+                );
+            }
+        }
+
         // Render adhesion lines if enabled
         if self.show_adhesion_lines {
             // Create bind group with current output buffer (physics results)
@@ -2757,6 +2838,11 @@ impl Scene for GpuScene {
         self.hiz_generator.resize(device, width, height);
         self.instance_builder.reset_hiz(); // Reset Hi-Z config so bind group is recreated with new texture
         self.first_frame = true; // Need to regenerate Hi-Z
+        
+        // Resize steam renderer if initialized
+        if let Some(ref mut steam_renderer) = self.steam_renderer {
+            steam_renderer.resize(width, height);
+        }
         
         // Resize cave renderer if initialized
         if let Some(ref mut cave_renderer) = self.cave_renderer {

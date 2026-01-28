@@ -1056,6 +1056,42 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
     
     ui.add_space(10.0);
     
+    // Fluid type selection
+    ui.separator();
+    ui.label("Fluid Type Selection:");
+    ui.add_space(3.0);
+    
+    let fluid_type_changed = {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        changed |= ui.radio_value(&mut context.editor_state.selected_fluid_type, 1u32, "Water").changed();
+        changed |= ui.radio_value(&mut context.editor_state.selected_fluid_type, 2u32, "Lava").changed();
+        changed |= ui.radio_value(&mut context.editor_state.selected_fluid_type, 3u32, "Steam").changed();
+    });
+    changed
+};
+    
+    if fluid_type_changed {
+        // Update fluid simulator type when changed
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            if let Some(ref mut simulator) = gpu_scene.fluid_simulator {
+                simulator.set_fluid_type(context.editor_state.selected_fluid_type);
+            }
+        }
+    }
+    
+    ui.add_space(5.0);
+    ui.label("Selected fluid type affects spawning behavior:");
+    let behavior_text = match context.editor_state.selected_fluid_type {
+        1 => "  • Water flows downward with gravity",
+        2 => "  • Lava flows downward with gravity (denser)",
+        3 => "  • Steam rises upward (reverse gravity)",
+        _ => "  • Unknown fluid type",
+    };
+    ui.label(behavior_text);
+
+    ui.add_space(10.0);
+
     // Lateral flow probability control
     ui.separator();
     ui.label("Lateral Flow Control:");

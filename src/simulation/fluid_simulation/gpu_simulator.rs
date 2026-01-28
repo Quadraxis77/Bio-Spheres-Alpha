@@ -33,6 +33,9 @@ pub struct GpuFluidParams {
 
     // Lateral flow probability (0.0 to 1.0)
     pub lateral_flow_probability: f32,
+    
+    // Fluid type for spawning (0=Empty, 1=Water, 2=Lava, 3=Steam)
+    pub spawn_fluid_type: u32,
 
     // Additional padding to match WGSL struct size
     pub _pad0: u32,
@@ -89,6 +92,9 @@ pub struct GpuFluidSimulator {
 
     // Continuous spawning control
     continuous_spawn_enabled: std::cell::Cell<bool>,
+    
+    // Fluid type control (0=Empty, 1=Water, 2=Lava, 3=Steam)
+    fluid_type: std::cell::Cell<u32>,
 
     // Compute pipelines
     swap_pipeline: wgpu::ComputePipeline,
@@ -145,6 +151,7 @@ impl GpuFluidSimulator {
             gravity_dir_y: -9.8,  // Default gravity pointing down (-Y)
             gravity_dir_z: 0.0,
             lateral_flow_probability: 0.8,  // Default 80% probability
+            spawn_fluid_type: 1u32,  // Default to water
             _pad0: 0,
             _pad1: 0,
         };
@@ -438,6 +445,7 @@ impl GpuFluidSimulator {
             bitfield_params_buffer,
             bitfield_pipeline,
             bitfield_bind_group_layout,
+            fluid_type: std::cell::Cell::new(1u32), // Default to water
             paused: false,
         }
     }
@@ -493,6 +501,7 @@ impl GpuFluidSimulator {
             gravity_dir_y: grav_y,
             gravity_dir_z: grav_z,
             lateral_flow_probability,
+            spawn_fluid_type: self.fluid_type.get(),
             _pad0: 0,
             _pad1: 0,
         };
@@ -553,6 +562,16 @@ impl GpuFluidSimulator {
     /// Get continuous spawning enabled state
     pub fn is_continuous_spawn_enabled(&self) -> bool {
         self.continuous_spawn_enabled.get()
+    }
+
+    /// Set fluid type (0=Empty, 1=Water, 2=Lava, 3=Steam)
+    pub fn set_fluid_type(&self, fluid_type: u32) {
+        self.fluid_type.set(fluid_type);
+    }
+
+    /// Get current fluid type
+    pub fn get_fluid_type(&self) -> u32 {
+        self.fluid_type.get()
     }
 
     /// Step the simulation - 100% GPU with zero CPU logic
