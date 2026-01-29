@@ -70,7 +70,7 @@ fn get_fluid_alpha(fluid_type: f32, base_alpha: f32) -> f32 {
     let ft = u32(fluid_type + 0.5);
     if ft == 1u { return base_alpha; } // Water - use user setting
     if ft == 2u { return min(base_alpha + 0.1, 1.0); } // Lava - slightly more opaque
-    if ft == 3u { return base_alpha * 0.6; } // Steam - more transparent
+    if ft == 3u { return 1.0; } // Steam - fully opaque
     return base_alpha;
 }
 

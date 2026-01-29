@@ -170,16 +170,45 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Ambient occlusion approximation
     let ao = 0.5 + 0.5 * texture_value;
     
+    // Calculate distance from world center for outer layer detection
+    let dist_from_center = length(in.world_position - cave_params.world_center);
+    let normalized_dist = dist_from_center / cave_params.world_radius;
+    
+    // Check if we're in bottom quarter (negative Y) with noise variation
+    let world_pos_normalized = (in.world_position - cave_params.world_center) / cave_params.world_radius;
+    let hemisphere_factor = -world_pos_normalized.y; // Positive for bottom hemisphere
+    
+    // Add noise variation to create irregular boundary between quarters
+    let noise_scale = 8.0;
+    let boundary_variation = sample_triplanar_texture(in.world_position * noise_scale, normalize(in.world_position)) * 0.3 - 0.15;
+    let hemisphere_threshold = 0.5 + boundary_variation; // 0.5 = bottom quarter (50% of hemisphere)
+    
+    // Only apply red coloring to bottom quarter with variation
+    let is_bottom_quarter = hemisphere_factor > hemisphere_threshold;
+    
     // Base cave color (dark gray-brown)
     let base_color = vec3<f32>(0.15, 0.12, 0.10);
+    
+    // Outer layer reddish color
+    let outer_color = vec3<f32>(0.6, 0.15, 0.1); // Reddish brown
+    
+    // Blend factor for outer layer (starts at 0.9 of world radius, full at 1.0)
+    let outer_blend_start = 0.9;
+    let outer_blend_factor = smoothstep(outer_blend_start, 1.0, normalized_dist);
+    
+    // Only apply red color if in bottom quarter AND in outer layer
+    let red_factor = outer_blend_factor * select(0.0, 1.0, is_bottom_quarter);
     
     // Add color variation based on triplanar texture
     let color_variation = texture_value * 0.15;
     let cave_color = base_color + vec3<f32>(color_variation);
     
+    // Blend with outer layer color only in bottom hemisphere
+    let final_base_color = mix(cave_color, outer_color, red_factor);
+    
     // Combine lighting
     let ambient = vec3<f32>(0.1) * ao;
-    let final_color = cave_color * (ambient + diffuse * 0.7) + vec3<f32>(specular * 0.3);
+    let final_color = final_base_color * (ambient + diffuse * 0.7) + vec3<f32>(specular * 0.3);
     
     // Completely opaque walls
     let alpha = 1.0;

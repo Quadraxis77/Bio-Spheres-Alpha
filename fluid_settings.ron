@@ -7,7 +7,7 @@
     pressure_iterations: 10,
     lateral_flow_probabilities: (1.0, 0.8, 0.6, 0.9),
     continuous_spawn: false,
-    selected_fluid_type: 3,
+    selected_fluid_type: 1,
     show_steam_particles: true,
     show_water_particles: true,
     water_particle_prominence: 0.0,

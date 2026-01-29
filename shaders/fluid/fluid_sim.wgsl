@@ -347,9 +347,9 @@ fn should_condense_steam(gid: vec3<u32>) -> bool {
     }
     
     // Higher condensation probability near boundaries (simulating cooling)
-    var condensation_probability = 0.002 + f32(adjacent_solids) * 0.001; // 0.2% to 0.3% for solids
+    var condensation_probability = 0.004 + f32(adjacent_solids) * 0.002; // 0.4% to 0.6% for solids
     if near_boundary {
-        condensation_probability = condensation_probability; // Same 0.2% to 0.3% for boundaries
+        condensation_probability = condensation_probability; // Same 0.4% to 0.6% for boundaries
     }
     
     // Use hash-based randomization for natural variation
@@ -358,6 +358,68 @@ fn should_condense_steam(gid: vec3<u32>) -> bool {
     let combined_hash = pos_hash ^ time_hash;
     
     return (combined_hash & 255u) < u32(condensation_probability * 255.0);
+}
+
+// Water-to-steam conversion - water converts to steam when touching hot red cave rocks in bottom quarter
+fn should_convert_to_steam(gid: vec3<u32>) -> bool {
+    let res = params.grid_resolution;
+    
+    // Check if water voxel is adjacent to solid surfaces that are in the red layer
+    let solid_neighbors = array<vec3<i32>, 6>(
+        vec3<i32>(1, 0, 0),   // +X
+        vec3<i32>(-1, 0, 0),  // -X
+        vec3<i32>(0, 1, 0),   // +Y
+        vec3<i32>(0, -1, 0),  // -Y
+        vec3<i32>(0, 0, 1),   // +Z
+        vec3<i32>(0, 0, -1)   // -Z
+    );
+    
+    var touching_red_rocks = false;
+    var adjacent_solids = 0u;
+    
+    for (var i = 0u; i < 6u; i++) {
+        let nx = i32(gid.x) + solid_neighbors[i].x;
+        let ny = i32(gid.y) + solid_neighbors[i].y;
+        let nz = i32(gid.z) + solid_neighbors[i].z;
+        
+        if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
+            if is_solid(u32(nx), u32(ny), u32(nz)) {
+                adjacent_solids++;
+                
+                // Check if this solid is in the red layer AND bottom quarter
+                let solid_world_pos = grid_to_world(u32(nx), u32(ny), u32(nz));
+                let solid_distance_from_center = length(solid_world_pos);
+                let red_layer_start = params.world_radius * 0.9;
+                
+                // Check if in bottom quarter (simplified - just check Y position)
+                let is_in_outer_layer = solid_distance_from_center >= red_layer_start && solid_distance_from_center <= params.world_radius;
+                
+                // Simple bottom quarter check: Y must be negative enough (bottom 25%)
+                let y_normalized = solid_world_pos.y / params.world_radius;
+                let is_bottom_quarter = y_normalized < -0.5; // Bottom quarter
+                
+                if is_in_outer_layer && is_bottom_quarter {
+                    touching_red_rocks = true;
+                }
+            }
+        }
+    }
+    
+    // Convert only if touching red cave rocks in bottom quarter
+    if !touching_red_rocks {
+        return false;
+    }
+    
+    // Conversion probability based on how many red rocks are touching
+    let solid_factor = min(f32(adjacent_solids) / 6.0, 1.0); // 0 to 1, more solids = higher chance
+    let conversion_probability = 0.05 + solid_factor * 0.1; // Increased to 5% to 15% for testing
+    
+    // Use hash-based randomization for natural variation
+    let pos_hash = hash_position(gid);
+    let time_hash = u32(params.time * 1000.0);
+    let combined_hash = pos_hash ^ time_hash;
+    
+    return (combined_hash & 255u) < u32(conversion_probability * 255.0);
 }
 
 // Check if water voxel is in contact with other water or solid surfaces
@@ -451,6 +513,15 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         let result = atomicCompareExchangeWeak(&voxels[idx], state, (65535u << 16u) | 1u);
         if result.exchanged {
             return; // Successfully condensed, no further processing needed
+        }
+    }
+
+    // Water-to-steam conversion check - convert water to steam when touching hot surfaces near boundary
+    if fluid_type == 1u && should_convert_to_steam(gid) {
+        // Try to convert water to steam
+        let result = atomicCompareExchangeWeak(&voxels[idx], state, (65535u << 16u) | 3u);
+        if result.exchanged {
+            return; // Successfully converted to steam, no further processing needed
         }
     }
 
@@ -943,7 +1014,7 @@ fn extract_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     let fluid_type = state & 0xFFFFu;
     let fill = f32((state >> 16u) & 0xFFFFu) / 65535.0;
 
-    if fluid_type == 1u && fill > 0.0 {
+    if (fluid_type == 1u || fluid_type == 2u) && fill > 0.0 {
         density_out[idx] = fill;
     } else {
         density_out[idx] = 0.0;

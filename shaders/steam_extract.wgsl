@@ -103,8 +103,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     particle.position = world_pos;
     particle.size = params.cell_size * 1.5;  // Slightly larger than voxel
 
-    // Steam color: white/grey, nearly invisible
-    particle.color = vec4<f32>(0.9, 0.9, 0.95, 0.003);
+    // Steam color: white/grey
+    particle.color = vec4<f32>(0.9, 0.9, 0.95, 0.01);
 
     // Animation data (time offset based on position for variation)
     particle.animation = vec4<f32>(
