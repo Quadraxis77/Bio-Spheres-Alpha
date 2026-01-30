@@ -24,13 +24,13 @@ var<storage, read_write> rotations_out: array<vec4<f32>>;
 
 // Cell state buffers
 @group(1) @binding(0)
-var<storage, read> birth_times: array<f32>;
+var<storage, read_write> birth_times: array<f32>;
 
 @group(1) @binding(1)
-var<storage, read> split_intervals: array<f32>;
+var<storage, read_write> split_intervals: array<f32>;
 
 @group(1) @binding(2)
-var<storage, read> split_masses: array<f32>;
+var<storage, read_write> split_masses: array<f32>;
 
 @group(1) @binding(3)
 var<storage, read_write> max_splits: array<u32>;
@@ -45,13 +45,13 @@ var<storage, read_write> mode_indices: array<u32>;
 var<storage, read_write> cell_ids: array<u32>;
 
 @group(1) @binding(7)
-var<storage, read> nutrient_gain_rates: array<f32>;
+var<storage, read_write> nutrient_gain_rates: array<f32>;
 
 @group(1) @binding(8)
-var<storage, read> max_cell_sizes: array<f32>;
+var<storage, read_write> max_cell_sizes: array<f32>;
 
 @group(1) @binding(9)
-var<storage, read> stiffnesses: array<f32>;
+var<storage, read_write> stiffnesses: array<f32>;
 
 // Per-genome buffer system
 @group(2) @binding(0)

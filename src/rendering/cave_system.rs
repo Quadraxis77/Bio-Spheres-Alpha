@@ -76,9 +76,9 @@ impl Default for CaveParams {
             grid_resolution: 64,
             triangle_count: 0,
             collision_enabled: 1,
-            collision_stiffness: 1.0,
+            collision_stiffness: 10000.0,
             collision_damping: 1.0,
-            substeps: 4,
+            substeps: 3,
             _padding: [0.0; 188],
         }
     }

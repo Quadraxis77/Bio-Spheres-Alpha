@@ -106,10 +106,18 @@ fn should_render_as_particle(x: u32, y: u32, z: u32) -> bool {
 
 // Convert grid coordinates to world position with random offset within voxel bounds
 fn grid_to_world(x: u32, y: u32, z: u32) -> vec3<f32> {
-    return vec3<f32>(
-        params.grid_origin.x + (f32(x) + 0.5) * params.cell_size,
-        params.grid_origin.y + (f32(y) + 0.5) * params.cell_size,
-        params.grid_origin.z + (f32(z) + 0.5) * params.cell_size,
+    // Create a unique seed for this voxel position
+    let seed = hash_u32(x + y * 1009u + z * 1009u * 1009u);
+    
+    // Generate random offsets within [0, 1) range for each dimension
+    let random_x = random_float(seed);
+    let random_y = random_float(seed + 1u);
+    let random_z = random_float(seed + 2u);
+    
+    return params.grid_origin + vec3<f32>(
+        (f32(x) + random_x) * params.cell_size,
+        (f32(y) + random_y) * params.cell_size,
+        (f32(z) + random_z) * params.cell_size
     );
 }
 

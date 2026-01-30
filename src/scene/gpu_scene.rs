@@ -146,6 +146,9 @@ pub struct GpuScene {
     /// Per-fluid-type lateral flow probabilities for fluid simulation (0.0 to 1.0)
     /// Index: 0=Empty (unused), 1=Water, 2=Lava, 3=Steam
     pub lateral_flow_probabilities: [f32; 4],
+    /// Phase change probabilities for fluid simulation (0.0 to 1.0)
+    pub condensation_probability: f32,  // Steam to Water
+    pub vaporization_probability: f32,  // Water to Steam
     /// Current cell count (tracked on GPU, no CPU canonical state)
     pub current_cell_count: u32,
     /// Next cell ID for deterministic cell creation
@@ -321,6 +324,8 @@ impl GpuScene {
             gravity: 0.0,
             gravity_dir: [false, true, false],
             lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
+            condensation_probability: 0.1,
+            vaporization_probability: 0.1,
             current_cell_count: 0,
             next_cell_id: 0,
             tail_renderer,
@@ -342,7 +347,7 @@ impl GpuScene {
             steam_render_bind_group: None,
             water_particle_renderer: None,
             show_water_particles: false,
-            water_particle_prominence: 0.5,
+            water_particle_prominence: 0.0,
             water_extract_bind_group: None,
             water_render_bind_group: None,
         }
@@ -684,7 +689,7 @@ impl GpuScene {
     
     /// Add a genome to the scene and return its ID.
     /// Simplified version to isolate crash issues
-    pub fn add_genome(&mut self, device: &wgpu::Device, genome: Genome) -> Option<usize> {
+    pub fn add_genome(&mut self, _device: &wgpu::Device, genome: Genome) -> Option<usize> {
         // For now, just add to CPU storage without GPU buffers
         let id = self.genomes.len();
         self.genomes.push(genome);
@@ -2083,7 +2088,7 @@ impl GpuScene {
     /// Step the GPU fluid simulation and update water bitfield for cell buoyancy
     pub fn step_fluid_simulation(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, dt: f32) {
         if let Some(ref simulator) = self.fluid_simulator {
-            simulator.step(device, queue, encoder, dt, self.gravity, self.gravity_dir, self.lateral_flow_probabilities);
+            simulator.step(device, queue, encoder, dt, self.gravity, self.gravity_dir, self.lateral_flow_probabilities, self.condensation_probability, self.vaporization_probability);
             // Update water bitfield for cell physics (compressed 32x for fast lookup)
             simulator.update_water_bitfield(device, encoder);
         }
@@ -2318,6 +2323,12 @@ impl GpuScene {
             renderer.set_prominence_factor(self.water_particle_prominence);
         }
     }
+    
+    /// Set phase change probabilities
+    pub fn set_phase_change_probabilities(&mut self, condensation: f32, vaporization: f32) {
+        self.condensation_probability = condensation.clamp(0.0, 1.0);
+        self.vaporization_probability = vaporization.clamp(0.0, 1.0);
+    }
 
     /// Apply cave parameters from editor state
     pub fn apply_cave_params_from_editor(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
@@ -2334,10 +2345,6 @@ impl GpuScene {
             params.smoothness = editor_state.cave_smoothness;
             params.seed = editor_state.cave_seed;
             params.grid_resolution = editor_state.cave_resolution;
-            params.collision_enabled = if editor_state.cave_collision_enabled { 1 } else { 0 };
-            params.collision_stiffness = editor_state.cave_collision_stiffness;
-            params.collision_damping = editor_state.cave_collision_damping;
-            params.substeps = editor_state.cave_substeps;
             
             // Ensure world dimensions match the physics world
             params.world_center = [0.0, 0.0, 0.0];

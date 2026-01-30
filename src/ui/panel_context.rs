@@ -140,10 +140,6 @@ pub struct GenomeEditorState {
     pub cave_smoothness: f32,
     pub cave_seed: u32,
     pub cave_resolution: u32,
-    pub cave_collision_enabled: bool,
-    pub cave_collision_stiffness: f32,
-    pub cave_collision_damping: f32,
-    pub cave_substeps: u32,
     pub cave_params_dirty: bool,
     
     // Fluid simulation parameters
@@ -156,6 +152,10 @@ pub struct GenomeEditorState {
     /// Per-fluid-type lateral flow probabilities for fluid simulation (0.0 to 1.0)
     /// Index: 0=Empty (unused), 1=Water, 2=Lava, 3=Steam
     pub fluid_lateral_flow_probabilities: [f32; 4],
+    /// Condensation probability for steam to water conversion (0.0 to 1.0)
+    pub fluid_condensation_probability: f32,
+    /// Vaporization probability for water to steam conversion (0.0 to 1.0)
+    pub fluid_vaporization_probability: f32,
     
     // Fluid visualization
     pub fluid_show_voxel_grid: bool,
@@ -188,14 +188,6 @@ pub struct GenomeEditorState {
     pub fluid_show_mesh: bool,
     /// Whether to enable continuous fluid spawning
     pub fluid_continuous_spawn: bool,
-    
-    // Particle visualization
-    /// Whether to show steam particles
-    pub show_steam_particles: bool,
-    /// Whether to show water particles
-    pub show_water_particles: bool,
-    /// Water particle prominence factor (0.0-1.0)
-    pub water_particle_prominence: f32,
     
     // Fluid mesh settings
     /// Iso level for surface extraction (0.0-1.0)
@@ -257,12 +249,11 @@ impl GenomeEditorState {
     /// Create a new genome editor state with default values.
     pub fn new() -> Self {
         let (cave_density, cave_scale, cave_octaves, cave_persistence, cave_threshold, 
-             cave_smoothness, cave_seed, cave_resolution, cave_collision_enabled, cave_collision_stiffness, 
-             cave_collision_damping, cave_substeps) = Self::load_cave_settings();
+             cave_smoothness, cave_seed, cave_resolution) = Self::load_cave_settings();
         
         let (fluid_gravity, fluid_gravity_x, fluid_gravity_y, fluid_gravity_z, 
              fluid_vorticity_epsilon, fluid_pressure_iterations, fluid_lateral_flow_probabilities,
-             fluid_continuous_spawn, selected_fluid_type, show_steam_particles, show_water_particles, water_particle_prominence) = Self::load_fluid_settings();
+             _fluid_continuous_spawn, selected_fluid_type, fluid_condensation_probability, fluid_vaporization_probability) = Self::load_fluid_settings();
         
         Self {
             renaming_mode: None,
@@ -304,10 +295,6 @@ impl GenomeEditorState {
             cave_smoothness,
             cave_seed,
             cave_resolution,
-            cave_collision_enabled,
-            cave_collision_stiffness,
-            cave_collision_damping,
-            cave_substeps,
             cave_params_dirty: false,
             fluid_gravity,
             fluid_gravity_x,
@@ -316,6 +303,8 @@ impl GenomeEditorState {
             fluid_vorticity_epsilon,
             fluid_pressure_iterations,
             fluid_lateral_flow_probabilities,
+            fluid_condensation_probability,
+            fluid_vaporization_probability,
             fluid_show_voxel_grid: true,
             fluid_show_solid_only: false,
             fluid_show_wireframe: false,
@@ -335,10 +324,7 @@ impl GenomeEditorState {
             selected_fluid_type,
             fluid_show_test_voxels: false,
             fluid_show_mesh: true,
-            fluid_continuous_spawn,
-            show_steam_particles,
-            show_water_particles,
-            water_particle_prominence,
+            fluid_continuous_spawn: false,  // Always start disabled by default
             fluid_iso_level: 0.15,
             fluid_ambient: 0.15,
             fluid_diffuse: 0.6,
@@ -381,10 +367,6 @@ impl GenomeEditorState {
             self.cave_smoothness,
             self.cave_seed,
             self.cave_resolution,
-            self.cave_collision_enabled,
-            self.cave_collision_stiffness,
-            self.cave_collision_damping,
-            self.cave_substeps,
         ) {
             log::error!("Failed to save cave settings: {}", e);
         }
@@ -402,9 +384,8 @@ impl GenomeEditorState {
             self.fluid_lateral_flow_probabilities,
             self.fluid_continuous_spawn,
             self.selected_fluid_type,
-            self.show_steam_particles,
-            self.show_water_particles,
-            self.water_particle_prominence,
+            self.fluid_condensation_probability,
+            self.fluid_vaporization_probability,
         ) {
             log::error!("Failed to save fluid settings: {}", e);
         }
@@ -419,10 +400,6 @@ impl GenomeEditorState {
         smoothness: f32,
         seed: u32,
         resolution: u32,
-        collision_enabled: bool,
-        collision_stiffness: f32,
-        collision_damping: f32,
-        substeps: u32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct CaveSettings {
@@ -434,10 +411,6 @@ impl GenomeEditorState {
             smoothness: f32,
             seed: u32,
             resolution: u32,
-            collision_enabled: bool,
-            collision_stiffness: f32,
-            collision_damping: f32,
-            substeps: u32,
         }
         
         let settings = CaveSettings {
@@ -449,10 +422,6 @@ impl GenomeEditorState {
             smoothness,
             seed,
             resolution,
-            collision_enabled,
-            collision_stiffness,
-            collision_damping,
-            substeps,
         };
         
         let path = PathBuf::from("cave_settings.ron");
@@ -471,9 +440,8 @@ impl GenomeEditorState {
         lateral_flow_probabilities: [f32; 4],
         continuous_spawn: bool,
         selected_fluid_type: u32,
-        show_steam_particles: bool,
-        show_water_particles: bool,
-        water_particle_prominence: f32,
+        condensation_probability: f32,
+        vaporization_probability: f32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct FluidSettings {
@@ -486,9 +454,8 @@ impl GenomeEditorState {
             lateral_flow_probabilities: [f32; 4],
             continuous_spawn: bool,
             selected_fluid_type: u32,
-            show_steam_particles: bool,
-            show_water_particles: bool,
-            water_particle_prominence: f32,
+            condensation_probability: f32,
+            vaporization_probability: f32,
         }
         
         let settings = FluidSettings {
@@ -501,9 +468,8 @@ impl GenomeEditorState {
             lateral_flow_probabilities,
             continuous_spawn,
             selected_fluid_type,
-            show_steam_particles,
-            show_water_particles,
-            water_particle_prominence,
+            condensation_probability,
+            vaporization_probability,
         };
         
         let path = PathBuf::from("fluid_settings.ron");
@@ -513,7 +479,7 @@ impl GenomeEditorState {
     }
     
     /// Load cave settings from disk, or return defaults if file doesn't exist.
-    pub fn load_cave_settings() -> (f32, f32, u32, f32, f32, f32, u32, u32, bool, f32, f32, u32) {
+    pub fn load_cave_settings() -> (f32, f32, u32, f32, f32, f32, u32, u32) {
         #[derive(serde::Deserialize)]
         struct CaveSettings {
             density: f32,
@@ -525,10 +491,6 @@ impl GenomeEditorState {
             seed: u32,
             #[serde(default = "default_resolution")]
             resolution: u32,
-            collision_enabled: bool,
-            collision_stiffness: f32,
-            collision_damping: f32,
-            substeps: u32,
         }
         
         fn default_resolution() -> u32 { 64 }
@@ -549,10 +511,6 @@ impl GenomeEditorState {
                                 settings.smoothness,
                                 settings.seed,
                                 settings.resolution,
-                                settings.collision_enabled,
-                                settings.collision_stiffness,
-                                settings.collision_damping,
-                                settings.substeps,
                             );
                         }
                         Err(e) => {
@@ -567,11 +525,11 @@ impl GenomeEditorState {
         }
         
         // Return defaults
-        (1.0, 10.0, 4u32, 0.5, 0.5, 0.1, 12345u32, 64u32, true, 1000.0, 0.5, 4u32)
+        (1.0, 10.0, 4u32, 0.5, 0.5, 0.1, 12345u32, 64u32)
     }
     
     /// Load fluid settings from disk, or return defaults if file doesn't exist.
-    pub fn load_fluid_settings() -> (f32, bool, bool, bool, f32, u32, [f32; 4], bool, u32, bool, bool, f32) {
+    pub fn load_fluid_settings() -> (f32, bool, bool, bool, f32, u32, [f32; 4], bool, u32, f32, f32) {
         #[derive(serde::Deserialize)]
         struct FluidSettings {
             gravity: f32,
@@ -583,9 +541,8 @@ impl GenomeEditorState {
             lateral_flow_probabilities: [f32; 4],
             continuous_spawn: bool,
             selected_fluid_type: u32,
-            show_steam_particles: bool,
-            show_water_particles: bool,
-            water_particle_prominence: f32,
+            condensation_probability: f32,
+            vaporization_probability: f32,
         }
         
         let path = PathBuf::from("fluid_settings.ron");
@@ -605,9 +562,8 @@ impl GenomeEditorState {
                                 settings.lateral_flow_probabilities,
                                 settings.continuous_spawn,
                                 settings.selected_fluid_type,
-                                settings.show_steam_particles,
-                                settings.show_water_particles,
-                                settings.water_particle_prominence,
+                                settings.condensation_probability,
+                                settings.vaporization_probability,
                             );
                         }
                         Err(e) => {
@@ -622,7 +578,7 @@ impl GenomeEditorState {
         }
         
         // Return defaults
-        (9.8, false, true, false, 0.05, 10, [1.0, 0.8, 0.6, 0.9], false, 1, true, false, 0.5)
+        (9.8, false, true, false, 0.05, 10, [1.0, 0.8, 0.6, 0.9], false, 1, 0.1, 0.1)
     }
 }
 

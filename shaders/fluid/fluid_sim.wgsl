@@ -26,6 +26,10 @@ struct FluidParams {
     lateral_flow_probability_lava: f32,
     lateral_flow_probability_steam: f32,
     
+    // Phase change probabilities (0.0 to 1.0)
+    condensation_probability: f32,  // Steam to Water
+    vaporization_probability: f32,  // Water to Steam
+    
     // Fluid type for spawning (0=Empty, 1=Water, 2=Lava, 3=Steam)
     spawn_fluid_type: u32,
 
@@ -304,7 +308,7 @@ fn get_steam_dispersion_bias(gid: vec3<u32>, direction: u32) -> f32 {
     if direction == 0u || direction == 1u || direction == 4u || direction == 5u {
         return dispersion_factor * 1.5; // Boost horizontal spreading
     } else {
-        return dispersion_factor * 0.8; // Reduce vertical movement bias
+        return dispersion_factor * 1.2; // Increase vertical movement bias for rising
     }
 }
 
@@ -346,11 +350,8 @@ fn should_condense_steam(gid: vec3<u32>) -> bool {
         return false;
     }
     
-    // Higher condensation probability near boundaries (simulating cooling)
-    var condensation_probability = 0.004 + f32(adjacent_solids) * 0.002; // 0.4% to 0.6% for solids
-    if near_boundary {
-        condensation_probability = condensation_probability; // Same 0.4% to 0.6% for boundaries
-    }
+    // Use condensation probability from uniform parameters
+    let condensation_probability = params.condensation_probability;
     
     // Use hash-based randomization for natural variation
     let pos_hash = hash_position(gid);
@@ -411,8 +412,8 @@ fn should_convert_to_steam(gid: vec3<u32>) -> bool {
     }
     
     // Conversion probability based on how many red rocks are touching
-    let solid_factor = min(f32(adjacent_solids) / 6.0, 1.0); // 0 to 1, more solids = higher chance
-    let conversion_probability = 0.05 + solid_factor * 0.1; // Increased to 5% to 15% for testing
+    // Use vaporization probability from uniform parameters
+    let conversion_probability = params.vaporization_probability;
     
     // Use hash-based randomization for natural variation
     let pos_hash = hash_position(gid);
@@ -522,6 +523,53 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         let result = atomicCompareExchangeWeak(&voxels[idx], state, (65535u << 16u) | 3u);
         if result.exchanged {
             return; // Successfully converted to steam, no further processing needed
+        }
+    }
+
+    // Steam teleportation - find top of water stack and teleport there
+    if fluid_type == 3u {
+        // Check if steam has water above it (higher Y values)
+        if gid.y + 1u < params.grid_resolution {
+            let up_idx = grid_index(gid.x, gid.y + 1u, gid.z);
+            let up_state = atomicLoad(&voxels[up_idx]);
+            let up_fluid_type = get_fluid_type(up_state);
+            
+            // If there's water above, teleport steam to the top
+            if up_fluid_type == 1u {
+                // Search upward to find the first empty space above water
+                var found_empty = false;
+                var target_y = gid.y;
+                
+                for (var search_y = gid.y + 1u; search_y < params.grid_resolution; search_y++) {
+                    let search_idx = grid_index(gid.x, search_y, gid.z);
+                    let search_state = atomicLoad(&voxels[search_idx]);
+                    let search_fluid_type = get_fluid_type(search_state);
+                    
+                    if search_fluid_type == 0u {
+                        // Check if this position is within the world sphere
+                        let world_pos = grid_to_world(gid.x, search_y, gid.z);
+                        let distance_from_center = length(world_pos);
+                        
+                        // Only teleport if within world sphere (with small margin)
+                        if distance_from_center < params.world_radius * 0.95 {
+                            // Found valid empty space above water
+                            target_y = search_y;
+                            found_empty = true;
+                            break;
+                        }
+                    }
+                }
+                
+                // If we found valid empty space within world bounds, teleport there immediately
+                if found_empty {
+                    let target_idx = grid_index(gid.x, target_y, gid.z);
+                    
+                    // Clear current position and place steam at target
+                    atomicStore(&voxels[idx], 0u); // Clear current steam position
+                    atomicStore(&voxels[target_idx], (65535u << 16u) | 3u); // Place steam at target
+                    return; // Teleported successfully
+                }
+            }
         }
     }
 
@@ -694,7 +742,9 @@ fn process_direction_fast(gid: vec3<u32>, direction: u32) {
     // For horizontal directions: Use configurable probability for lateral movement
     if direction == 0u || direction == 1u || direction == 4u || direction == 5u {
         // Water can only move laterally if it's supported (touching other water or solids)
-        if a_is_water || b_is_water {
+        // But steam-water exchanges should be allowed regardless of water support
+        if (a_is_water && b_is_water) || (a_is_water && b_is_empty) || (a_is_empty && b_is_water) {
+            // Pure water or water-empty exchanges require support check
             if a_is_water && !water_is_supported(gid) {
                 return; // Water not supported, no lateral movement
             }
@@ -702,6 +752,7 @@ fn process_direction_fast(gid: vec3<u32>, direction: u32) {
                 return; // Water not supported, no lateral movement
             }
         }
+        // Steam-water and steam-empty exchanges don't need water support checks
         
         // Use the configurable lateral flow probability
         let time_hash = u32(params.time * 1000.0) + direction * 12345u;
@@ -710,6 +761,19 @@ fn process_direction_fast(gid: vec3<u32>, direction: u32) {
         
         // Apply steam dispersion bias for more gas-like behavior
         var fluid_probability = get_lateral_flow_probability(type_a) * get_lateral_flow_probability(type_b);
+        
+        // Preferential steam-water swapping when fluids are stacked vertically
+        if (a_is_steam && b_is_water) || (a_is_water && b_is_steam) {
+            // Check if this is a vertical direction (up/down)
+            let is_vertical = (direction == 2u || direction == 3u); // +Y or -Y
+            
+            if is_vertical {
+                // Boost probability for steam-water exchanges in vertical directions
+                // This helps steam rise through water
+                fluid_probability = fluid_probability * 2.0; // Double the probability
+            }
+        }
+        
         if a_is_steam || b_is_steam {
             fluid_probability = fluid_probability * get_steam_dispersion_bias(gid, direction);
         }
@@ -867,6 +931,19 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
         
         // Apply steam dispersion bias for more gas-like behavior
         var fluid_probability = get_lateral_flow_probability(type_a) * get_lateral_flow_probability(type_b);
+        
+        // Preferential steam-water swapping when fluids are stacked vertically
+        if (a_is_steam && b_is_water) || (a_is_water && b_is_steam) {
+            // Check if this is a vertical direction (up/down)
+            let is_vertical = (direction == 2u || direction == 3u); // +Y or -Y
+            
+            if is_vertical {
+                // Boost probability for steam-water exchanges in vertical directions
+                // This helps steam rise through water
+                fluid_probability = fluid_probability * 2.0; // Double the probability
+            }
+        }
+        
         if a_is_steam || b_is_steam {
             fluid_probability = fluid_probability * get_steam_dispersion_bias(gid, direction);
         }

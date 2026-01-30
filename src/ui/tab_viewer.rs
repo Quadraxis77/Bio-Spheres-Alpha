@@ -486,13 +486,12 @@ fn render_genome_editor(ui: &mut Ui, context: &mut PanelContext) {
 fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
     let perf = context.performance;
     
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        // GPU Readbacks toggle at the top
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut state.gpu_readbacks_enabled, "Enable GPU Readbacks");
-            ui.label("").on_hover_text("Disable to avoid CPU-GPU sync overhead.\nCell count and culling stats won't update.");
-        });
-        ui.separator();
+    // GPU Readbacks toggle at the top
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut state.gpu_readbacks_enabled, "Enable GPU Readbacks");
+        ui.label("").on_hover_text("Disable to avoid CPU-GPU sync overhead.\nCell count and culling stats won't update.");
+    });
+    ui.separator();
         
         // FPS and Frame Time section
         ui.heading("Frame Rate");
@@ -691,55 +690,7 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
                     .fixed_decimals(1));
             }
             
-            ui.add_space(8.0);
-            
-            // LOD Controls section
-            ui.heading("LOD Controls");
-            ui.separator();
-            
-            ui.label("Scale Factor:")
-                .on_hover_text("Higher values = more aggressive LOD transitions");
-            ui.add(egui::Slider::new(&mut state.lod_scale_factor, 100.0..=1000.0)
-                .step_by(10.0)
-                .fixed_decimals(0));
-            
-            ui.add_space(4.0);
-            
-            ui.label("Low → Medium Threshold:")
-                .on_hover_text("Screen radius threshold for 32x32 → 64x64 transition");
-            ui.add(egui::Slider::new(&mut state.lod_threshold_low, 1.0..=50.0)
-                .step_by(0.5)
-                .fixed_decimals(1));
-            
-            ui.label("Medium → High Threshold:")
-                .on_hover_text("Screen radius threshold for 64x64 → 128x128 transition");
-            ui.add(egui::Slider::new(&mut state.lod_threshold_medium, 5.0..=100.0)
-                .step_by(0.5)
-                .fixed_decimals(1));
-            
-            ui.label("High → Ultra Threshold:")
-                .on_hover_text("Screen radius threshold for 128x128 → 256x256 transition");
-            ui.add(egui::Slider::new(&mut state.lod_threshold_high, 10.0..=200.0)
-                .step_by(1.0)
-                .fixed_decimals(1));
-            
-            ui.add_space(4.0);
-            
-            // Debug colors toggle
-            ui.checkbox(&mut state.lod_debug_colors, "Show Debug Colors")
-                .on_hover_text("Show LOD levels as colors: Red (Low), Green (Medium), Blue (High), Yellow (Ultra)");
-            
-            ui.add_space(4.0);
-            
-            // Reset LOD to defaults button
-            if ui.button("Reset LOD to Defaults").clicked() {
-                state.lod_scale_factor = 500.0;
-                state.lod_threshold_low = 10.0;
-                state.lod_threshold_medium = 25.0;
-                state.lod_threshold_high = 50.0;
-                state.lod_debug_colors = false;
             }
-        }
         
         ui.add_space(8.0);
         
@@ -865,7 +816,6 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             egui::FontId::default(),
             egui::Color32::WHITE,
         );
-    });
 }
 
 /// Render the RenderingControls panel (placeholder).
@@ -878,7 +828,6 @@ fn render_rendering_controls(ui: &mut Ui) {
 
 /// Render the Cave System panel for procedural cave generation and collision.
 fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
-    ui.heading("Cave System");
     ui.separator();
     
     // Check if we're in GPU mode
@@ -922,10 +871,6 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             let mut smoothness = params.smoothness;
             let mut seed = params.seed as i32;
             let mut resolution = params.grid_resolution as i32;
-            let mut collision_enabled = params.collision_enabled != 0;
-            let mut collision_stiffness = params.collision_stiffness;
-            let mut collision_damping = params.collision_damping;
-            let mut substeps = params.substeps as i32;
             
             let mut params_changed = false;
             
@@ -933,13 +878,29 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             ui.add_space(5.0);
             
             // Editable parameters
-            params_changed |= ui.add(egui::Slider::new(&mut density, 0.1..=2.0).text("Density")).changed();
-            params_changed |= ui.add(egui::Slider::new(&mut scale, 50.0..=100.0).text("Scale")).changed();
-            params_changed |= ui.add(egui::Slider::new(&mut octaves, 1..=8).text("Octaves")).changed();
-            params_changed |= ui.add(egui::Slider::new(&mut smoothness, 0.0..=1.0).text("Smoothness")).changed();
-            params_changed |= ui.add(egui::Slider::new(&mut resolution, 32..=128).text("Resolution")).changed();
+            ui.add_space(4.0);
+            ui.label("Density:");
+            params_changed |= ui.add(egui::Slider::new(&mut density, 0.1..=2.0)).changed();
+            
+            ui.add_space(4.0);
+            ui.label("Scale:");
+            params_changed |= ui.add(egui::Slider::new(&mut scale, 50.0..=100.0)).changed();
+            
+            ui.add_space(4.0);
+            ui.label("Octaves:");
+            params_changed |= ui.add(egui::Slider::new(&mut octaves, 1..=8)).changed();
+            
+            ui.add_space(4.0);
+            ui.label("Smoothness:");
+            params_changed |= ui.add(egui::Slider::new(&mut smoothness, 0.0..=1.0)).changed();
+            
+            ui.add_space(4.0);
+            ui.label("Resolution:");
+            params_changed |= ui.add(egui::Slider::new(&mut resolution, 32..=128)).changed();
+            
+            ui.add_space(4.0);
+            ui.label("Seed:");
             ui.horizontal(|ui| {
-                ui.label("Seed:");
                 params_changed |= ui.add(egui::DragValue::new(&mut seed).range(0..=9999)).changed();
                 if ui.button("🎲").on_hover_text("Randomize seed").clicked() {
                     use std::collections::hash_map::DefaultHasher;
@@ -953,19 +914,6 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                     params_changed = true;
                 }
             });
-            
-            ui.add_space(10.0);
-            ui.separator();
-            ui.heading("Collision Settings");
-            ui.add_space(5.0);
-            
-            params_changed |= ui.checkbox(&mut collision_enabled, "Enable Collision").changed();
-            
-            if collision_enabled {
-                params_changed |= ui.add(egui::Slider::new(&mut collision_stiffness, 0.0..=10000.0).logarithmic(true).text("Stiffness")).changed();
-                params_changed |= ui.add(egui::Slider::new(&mut collision_damping, 0.0..=1.0).text("Damping")).changed();
-                params_changed |= ui.add(egui::Slider::new(&mut substeps, 1..=10).text("Substeps")).changed();
-            }
             
             ui.add_space(10.0);
             ui.separator();
@@ -984,10 +932,6 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 context.editor_state.cave_smoothness = smoothness;
                 context.editor_state.cave_seed = seed as u32;
                 context.editor_state.cave_resolution = resolution as u32;
-                context.editor_state.cave_collision_enabled = collision_enabled;
-                context.editor_state.cave_collision_stiffness = collision_stiffness;
-                context.editor_state.cave_collision_damping = collision_damping;
-                context.editor_state.cave_substeps = substeps as u32;
                 context.editor_state.cave_params_dirty = true;
                 
                 // Save settings to disk
@@ -1015,7 +959,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
     
     // Continuous spawning controls
     ui.separator();
-    let spawn_changed = ui.checkbox(&mut context.editor_state.fluid_continuous_spawn, "Enable Continuous Stream").changed();
+    let spawn_changed = ui.checkbox(&mut context.editor_state.fluid_continuous_spawn, "Water Fill").changed();
     
     if spawn_changed {
         // Update fluid simulator continuous spawn state when toggled
@@ -1028,33 +972,9 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
         context.editor_state.save_fluid_settings();
     }
     
-    // Fluid type selection
-    ui.separator();
-    
-    let fluid_type_changed = {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        changed |= ui.radio_value(&mut context.editor_state.selected_fluid_type, 1u32, "Water").changed();
-        changed |= ui.radio_value(&mut context.editor_state.selected_fluid_type, 2u32, "Lava").changed();
-        changed |= ui.radio_value(&mut context.editor_state.selected_fluid_type, 3u32, "Steam").changed();
-    });
-    changed
-};
-    
-    if fluid_type_changed {
-        // Update fluid simulator type when changed
-        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-            if let Some(ref mut simulator) = gpu_scene.fluid_simulator {
-                simulator.set_fluid_type(context.editor_state.selected_fluid_type);
-            }
-        }
-        // Save fluid settings
-        context.editor_state.save_fluid_settings();
-    }
 
     // Lateral flow probability control for selected fluid type
     ui.separator();
-    ui.label("Lateral Flow Probability");
     
     // Show lateral flow probability only for the selected fluid type
     let selected_fluid_type = context.editor_state.selected_fluid_type;
@@ -1063,15 +983,14 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
         let mut probabilities = context.editor_state.fluid_lateral_flow_probabilities;
         let mut changed = false;
         
-        ui.horizontal(|ui| {
-            if ui.add(egui::Slider::new(&mut probabilities[selected_fluid_type as usize], 0.0..=1.0)
-                .step_by(0.01)
-                .fixed_decimals(2)
-                .suffix(" (0.0 = never, 1.0 = always)")
-            ).changed() {
-                changed = true;
-            }
-        });
+        ui.add_space(4.0);
+        ui.label("Lateral Flow Probability:");
+        if ui.add(egui::Slider::new(&mut probabilities[selected_fluid_type as usize], 0.0..=1.0)
+            .step_by(0.01)
+            .fixed_decimals(2)
+        ).changed() {
+            changed = true;
+        }
         
         if changed {
             context.editor_state.fluid_lateral_flow_probabilities = probabilities;
@@ -1080,44 +999,41 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
         }
     }
     
-    // Particle visualization controls
-    ui.separator();
-    ui.heading("Particle Visualization");
-    
-    // Steam particles
-    let steam_changed = ui.checkbox(&mut context.editor_state.show_steam_particles, "Show Steam Particles").changed();
-    if steam_changed {
-        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-            gpu_scene.show_steam_particles = context.editor_state.show_steam_particles;
-        }
-        context.editor_state.save_fluid_settings();
-    }
-    
-    // Water particles
-    let water_changed = ui.checkbox(&mut context.editor_state.show_water_particles, "Show Water Particles").changed();
-    if water_changed {
-        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-            gpu_scene.show_water_particles = context.editor_state.show_water_particles;
-        }
-        context.editor_state.save_fluid_settings();
-    }
-    
-    // Water particle prominence (only show if water particles are enabled)
-    if context.editor_state.show_water_particles {
-        ui.horizontal(|ui| {
-            ui.label("Water Prominence:");
-            if ui.add(egui::Slider::new(&mut context.editor_state.water_particle_prominence, 0.0..=1.0)
-                .step_by(0.01)
-                .fixed_decimals(2)
-                .suffix(" (0.0 = subtle, 1.0 = very prominent)")
-            ).changed() {
-                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                    gpu_scene.set_water_particle_prominence(context.editor_state.water_particle_prominence);
-                }
-                context.editor_state.save_fluid_settings();
+    // Condensation probability (steam to water)
+    ui.add_space(4.0);
+    ui.label("Condensation Probability:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_condensation_probability, 0.0..=0.05)
+        .step_by(0.001)
+        .fixed_decimals(3)
+        ).changed() {
+            // Update GPU scene phase change probabilities
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                gpu_scene.set_phase_change_probabilities(
+                    context.editor_state.fluid_condensation_probability,
+                    context.editor_state.fluid_vaporization_probability
+                );
             }
-        });
-    }
+            // Save fluid settings
+            context.editor_state.save_fluid_settings();
+        }
+    
+    // Vaporization probability (water to steam)
+    ui.add_space(4.0);
+    ui.label("Vaporization Probability:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_vaporization_probability, 0.0..=0.05)
+        .step_by(0.001)
+        .fixed_decimals(3)
+        ).changed() {
+            // Update GPU scene phase change probabilities
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                gpu_scene.set_phase_change_probabilities(
+                    context.editor_state.fluid_condensation_probability,
+                    context.editor_state.fluid_vaporization_probability
+                );
+            }
+            // Save fluid settings
+            context.editor_state.save_fluid_settings();
+        }
     
     ui.add_space(10.0);
 }

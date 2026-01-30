@@ -331,7 +331,7 @@ impl WaterParticleRenderer {
             max_particles,
             time: 0.0,
             particle_count: 0,
-            prominence_factor: 0.5,  // Default medium prominence
+            prominence_factor: 0.0,  // Default subtle prominence
             width,
             height,
         }
