@@ -384,6 +384,9 @@ impl GpuCellInsertion {
         let type_name = match cell_type {
             0 => "Test",
             1 => "Flagellocyte",
+            2 => "Phagocyte",
+            3 => "Photocyte",
+            4 => "Lipocyte",
             _ => "Unknown",
         };
         println!("[DEBUG CELL_INSERTION] Inserting cell:");

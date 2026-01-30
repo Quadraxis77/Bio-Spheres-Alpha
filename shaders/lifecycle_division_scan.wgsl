@@ -100,9 +100,23 @@ var<storage, read> mode_indices: array<u32>;
 
 // Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
 // Always up-to-date with genome settings, unlike cell_types buffer
-// Flagellocytes split based on mass only (ignore split_interval)
 @group(2) @binding(8)
 var<storage, read> mode_cell_types: array<u32>;
+
+// Cell type behavior flags for parameterized shader logic
+struct CellTypeBehaviorFlags {
+    ignores_split_interval: u32,
+    applies_swim_force: u32,
+    uses_texture_atlas: u32,
+    has_procedural_tail: u32,
+    gains_mass_from_light: u32,
+    is_storage_cell: u32,
+    _padding: array<u32, 10>,
+}
+
+// Cell type behavior flags (one per type, up to MAX_TYPES=30)
+@group(2) @binding(9)
+var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
 
 // Adhesion bind group (group 3) - for checking neighbor division status
 @group(3) @binding(0)
@@ -184,9 +198,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Check division criteria
     let mass_ready = mass >= split_mass;
-    // Flagellocytes (cell_type == 1) split based on mass only, ignore split_interval
-    // Test cells (cell_type == 0) require both mass and time conditions
-    let time_ready = (cell_type == 1u) || (age >= split_interval);
+    // Cells with ignores_split_interval flag split based on mass only
+    // Others require both mass and time conditions
+    let behavior = type_behaviors[cell_type];
+    let time_ready = (behavior.ignores_split_interval != 0u) || (age >= split_interval);
     let splits_remaining = current_splits < max_split || max_split == 0u;
     
     let wants_to_divide = mass_ready && time_ready && splits_remaining;
@@ -279,7 +294,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         
         // Check all division criteria for neighbor
         let neighbor_mass_ready = neighbor_mass >= neighbor_split_mass;
-        let neighbor_time_ready = (neighbor_cell_type == 1u) || (neighbor_age >= neighbor_split_interval);
+        let neighbor_behavior = type_behaviors[neighbor_cell_type];
+        let neighbor_time_ready = (neighbor_behavior.ignores_split_interval != 0u) || (neighbor_age >= neighbor_split_interval);
         let neighbor_splits_remaining = neighbor_current_splits < neighbor_max_splits || neighbor_max_splits == 0u;
         
         let neighbor_wants_to_divide = neighbor_mass_ready && neighbor_time_ready && neighbor_splits_remaining;

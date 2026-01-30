@@ -461,7 +461,7 @@ impl CellRenderer {
         _lod_threshold_low: f32,
         _lod_threshold_medium: f32,
         _lod_threshold_high: f32,
-        lod_debug_colors: bool,
+        _lod_debug_colors: bool,
     ) -> Vec<CellInstance> {
         if state.cell_count == 0 {
             return Vec::new();
@@ -515,48 +515,17 @@ impl CellRenderer {
                 .unwrap_or_default();
             
             // Get type-specific instance data from behavior module
-            // For Test cells, generate texture atlas UV coordinates
-            // For Flagellocyte cells, populate from visuals for 3D geometry
+            // All cell types use their behavior modules for consistent handling
             // IMPORTANT: data[7] must contain cell_type for the hybrid shader to branch correctly
-            let type_data = if cell_type_index == crate::cell::CellType::Test as usize {
-                // Test cell: Use texture atlas with GPU-calculated LOD
-                crate::cell::behaviors::TypeSpecificInstanceData {
-                    data: [
-                        0.0, // Reserved - UV coordinates calculated on GPU
-                        0.0, // Reserved - UV coordinates calculated on GPU  
-                        0.0, // Reserved - UV coordinates calculated on GPU
-                        0.0, // Reserved - UV coordinates calculated on GPU
-                        0.0, // Reserved - LOD level calculated on GPU
-                        0.0, // Reserved - screen radius calculated on GPU
-                        if lod_debug_colors { 1.0 } else { 0.0 }, // debug_colors_enabled
-                        cell_type_index as f32, // cell_type for hybrid shader (index 7)
-                    ]
-                }
-            } else if cell_type_index == crate::cell::CellType::Flagellocyte as usize {
-                // Flagellocyte: populate type_data with flagella parameters from visuals for pixelated 3D geometry
-                // tail_speed is derived from swim_force (animation speed proportional to thrust)
-                let tail_speed = mode_settings.swim_force * 15.0; // Scale swim_force (0-1) to speed (0-15)
-                crate::cell::behaviors::TypeSpecificInstanceData::flagellocyte(
-                    visuals.tail_length,
-                    visuals.tail_thickness,
-                    visuals.tail_amplitude,
-                    visuals.tail_frequency,
-                    tail_speed,
-                    visuals.tail_taper,
-                    if lod_debug_colors { 1.0 } else { 0.0 }, // debug_colors_enabled
-                    cell_type_index as f32, // cell_type for hybrid shader
-                )
+            let mut data = if cell_type_index < self.behaviors.len() {
+                self.behaviors[cell_type_index].build_instance_data(&mode_settings)
             } else {
-                // For all other cell types, use behavior module but ensure cell_type is in data[7]
-                let mut data = if cell_type_index < self.behaviors.len() {
-                    self.behaviors[cell_type_index].build_instance_data(&mode_settings)
-                } else {
-                    crate::cell::behaviors::TypeSpecificInstanceData::empty()
-                };
-                // Store cell_type in data[7] for hybrid shader branching
-                data.data[7] = cell_type_index as f32;
-                data
+                crate::cell::behaviors::TypeSpecificInstanceData::empty()
             };
+            
+            // Ensure cell_type is stored in data[7] for hybrid shader branching
+            data.data[7] = cell_type_index as f32;
+            let type_data = data;
             
             // Build instance
             let instance = CellInstance {
@@ -606,7 +575,7 @@ impl CellRenderer {
         lod_threshold_low: f32,
         lod_threshold_medium: f32,
         lod_threshold_high: f32,
-        lod_debug_colors: bool,
+        _lod_debug_colors: bool,
     ) {
         if state.cell_count == 0 {
             return;
@@ -621,7 +590,7 @@ impl CellRenderer {
             lod_threshold_low, 
             lod_threshold_medium, 
             lod_threshold_high,
-            lod_debug_colors,
+            _lod_debug_colors,
         );
         let instance_count = instances.len() as u32;
         
@@ -704,12 +673,10 @@ impl CellRenderer {
     /// This method is used when instance data is built on the GPU via compute shaders.
     /// It skips the CPU-side instance building and uses the GPU-generated buffer directly.
     /// Uses indirect drawing to read the actual visible count from the GPU buffer.
-    /// 
-    /// Instances are sorted by cell type in the buffer:
-    /// - Test cells (type 0): indices [0, capacity/2)
-    /// - Flagellocyte cells (type 1): indices [capacity/2, capacity)
-    /// 
-    /// Each cell type is rendered with its appropriate pipeline for correct visual appearance.
+    ///
+    /// Instances are dynamically partitioned by cell type with each type getting
+    /// consecutive instances based on actual counts. Each cell type is rendered
+    /// with its appropriate pipeline for correct visual appearance.
     pub fn render_with_encoder(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -760,14 +727,24 @@ impl CellRenderer {
             });
             
             color_pass.set_bind_group(0, &self.bind_group, &[]);
-            color_pass.set_vertex_buffer(0, instance_builder.instance_buffer.slice(..));
+
+            // Render each cell type with its own pipeline
+            // Each type uses its own indirect buffer with dynamic instance counts
+            // Also use vertex buffer offset to read from correct partition
+            let cell_capacity = instance_builder.cell_capacity();
+            let partition_size = cell_capacity / CellType::MAX_TYPES;
             
-            // Render all cells with unified pipeline using single indirect buffer
-            // All cells are written contiguously to [0, total_count)
-            // The shader handles cell type differences via type_data_1.w
-            let unified_pipeline = self.type_registry.get_pipeline(CellType::Flagellocyte);
-            color_pass.set_pipeline(unified_pipeline);
-            color_pass.draw_indirect(instance_builder.get_indirect_buffer_test(), 0);
+            for cell_type in CellType::iter() {
+                let pipeline = self.type_registry.get_pipeline(cell_type);
+                color_pass.set_pipeline(pipeline);
+
+                // Set vertex buffer offset to read from this type's partition
+                let vertex_offset = (cell_type as usize * partition_size * std::mem::size_of::<CellInstance>()) as u64;
+                color_pass.set_vertex_buffer(0, instance_builder.instance_buffer.slice(vertex_offset..));
+
+                let indirect_buffer = instance_builder.get_indirect_buffer_for_type(cell_type);
+                color_pass.draw_indirect(indirect_buffer, 0);
+            }
         }
     }
 }

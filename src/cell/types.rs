@@ -100,6 +100,42 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use bytemuck::{Pod, Zeroable};
+
+/// GPU-side behavior flags for cell types.
+/// These flags replace hard-coded type checks in shaders with parameterized logic.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct GpuCellTypeBehaviorFlags {
+    /// If 1, cell ignores split_interval and can divide immediately when mature
+    pub ignores_split_interval: u32,
+    /// If 1, cell applies swim force (flagellum propulsion)
+    pub applies_swim_force: u32,
+    /// If 1, cell uses texture atlas UVs (for LOD/instancing)
+    pub uses_texture_atlas: u32,
+    /// If 1, cell has procedural tail rendering
+    pub has_procedural_tail: u32,
+    /// If 1, cell gains mass from light intensity
+    pub gains_mass_from_light: u32,
+    /// If 1, cell is a storage specialist
+    pub is_storage_cell: u32,
+    /// Padding to 64 bytes for alignment
+    pub _padding: [u32; 10],
+}
+
+impl Default for GpuCellTypeBehaviorFlags {
+    fn default() -> Self {
+        Self {
+            ignores_split_interval: 0,
+            applies_swim_force: 0,
+            uses_texture_atlas: 0,
+            has_procedural_tail: 0,
+            gains_mass_from_light: 0,
+            is_storage_cell: 0,
+            _padding: [0; 10],
+        }
+    }
+}
 
 /// Visual settings for a cell type.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -274,15 +310,27 @@ pub enum CellVisualsError {
 pub enum CellType {
     Test = 0,
     Flagellocyte = 1,
+    Phagocyte = 2,
+    Photocyte = 3,
+    Lipocyte = 4,
 }
 
 impl CellType {
     /// Number of registered cell types. Update when adding new types.
-    pub const COUNT: usize = 2;
+    pub const COUNT: usize = 5;
+
+    /// Maximum number of cell types supported by GPU buffers.
+    pub const MAX_TYPES: usize = 30;
 
     /// Get all available cell types as a slice.
     pub const fn all() -> &'static [CellType] {
-        &[CellType::Test, CellType::Flagellocyte]
+        &[
+            CellType::Test,
+            CellType::Flagellocyte,
+            CellType::Phagocyte,
+            CellType::Photocyte,
+            CellType::Lipocyte,
+        ]
     }
 
     /// Iterator over all cell types for registry initialization.
@@ -295,12 +343,15 @@ impl CellType {
         match self {
             CellType::Test => "Test",
             CellType::Flagellocyte => "Flagellocyte",
+            CellType::Phagocyte => "Phagocyte",
+            CellType::Photocyte => "Photocyte",
+            CellType::Lipocyte => "Lipocyte",
         }
     }
 
     /// Get all cell type names as a slice.
     pub const fn names() -> &'static [&'static str] {
-        &["Test", "Flagellocyte"]
+        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte"]
     }
 
     /// Convert from integer index to cell type.
@@ -308,6 +359,9 @@ impl CellType {
         match index {
             0 => Some(CellType::Test),
             1 => Some(CellType::Flagellocyte),
+            2 => Some(CellType::Phagocyte),
+            3 => Some(CellType::Photocyte),
+            4 => Some(CellType::Lipocyte),
             _ => None,
         }
     }
@@ -322,6 +376,58 @@ impl CellType {
     pub fn shader_path(&self) -> &'static str {
         // All cell types use the textured shader
         "shaders/cells/textured_cell.wgsl"
+    }
+
+    /// Get GPU behavior flags for this cell type.
+    /// These flags control type-specific behavior in shaders.
+    pub fn behavior_flags(&self) -> GpuCellTypeBehaviorFlags {
+        match self {
+            CellType::Test => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 0,
+                applies_swim_force: 0,
+                uses_texture_atlas: 0,
+                has_procedural_tail: 0,
+                gains_mass_from_light: 0,
+                is_storage_cell: 0,
+                _padding: [0; 10],
+            },
+            CellType::Flagellocyte => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 1,
+                applies_swim_force: 1,
+                uses_texture_atlas: 0,
+                has_procedural_tail: 1,
+                gains_mass_from_light: 0,
+                is_storage_cell: 0,
+                _padding: [0; 10],
+            },
+            CellType::Phagocyte => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 0,
+                applies_swim_force: 1,
+                uses_texture_atlas: 0,
+                has_procedural_tail: 0,
+                gains_mass_from_light: 0,
+                is_storage_cell: 0,
+                _padding: [0; 10],
+            },
+            CellType::Photocyte => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 0,
+                applies_swim_force: 0,
+                uses_texture_atlas: 0,
+                has_procedural_tail: 0,
+                gains_mass_from_light: 1,
+                is_storage_cell: 0,
+                _padding: [0; 10],
+            },
+            CellType::Lipocyte => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 0,
+                applies_swim_force: 0,
+                uses_texture_atlas: 0,
+                has_procedural_tail: 0,
+                gains_mass_from_light: 0,
+                is_storage_cell: 1,
+                _padding: [0; 10],
+            },
+        }
     }
 }
 

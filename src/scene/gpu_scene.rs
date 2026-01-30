@@ -3,6 +3,7 @@
 //! This scene runs the full GPU-accelerated simulation using compute shaders.
 //! Optimized for large-scale simulations with thousands of cells.
 
+use crate::cell::types::CellType;
 use crate::genome::Genome;
 use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, SteamParticleRenderer, TailRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
@@ -612,6 +613,19 @@ impl GpuScene {
                 self.instance_builder.mode_properties_buffer(),
                 0,
                 mode_properties_copy_size,
+            );
+        }
+        
+        // Copy mode cell types (1 u32 per mode = 4 bytes) - critical for correct cell type rendering
+        // This ensures the InstanceBuilder has the same mode_cell_types as GpuTripleBufferSystem
+        let mode_cell_types_copy_size = (total_modes * 4) as u64;
+        if mode_cell_types_copy_size > 0 {
+            encoder.copy_buffer_to_buffer(
+                &self.gpu_triple_buffers.mode_cell_types,
+                0,
+                self.instance_builder.mode_cell_types_buffer(),
+                0,
+                mode_cell_types_copy_size,
             );
         }
         
@@ -2787,7 +2801,7 @@ impl Scene for GpuScene {
         );
 
         // Render flagellocyte tails using GPU instance buffer
-        // All cells are written contiguously - the tail shader filters for flagellocytes
+        // Render tails for Flagellocytes only
         self.tail_renderer.render_from_gpu_buffer(
             device,
             queue,
@@ -2795,7 +2809,7 @@ impl Scene for GpuScene {
             view,
             &self.renderer.depth_view,
             self.instance_builder.get_instance_buffer(),
-            self.instance_builder.get_indirect_buffer_test(), // Use test buffer (contains all cells)
+            self.instance_builder.get_indirect_buffer_for_type(CellType::Flagellocyte),
             self.camera.position(),
             self.camera.rotation,
             self.current_time,

@@ -3,11 +3,12 @@
 //! Builds cell instance data on the GPU to eliminate CPU-side iteration
 //! and reduce CPU→GPU data transfer. Includes frustum and occlusion culling.
 
-use crate::cell::types::CellTypeVisuals;
+use crate::cell::types::{CellType, CellTypeVisuals};
 use crate::genome::Genome;
 use crate::simulation::CanonicalState;
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
+use wgpu::util::DeviceExt;
 
 /// Culling mode for the instance builder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -68,19 +69,22 @@ pub struct InstanceBuilder {
     /// Cell type per mode (lookup table: mode_cell_types[mode_index] = cell_type)
     /// Used by shader to derive cell_type from mode_index when genomes change
     mode_cell_types_buffer: wgpu::Buffer,
+    /// Behavior flags per cell type for parameterized shader logic
+    behavior_flags_buffer: wgpu::Buffer,
     
     // Output buffer (instance data for rendering)
     pub instance_buffer: wgpu::Buffer,
     
     // Indirect draw buffer for GPU-driven rendering (total visible count)
     pub indirect_buffer: wgpu::Buffer,
-    
-    // Per-type indirect draw buffers for multi-pipeline rendering
-    // Test cells are in [0, capacity/2), Flagellocytes in [capacity/2, capacity)
-    indirect_buffer_test: wgpu::Buffer,
-    indirect_buffer_flagellocyte: wgpu::Buffer,
-    
+
+    // Per-type indirect draw buffers for multi-pipeline rendering (one per type)
+    // Dynamic allocation: each type gets consecutive instances based on actual counts
+    indirect_buffers: Vec<wgpu::Buffer>,
+
     // Counter buffer for atomic operations
+    // counters[0..4]: visible, total, frustum_culled, occluded
+    // counters[4..4+MAX_TYPES]: per-type instance counts
     counters_buffer: wgpu::Buffer,
     counters_readback_buffer: wgpu::Buffer,
     
@@ -181,8 +185,10 @@ struct BuildParams {
     lod_threshold_high: f32,
     // Debug colors flag for LOD visualization
     lod_debug_colors: u32,  // 0 = disabled, 1 = enabled
-    // Padding to maintain 16-byte alignment (reduced by 1 due to debug flag)
-    _padding: [f32; 2],
+    // Cell buffer capacity for partition size calculation
+    cell_capacity: u32,
+    // Padding to maintain 16-byte alignment
+    _padding: f32,
     // Frustum planes array needs 16-byte alignment
     frustum_planes: [FrustumPlane; 6],
 }
@@ -459,6 +465,17 @@ impl InstanceBuilder {
                     },
                     count: None,
                 },
+                // Binding 16: Cell type behavior flags
+                wgpu::BindGroupLayoutEntry {
+                    binding: 16,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         
@@ -501,6 +518,18 @@ impl InstanceBuilder {
         let mode_properties_buffer = Self::create_storage_buffer(device, "Mode Properties", mode_capacity * 48);
         // Mode cell types: 1 u32 per mode - lookup table for deriving cell_type from mode_index
         let mode_cell_types_buffer = Self::create_storage_buffer(device, "Mode Cell Types", mode_capacity * 4);
+
+        // Cell type behavior flags: 64 bytes per type (GpuCellTypeBehaviorFlags struct)
+        // Initialize with behavior flags for all types
+        use crate::cell::types::GpuCellTypeBehaviorFlags;
+        let flags: Vec<GpuCellTypeBehaviorFlags> = CellType::iter()
+            .map(|t| t.behavior_flags())
+            .collect();
+        let behavior_flags_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Cell Type Behavior Flags"),
+            contents: bytemuck::cast_slice(&flags),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
         
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Builder Output"),
@@ -518,33 +547,32 @@ impl InstanceBuilder {
             mapped_at_creation: false,
         });
         
-        // Per-type indirect draw buffers for multi-pipeline rendering
-        // Test cells (type 0): first_instance = 0
-        let indirect_buffer_test = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Instance Builder Indirect Test"),
-            size: 16, // 4 u32s
-            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        
-        // Flagellocyte cells (type 1): first_instance = capacity/2
-        let indirect_buffer_flagellocyte = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Instance Builder Indirect Flagellocyte"),
-            size: 16, // 4 u32s
-            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        
-        // 6 counters: visible, total, frustum_culled, occluded, test_count, flagellocyte_count
+        // Per-type indirect draw buffers for multi-pipeline rendering (one per type)
+        // Each type gets a separate indirect buffer for efficient GPU-driven rendering
+        let indirect_buffers: Vec<wgpu::Buffer> = (0..CellType::MAX_TYPES)
+            .map(|i| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("Instance Builder Indirect Type {}", i)),
+                    size: 16, // 4 u32s: vertex_count, instance_count, first_vertex, first_instance
+                    usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect();
+
+        // Counters buffer: 4 general counters + MAX_TYPES per-type counters
+        // counters[0..4]: visible, total, frustum_culled, occluded
+        // counters[4..4+MAX_TYPES]: per-type instance counts
+        let counter_count = 4 + CellType::MAX_TYPES;
         let counters_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Builder Counters"),
-            size: 24, // 6 u32s
+            size: (counter_count * 4) as u64, // 4 bytes per u32
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let counters_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Counters Readback"),
-            size: 24, // 6 u32s
+            size: (counter_count * 4) as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -564,10 +592,10 @@ impl InstanceBuilder {
             cell_type_visuals_buffer,
             mode_properties_buffer,
             mode_cell_types_buffer,
+            behavior_flags_buffer,
             instance_buffer,
             indirect_buffer,
-            indirect_buffer_test,
-            indirect_buffer_flagellocyte,
+            indirect_buffers,
             counters_buffer,
             counters_readback_buffer,
             bind_group: None,
@@ -846,6 +874,10 @@ impl InstanceBuilder {
                     binding: 15,
                     resource: self.mode_cell_types_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: self.behavior_flags_buffer.as_entire_binding(),
+                },
             ],
         }));
     }
@@ -1026,6 +1058,8 @@ impl InstanceBuilder {
             for (mode_idx, mode) in genome.modes.iter().enumerate() {
                 // Include mode index for uniqueness
                 hash = hash.wrapping_mul(31).wrapping_add(mode_idx as u64);
+                // Include cell_type so type changes trigger buffer update
+                hash = hash.wrapping_mul(31).wrapping_add(mode.cell_type as u64);
                 hash = hash.wrapping_mul(31).wrapping_add((mode.color.x * 1000.0) as u64);
                 hash = hash.wrapping_mul(31).wrapping_add((mode.color.y * 1000.0) as u64);
                 hash = hash.wrapping_mul(31).wrapping_add((mode.color.z * 1000.0) as u64);
@@ -1093,7 +1127,7 @@ impl InstanceBuilder {
                 genome.modes.iter().map(|mode| mode.cell_type as u32)
             })
             .collect();
-        
+
         if !mode_cell_types.is_empty() {
             queue.write_buffer(&self.mode_cell_types_buffer, 0, bytemuck::cast_slice(&mode_cell_types));
         }
@@ -1263,6 +1297,10 @@ impl InstanceBuilder {
                     binding: 15,
                     resource: self.mode_cell_types_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: self.behavior_flags_buffer.as_entire_binding(),
+                },
             ],
         }));
     }
@@ -1338,31 +1376,32 @@ impl InstanceBuilder {
             lod_threshold_high,
             // Debug colors flag for LOD visualization
             lod_debug_colors: if lod_debug_colors { 1 } else { 0 },
-            // Padding to maintain 16-byte alignment (reduced by 1 due to debug flag)
-            _padding: [0.0, 0.0],
+            // Cell buffer capacity for partition size calculation
+            cell_capacity: cell_capacity as u32,
+            // Padding to maintain 16-byte alignment
+            _padding: 0.0,
             frustum_planes,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
         
-        // Clear all 6 counters: visible, total, frustum_culled, occluded, test_count, flagellocyte_count
-        let zero_counters: [u32; 6] = [0, 0, 0, 0, 0, 0];
+        // Clear all counters: 4 general + MAX_TYPES per-type counters
+        let counter_count = 4 + CellType::MAX_TYPES;
+        let zero_counters: Vec<u32> = vec![0; counter_count];
         queue.write_buffer(&self.counters_buffer, 0, bytemuck::cast_slice(&zero_counters));
         
         // Initialize indirect draw buffer (legacy, total visible count)
         // vertex_count=4 (triangle strip quad), instance_count=0, first_vertex=0, first_instance=0
         let indirect_data: [u32; 4] = [4, 0, 0, 0];
         queue.write_buffer(&self.indirect_buffer, 0, bytemuck::cast_slice(&indirect_data));
-        
-        // Initialize per-type indirect draw buffers
-        // Instances are sorted by type: Test cells at [0, test_count), Flagellocytes at [capacity/2, capacity/2 + flagellocyte_count)
-        // Test cells: first_instance = 0
-        let indirect_test: [u32; 4] = [4, 0, 0, 0];
-        queue.write_buffer(&self.indirect_buffer_test, 0, bytemuck::cast_slice(&indirect_test));
-        
-        // Flagellocyte cells: first_instance = capacity/2 (fixed offset for sorted layout)
-        let flagellocyte_first_instance = (cell_capacity / 2) as u32;
-        let indirect_flagellocyte: [u32; 4] = [4, 0, 0, flagellocyte_first_instance];
-        queue.write_buffer(&self.indirect_buffer_flagellocyte, 0, bytemuck::cast_slice(&indirect_flagellocyte));
+
+        // Initialize per-type indirect draw buffers with fixed partitioning
+        // Each type gets a fixed partition: [type_index * partition_size, (type_index+1) * partition_size)
+        let _partition_size = cell_capacity / CellType::MAX_TYPES;
+        for (_type_index, indirect_buffer) in self.indirect_buffers.iter().enumerate() {
+            // first_instance is 0 since we use vertex buffer offset instead
+            let indirect_init: [u32; 4] = [4, 0, 0, 0]; // vertex_count, instance_count, first_vertex, first_instance
+            queue.write_buffer(indirect_buffer, 0, bytemuck::cast_slice(&indirect_init));
+        }
 
         // Ensure bind group exists with cell_count_buffer
         if self.bind_group.is_none() {
@@ -1394,33 +1433,28 @@ impl InstanceBuilder {
             4,  // instance_count field offset
             4,  // 4 bytes (u32)
         );
-        
-        // Copy Test cell count (counters[4]) to Test indirect buffer's instance_count field
-        encoder.copy_buffer_to_buffer(
-            &self.counters_buffer,
-            16, // counters[4] = test count (4 * 4 bytes offset)
-            &self.indirect_buffer_test,
-            4,  // instance_count field offset
-            4,  // 4 bytes (u32)
-        );
-        
-        // Copy Flagellocyte count (counters[5]) to Flagellocyte indirect buffer's instance_count field
-        encoder.copy_buffer_to_buffer(
-            &self.counters_buffer,
-            20, // counters[5] = flagellocyte count (5 * 4 bytes offset)
-            &self.indirect_buffer_flagellocyte,
-            4,  // instance_count field offset
-            4,  // 4 bytes (u32)
-        );
+
+        // Copy per-type counts (counters[4..4+MAX_TYPES]) to each type's indirect buffer instance_count field
+        for type_index in 0..CellType::MAX_TYPES {
+            let counter_offset = (4 + type_index) * 4; // counters[4+type_index] byte offset
+            encoder.copy_buffer_to_buffer(
+                &self.counters_buffer,
+                counter_offset as u64,
+                &self.indirect_buffers[type_index],
+                4,  // instance_count field offset in indirect buffer
+                4,  // 4 bytes (u32)
+            );
+        }
         
         // Copy counters to readback buffer for stats (only if not currently mapped)
         if !self.stats_map_pending {
+            let counter_count = 4 + CellType::MAX_TYPES;
             encoder.copy_buffer_to_buffer(
                 &self.counters_buffer,
                 0,
                 &self.counters_readback_buffer,
                 0,
-                24, // 6 u32s
+                (counter_count * 4) as u64, // All counters
             );
         }
         
@@ -1562,14 +1596,15 @@ impl InstanceBuilder {
                     let data = buffer_slice.get_mapped_range();
                     let counters: &[u32] = bytemuck::cast_slice(&data);
                     
+                    // Update stats
                     self.last_stats = CullingStats {
-                        visible_cells: counters[0],
                         total_cells: counters[1],
+                        visible_cells: counters[0],
                         frustum_culled: counters[2],
                         occluded: counters[3],
                     };
                     self.last_visible_count = counters[0];
-                    
+
                     drop(data);
                     self.counters_readback_buffer.unmap();
                     
@@ -1618,17 +1653,16 @@ impl InstanceBuilder {
     pub fn get_indirect_buffer(&self) -> &wgpu::Buffer {
         &self.indirect_buffer
     }
-    
-    /// Get the indirect draw buffer for Test cells (type 0).
-    /// Test cells are stored at instance indices [0, capacity/2).
-    pub fn get_indirect_buffer_test(&self) -> &wgpu::Buffer {
-        &self.indirect_buffer_test
+
+    /// Get the indirect draw buffer for a specific cell type.
+    /// Each type has its own indirect buffer for GPU-driven rendering.
+    pub fn get_indirect_buffer_for_type(&self, cell_type: CellType) -> &wgpu::Buffer {
+        &self.indirect_buffers[cell_type as usize]
     }
-    
-    /// Get the indirect draw buffer for Flagellocyte cells (type 1).
-    /// Flagellocyte cells are stored at instance indices [capacity/2, capacity).
-    pub fn get_indirect_buffer_flagellocyte(&self) -> &wgpu::Buffer {
-        &self.indirect_buffer_flagellocyte
+
+    /// Get all per-type indirect buffers for iterating over types during rendering.
+    pub fn get_indirect_buffers(&self) -> &[wgpu::Buffer] {
+        &self.indirect_buffers
     }
     
     /// Get current cell capacity.
@@ -1671,6 +1705,11 @@ impl InstanceBuilder {
         &self.mode_properties_buffer
     }
     
+    /// Get the mode cell types buffer for external GPU-to-GPU copies.
+    pub fn mode_cell_types_buffer(&self) -> &wgpu::Buffer {
+        &self.mode_cell_types_buffer
+    }
+    
     /// Clear mode indices dirty flag (call after GPU-to-GPU copy).
     pub fn clear_mode_indices_dirty(&mut self) {
         self.mode_indices_dirty = false;
@@ -1699,44 +1738,5 @@ impl InstanceBuilder {
     /// Get the counters buffer for debug readback.
     pub fn counters_buffer(&self) -> &wgpu::Buffer {
         &self.counters_buffer
-    }
-    
-    /// DEBUG: Blocking readback of counters buffer [visible, total, frustum_culled, occluded].
-    pub fn debug_read_counters_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> [u32; 4] {
-        let read_size = 16u64; // 4 x u32
-        
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Debug Counters Staging"),
-            size: read_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Debug Counters Readback"),
-        });
-        encoder.copy_buffer_to_buffer(&self.counters_buffer, 0, &staging, 0, read_size);
-        queue.submit(std::iter::once(encoder.finish()));
-        
-        let slice = staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-        let _ = device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
-        
-        if rx.recv().ok().and_then(|r| r.ok()).is_some() {
-            let view = slice.get_mapped_range();
-            let data: &[u32] = bytemuck::cast_slice(&view);
-            let result = [data[0], data[1], data[2], data[3]];
-            drop(view);
-            staging.unmap();
-            result
-        } else {
-            [0, 0, 0, 0]
-        }
     }
 }

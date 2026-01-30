@@ -84,6 +84,17 @@ struct ModeProperties {
     _pad2: f32,
 }
 
+// Cell type behavior flags for parameterized shader logic
+struct CellTypeBehaviorFlags {
+    ignores_split_interval: u32,
+    applies_swim_force: u32,
+    uses_texture_atlas: u32,
+    has_procedural_tail: u32,
+    gains_mass_from_light: u32,
+    is_storage_cell: u32,
+    _padding: array<u32, 10>,
+}
+
 // Frustum plane (normal.xyz, distance)
 struct FrustumPlane {
     normal_and_dist: vec4<f32>,
@@ -119,9 +130,10 @@ struct BuildParams {
     lod_threshold_high: f32,
     // Debug colors flag for LOD visualization
     lod_debug_colors: u32,  // 0 = disabled, 1 = enabled
+    // Cell buffer capacity for partition size calculation
+    cell_capacity: u32,
     // Padding to maintain 16-byte alignment
     _padding0: f32,
-    _padding1: f32,
     // Frustum planes (6 planes: left, right, bottom, top, near, far)
     frustum_planes: array<FrustumPlane, 6>,
 }
@@ -155,8 +167,8 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
 // Atomic counter for visible instance count
 @group(0) @binding(10) var<storage, read_write> counters: array<atomic<u32>>;
 // counters[0] = visible count (total), counters[1] = total processed, counters[2] = frustum culled, counters[3] = occluded
-// counters[4] = Test cell count, counters[5] = Flagellocyte count
-// Per-type counts are used for multi-pipeline rendering
+// counters[4..4+MAX_TYPES] = per-type instance counts (dynamically allocated)
+// Per-type counts are used for multi-pipeline rendering with dynamic partitioning
 
 // Hi-Z depth texture for occlusion culling (optional, binding 11)
 // Note: R32Float is not filterable, so we use textureLoad instead of textureSample
@@ -176,6 +188,9 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
 // Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
 // This is always up-to-date with current genome settings, unlike cell_types buffer
 @group(0) @binding(15) var<storage, read> mode_cell_types: array<u32>;
+
+// Cell type behavior flags (one per type, up to MAX_TYPES=30)
+@group(0) @binding(16) var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
 
 // ============================================================================
 // Random Number Generation
@@ -398,11 +413,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mode_index = mode_indices[idx];
     let cell_id = cell_ids[idx];
     
-    // Derive cell_type from mode (always up-to-date with genome settings)
-    // This ensures children get the correct cell_type after division
-    // Use bounds check to prevent reading garbage if mode_index is invalid
+    // Derive cell_type from cell's stored type (preserves original type)
+    // This prevents existing cells from changing when preview mode changes
     var cell_type = 0u;
-    if (mode_index < params.mode_count) {
+    if (idx < arrayLength(&cell_types)) {
+        cell_type = cell_types[idx];
+    }
+    
+    // Fallback: if cell_types buffer is empty or invalid, use mode_cell_types
+    // This can happen for newly inserted cells before cell_types is updated
+    if (cell_type == 0u && mode_index < params.mode_count) {
         cell_type = mode_cell_types[mode_index];
     }
     
@@ -467,21 +487,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     instance.color = vec4<f32>(color, 1.0);  // Always fully opaque
     instance.visual_params = vec4<f32>(specular_strength, specular_power, fresnel_strength, emissive);
     
-    // Rotation: Test cells get randomized texture orientation, others use physics rotation
-    if (cell_type == 0u) {
-        // Test cell: use random quaternion based on cell_id for varied texture appearance
+    // Rotation: Cells with texture atlas get randomized orientation, others use physics rotation
+    let behavior = type_behaviors[cell_type];
+    if (behavior.uses_texture_atlas != 0u) {
+        // Texture atlas cells: use random quaternion based on cell_id for varied appearance
         instance.rotation = random_quaternion(cell_id);
     } else {
         // Other cell types: use physics-driven rotation
         instance.rotation = rotation;
     }
     
-    // Type-specific data based on cell type
-    // Cell type 0 = Test: atlas UV coordinates for texture-based rendering
-    // Cell type 1 = Flagellocyte: flagella params for pixelated 3D geometry
-    // type_data_1.w always stores cell_type for the hybrid shader
-    if (cell_type == 1u && cell_type < params.cell_type_count) {
-        // Flagellocyte: populate type_data with flagella parameters from visuals
+    // Type-specific data based on behavior flags
+    // Cells with procedural tails: flagella params for 3D geometry
+    // Cells with texture atlas: UV coordinates for texture-based rendering
+    // type_data_1.w always stores cell_type for the shader
+    if (behavior.has_procedural_tail != 0u && cell_type < params.cell_type_count) {
+        // Procedural tail cells (e.g., Flagellocyte): populate type_data with tail parameters
         let visuals = cell_type_visuals[cell_type];
         
         // Calculate tail_speed from swim_force (animation speed proportional to thrust)
@@ -508,8 +529,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             f32(params.lod_debug_colors),  // debug_colors in .z for consistency with cell shader
             f32(cell_type)  // Store cell_type for hybrid shader
         );
-    } else {
-        // Test cell: atlas UV coordinates for texture-based rendering
+    } else if (behavior.uses_texture_atlas != 0u) {
+        // Texture atlas cells (e.g., Test, Phagocyte, Photocyte, Lipocyte):
         // Calculate screen radius for LOD selection with configurable scale factor
         let camera_distance = max(length(position - params.camera_pos), 1.0);
         // Use configurable scale factor for more spread out transitions
@@ -550,26 +571,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let uv_max_x = (x_offset + x_padding + actual_size) / atlas_width;
         let uv_max_y = (y_offset + y_padding + actual_size) / atlas_height;
         
-        // type_data layout for Test cell (texture atlas):
+        // type_data layout for texture atlas cells:
         // [0]=uv_min.x, [1]=uv_min.y, [2]=uv_max.x, [3]=uv_max.y
         // [4]=lod_level, [5]=screen_radius, [6]=debug_colors_enabled, [7]=cell_type
         instance.type_data_0 = vec4<f32>(uv_min_x, uv_min_y, uv_max_x, uv_max_y);
         instance.type_data_1 = vec4<f32>(f32(lod_level), clamped_screen_radius, f32(params.lod_debug_colors), f32(cell_type)); // cell_type in .w
+    } else {
+        // Unknown type or no special rendering: use default empty data
+        instance.type_data_0 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        instance.type_data_1 = vec4<f32>(0.0, 0.0, f32(params.lod_debug_colors), f32(cell_type));
     }
-    
-    // Write instance at sorted position by type
-    // For now, write ALL cells to the start of the buffer (no sorting)
-    // This ensures all cells render via the Test indirect buffer
-    let output_index = atomicAdd(&counters[4], 1u);
-    
-    // Also track flagellocyte count for debugging
-    if (cell_type != 0u) {
-        atomicAdd(&counters[5], 1u);
+
+    // Fixed-partition instance allocation by type
+    // Each type gets a fixed partition of the instance buffer to avoid overlaps
+    // Partition size = capacity / MAX_TYPES (30)
+    let partition_size = params.cell_capacity / 30u; // MAX_TYPES = 30
+    let base_offset = cell_type * partition_size;
+
+    // Allocate within this type's partition
+    let counter_index = 4u + cell_type;
+    let local_index = atomicAdd(&counters[counter_index], 1u);
+    let output_index = base_offset + local_index;
+
+    // Bounds check to prevent overflow into next partition or out of buffer
+    if (output_index >= params.cell_capacity) {
+        return; // Skip this cell if out of bounds
     }
-    
+
     // Increment total visible count
     atomicAdd(&counters[0], 1u);
-    
-    // Write to sorted position
+
+    // Write to partitioned position
     instances[output_index] = instance;
 }

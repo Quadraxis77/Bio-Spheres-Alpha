@@ -344,6 +344,9 @@ pub struct GpuTripleBufferSystem {
     
     /// Last known cell count from GPU readback
     last_cell_count: u32,
+    
+    /// Behavior flags per cell type for parameterized shader logic
+    pub behavior_flags: wgpu::Buffer,
 }
 
 impl GpuTripleBufferSystem {
@@ -473,6 +476,9 @@ impl GpuTripleBufferSystem {
         // Mode cell types: one u32 per mode - lookup table for deriving cell_type from mode_index
         let mode_cell_types = Self::create_storage_buffer(device, max_modes * 4, "Mode Cell Types");
         
+        // Behavior flags per cell type for parameterized shader logic
+        let behavior_flags = Self::create_storage_buffer(device, 30 * 4, "Behavior Flags"); // CellType::MAX_TYPES = 30
+        
         Self {
             position_and_mass,
             velocity,
@@ -511,6 +517,7 @@ impl GpuTripleBufferSystem {
             child_b_keep_adhesion_flags,
             mode_properties,
             mode_cell_types,
+            behavior_flags,
             current_index: AtomicUsize::new(0),
             capacity,
             needs_sync: true,

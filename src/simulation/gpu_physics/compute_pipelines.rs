@@ -796,10 +796,14 @@ impl GpuPhysicsPipelines {
                     binding: 8,
                     resource: buffers.mode_cell_types.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: buffers.behavior_flags.as_entire_binding(),
+                },
             ],
         })
     }
-    
+
     /// Create cell state bind group (read-write version for division execute)
     pub fn create_cell_state_write_bind_group(
         &self,
@@ -1606,6 +1610,17 @@ impl GpuPhysicsPipelines {
                     // Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
                     wgpu::BindGroupLayoutEntry {
                         binding: 8,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 9: Cell type behavior flags (read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -3740,10 +3755,21 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 4: Cell type behavior flags (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
-    
+
     /// Create swim force force accumulation bind group (Group 1 in swim_force shader)
     fn create_swim_force_force_accum_bind_group(
         &self,
@@ -3801,6 +3827,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: triple_buffers.mode_cell_types.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: triple_buffers.behavior_flags.as_entire_binding(),
                 },
             ],
         })

@@ -292,13 +292,13 @@ impl CellTypeRegistry {
     ///
     /// This uses include_str! at compile time for built-in shaders.
     /// Each cell type has its own shader: cell_0.wgsl, cell_1.wgsl, etc.
-    #[allow(unreachable_patterns)]
     fn load_shader_source(cell_type: CellType) -> &'static str {
         match cell_type {
             CellType::Test => include_str!("../../shaders/cells/cell_0.wgsl"),
             CellType::Flagellocyte => include_str!("../../shaders/cells/cell_1.wgsl"),
-            // Other cell types fall back to Test shader for now
-            _ => include_str!("../../shaders/cells/cell_0.wgsl"),
+            CellType::Phagocyte => include_str!("../../shaders/cells/cell_2.wgsl"),
+            CellType::Photocyte => include_str!("../../shaders/cells/cell_3.wgsl"),
+            CellType::Lipocyte => include_str!("../../shaders/cells/cell_4.wgsl"),
         }
     }
     

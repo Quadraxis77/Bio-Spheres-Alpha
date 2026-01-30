@@ -83,6 +83,9 @@
 
 pub mod flagellocyte;
 pub mod test_cell;
+pub mod phagocyte;
+pub mod photocyte;
+pub mod lipocyte;
 
 use crate::genome::ModeSettings;
 
@@ -318,5 +321,8 @@ pub fn create_behavior(cell_type: crate::cell::CellType) -> Box<dyn CellBehavior
     match cell_type {
         crate::cell::CellType::Test => Box::new(test_cell::TestCellBehavior),
         crate::cell::CellType::Flagellocyte => Box::new(flagellocyte::FlagellocyteBehavior),
+        crate::cell::CellType::Phagocyte => Box::new(phagocyte::PhagocyteBehavior),
+        crate::cell::CellType::Photocyte => Box::new(photocyte::PhotocyteBehavior),
+        crate::cell::CellType::Lipocyte => Box::new(lipocyte::LipocyteBehavior),
     }
 }

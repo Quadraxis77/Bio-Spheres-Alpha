@@ -1260,7 +1260,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     color: glam::Vec3::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0), // Convert to Vec3
                     opacity: 1.0,
                     emissive: 0.0,
-                    cell_type: 0, // Default to Photocyte
+                    cell_type: 0, // Default to Test
                     parent_make_adhesion: false, // Default to no adhesion
                     split_mass: 1.5,
                     split_interval: 5.0,

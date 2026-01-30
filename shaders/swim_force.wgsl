@@ -45,6 +45,17 @@ struct ModeProperties {
     _pad2: f32,
 }
 
+// Cell type behavior flags for parameterized shader logic
+struct CellTypeBehaviorFlags {
+    ignores_split_interval: u32,
+    applies_swim_force: u32,
+    uses_texture_atlas: u32,
+    has_procedural_tail: u32,
+    gains_mass_from_light: u32,
+    is_storage_cell: u32,
+    _padding: array<u32, 10>,
+}
+
 @group(0) @binding(0)
 var<uniform> params: PhysicsParams;
 
@@ -93,6 +104,10 @@ var<storage, read> mode_properties: array<ModeProperties>;
 @group(2) @binding(3)
 var<storage, read> mode_cell_types: array<u32>;
 
+// Cell type behavior flags (one per type, up to MAX_TYPES=30)
+@group(2) @binding(4)
+var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
+
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const SWIM_FORCE_MULTIPLIER: f32 = 50.0; // Scale swim_force (0-1) to actual force magnitude
 
@@ -130,9 +145,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Derive cell type from mode (always up-to-date with genome settings)
-    // Only Flagellocytes (type 1) have swim force
     let cell_type = mode_cell_types[mode_idx];
-    if (cell_type != 1u) {
+
+    // Check if this cell type applies swim force using behavior flags
+    let behavior = type_behaviors[cell_type];
+    if (behavior.applies_swim_force == 0u) {
         return;
     }
     
