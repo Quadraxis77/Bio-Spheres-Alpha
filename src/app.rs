@@ -613,7 +613,7 @@ impl App {
             // This ensures cell_type changes are reflected in the mode_cell_types buffer
             if current_mode == crate::ui::types::SimulationMode::Gpu {
                 if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
-                    gpu_scene.update_genome(&self.working_genome);
+                    gpu_scene.update_genome(&self.device, &self.working_genome);
                 }
             }
             

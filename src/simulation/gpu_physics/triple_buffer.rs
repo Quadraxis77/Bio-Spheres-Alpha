@@ -453,9 +453,10 @@ impl GpuTripleBufferSystem {
         });
 
         
-        // Genome mode data: 40 modes per genome * 10,000 genomes max = 400,000 modes
+        // Genome mode data: 40 modes per genome * 20,000 genomes max = 800,000 modes
         // Each mode: child_a_orientation (16 bytes) + child_b_orientation (16 bytes) + split_direction (16 bytes) = 48 bytes
-        let max_modes = 40 * 10_000;
+        // Increased to support 20,000 genomes
+        let max_modes = 40 * 20_000; // Support for 20,000 genomes
         let genome_mode_data = Self::create_storage_buffer(device, max_modes * 48, "Genome Mode Data");
         
         // Child mode indices: two i32 per mode (child_a_mode, child_b_mode)
@@ -533,9 +534,12 @@ impl GpuTripleBufferSystem {
     
     /// Create a storage buffer with optimal settings for compute shaders
     fn create_storage_buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
+        // Align size to 16-byte boundary for GPU compatibility
+        let aligned_size = (size + 15) & !15; // Round up to nearest 16 bytes
+        
         device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
-            size,
+            size: aligned_size,
             usage: wgpu::BufferUsages::STORAGE 
                 | wgpu::BufferUsages::COPY_SRC 
                 | wgpu::BufferUsages::COPY_DST,
