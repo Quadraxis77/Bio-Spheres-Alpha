@@ -8,6 +8,6 @@
     lateral_flow_probabilities: (1.0, 0.5, 0.6, 0.9),
     continuous_spawn: false,
     selected_fluid_type: 1,
-    condensation_probability: 0.001,
-    vaporization_probability: 0.001,
+    condensation_probability: 0.004,
+    vaporization_probability: 0.006,
 )

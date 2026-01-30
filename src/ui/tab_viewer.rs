@@ -770,7 +770,8 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             let params = cave_renderer.params();
             
             // Create local copies for editing
-            let mut density = params.density;
+            // Invert density for UI display so that 1.0 = higher density (lower actual value)
+            let mut density = 1.0 - params.density;
             let mut scale = params.scale; // Use actual scale directly
             let mut octaves = params.octaves as i32;
             let mut smoothness = params.smoothness;
@@ -785,7 +786,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             // Editable parameters
             ui.add_space(4.0);
             ui.label("Density:");
-            params_changed |= ui.add(egui::Slider::new(&mut density, 0.1..=2.0)).changed();
+            params_changed |= ui.add(egui::Slider::new(&mut density, 0.01..=1.0)).changed();
             
             ui.add_space(4.0);
             ui.label("Scale:");
@@ -807,7 +808,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             ui.label("Seed:");
             ui.horizontal(|ui| {
                 let mut seed_text = seed.to_string();
-                if ui.text_edit_singleline(&mut seed_text).changed() {
+                if ui.add_sized([80.0, 20.0], egui::TextEdit::singleline(&mut seed_text)).changed() {
                     if let Ok(parsed_seed) = seed_text.parse::<i32>() {
                         if parsed_seed >= 0 && parsed_seed <= 9999 {
                             seed = parsed_seed;
@@ -815,7 +816,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                         }
                     }
                 }
-                if ui.button("🎲").on_hover_text("Randomize seed").clicked() {
+                if ui.button("🎲 Randomize").on_hover_text("Generate random seed").clicked() {
                     use std::collections::hash_map::DefaultHasher;
                     use std::hash::{Hash, Hasher};
                     use std::time::SystemTime;
@@ -839,7 +840,8 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             // Apply changes if any parameter changed or regenerate was clicked
             if params_changed || regenerate_clicked {
                 // Store changes in editor state for the app to apply
-                context.editor_state.cave_density = density;
+                // Invert density so that 1.0 = higher density (lower actual value)
+                context.editor_state.cave_density = 1.0 - density;
                 context.editor_state.cave_scale = scale;
                 context.editor_state.cave_octaves = octaves as u32;
                 context.editor_state.cave_smoothness = smoothness;
