@@ -9,5 +9,5 @@
     continuous_spawn: false,
     selected_fluid_type: 1,
     condensation_probability: 0.001,
-    vaporization_probability: 0.05,
+    vaporization_probability: 0.001,
 )

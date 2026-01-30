@@ -101,18 +101,18 @@ impl CameraController {
         }
     }
 
-    /// Create camera for GPU scene (FreeFly at origin)
+    /// Create camera for GPU scene (Orbit at 50 units)
     pub fn new_for_gpu_scene() -> Self {
-        // Start at origin looking down at 45-degree angle
+        // Initial rotation: looking down at the scene from a 45-degree angle
         let initial_rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4);
 
         Self {
-            center: Vec3::ZERO,  // FreeFly starts at origin
-            distance: 0.0,       // FreeFly has no distance
-            target_distance: 0.0,
+            center: Vec3::ZERO,
+            distance: 50.0,       // Orbit at 50 units
+            target_distance: 50.0,
             rotation: initial_rotation,
             target_rotation: initial_rotation,
-            mode: CameraMode::FreeFly,
+            mode: CameraMode::Orbit,  // GPU scene now defaults to Orbit mode
             scene_type: SceneType::GpuScene,
             up_direction: Vec3::Y,
             is_dragging: false,

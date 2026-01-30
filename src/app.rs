@@ -390,8 +390,8 @@ impl App {
         // Update camera gravity direction only for GPU scene (preview scene ignores gravity)
         if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
             self.scene_manager.active_scene_mut().camera_mut().set_gravity_direction(
-                self.ui.state.gravity,
-                [self.ui.state.gravity_x, self.ui.state.gravity_y, self.ui.state.gravity_z],
+                self.ui.state.world_settings.gravity,
+                [self.ui.state.world_settings.gravity_x, self.ui.state.world_settings.gravity_y, self.ui.state.world_settings.gravity_z],
             );
         }
         self.scene_manager.active_scene_mut().camera_mut().update(dt);
@@ -479,11 +479,11 @@ impl App {
             );
 
             // Apply gravity from UI
-            gpu_scene.gravity = self.ui.state.gravity;
+            gpu_scene.gravity = self.ui.state.world_settings.gravity;
             gpu_scene.gravity_dir = [
-                self.ui.state.gravity_x,
-                self.ui.state.gravity_y,
-                self.ui.state.gravity_z,
+                self.ui.state.world_settings.gravity_x,
+                self.ui.state.world_settings.gravity_y,
+                self.ui.state.world_settings.gravity_z,
             ];
 
             // Apply lateral flow probabilities from UI
@@ -636,7 +636,7 @@ impl App {
                 }
                 crate::ui::panel_context::SceneModeRequest::Reset => {
                     // Use capacity from UI slider
-                    let capacity = self.ui.state.cell_capacity;
+                    let capacity = self.ui.state.world_settings.cell_capacity;
                     
                     // Recreate GPU scene with appropriate capacity if needed
                     self.scene_manager.recreate_gpu_scene_with_capacity(
@@ -712,7 +712,7 @@ impl App {
                     }
                 }
                 
-                let cave_initialized = self.scene_manager.switch_mode(requested_mode, &self.device, &self.queue, &self.config, self.ui.state.world_diameter, self.ui.state.cell_capacity, &self.editor_state);
+                let cave_initialized = self.scene_manager.switch_mode(requested_mode, &self.device, &self.queue, &self.config, self.ui.state.world_diameter, self.ui.state.world_settings.cell_capacity, &self.editor_state);
                 if cave_initialized {
                     // Cave was just initialized, mark params as dirty so they get applied
                     self.editor_state.cave_params_dirty = true;
@@ -741,7 +741,7 @@ impl App {
                     self.working_genome = preview_scene.genome.clone();
                 }
             }
-            let cave_initialized = self.scene_manager.switch_mode(dock_mode, &self.device, &self.queue, &self.config, self.ui.state.world_diameter, self.ui.state.cell_capacity, &self.editor_state);
+            let cave_initialized = self.scene_manager.switch_mode(dock_mode, &self.device, &self.queue, &self.config, self.ui.state.world_diameter, self.ui.state.world_settings.cell_capacity, &self.editor_state);
             if cave_initialized {
                 // Cave was just initialized, mark params as dirty so they get applied
                 self.editor_state.cave_params_dirty = true;

@@ -61,6 +61,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::RenderingControls => render_rendering_controls(ui),
             Panel::CaveSystem => render_cave_system(ui, self.context),
             Panel::FluidSettings => render_fluid_settings(ui, self.context),
+            Panel::WorldSettings => render_world_settings(ui, self.context, self.state),
             Panel::TimeScrubber => render_time_scrubber(ui, self.context),
             Panel::ThemeEditor => render_theme_editor(ui),
             Panel::CameraSettings => render_camera_settings(ui, self.context),
@@ -492,10 +493,49 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
         ui.label("").on_hover_text("Disable to avoid CPU-GPU sync overhead.\nCell count and culling stats won't update.");
     });
     ui.separator();
-        
-        // FPS and Frame Time section
-        ui.heading("Frame Rate");
+    
+    // Culling section (GPU mode only)
+    if context.current_mode == crate::ui::types::SimulationMode::Gpu {
+        ui.add_space(8.0);
+        ui.heading("GPU Rendering");
         ui.separator();
+        
+        let (total, visible, frustum_culled, occluded) = perf.culling_stats();
+        
+        ui.horizontal(|ui| {
+            ui.label("Total Cells:");
+            ui.label(format!("{}", total));
+        });
+        
+        ui.horizontal(|ui| {
+            ui.label("Visible:");
+            ui.label(format!("{}", visible));
+        });
+        
+        ui.horizontal(|ui| {
+            ui.label("Frustum Culled:");
+            ui.label(format!("{}", frustum_culled));
+        });
+        
+        ui.horizontal(|ui| {
+            ui.label("Occluded:");
+            ui.label(format!("{}", occluded));
+        });
+        
+        if total > 0 {
+            let cull_percent = ((total - visible) as f32 / total as f32) * 100.0;
+            ui.horizontal(|ui| {
+                ui.label("Cull Rate:");
+                ui.label(format!("{:.1}%", cull_percent));
+            });
+        }
+        
+        ui.add_space(8.0);
+    }
+    
+    // FPS and Frame Time section
+    ui.heading("Frame Rate");
+    ui.separator();
         
         ui.horizontal(|ui| {
             ui.label("FPS:");
@@ -556,141 +596,6 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
                 );
             }
         }
-        
-        ui.add_space(8.0);
-        
-        // Culling section (GPU mode only)
-        if context.current_mode == crate::ui::types::SimulationMode::Gpu {
-            ui.add_space(8.0);
-            ui.heading("GPU Rendering");
-            ui.separator();
-            
-            // Adhesion lines toggle
-            ui.checkbox(&mut state.show_adhesion_lines, "Show Adhesion Lines")
-                .on_hover_text("Show connection lines between adhered cells.");
-            
-            ui.add_space(4.0);
-            
-            // World diameter slider
-            ui.label("World Diameter:");
-            ui.add(egui::Slider::new(&mut state.world_diameter, 50.0..=400.0).suffix(" units"));
-            
-            ui.add_space(4.0);
-
-            // Gravity slider
-            ui.label("Gravity:");
-            ui.add(egui::Slider::new(&mut state.gravity, -50.0..=50.0).suffix(" m/s²"));
-            ui.horizontal(|ui| {
-                ui.label("Direction:");
-                
-                // Radio button logic for gravity axis selection
-                let selected_x = state.gravity_x;
-                let selected_y = state.gravity_y;
-                let selected_z = state.gravity_z;
-                
-                if ui.selectable_label(selected_x, "X").clicked() {
-                    state.gravity_x = true;
-                    state.gravity_y = false;
-                    state.gravity_z = false;
-                }
-                if ui.selectable_label(selected_y, "Y").clicked() {
-                    state.gravity_x = false;
-                    state.gravity_y = true;
-                    state.gravity_z = false;
-                }
-                if ui.selectable_label(selected_z, "Z").clicked() {
-                    state.gravity_x = false;
-                    state.gravity_y = false;
-                    state.gravity_z = true;
-                }
-            });
-
-            ui.add_space(4.0);
-
-            // Cell capacity slider
-            let current_capacity = context.gpu_capacity().unwrap_or(state.cell_capacity);
-            let capacity_k = state.cell_capacity / 1000;
-            
-            ui.label("Cell Capacity:");
-            let mut capacity_k_mut = capacity_k;
-            if ui.add(egui::Slider::new(&mut capacity_k_mut, 10..=200).suffix("k")).changed() {
-                state.cell_capacity = capacity_k_mut * 1000;
-            }
-            
-            // Show reset required message if capacity changed
-            if state.cell_capacity != current_capacity {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("⚠ Scene reset required").color(egui::Color32::YELLOW));
-                });
-            }
-            
-            ui.add_space(4.0);
-            
-            let (total, visible, frustum_culled, occluded) = perf.culling_stats();
-            
-            ui.horizontal(|ui| {
-                ui.label("Total Cells:");
-                ui.label(format!("{}", total));
-            });
-            
-            ui.horizontal(|ui| {
-                ui.label("Visible:");
-                ui.label(format!("{}", visible));
-            });
-            
-            ui.horizontal(|ui| {
-                ui.label("Frustum Culled:");
-                ui.label(format!("{}", frustum_culled));
-            });
-            
-            ui.horizontal(|ui| {
-                ui.label("Occluded:");
-                ui.label(format!("{}", occluded));
-            });
-            
-            if total > 0 {
-                let cull_percent = ((total - visible) as f32 / total as f32) * 100.0;
-                ui.horizontal(|ui| {
-                    ui.label("Cull Rate:");
-                    ui.label(format!("{:.1}%", cull_percent));
-                });
-            }
-            
-            ui.add_space(4.0);
-            
-            // Enable/disable toggles
-            ui.checkbox(&mut state.frustum_enabled, "Enable Frustum Culling");
-            ui.checkbox(&mut state.occlusion_enabled, "Enable Occlusion Culling");
-            
-            if state.occlusion_enabled {
-                ui.add_space(4.0);
-                
-                ui.label("Depth Bias:");
-                ui.add(egui::Slider::new(&mut state.occlusion_bias, -0.1..=0.1)
-                    .step_by(0.001)
-                    .fixed_decimals(3));
-                
-                ui.add_space(4.0);
-                
-                ui.label("Mip Level (-1 = auto):");
-                ui.add(egui::Slider::new(&mut state.occlusion_mip_override, -1..=10));
-                
-                ui.add_space(4.0);
-                
-                ui.label("Min Screen Size (px):");
-                ui.add(egui::Slider::new(&mut state.occlusion_min_screen_size, 0.0..=100.0)
-                    .step_by(1.0)
-                    .fixed_decimals(0));
-                
-                ui.add_space(4.0);
-                
-                ui.label("Min Distance:");
-                ui.add(egui::Slider::new(&mut state.occlusion_min_distance, 0.0..=100.0)
-                    .step_by(0.5)
-                    .fixed_decimals(1));
-            }
-            
-            }
         
         ui.add_space(8.0);
         
@@ -901,7 +806,15 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             ui.add_space(4.0);
             ui.label("Seed:");
             ui.horizontal(|ui| {
-                params_changed |= ui.add(egui::DragValue::new(&mut seed).range(0..=9999)).changed();
+                let mut seed_text = seed.to_string();
+                if ui.text_edit_singleline(&mut seed_text).changed() {
+                    if let Ok(parsed_seed) = seed_text.parse::<i32>() {
+                        if parsed_seed >= 0 && parsed_seed <= 9999 {
+                            seed = parsed_seed;
+                            params_changed = true;
+                        }
+                    }
+                }
                 if ui.button("🎲").on_hover_text("Randomize seed").clicked() {
                     use std::collections::hash_map::DefaultHasher;
                     use std::hash::{Hash, Hasher};
@@ -2508,6 +2421,75 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
     if changes_made {
         log::info!("Node graph changes written back to genome");
     }
+}
+
+/// Render the WorldSettings panel for simulation parameters and physics.
+fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
+    ui.heading("World Settings");
+    ui.separator();
+    
+    // Only show world settings in GPU mode
+    if context.current_mode != crate::ui::types::SimulationMode::Gpu {
+        ui.label("World settings are only available in GPU mode.");
+        return;
+    }
+    
+    let world = &mut state.world_settings;
+    
+    // World Settings section
+    ui.heading("World Parameters");
+    ui.separator();
+    
+    // Cell capacity slider
+    let current_capacity = context.gpu_capacity().unwrap_or(world.cell_capacity);
+    let capacity_k = world.cell_capacity / 1000;
+    
+    ui.label("Cell Capacity:");
+    let mut capacity_k_mut = capacity_k;
+    if ui.add(egui::Slider::new(&mut capacity_k_mut, 10..=200).suffix("k")).changed() {
+        world.cell_capacity = capacity_k_mut * 1000;
+    }
+    
+    // Show reset required message if capacity changed
+    if world.cell_capacity != current_capacity {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("⚠ Scene reset required").color(egui::Color32::YELLOW));
+        });
+    }
+    
+    ui.add_space(8.0);
+    
+    // Physics section
+    ui.heading("Physics");
+    ui.separator();
+    
+    // Gravity slider
+    ui.label("Gravity:");
+    ui.add(egui::Slider::new(&mut world.gravity, -50.0..=50.0).suffix(" m/s²"));
+    ui.horizontal(|ui| {
+        ui.label("Direction:");
+        
+        // Radio button logic for gravity axis selection
+        let selected_x = world.gravity_x;
+        let selected_y = world.gravity_y;
+        let selected_z = world.gravity_z;
+        
+        if ui.selectable_label(selected_x, "X").clicked() {
+            world.gravity_x = true;
+            world.gravity_y = false;
+            world.gravity_z = false;
+        }
+        if ui.selectable_label(selected_y, "Y").clicked() {
+            world.gravity_x = false;
+            world.gravity_y = true;
+            world.gravity_z = false;
+        }
+        if ui.selectable_label(selected_z, "Z").clicked() {
+            world.gravity_x = false;
+            world.gravity_y = false;
+            world.gravity_z = true;
+        }
+    });
 }
 
 /// Render the Help panel showing context-specific controls and shortcuts.

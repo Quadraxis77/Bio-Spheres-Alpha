@@ -758,6 +758,26 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
                 state.set_panel_locked(&fluid_name, !fluid_locked);
             }
         });
+        
+        // World Settings (GPU mode only)
+        let world_open = is_panel_open(dock_manager.current_tree(), &Panel::WorldSettings);
+        let world_name = format!("{:?}", Panel::WorldSettings);
+        let world_locked = state.is_panel_locked(&world_name);
+        
+        ui.horizontal(|ui| {
+            if ui.selectable_label(world_open, "  World Settings").clicked() {
+                if world_open {
+                    close_panel(dock_manager.current_tree_mut(), &Panel::WorldSettings);
+                } else {
+                    open_panel(dock_manager.current_tree_mut(), &Panel::WorldSettings);
+                }
+            }
+            
+            let lock_icon = if world_locked { "🔒" } else { "🔓" };
+            if ui.small_button(lock_icon).clicked() {
+                state.set_panel_locked(&world_name, !world_locked);
+            }
+        });
     }
 
     ui.separator();

@@ -164,10 +164,46 @@ impl Default for LockSettings {
     }
 }
 
-/// Global UI state shared across all UI components.
+/// World-specific simulation and physics settings.
 ///
-/// This struct tracks the current simulation mode, UI scale, lock settings,
-/// and per-scene configurations.
+/// These settings control the simulation world parameters including
+/// physics and world configuration options.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct WorldSettings {
+    /// Target cell capacity (applied on scene reset)
+    #[serde(default = "default_cell_capacity")]
+    pub cell_capacity: u32,
+
+    /// Gravity strength (negative = downward)
+    #[serde(default)]
+    pub gravity: f32,
+
+    /// Gravity applies to X axis
+    #[serde(default)]
+    pub gravity_x: bool,
+
+    /// Gravity applies to Y axis
+    #[serde(default = "default_true")]
+    pub gravity_y: bool,
+
+    /// Gravity applies to Z axis
+    #[serde(default)]
+    pub gravity_z: bool,
+}
+
+impl Default for WorldSettings {
+    fn default() -> Self {
+        Self {
+            cell_capacity: 20_000,
+            gravity: 0.0,
+            gravity_x: false,
+            gravity_y: true,
+            gravity_z: false,
+        }
+    }
+}
+
+/// Global UI state shared across all UI components.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GlobalUiState {
     /// Current simulation mode/scene.
@@ -220,15 +256,9 @@ pub struct GlobalUiState {
     #[serde(default = "default_true")]
     pub gpu_readbacks_enabled: bool,
 
-
-
     /// Whether to show adhesion lines between cells
     #[serde(default = "default_true")]
     pub show_adhesion_lines: bool,
-
-    /// Target cell capacity (applied on scene reset)
-    #[serde(default = "default_cell_capacity")]
-    pub cell_capacity: u32,
 
     /// World diameter in simulation units (applied on scene reset)
     #[serde(default = "default_world_diameter")]
@@ -254,21 +284,9 @@ pub struct GlobalUiState {
     #[serde(default)]
     pub lod_debug_colors: bool,
 
-    /// Gravity strength (negative = downward)
+    /// World-specific simulation and physics settings
     #[serde(default)]
-    pub gravity: f32,
-
-    /// Gravity applies to X axis
-    #[serde(default)]
-    pub gravity_x: bool,
-
-    /// Gravity applies to Y axis
-    #[serde(default = "default_true")]
-    pub gravity_y: bool,
-
-    /// Gravity applies to Z axis
-    #[serde(default)]
-    pub gravity_z: bool,
+    pub world_settings: WorldSettings,
 
     /// Whether the low FPS warning dialog is shown
     #[serde(skip)]
@@ -296,7 +314,7 @@ fn default_cell_capacity() -> u32 {
 }
 
 fn default_world_diameter() -> f32 {
-    400.0
+    395.0
 }
 
 fn default_lod_scale_factor() -> f32 {
@@ -342,17 +360,13 @@ impl Default for GlobalUiState {
             frustum_enabled: true,
             gpu_readbacks_enabled: true,
             show_adhesion_lines: true,
-            cell_capacity: 20_000,
-            world_diameter: 400.0,
+            world_diameter: 395.0,
             lod_scale_factor: 500.0,
             lod_threshold_low: 10.0,
             lod_threshold_medium: 25.0,
             lod_threshold_high: 50.0,
             lod_debug_colors: false,
-            gravity: 0.0,
-            gravity_x: false,
-            gravity_y: true,
-            gravity_z: false,
+            world_settings: WorldSettings::default(),
             show_low_fps_dialog: false,
             show_reset_dialog: false,
             mode_request: None,

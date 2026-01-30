@@ -50,6 +50,8 @@ pub enum Panel {
     CaveSystem,
     /// Fluid simulation settings and visualization controls.
     FluidSettings,
+    /// World settings for simulation parameters and physics.
+    WorldSettings,
 
     // Genome editor sub-panels
     /// Cell modes list panel.
@@ -93,6 +95,7 @@ impl Panel {
             Panel::RenderingControls => true,
             Panel::CaveSystem => true,
             Panel::FluidSettings => true,
+            Panel::WorldSettings => true,
             Panel::Help => true,
 
             // Preview mode only (genome editing)
@@ -140,6 +143,7 @@ impl Panel {
                 Panel::CameraSettings,
                 Panel::CaveSystem,
                 Panel::FluidSettings,
+                Panel::WorldSettings,
                 Panel::GizmoSettings,
             ],
         }
@@ -165,6 +169,7 @@ impl Panel {
             Panel::CellTypeVisuals,
             Panel::CaveSystem,
             Panel::FluidSettings,
+            Panel::WorldSettings,
             Panel::Modes,
             Panel::NameTypeEditor,
             Panel::AdhesionSettings,
@@ -197,6 +202,7 @@ impl Panel {
             Panel::CellTypeVisuals => "Cell Visuals",
             Panel::CaveSystem => "Cave System",
             Panel::FluidSettings => "Fluid System",
+            Panel::WorldSettings => "World Settings",
             Panel::Modes => "Modes",
             Panel::NameTypeEditor => "Name & Type",
             Panel::AdhesionSettings => "Adhesion Settings",
