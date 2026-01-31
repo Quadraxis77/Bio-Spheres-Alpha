@@ -101,15 +101,15 @@ impl CameraController {
         }
     }
 
-    /// Create camera for GPU scene (Orbit at 50 units)
+    /// Create camera for GPU scene (Orbit at 500 units)
     pub fn new_for_gpu_scene() -> Self {
         // Initial rotation: looking down at the scene from a 45-degree angle
         let initial_rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4);
 
         Self {
             center: Vec3::ZERO,
-            distance: 50.0,       // Orbit at 50 units
-            target_distance: 50.0,
+            distance: 500.0,      // Orbit at 500 units
+            target_distance: 500.0,
             rotation: initial_rotation,
             target_rotation: initial_rotation,
             mode: CameraMode::Orbit,  // GPU scene now defaults to Orbit mode

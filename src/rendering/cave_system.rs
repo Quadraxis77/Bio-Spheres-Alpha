@@ -67,13 +67,13 @@ impl Default for CaveParams {
             world_center: [0.0, 0.0, 0.0],
             world_radius: 200.0,  // Updated for 400-unit world diameter
             density: 0.5,
-            scale: 10.0,  // Base scale, will be multiplied by world size factor
-            octaves: 4,
+            scale: 100.0,  // Updated to 100 as requested
+            octaves: 2,  // Updated to 2 as requested
             persistence: 0.5,
             threshold: 1.0,
-            smoothness: 0.1,
+            smoothness: 1.0,  // Updated to 1.0 as requested
             seed: 12345,
-            grid_resolution: 64,
+            grid_resolution: 128,  // Updated to 128 as requested
             triangle_count: 0,
             collision_enabled: 1,
             collision_stiffness: 10000.0,
