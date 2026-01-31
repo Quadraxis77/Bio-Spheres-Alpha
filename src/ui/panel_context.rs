@@ -156,6 +156,8 @@ pub struct GenomeEditorState {
     pub fluid_condensation_probability: f32,
     /// Vaporization probability for water to steam conversion (0.0 to 1.0)
     pub fluid_vaporization_probability: f32,
+    /// Nutrient particle density for noise-based spawning (0.0 to 1.0)
+    pub nutrient_density: f32,
     
     // Fluid visualization
     pub fluid_show_voxel_grid: bool,
@@ -253,7 +255,7 @@ impl GenomeEditorState {
         
         let (fluid_gravity, fluid_gravity_x, fluid_gravity_y, fluid_gravity_z, 
              fluid_vorticity_epsilon, fluid_pressure_iterations, fluid_lateral_flow_probabilities,
-             _fluid_continuous_spawn, selected_fluid_type, fluid_condensation_probability, fluid_vaporization_probability) = Self::load_fluid_settings();
+             _fluid_continuous_spawn, selected_fluid_type, fluid_condensation_probability, fluid_vaporization_probability, nutrient_density) = Self::load_fluid_settings();
         
         Self {
             renaming_mode: None,
@@ -305,6 +307,7 @@ impl GenomeEditorState {
             fluid_lateral_flow_probabilities,
             fluid_condensation_probability,
             fluid_vaporization_probability,
+            nutrient_density,
             fluid_show_voxel_grid: true,
             fluid_show_solid_only: false,
             fluid_show_wireframe: false,
@@ -386,6 +389,7 @@ impl GenomeEditorState {
             self.selected_fluid_type,
             self.fluid_condensation_probability,
             self.fluid_vaporization_probability,
+            self.nutrient_density,
         ) {
             log::error!("Failed to save fluid settings: {}", e);
         }
@@ -442,6 +446,7 @@ impl GenomeEditorState {
         selected_fluid_type: u32,
         condensation_probability: f32,
         vaporization_probability: f32,
+        nutrient_density: f32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct FluidSettings {
@@ -456,6 +461,7 @@ impl GenomeEditorState {
             selected_fluid_type: u32,
             condensation_probability: f32,
             vaporization_probability: f32,
+            nutrient_density: f32,
         }
         
         let settings = FluidSettings {
@@ -470,6 +476,7 @@ impl GenomeEditorState {
             selected_fluid_type,
             condensation_probability,
             vaporization_probability,
+            nutrient_density,
         };
         
         let path = PathBuf::from("fluid_settings.ron");
@@ -529,7 +536,7 @@ impl GenomeEditorState {
     }
     
     /// Load fluid settings from disk, or return defaults if file doesn't exist.
-    pub fn load_fluid_settings() -> (f32, bool, bool, bool, f32, u32, [f32; 4], bool, u32, f32, f32) {
+    pub fn load_fluid_settings() -> (f32, bool, bool, bool, f32, u32, [f32; 4], bool, u32, f32, f32, f32) {
         #[derive(serde::Deserialize)]
         struct FluidSettings {
             gravity: f32,
@@ -543,6 +550,7 @@ impl GenomeEditorState {
             selected_fluid_type: u32,
             condensation_probability: f32,
             vaporization_probability: f32,
+            nutrient_density: f32,
         }
         
         let path = PathBuf::from("fluid_settings.ron");
@@ -564,6 +572,7 @@ impl GenomeEditorState {
                                 settings.selected_fluid_type,
                                 settings.condensation_probability,
                                 settings.vaporization_probability,
+                                settings.nutrient_density,
                             );
                         }
                         Err(e) => {
@@ -578,7 +587,7 @@ impl GenomeEditorState {
         }
         
         // Return defaults
-        (9.8, false, true, false, 0.05, 10, [1.0, 0.8, 0.6, 0.9], false, 1, 0.1, 0.1)
+        (9.8, false, true, false, 0.05, 10, [1.0, 0.8, 0.6, 0.9], false, 1, 0.1, 0.1, 0.2)
     }
 }
 

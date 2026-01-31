@@ -950,6 +950,22 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
             context.editor_state.save_fluid_settings();
         }
     
+    // Nutrient density for particle spawning
+    ui.add_space(4.0);
+    ui.label("Nutrient Density:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_density, 0.0..=0.5)
+        .step_by(0.01)
+        .fixed_decimals(2)
+        .text("Density (0.0 = sparse, 0.5 = dense)")
+        ).changed() {
+            // Update GPU scene nutrient density
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                gpu_scene.nutrient_density = context.editor_state.nutrient_density;
+            }
+            // Save fluid settings
+            context.editor_state.save_fluid_settings();
+        }
+    
     ui.add_space(10.0);
 }
 /// Render the TimeScrubber panel (placeholder).

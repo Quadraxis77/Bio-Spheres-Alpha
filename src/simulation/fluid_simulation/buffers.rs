@@ -18,6 +18,7 @@ pub enum FluidType {
     Lava = 2,
     Steam = 3,
     Solid = 4,
+    Nutrients = 5,
 }
 
 /// Voxel state (type + fill fraction)
@@ -38,10 +39,12 @@ pub struct GridStats {
     pub water_count: u32,
     pub lava_count: u32,
     pub steam_count: u32,
+    pub nutrients_count: u32,
     pub total_water_mass: f32,
     pub total_lava_mass: f32,
     pub total_steam_mass: f32,
-    pub _padding: [u32; 8], // Pad to 64 bytes
+    pub total_nutrients_mass: f32,
+    pub _padding: [u32; 6], // Pad to 64 bytes
 }
 
 /// Fluid simulation parameters (256-byte aligned for uniform buffer)

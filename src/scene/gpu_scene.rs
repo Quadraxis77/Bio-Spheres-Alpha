@@ -5,7 +5,7 @@
 
 use crate::cell::types::CellType;
 use crate::genome::Genome;
-use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, SteamParticleRenderer, TailRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
+use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, NutrientParticleRenderer, SteamParticleRenderer, TailRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
@@ -149,6 +149,8 @@ pub struct GpuScene {
     /// Phase change probabilities for fluid simulation (0.0 to 1.0)
     pub condensation_probability: f32,  // Steam to Water
     pub vaporization_probability: f32,  // Water to Steam
+    /// Nutrient particle density for noise-based spawning (0.0 to 1.0)
+    pub nutrient_density: f32,  // Controls threshold for nutrient spawning
     /// Current cell count (tracked on GPU, no CPU canonical state)
     pub current_cell_count: u32,
     /// Next cell ID for deterministic cell creation
@@ -197,6 +199,16 @@ pub struct GpuScene {
     water_extract_bind_group: Option<wgpu::BindGroup>,
     /// Cached water particle render bind group
     water_render_bind_group: Option<wgpu::BindGroup>,
+    /// Nutrient particle system renderer
+    pub nutrient_particle_renderer: Option<NutrientParticleRenderer>,
+    /// Whether to show nutrient particles
+    pub show_nutrient_particles: bool,
+    /// Nutrient particle spawn probability (0.0-1.0)
+    pub nutrient_spawn_probability: f32,
+    /// Cached nutrient particle extract bind group (for compute)
+    nutrient_extract_bind_group: Option<wgpu::BindGroup>,
+    /// Cached nutrient particle render bind group
+    nutrient_render_bind_group: Option<wgpu::BindGroup>,
 }
 
 impl GpuScene {
@@ -326,6 +338,7 @@ impl GpuScene {
             lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
             condensation_probability: 0.1,
             vaporization_probability: 0.1,
+            nutrient_density: 0.2,  // Default nutrient density (20% of 0.5 range)
             current_cell_count: 0,
             next_cell_id: 0,
             tail_renderer,
@@ -350,6 +363,11 @@ impl GpuScene {
             water_particle_prominence: 0.0,
             water_extract_bind_group: None,
             water_render_bind_group: None,
+            nutrient_particle_renderer: None,
+            show_nutrient_particles: true,
+            nutrient_spawn_probability: 0.05,  // 5% spawn probability
+            nutrient_extract_bind_group: None,
+            nutrient_render_bind_group: None,
         }
     }
 
@@ -1558,6 +1576,7 @@ impl GpuScene {
     pub fn initialize_fluid_system(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         camera_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> bool {
@@ -2042,7 +2061,7 @@ impl GpuScene {
     }
 
     /// Initialize the GPU fluid simulator (starts empty)
-    pub fn initialize_fluid_simulator(&mut self, device: &wgpu::Device, _queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
+    pub fn initialize_fluid_simulator(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
         // First ensure surface nets is initialized
         if self.gpu_surface_nets.is_none() {
             self.initialize_gpu_surface_nets(device, surface_format);
@@ -2082,7 +2101,10 @@ impl GpuScene {
         // Initialize water particle renderer
         self.initialize_water_particle_renderer(device, surface_format);
 
-        log::info!("GPU fluid simulator initialized with solid mask and water bitfield for cell buoyancy");
+        // Initialize nutrient particle renderer
+        self.initialize_nutrient_particle_renderer(device, queue, surface_format);
+
+        log::info!("GPU fluid simulator initialized with solid mask, water bitfield, and nutrient particles for cell buoyancy");
     }
 
     /// Step the GPU fluid simulation and update water bitfield for cell buoyancy
@@ -2207,6 +2229,62 @@ impl GpuScene {
         log::info!("Water particle renderer initialized (GPU-based)");
     }
 
+    /// Create or update nutrient particle renderer when fluid simulator is available
+    fn ensure_nutrient_particle_renderer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat, depth_format: wgpu::TextureFormat) {
+        if self.nutrient_particle_renderer.is_some() {
+            return;
+        }
+
+        // Create camera layout (same as other renderers)
+        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Nutrient Camera Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let mut nutrient_particle_renderer = NutrientParticleRenderer::new(
+            device,
+            queue,
+            surface_format,
+            depth_format,
+            &camera_layout,
+            self.renderer.width,
+            self.renderer.height,
+        );
+
+        // Set spawn probability
+        nutrient_particle_renderer.set_spawn_probability(self.nutrient_spawn_probability);
+
+        // Create render bind group
+        let nutrient_particle_renderer = nutrient_particle_renderer; // Make it immutable for the rest
+        self.nutrient_render_bind_group = Some(nutrient_particle_renderer.create_render_bind_group(device));
+
+        self.nutrient_particle_renderer = Some(nutrient_particle_renderer);
+        self.show_nutrient_particles = true;
+
+        log::info!("Nutrient particle renderer initialized (GPU-based)");
+    }
+
+    /// Initialize the nutrient particle renderer
+    pub fn initialize_nutrient_particle_renderer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
+        if self.nutrient_particle_renderer.is_some() {
+            return;
+        }
+
+        let depth_format = wgpu::TextureFormat::Depth32Float;
+        self.ensure_nutrient_particle_renderer(device, queue, surface_format, depth_format);
+    }
+
     /// Create or update steam extract bind group when fluid simulator is available
     fn ensure_steam_extract_bind_group(&mut self, device: &wgpu::Device) {
         if self.steam_extract_bind_group.is_some() {
@@ -2257,6 +2335,62 @@ impl GpuScene {
     /// Poll for steam particle count after command buffer submission
     pub fn poll_steam_particle_count(&mut self, device: &wgpu::Device) {
         if let Some(ref mut particle_renderer) = self.steam_particle_renderer {
+            particle_renderer.poll_particle_count(device);
+        }
+    }
+
+    /// Create or update nutrient extract bind group when fluid simulator is available
+    fn ensure_nutrient_extract_bind_group(&mut self, device: &wgpu::Device) {
+        if self.nutrient_extract_bind_group.is_some() {
+            return;
+        }
+
+        if let (Some(ref particle_renderer), Some(ref fluid_sim)) =
+            (&self.nutrient_particle_renderer, &self.fluid_simulator) {
+            self.nutrient_extract_bind_group = Some(
+                particle_renderer.create_extract_bind_group(device, fluid_sim.current_state_buffer(), fluid_sim.solid_mask_buffer())
+            );
+            log::info!("Nutrient extract bind group created");
+        }
+    }
+
+    /// Run nutrient particle extraction compute shader
+    pub fn extract_nutrient_particles(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        dt: f32,
+    ) {
+        // Ensure bind group exists
+        self.ensure_nutrient_extract_bind_group(device);
+
+        if let (Some(ref mut particle_renderer), Some(ref fluid_sim), Some(ref extract_bind_group)) =
+            (&mut self.nutrient_particle_renderer, &self.fluid_simulator, &self.nutrient_extract_bind_group) {
+
+            let (world_radius, world_center) = fluid_sim.grid_params();
+            let grid_resolution = 128u32;
+            let world_diameter = world_radius * 2.0;
+            let cell_size = world_diameter / grid_resolution as f32;
+            let grid_origin = world_center - glam::Vec3::splat(world_diameter / 2.0);
+
+            particle_renderer.extract_nutrient_particles(
+                encoder,
+                queue,
+                extract_bind_group,
+                grid_resolution,
+                grid_origin,
+                cell_size,
+                world_radius,
+                dt,
+                self.nutrient_density,
+            );
+        }
+    }
+
+    /// Poll for nutrient particle count after command buffer submission
+    pub fn poll_nutrient_particle_count(&mut self, device: &wgpu::Device) {
+        if let Some(ref mut particle_renderer) = self.nutrient_particle_renderer {
             particle_renderer.poll_particle_count(device);
         }
     }
@@ -2658,6 +2792,11 @@ impl Scene for GpuScene {
             if self.show_water_particles {
                 self.extract_water_particles(&mut encoder, device, queue, dt);
             }
+
+            // Extract nutrient particles from fluid state (GPU compute)
+            if self.show_nutrient_particles {
+                self.extract_nutrient_particles(&mut encoder, device, queue, dt);
+            }
         }
 
         // Process any pending cell insertion from input handling
@@ -3008,6 +3147,38 @@ impl Scene for GpuScene {
             }
         }
 
+        // Render nutrient particles if enabled
+        if self.show_nutrient_particles {
+            if let (Some(ref nutrient_particle_renderer), Some(ref render_bind_group)) =
+                (&self.nutrient_particle_renderer, &self.nutrient_render_bind_group) {
+
+                // Create camera bind group for nutrient particles
+                let camera_uniform = self.create_camera_uniform();
+                let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Nutrient Particle Camera Buffer"),
+                    contents: bytemuck::cast_slice(&[camera_uniform]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
+
+                let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Nutrient Particle Camera Bind Group"),
+                    layout: nutrient_particle_renderer.camera_bind_group_layout(),
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: camera_buffer.as_entire_binding(),
+                    }],
+                });
+
+                nutrient_particle_renderer.render(
+                    &mut encoder,
+                    view,
+                    &self.renderer.depth_view,
+                    &camera_bind_group,
+                    render_bind_group,
+                );
+            }
+        }
+
 
         // Render adhesion lines if enabled
         if self.show_adhesion_lines {
@@ -3092,6 +3263,11 @@ impl Scene for GpuScene {
         // Poll for water particle count (GPU readback)
         if self.show_water_particles {
             self.poll_water_particle_count(device);
+        }
+
+        // Poll for nutrient particle count (GPU readback)
+        if self.show_nutrient_particles {
+            self.poll_nutrient_particle_count(device);
         }
 
         // Mark that we now have Hi-Z data for next frame

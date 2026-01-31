@@ -105,6 +105,7 @@ impl SceneManager {
                     
                     let fluid_initialized = gpu_scene.initialize_fluid_system(
                         device,
+                        queue,
                         config.format,
                         &camera_bind_group_layout,
                     );
@@ -181,6 +182,7 @@ impl SceneManager {
         
         let fluid_initialized = gpu_scene.initialize_fluid_system(
             device,
+            queue,
             config.format,
             &camera_bind_group_layout,
         );
