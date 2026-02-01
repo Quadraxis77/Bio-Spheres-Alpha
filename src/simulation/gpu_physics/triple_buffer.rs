@@ -478,7 +478,8 @@ impl GpuTripleBufferSystem {
         let mode_cell_types = Self::create_storage_buffer(device, max_modes * 4, "Mode Cell Types");
         
         // Behavior flags per cell type for parameterized shader logic
-        let behavior_flags = Self::create_storage_buffer(device, 30 * 4, "Behavior Flags"); // CellType::MAX_TYPES = 30
+        // Each GpuCellTypeBehaviorFlags struct is 64 bytes (6 u32 fields + 10 u32 padding)
+        let behavior_flags = Self::create_storage_buffer(device, 30 * 64, "Behavior Flags"); // CellType::MAX_TYPES = 30
         
         Self {
             position_and_mass,
@@ -749,9 +750,12 @@ impl GpuTripleBufferSystem {
         
         // Sync mode properties for division (nutrient_gain_rate, max_cell_size, etc.)
         self.sync_mode_properties(queue, genomes);
-        
+
         // Sync mode cell types lookup table (for deriving cell_type from mode_index)
         self.sync_mode_cell_types(queue, genomes);
+
+        // Sync behavior flags for all cell types (applies_swim_force, etc.)
+        self.sync_behavior_flags(queue);
     }
     
     /// Update cell_types buffer when genome mode cell_type settings change.
@@ -923,12 +927,25 @@ impl GpuTripleBufferSystem {
                 genome.modes.iter().map(|mode| mode.cell_type as u32)
             })
             .collect();
-        
+
         if !mode_cell_types.is_empty() {
             queue.write_buffer(&self.mode_cell_types, 0, bytemuck::cast_slice(&mode_cell_types));
         }
     }
-    
+
+    /// Sync behavior flags for all cell types
+    /// This populates the GPU buffer with behavior flags (applies_swim_force, etc.)
+    /// for each cell type. Should be called once during initialization.
+    pub fn sync_behavior_flags(&self, queue: &wgpu::Queue) {
+        use crate::cell::types::{CellType, GpuCellTypeBehaviorFlags};
+
+        let flags: Vec<GpuCellTypeBehaviorFlags> = CellType::iter()
+            .map(|t| t.behavior_flags())
+            .collect();
+
+        queue.write_buffer(&self.behavior_flags, 0, bytemuck::cast_slice(&flags));
+    }
+
     /// Sync a single cell to all GPU buffer sets (for cell insertion during simulation)
     pub fn sync_single_cell(&self, queue: &wgpu::Queue, cell_idx: usize, position: glam::Vec3, velocity: glam::Vec3, mass: f32, rotation: glam::Quat) {
         let position_mass: [f32; 4] = [position.x, position.y, position.z, mass];

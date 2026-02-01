@@ -9,6 +9,10 @@ struct Camera {
     view_proj: mat4x4<f32>,
     camera_pos: vec3<f32>,
     time: f32,
+    partition_offset: u32,  // Offset into instance buffer for Flagellocyte partition
+    _padding0: u32,         // Padding to maintain alignment
+    _padding1: u32,
+    _padding2: u32,
 }
 
 struct Lighting {
@@ -60,10 +64,12 @@ fn vs_main(
     @builtin(instance_index) instance_index: u32,
 ) -> VertexOutput {
     var out: VertexOutput;
-    
+
     // Read instance data from storage buffer
-    // instance_index already accounts for first_instance from indirect buffer
-    let instance = cell_instances[instance_index];
+    // Add partition_offset to read from the correct partition (Flagellocyte cells)
+    // Instance buffer is partitioned by cell type: [Test cells][Flagellocyte cells][Phagocyte cells]...
+    let buffer_index = camera.partition_offset + instance_index;
+    let instance = cell_instances[buffer_index];
     
     // Check if this is a flagellocyte (cell_type = 1)
     // cell_type is stored in type_data_1.w

@@ -42,6 +42,8 @@ struct TailCameraUniform {
     view_proj: [[f32; 4]; 4],
     camera_pos: [f32; 3],
     time: f32,
+    partition_offset: u32,
+    _padding: [u32; 3],
 }
 
 /// Lighting uniform for tail shader
@@ -538,18 +540,20 @@ impl TailRenderer {
     }
     
     /// Update camera uniform
-    fn update_camera(&self, queue: &wgpu::Queue, camera_pos: Vec3, camera_rotation: Quat, time: f32) {
+    fn update_camera(&self, queue: &wgpu::Queue, camera_pos: Vec3, camera_rotation: Quat, time: f32, partition_offset: u32) {
         let view = Mat4::from_rotation_translation(camera_rotation, camera_pos).inverse();
         let aspect = self.width as f32 / self.height as f32;
         let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 1000.0);
         let view_proj = proj * view;
-        
+
         let uniform = TailCameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),
             time,
+            partition_offset,
+            _padding: [0; 3],
         };
-        
+
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
     
@@ -612,9 +616,9 @@ impl TailRenderer {
         
         // Upload instance data
         queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(instances));
-        
-        // Update uniforms
-        self.update_camera(queue, camera_pos, camera_rotation, time);
+
+        // Update uniforms (partition_offset = 0 for PreviewScene which uses contiguous data)
+        self.update_camera(queue, camera_pos, camera_rotation, time, 0);
         self.update_lighting(queue);
         
         // Render pass
@@ -682,8 +686,9 @@ impl TailRenderer {
     }
     
     /// Render tails using GPU instance buffer (for GpuScene)
-    /// Reads cell instances directly from the instance builder's buffer.
-    /// All cells are written contiguously - the shader filters for flagellocytes.
+    /// Reads cell instances directly from the instance builder's partitioned buffer.
+    /// Uses first_instance to offset into the Flagellocyte partition.
+    /// The shader also filters by cell_type as a safety check.
     pub fn render_from_gpu_buffer(
         &mut self,
         device: &wgpu::Device,
@@ -698,25 +703,40 @@ impl TailRenderer {
         time: f32,
         width: u32,
         height: u32,
+        cell_capacity: usize,
     ) {
         // Update dimensions for correct aspect ratio
         self.width = width;
         self.height = height;
         
-        // Update uniforms
-        self.update_camera(queue, camera_pos, camera_rotation, time);
+        // Calculate partition offset for Flagellocytes (cell_type = 1)
+        // The instance buffer is partitioned by cell type to support multi-pipeline rendering
+        // Partition size = cell_capacity / MAX_TYPES (30)
+        use crate::cell::types::CellType;
+        let partition_size = cell_capacity / CellType::MAX_TYPES;
+        let flagellocyte_offset = (CellType::Flagellocyte as usize) * partition_size;
+
+        log::info!("Tail Renderer: cell_capacity={}, partition_size={}, flagellocyte_offset={}",
+                   cell_capacity, partition_size, flagellocyte_offset);
+
+        // Update uniforms (pass partition_offset to camera uniform)
+        self.update_camera(queue, camera_pos, camera_rotation, time, flagellocyte_offset as u32);
         self.update_lighting(queue);
-        
+
         // Set up indexed indirect buffer using LOD 2 (medium-high detail)
         // For GPU rendering, we use a fixed LOD since all instances share the same mesh
         // LOD 2 provides good quality at reasonable cost for most viewing distances
         let lod = &self.lod_info[2];
+
         // Source format (draw_indirect): [vertex_count, instance_count, first_vertex, first_instance]
         // Target format (draw_indexed_indirect): [index_count, instance_count, first_index, base_vertex, first_instance]
-        // We need: index_count (our mesh), instance_count (from source), first_index=lod.index_offset, base_vertex=0, first_instance (from source)
+        // first_instance is set to 0 since we handle partition offset in the shader via uniform
         let indexed_indirect_data: [u32; 5] = [lod.index_count, 0, lod.index_offset, 0, 0];
         queue.write_buffer(&self.indexed_indirect_buffer, 0, bytemuck::cast_slice(&indexed_indirect_data));
-        
+
+        log::info!("Tail Renderer: index_count={}, first_index={}, partition_offset passed to shader={}",
+                   lod.index_count, lod.index_offset, flagellocyte_offset);
+
         // Copy instance_count from indirect buffer (offset 4) to indexed indirect buffer (offset 4)
         encoder.copy_buffer_to_buffer(
             indirect_buffer,
@@ -725,15 +745,8 @@ impl TailRenderer {
             4,  // instance_count in dest
             4,  // 4 bytes
         );
-        
-        // Copy first_instance from indirect buffer (offset 12) to indexed indirect buffer (offset 16)
-        encoder.copy_buffer_to_buffer(
-            indirect_buffer,
-            12, // first_instance in source
-            &self.indexed_indirect_buffer,
-            16, // first_instance in dest
-            4,  // 4 bytes
-        );
+
+        // Note: first_instance is now set to the partition offset above, no need to copy from indirect buffer
         
         // Create bind group with cell instance buffer
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {

@@ -732,7 +732,10 @@ impl GpuScene {
         
         // Sync mode cell types lookup table (for deriving cell_type from mode_index)
         self.gpu_triple_buffers.sync_mode_cell_types(queue, &self.genomes);
-        
+
+        // Sync behavior flags for all cell types (applies_swim_force, etc.)
+        self.gpu_triple_buffers.sync_behavior_flags(queue);
+
         // Sync child mode indices for division (CRITICAL: determines what mode children get)
         self.gpu_triple_buffers.sync_child_mode_indices(queue, &self.genomes);
         
@@ -1576,7 +1579,7 @@ impl GpuScene {
     pub fn initialize_fluid_system(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         camera_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> bool {
@@ -2963,6 +2966,7 @@ impl Scene for GpuScene {
             self.current_time,
             self.renderer.width,
             self.renderer.height,
+            self.instance_builder.capacity(),
         );
 
         // Render world boundary sphere if enabled
