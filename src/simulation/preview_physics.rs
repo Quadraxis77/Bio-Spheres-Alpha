@@ -279,14 +279,22 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
         if let Some(mode) = genome.modes.get(mode_index) {
-            // Flagellocytes don't generate their own nutrients
-            if mode.cell_type == 1 {
+            // Preview scene auto-gain simulates GPU scene nutrient sources:
+            // - Test cells (0): Always auto-gain
+            // - Phagocytes (2): Simulate eating nutrient particles
+            // - Photocytes (3): Simulate photosynthesis from light
+            // All other cells (Flagellocytes, Lipocytes) must rely on nutrient transport
+            let can_auto_gain = mode.cell_type == 0  // Test
+                             || mode.cell_type == 2  // Phagocyte
+                             || mode.cell_type == 3; // Photocyte
+
+            if !can_auto_gain {
                 continue;
             }
-            
+
             let current_mass = state.masses[i];
             let max_mass = mode.max_cell_size;
-            
+
             if current_mass < max_mass {
                 let mass_gain = mode.nutrient_gain_rate * dt;
                 if mass_gain > 0.0 {

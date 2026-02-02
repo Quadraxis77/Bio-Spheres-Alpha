@@ -146,6 +146,14 @@ var<storage, read> child_mode_indices: array<vec2<i32>>;
 @group(2) @binding(18)
 var<storage, read> mode_properties: array<vec4<f32>>;
 
+// Cell types per cell - DEPRECATED, use mode_cell_types
+@group(2) @binding(19)
+var<storage, read_write> cell_types: array<u32>;
+
+// Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
+@group(2) @binding(20)
+var<storage, read> mode_cell_types: array<u32>;
+
 // Adhesion creation buffers (group 3)
 @group(3) @binding(0)
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
@@ -385,7 +393,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_a_props_0 = mode_properties[child_a_mode_idx * 3u];
     let child_a_props_1 = mode_properties[child_a_mode_idx * 3u + 1u];
     let child_a_props_2 = mode_properties[child_a_mode_idx * 3u + 2u];
-    nutrient_gain_rates[cell_idx] = child_a_props_0.x;
+
+    // Only Test cells (cell_type == 0) auto-generate nutrients
+    let child_a_cell_type = mode_cell_types[child_a_mode_idx];
+    let child_a_nutrient_rate = select(0.0, child_a_props_0.x, child_a_cell_type == 0u);
+    nutrient_gain_rates[cell_idx] = child_a_nutrient_rate;
+
     max_cell_sizes[cell_idx] = child_a_props_0.y;
     stiffnesses[cell_idx] = child_a_props_0.z;
     split_intervals[cell_idx] = child_a_props_0.w;
@@ -402,7 +415,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_b_props_0 = mode_properties[child_b_mode_idx * 3u];
     let child_b_props_1 = mode_properties[child_b_mode_idx * 3u + 1u];
     let child_b_props_2 = mode_properties[child_b_mode_idx * 3u + 2u];
-    
+
     // Set Child B state from its mode properties
     birth_times[child_b_slot] = params.current_time;
     split_intervals[child_b_slot] = child_b_props_0.w;
@@ -417,7 +430,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     max_splits[child_b_slot] = u32(child_b_props_2.x);
     genome_ids[child_b_slot] = genome_ids[cell_idx]; // Copy genome reference
     mode_indices[child_b_slot] = child_b_mode_idx; // Child B gets its designated mode
-    nutrient_gain_rates[child_b_slot] = child_b_props_0.x;
+
+    // Only Test cells (cell_type == 0) auto-generate nutrients
+    let child_b_cell_type = mode_cell_types[child_b_mode_idx];
+    let child_b_nutrient_rate = select(0.0, child_b_props_0.x, child_b_cell_type == 0u);
+    nutrient_gain_rates[child_b_slot] = child_b_nutrient_rate;
+
     max_cell_sizes[child_b_slot] = child_b_props_0.y;
     stiffnesses[child_b_slot] = child_b_props_0.z;
     

@@ -260,7 +260,8 @@ impl GpuScene {
         queue.write_buffer(&gpu_triple_buffers.next_cell_id, 0, bytemuck::cast_slice(&next_id));
         
         // Create adhesion buffer system
-        let max_modes: u32 = 256; // Maximum modes across all genomes
+        // Support 20,000 genomes * 40 modes each = 800,000 modes total
+        let max_modes: u32 = 40 * crate::simulation::gpu_physics::MAX_GENOMES as u32;
         let mut adhesion_buffers = AdhesionBuffers::new(device, capacity, max_modes);
         
         // Initialize adhesion buffers with default values
@@ -725,13 +726,26 @@ impl GpuScene {
     }
     
     /// Add a genome to the scene and return its ID.
-    /// Simplified version to isolate crash issues
+    /// Checks for duplicate genomes and reuses existing ones.
     pub fn add_genome(&mut self, _device: &wgpu::Device, genome: Genome) -> Option<usize> {
-        // For now, just add to CPU storage without GPU buffers
+        // Check if an identical genome already exists
+        for (id, existing) in self.genomes.iter().enumerate() {
+            if existing.name == genome.name
+                && existing.modes.len() == genome.modes.len()
+                && existing.initial_mode == genome.initial_mode
+                && existing.initial_orientation == genome.initial_orientation
+            {
+                // Genome already exists, reuse it
+                log::info!("Reusing existing genome {} (total: {})", id, self.genomes.len());
+                return Some(id);
+            }
+        }
+
+        // No match found, add new genome
         let id = self.genomes.len();
         self.genomes.push(genome);
-        
-        log::info!("Added genome {} (total: {})", id, self.genomes.len());
+
+        log::info!("Added new genome {} (total: {})", id, self.genomes.len());
         Some(id)
     }
     
@@ -941,7 +955,16 @@ impl GpuScene {
         }
         
         // Calculate initial radius from mass (mass = 4/3 * pi * r^3 for unit density)
-        let initial_mass = 1.0_f32;
+        // Set initial mass based on cell type and split mass
+        // Phagocytes need enough mass to split once and have offspring survive briefly
+        let mode = &genome.modes[mode_idx];
+        let initial_mass = if mode.cell_type == 2 {
+            // Phagocyte: Start with enough mass to split once
+            // Use split_mass * 1.2 to ensure split happens and offspring have buffer
+            (mode.split_mass * 1.2).max(2.0)
+        } else {
+            1.0_f32
+        };
         
         // Initialize GPU systems if not already done
         self.initialize_gpu_systems(device, queue);

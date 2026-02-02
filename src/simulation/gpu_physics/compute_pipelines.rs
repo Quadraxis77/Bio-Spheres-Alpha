@@ -896,6 +896,10 @@ impl GpuPhysicsPipelines {
                     binding: 19,
                     resource: buffers.cell_types.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 20,
+                    resource: buffers.mode_cell_types.as_entire_binding(),
+                },
             ],
         })
     }
@@ -1845,12 +1849,23 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Cell types (0 = Test, 1 = Flagellocyte) - for cell insertion
+                    // Cell types (0 = Test, 1 = Flagellocyte) - DEPRECATED, use mode_cell_types
                     wgpu::BindGroupLayoutEntry {
                         binding: 19,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 20,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -2952,6 +2967,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 4: Mode cell types (read-only, for cell type lookup by mode index)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -3012,6 +3038,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: buffers.split_ready_frame.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.mode_cell_types.as_entire_binding(),
                 },
             ],
         })

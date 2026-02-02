@@ -652,8 +652,13 @@ impl GpuTripleBufferSystem {
                     let mode = &genome.modes[mode_idx];
                     let ms = mode.max_splits;
                     max_splits_data.push(if ms < 0 { 0 } else { ms as u32 });
-                    // Flagellocytes (cell_type == 1) don't generate their own nutrients
-                    let nutrient_rate = if mode.cell_type == 1 { 0.0 } else { mode.nutrient_gain_rate };
+                    // Only Test cells (cell_type == 0) auto-generate nutrients
+                    // All other cells rely on specialized functions or nutrient transport
+                    let nutrient_rate = if mode.cell_type == 0 {
+                        mode.nutrient_gain_rate
+                    } else {
+                        0.0
+                    };
                     nutrient_gain_rates_data.push(nutrient_rate);
                     max_cell_sizes_data.push(mode.max_cell_size);
                     stiffnesses_data.push(mode.membrane_stiffness);
@@ -1056,18 +1061,25 @@ impl GpuTripleBufferSystem {
             genomes,
         );
         
-        // Get cell_type from genome mode settings
-        let cell_type = if request.genome_id < genomes.len() {
+        // Get cell properties from genome mode settings
+        let (cell_type, nutrient_gain_rate, max_cell_size, max_splits) = if request.genome_id < genomes.len() {
             let genome = &genomes[request.genome_id];
             if request.mode_index < genome.modes.len() {
-                genome.modes[request.mode_index].cell_type as u32
+                let mode = &genome.modes[request.mode_index];
+                // Only Test cells (cell_type == 0) auto-generate nutrients
+                let nutrient_rate = if mode.cell_type == 0 {
+                    mode.nutrient_gain_rate
+                } else {
+                    0.0
+                };
+                (mode.cell_type as u32, nutrient_rate, mode.max_cell_size, mode.max_splits)
             } else {
-                0 // Default to Test cell type
+                (0, 0.2, 2.0, -1) // Defaults if mode not found
             }
         } else {
-            0 // Default to Test cell type
+            (0, 0.2, 2.0, -1) // Defaults if genome not found
         };
-        
+
         // Sync cell state for division system
         self.sync_single_cell_state(
             queue,
@@ -1078,9 +1090,9 @@ impl GpuTripleBufferSystem {
             request.genome_id,
             absolute_mode_idx,
             cell_id as usize,
-            -1, // Default max_splits (unlimited)
-            0.2, // Default nutrient_gain_rate
-            2.0, // Default max_cell_size
+            max_splits,
+            nutrient_gain_rate,
+            max_cell_size,
             request.stiffness,
             cell_type,
         );
@@ -1428,8 +1440,13 @@ impl GpuTripleBufferSystem {
                     let genome = &genomes[genome_id];
                     if local_mode_idx < genome.modes.len() {
                         let mode = &genome.modes[local_mode_idx];
-                        // Flagellocytes (cell_type == 1) don't generate their own nutrients
-                        let nutrient_rate = if mode.cell_type == 1 { 0.0 } else { mode.nutrient_gain_rate };
+                        // Only Test cells (cell_type == 0) auto-generate nutrients
+                        // All other cells rely on specialized functions (e.g., photosynthesis) or nutrient transport
+                        let nutrient_rate = if mode.cell_type == 0 {
+                            mode.nutrient_gain_rate
+                        } else {
+                            0.0
+                        };
                         (mode.max_splits, nutrient_rate, mode.max_cell_size, mode.membrane_stiffness, mode.cell_type as u32)
                     } else {
                         (-1, 0.2, 2.0, 50.0, 0) // Defaults if mode not found

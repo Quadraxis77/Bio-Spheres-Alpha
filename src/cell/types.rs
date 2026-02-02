@@ -402,7 +402,7 @@ impl CellType {
             },
             CellType::Phagocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,
-                applies_swim_force: 1,
+                applies_swim_force: 0,
                 uses_texture_atlas: 0,
                 has_procedural_tail: 0,
                 gains_mass_from_light: 0,

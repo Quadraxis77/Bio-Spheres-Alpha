@@ -85,6 +85,9 @@ var<storage, read> mode_properties: array<ModeProperties>;
 @group(3) @binding(3)
 var<storage, read> split_ready_frame: array<i32>;
 
+@group(3) @binding(4)
+var<storage, read> mode_cell_types: array<u32>;
+
 // Adhesion connection structure (exactly 96 bytes, matching reference)
 struct AdhesionConnection {
     cell_a_index: u32,
@@ -123,7 +126,8 @@ const MIN_CELL_MASS: f32 = 0.5;
 const DANGER_THRESHOLD: f32 = 0.6;
 const PRIORITY_BOOST: f32 = 10.0;
 const TRANSPORT_RATE: f32 = 0.5;
-const SWIM_CONSUMPTION_RATE: f32 = 0.2;  // 0.2 mass per second at full swim force
+const BASE_METABOLISM_RATE: f32 = 0.05;  // Base metabolic cost per second for all cells
+const SWIM_CONSUMPTION_RATE: f32 = 0.2;  // Additional 0.2 mass per second at full swim force
 const DEFER_FRAMES: i32 = 32;  // 0.5 seconds at 64 FPS = 32 frames
 
 // Fixed-point conversion for atomic operations (matching other shaders)
@@ -163,17 +167,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Read current mass from positions buffer
     let current_mass = positions_out[cell_idx].w;
     
-    // Step 1: Nutrient consumption for Flagellocytes with swim force
+    // Step 1: Nutrient consumption - all cells except Test cells have base metabolism
     let mode_idx = mode_indices[cell_idx];
-    if (mode_idx < arrayLength(&mode_properties)) {
+
+    // Get cell type from mode
+    var cell_type = 0u;
+    if (mode_idx < arrayLength(&mode_cell_types)) {
+        cell_type = mode_cell_types[mode_idx];
+    }
+
+    // Test cells (cell_type 0) have no metabolism - they auto-gain from nutrient_gain_rate
+    // All other cells have base metabolism
+    if (cell_type != 0u && mode_idx < arrayLength(&mode_properties)) {
         let mode = mode_properties[mode_idx];
-        
-        // Consume mass proportional to swim force (Flagellocytes only)
+
+        // Base metabolism: consume nutrients to stay alive
+        var mass_loss = BASE_METABOLISM_RATE * params.delta_time;
+
+        // Additional consumption from swim force (Flagellocytes only)
         if (mode.swim_force > 0.0) {
-            let mass_loss = mode.swim_force * SWIM_CONSUMPTION_RATE * params.delta_time;
-            let consumption_fixed = float_to_fixed(-mass_loss);
-            atomicAdd(&mass_deltas[cell_idx], consumption_fixed);
+            mass_loss += mode.swim_force * SWIM_CONSUMPTION_RATE * params.delta_time;
         }
+
+        let consumption_fixed = float_to_fixed(-mass_loss);
+        atomicAdd(&mass_deltas[cell_idx], consumption_fixed);
     }
     
     // Step 2: Check for cell death from starvation (preliminary check)
