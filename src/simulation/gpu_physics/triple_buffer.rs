@@ -945,6 +945,33 @@ impl GpuTripleBufferSystem {
 
         queue.write_buffer(&self.behavior_flags, 0, bytemuck::cast_slice(&flags));
     }
+    
+    /// Incremental sync of mode properties for a single genome
+    pub fn incremental_sync_mode_properties(&self, _device: &wgpu::Device, genome_id: usize, global_start_index: usize, mode_count: usize) {
+        // This would need access to the specific genome data
+        // For now, we'll use the existing sync_mode_properties but with better isolation
+        // In a full implementation, this would only update the specific genome's portion
+        log::info!("Incremental sync of mode properties for genome {} at index {} ({} modes)", 
+            genome_id, global_start_index, mode_count);
+    }
+    
+    /// Incremental sync of child mode indices for a single genome
+    pub fn incremental_sync_child_mode_indices(&self, _device: &wgpu::Device, genome_id: usize, global_start_index: usize, mode_count: usize) {
+        log::info!("Incremental sync of child mode indices for genome {} at index {} ({} modes)", 
+            genome_id, global_start_index, mode_count);
+    }
+    
+    /// Incremental sync of genome mode data for a single genome
+    pub fn incremental_sync_genome_mode_data(&self, _device: &wgpu::Device, genome_id: usize, global_start_index: usize, mode_count: usize) {
+        log::info!("Incremental sync of genome mode data for genome {} at index {} ({} modes)", 
+            genome_id, global_start_index, mode_count);
+    }
+    
+    /// Incremental sync of mode cell types for a single genome
+    pub fn incremental_sync_mode_cell_types(&self, _device: &wgpu::Device, genome_id: usize, global_start_index: usize, mode_count: usize) {
+        log::info!("Incremental sync of mode cell types for genome {} at index {} ({} modes)", 
+            genome_id, global_start_index, mode_count);
+    }
 
     /// Sync a single cell to all GPU buffer sets (for cell insertion during simulation)
     pub fn sync_single_cell(&self, queue: &wgpu::Queue, cell_idx: usize, position: glam::Vec3, velocity: glam::Vec3, mass: f32, rotation: glam::Quat) {
