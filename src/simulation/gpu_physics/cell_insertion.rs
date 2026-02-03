@@ -109,6 +109,16 @@ impl GpuCellInsertion {
                     binding: 3,
                     resource: buffers.rotations[2].as_entire_binding(),
                 },
+                // Binding 4: Lifecycle counts (read-only, atomic)
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.lifecycle_counts.as_entire_binding(),
+                },
+                // Binding 5: Free slot indices (read-only)
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.free_slot_indices.as_entire_binding(),
+                },
             ],
         });
         
