@@ -62,13 +62,13 @@ struct InspectedCellData {
     genome_id: u32,
     mode_index: u32,
     cell_id: u32,
-    is_valid: u32,
+    cell_slot_index: u32,
     
     // Cell state properties (16 bytes)
     nutrient_gain_rate: f32,
     max_cell_size: f32,
     stiffness: f32,
-    _pad2: f32,
+    is_valid: u32,
 }
 
 // Physics bind group (group 0) - standard 6-binding layout
@@ -162,6 +162,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         extracted_data.genome_id = 0u;
         extracted_data.mode_index = 0u;
         extracted_data.cell_id = 0u;
+        extracted_data.cell_slot_index = cell_index; // Set slot index even for invalid cells
         extracted_data.is_valid = 0u; // Invalid
         extracted_data.nutrient_gain_rate = 0.0;
         extracted_data.max_cell_size = 0.0;
@@ -187,6 +188,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     extracted_data.genome_id = genome_ids[cell_index];
     extracted_data.mode_index = mode_indices[cell_index];
     extracted_data.cell_id = cell_ids[cell_index];
+    extracted_data.cell_slot_index = cell_index; // Set slot index for valid cells
     extracted_data.nutrient_gain_rate = nutrient_gain_rates[cell_index];
     extracted_data.max_cell_size = max_cell_sizes[cell_index];
     extracted_data.stiffness = stiffnesses[cell_index];

@@ -449,6 +449,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             ui.label(format!("Mode index: {}", data.mode_index));
             ui.label(format!("Genome ID: {}", data.genome_id));
             ui.label(format!("Cell ID: {}", data.cell_id));
+            ui.label(format!("Cell Slot Index: {}", data.cell_slot_index));
             
             // Birth time and age (from GPU data)
             ui.add_space(4.0);

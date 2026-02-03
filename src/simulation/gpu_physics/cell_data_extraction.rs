@@ -43,13 +43,13 @@ pub struct InspectedCellData {
     pub genome_id: u32,
     pub mode_index: u32,
     pub cell_id: u32,
-    pub is_valid: u32,
+    pub cell_slot_index: u32,
     
     // Cell state properties (16 bytes)
     pub nutrient_gain_rate: f32,
     pub max_cell_size: f32,
     pub stiffness: f32,
-    pub _pad2: f32,
+    pub is_valid: u32,
 }
 
 impl Default for InspectedCellData {
@@ -70,11 +70,11 @@ impl Default for InspectedCellData {
             genome_id: 0,
             mode_index: 0,
             cell_id: 0,
-            is_valid: 0, // Invalid by default
+            cell_slot_index: 0,
             nutrient_gain_rate: 0.0,
             max_cell_size: 0.0,
             stiffness: 0.0,
-            _pad2: 0.0,
+            is_valid: 0, // Invalid by default
         }
     }
 }
