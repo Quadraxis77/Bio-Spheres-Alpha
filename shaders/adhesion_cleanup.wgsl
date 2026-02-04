@@ -84,13 +84,13 @@ var<storage, read_write> death_flags: array<u32>;
 var<storage, read_write> division_flags: array<u32>;
 
 @group(1) @binding(2)
-var<storage, read_write> free_slot_indices: array<u32>;
+var<storage, read_write> free_slot_ring: array<u32>;
 
 @group(1) @binding(3)
 var<storage, read_write> division_slot_assignments: array<u32>;
 
 @group(1) @binding(4)
-var<storage, read_write> lifecycle_counts: array<atomic<u32>>;
+var<storage, read_write> ring_state: array<atomic<u32>>;
 
 // Adhesion bind group (group 2)
 @group(2) @binding(0)

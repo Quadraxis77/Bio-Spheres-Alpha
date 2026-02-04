@@ -227,8 +227,15 @@ pub struct GpuTripleBufferSystem {
     /// Division slot assignments: maps dividing cell to its assigned free slot index
     pub division_slot_assignments: wgpu::Buffer,
     
-    /// Lifecycle counts: [0] = free slot count, [1] = division count
+    /// Lifecycle counts: [0] = free slot count, [1] = division count (DEPRECATED - use ring buffer)
     pub lifecycle_counts: wgpu::Buffer,
+    
+    /// Ring buffer for free slot recycling (persistent across frames)
+    /// Capacity: 262144 slots (256K) to support up to 200K cells
+    pub free_slot_ring: wgpu::Buffer,
+    
+    /// Ring buffer state: [0]=head, [1]=tail, [2]=next_slot_id, [3]=reservation_count
+    pub ring_state: wgpu::Buffer,
     
     // === Cell state buffers for division ===
     
@@ -415,15 +422,26 @@ impl GpuTripleBufferSystem {
         // === Lifecycle buffers for cell division ===
         let u32_per_cell = capacity as u64 * 4; // u32 = 4 bytes
         let f32_per_cell = capacity as u64 * 4; // f32 = 4 bytes
-        
-        let death_flags = Self::create_storage_buffer(device, u32_per_cell, "Death Flags");
+
+        // death_flags must be zero-initialized to prevent cell_insertion shader from
+        // finding false "dead" slots in uninitialized memory
+        let death_flags = Self::create_zero_initialized_storage_buffer(device, u32_per_cell, "Death Flags");
         let mass_deltas_buffer = Self::create_storage_buffer(device, f32_per_cell, "Mass Deltas Buffer"); // i32 = 4 bytes, same as f32
         let division_flags = Self::create_storage_buffer(device, u32_per_cell, "Division Flags");
         let free_slot_indices = Self::create_storage_buffer(device, u32_per_cell, "Free Slot Indices");
         let division_slot_assignments = Self::create_storage_buffer(device, u32_per_cell, "Division Slot Assignments");
         
-        // Lifecycle counts: [0] = free slots, [1] = divisions, [2] = dead count
+        // Lifecycle counts: [0] = free slots, [1] = divisions, [2] = dead count (DEPRECATED)
         let lifecycle_counts = Self::create_storage_buffer(device, 12, "Lifecycle Counts");
+        
+        // Ring buffer for free slot recycling: 262144 slots (256K u32s = 1MB)
+        // Supports up to 200K cells with headroom for churn
+        const RING_BUFFER_CAPACITY: u64 = 262144;
+        let free_slot_ring = Self::create_storage_buffer(device, RING_BUFFER_CAPACITY * 4, "Free Slot Ring");
+        
+        // Ring state: [head, tail, next_slot_id, reservation_count] = 16 bytes
+        // Zero-initialized so ring starts empty and next_slot_id starts at 0
+        let ring_state = Self::create_zero_initialized_storage_buffer(device, 16, "Ring State");
         
         // Cell state buffers
         let birth_times = Self::create_storage_buffer(device, f32_per_cell, "Birth Times");
@@ -433,7 +451,9 @@ impl GpuTripleBufferSystem {
         let split_ready_frame = Self::create_storage_buffer(device, u32_per_cell, "Split Ready Frame");
         let max_splits = Self::create_storage_buffer(device, u32_per_cell, "Max Splits");
         let genome_ids = Self::create_storage_buffer(device, u32_per_cell, "Genome IDs");
-        let cell_types = Self::create_storage_buffer(device, u32_per_cell, "Cell Types");
+        // cell_types must be zero-initialized so build_instances shader fallback works correctly
+        // (fallback uses mode_cell_types when cell_types[idx] == 0)
+        let cell_types = Self::create_zero_initialized_storage_buffer(device, u32_per_cell, "Cell Types");
         let mode_indices = Self::create_storage_buffer(device, u32_per_cell, "Mode Indices");
         let cell_ids = Self::create_storage_buffer(device, u32_per_cell, "Cell IDs");
         let next_cell_id = Self::create_storage_buffer(device, 4, "Next Cell ID");
@@ -442,7 +462,8 @@ impl GpuTripleBufferSystem {
         let stiffnesses = Self::create_storage_buffer(device, f32_per_cell, "Stiffnesses");
         
         // GPU-side cell count: [0] = total cells, [1] = live cells
-        let cell_count_buffer = Self::create_storage_buffer(device, 8, "Cell Count Buffer");
+        // Must be zero-initialized so shaders start with 0 cells
+        let cell_count_buffer = Self::create_zero_initialized_storage_buffer(device, 8, "Cell Count Buffer");
         
         // Cell count readback buffer for async GPU-to-CPU transfer
         let cell_count_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -497,6 +518,8 @@ impl GpuTripleBufferSystem {
             free_slot_indices,
             division_slot_assignments,
             lifecycle_counts,
+            free_slot_ring,
+            ring_state,
             birth_times,
             split_intervals,
             split_masses,
@@ -537,15 +560,40 @@ impl GpuTripleBufferSystem {
     fn create_storage_buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
         // Align size to 16-byte boundary for GPU compatibility
         let aligned_size = (size + 15) & !15; // Round up to nearest 16 bytes
-        
+
         device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size: aligned_size,
-            usage: wgpu::BufferUsages::STORAGE 
-                | wgpu::BufferUsages::COPY_SRC 
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         })
+    }
+
+    /// Create a storage buffer that is zero-initialized
+    /// Used for buffers like death_flags that need deterministic initial state
+    fn create_zero_initialized_storage_buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
+        // Align size to 16-byte boundary for GPU compatibility
+        let aligned_size = (size + 15) & !15; // Round up to nearest 16 bytes
+
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: aligned_size,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+
+        // Zero-initialize the buffer
+        {
+            let mut view = buffer.slice(..).get_mapped_range_mut();
+            view.fill(0);
+        }
+        buffer.unmap();
+
+        buffer
     }
     
     /// Upload canonical state data to all GPU buffer sets

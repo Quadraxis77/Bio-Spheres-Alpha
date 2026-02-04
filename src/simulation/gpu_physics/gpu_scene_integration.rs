@@ -267,24 +267,24 @@ pub fn execute_lifecycle_pipeline(
     // Calculate workgroup counts - dispatch for capacity, shaders check cell_count
     let cell_workgroups_lifecycle = (triple_buffers.capacity + WORKGROUP_SIZE_LIFECYCLE - 1) / WORKGROUP_SIZE_LIFECYCLE;
     
-    // Execute lifecycle pipeline with explicit synchronization to prevent race conditions
+    // Execute NEW unified lifecycle pipeline (2-stage with ring buffer)
+    // Stage 1: Unified death + division scan (handles slot allocation via ring buffer)
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Lifecycle Pipeline - Death Scan"),
+            label: Some("Lifecycle Pipeline - Unified Death/Division Scan"),
             timestamp_writes: None,
         });
         
-        // Stage 1: Death scan - identify dead cells (128 threads)
-        compute_pass.set_pipeline(&pipelines.lifecycle_death_scan);
+        compute_pass.set_pipeline(&pipelines.lifecycle_unified);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
+        compute_pass.set_bind_group(2, cell_state_read_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
         
-        // CRITICAL: Drop compute pass to force GPU synchronization
         drop(compute_pass);
     }
     
-    // Stage 1.5: Adhesion cleanup (after death scan completes)
+    // Stage 1.5: Adhesion cleanup (after death detection completes)
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Lifecycle Pipeline - Adhesion Cleanup"),
@@ -301,42 +301,10 @@ pub fn execute_lifecycle_pipeline(
         drop(compute_pass);
     }
     
-    // Stage 2: Prefix sum (after adhesion cleanup completes)
+    // Stage 2: Division execute (uses pre-allocated slots from unified scan)
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Lifecycle Pipeline - Prefix Sum"),
-            timestamp_writes: None,
-        });
-        
-        compute_pass.set_pipeline(&pipelines.lifecycle_prefix_sum);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
-        
-        drop(compute_pass);
-    }
-    
-    // Stage 3: Division scan (after prefix sum completes)
-    {
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Lifecycle Pipeline - Division Scan"),
-            timestamp_writes: None,
-        });
-        
-        compute_pass.set_pipeline(&pipelines.lifecycle_division_scan);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
-        compute_pass.set_bind_group(2, cell_state_read_bind_group, &[]);
-        compute_pass.set_bind_group(3, &cached_bind_groups.division_scan_adhesion, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
-        
-        drop(compute_pass);
-    }
-    
-    // Stage 4: Division execute (after division scan completes)
-    {
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Lifecycle Pipeline - Division Execute"),
+            label: Some("Lifecycle Pipeline - Division Execute Ring"),
             timestamp_writes: None,
         });
         

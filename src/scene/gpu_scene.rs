@@ -2953,7 +2953,7 @@ impl Scene for GpuScene {
             // Allow more steps when time_scale > 1 (fast forward)
             let max_steps = (4.0 * self.time_scale).ceil() as i32;
             let mut steps = 0;
-            
+
             while self.time_accumulator >= fixed_dt && steps < max_steps {
                 self.run_physics(device, &mut encoder, queue, fixed_dt, world_diameter);
 
@@ -2961,33 +2961,35 @@ impl Scene for GpuScene {
                 self.time_accumulator -= fixed_dt;
                 steps += 1;
             }
-            
+
             // If we hit max steps, discard remaining accumulated time
             if steps >= max_steps {
                 self.time_accumulator = 0.0;
             }
         }
-        
+
         // Execute any pending position updates (drag tool) AFTER physics
         // This ensures the dragged cell's position is set after physics has run,
         // so physics doesn't overwrite the user's drag position
         let position_updated = self.execute_pending_position_updates(device, &mut encoder, queue);
-        
+
         // Execute any pending cell removals (remove tool) AFTER physics
         // This marks cells for death by setting their mass to 0
         // The lifecycle pipeline will handle the actual removal on the next physics step
         let cell_removed = self.execute_pending_cell_removals(device, &mut encoder, queue);
-        
+
         // Execute any pending cell boosts (boost tool) AFTER physics
         // This sets cell mass to maximum to trigger division
         let cell_boosted = self.execute_pending_cell_boosts(device, &mut encoder, queue);
-        
+
         // Execute any pending cell extractions (inspect tool) AFTER physics
         // This extracts detailed cell data for the Cell Inspector panel
         let _cell_extracted = self.execute_pending_cell_extraction(device, &mut encoder, queue);
-        
-        // Copy buffers to instance builder after position update, cell removal, or cell boost
-        if position_updated || cell_removed || cell_boosted {
+
+        // Copy buffers to instance builder after physics (always needed for division)
+        // Division creates new cells with updated cell_types that must be copied before rendering
+        // Also copy after position update, cell removal, or cell boost
+        if !self.paused || position_updated || cell_removed || cell_boosted {
             self.copy_buffers_to_instance_builder(&mut encoder);
         }
 

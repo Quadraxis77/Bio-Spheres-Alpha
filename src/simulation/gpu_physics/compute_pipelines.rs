@@ -266,10 +266,8 @@ pub struct GpuPhysicsPipelines {
     // Adhesion physics pipeline
     pub adhesion_physics: wgpu::ComputePipeline,
     
-    // Lifecycle pipelines for cell division
-    pub lifecycle_death_scan: wgpu::ComputePipeline,
-    pub lifecycle_prefix_sum: wgpu::ComputePipeline,
-    pub lifecycle_division_scan: wgpu::ComputePipeline,
+    // Lifecycle pipelines (2-stage with ring buffer for slot allocation)
+    pub lifecycle_unified: wgpu::ComputePipeline,
     pub lifecycle_division_execute: wgpu::ComputePipeline,
     
     // Adhesion cleanup pipeline (runs after death scan)
@@ -539,34 +537,18 @@ impl GpuPhysicsPipelines {
             "Adhesion Physics",
         );
         
-        // Lifecycle pipelines
-        let lifecycle_death_scan = Self::create_compute_pipeline(
+        // Lifecycle pipelines (2-stage with ring buffer for slot allocation)
+        let lifecycle_unified = Self::create_compute_pipeline(
             device,
-            include_str!("../../../shaders/lifecycle_death_scan.wgsl"),
-            "main",
-            &[&physics_layout, &lifecycle_layout],
-            "Lifecycle Death Scan",
-        );
-        
-        let lifecycle_prefix_sum = Self::create_compute_pipeline(
-            device,
-            include_str!("../../../shaders/lifecycle_prefix_sum.wgsl"),
-            "main",
-            &[&physics_layout, &lifecycle_layout],
-            "Lifecycle Prefix Sum",
-        );
-        
-        let lifecycle_division_scan = Self::create_compute_pipeline(
-            device,
-            include_str!("../../../shaders/lifecycle_division_scan.wgsl"),
-            "main",
-            &[&physics_layout, &lifecycle_layout, &cell_state_read_layout, &division_scan_adhesion_layout],
-            "Lifecycle Division Scan",
+            include_str!("../../../shaders/lifecycle_unified.wgsl"),
+            "death_and_division_scan",
+            &[&physics_layout, &lifecycle_layout, &cell_state_read_layout],
+            "Lifecycle Unified",
         );
         
         let lifecycle_division_execute = Self::create_compute_pipeline(
             device,
-            include_str!("../../../shaders/lifecycle_division_execute.wgsl"),
+            include_str!("../../../shaders/lifecycle_division_execute_ring.wgsl"),
             "main",
             &[&physics_layout, &lifecycle_layout, &cell_state_write_layout, &lifecycle_adhesion_layout],
             "Lifecycle Division Execute",
@@ -607,9 +589,7 @@ impl GpuPhysicsPipelines {
             cell_boost,
             nutrient_transport,
             adhesion_physics,
-            lifecycle_death_scan,
-            lifecycle_prefix_sum,
-            lifecycle_division_scan,
+            lifecycle_unified,
             lifecycle_division_execute,
             adhesion_cleanup,
             swim_force,
@@ -717,6 +697,7 @@ impl GpuPhysicsPipelines {
     }
     
     /// Create lifecycle bind group for division pipeline
+    /// Uses ring buffer for slot allocation (replaces prefix sum system)
     pub fn create_lifecycle_bind_group(
         &self,
         device: &wgpu::Device,
@@ -736,7 +717,7 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: buffers.free_slot_indices.as_entire_binding(),
+                    resource: buffers.free_slot_ring.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -744,7 +725,7 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: buffers.lifecycle_counts.as_entire_binding(),
+                    resource: buffers.ring_state.as_entire_binding(),
                 },
             ],
         })
@@ -1452,6 +1433,7 @@ impl GpuPhysicsPipelines {
     }
     
     /// Create lifecycle bind group layout for division pipeline
+    /// Uses ring buffer for slot allocation (replaces prefix sum system)
     fn create_lifecycle_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Lifecycle Bind Group Layout"),
@@ -1478,7 +1460,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Free slot indices
+                // Free slot ring buffer (replaces free_slot_indices)
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -1500,7 +1482,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Lifecycle counts
+                // Ring state: [head, tail, next_slot_id, reservation_count] (replaces lifecycle_counts)
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3195,7 +3177,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 4: Lifecycle counts (read-write, atomic)
+                // Binding 4: Free slot ring buffer (read-write)
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3206,12 +3188,12 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 5: Free slot indices (read-only)
+                // Binding 5: Ring state [head, tail, next_slot_id, reservation_count] (read-write, atomic)
                 wgpu::BindGroupLayoutEntry {
                     binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },

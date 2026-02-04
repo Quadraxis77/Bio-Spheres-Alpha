@@ -98,14 +98,13 @@ var<storage, read_write> cell_count_buffer: array<atomic<u32>>;
 @group(1) @binding(0)
 var<uniform> insertion_params: CellInsertionParams;
 
-// Lifecycle counters for free slot management (read-write for atomic operations)
-// [0] = free slots available, [1] = reservations, [2] = dead count
+// Ring buffer for free slot recycling (replaces lifecycle_counts/free_slot_indices)
 @group(1) @binding(4)
-var<storage, read_write> lifecycle_counts: array<atomic<u32>>;
+var<storage, read_write> free_slot_ring: array<u32>;
 
-// Free slot indices array (contains available slots from dead cells)
+// Ring state: [head, tail, next_slot_id, reservation_count]
 @group(1) @binding(5)
-var<storage, read> free_slot_indices: array<u32>;
+var<storage, read_write> ring_state: array<atomic<u32>>;
 
 // Triple-buffered cell rotations (all 3 sets for write)
 @group(1) @binding(1)
@@ -182,46 +181,39 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Search for a dead cell to reuse its slot
-    // We look at death_flags directly instead of relying on lifecycle_counts
-    // which get cleared by the lifecycle pipeline every frame
-    var found_dead_slot = false;
-    var dead_slot_index = 0u;
-    
-    // Only search for dead slots if we have existing cells
-    if (current_count > 0u) {
-        // Search for the first dead cell
-        for (var i = 0u; i < current_count; i = i + 1u) {
-            if (death_flags[i] == 1u) {
-                // Found a dead cell, reuse its slot
-                found_dead_slot = true;
-                dead_slot_index = i;
-                break;
-            }
-        }
-    }
-    
-    // Determine slot allocation strategy
+    // Use ring buffer for slot allocation (matches lifecycle_unified.wgsl)
+    // Try to pop a recycled slot from the ring buffer first
     var slot: u32;
     var used_free_slot = false;
     
-    if (found_dead_slot) {
-        // Reuse the dead cell's slot
-        slot = dead_slot_index;
+    // Try ring buffer first
+    let head = atomicAdd(&ring_state[0], 1u);
+    let tail = atomicLoad(&ring_state[1]);
+    
+    if (head < tail) {
+        // Got a recycled slot from ring buffer
+        let ring_idx = head % 262144u; // RING_BUFFER_CAPACITY
+        slot = free_slot_ring[ring_idx];
         used_free_slot = true;
         
         // Mark this slot as alive again
         death_flags[slot] = 0u;
     } else {
-        // No dead slots available, allocate a new slot
-        slot = atomicAdd(&cell_count_buffer[0], 1u);
+        // Ring buffer empty, undo the head increment
+        atomicSub(&ring_state[0], 1u);
         
-        // Double-check capacity after atomic increment
+        // Allocate new slot using ring_state[2] (next_slot_id)
+        slot = atomicAdd(&ring_state[2], 1u);
+        
+        // Check capacity
         if (slot >= params.cell_capacity) {
-            // Rollback the increment if we exceeded capacity
-            atomicSub(&cell_count_buffer[0], 1u);
+            // Rollback and fail
+            atomicSub(&ring_state[2], 1u);
             return;
         }
+        
+        // Update total cell count (high water mark)
+        atomicMax(&cell_count_buffer[0], slot + 1u);
     }
     
     // Ensure slot is within bounds
@@ -296,15 +288,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Initialize cell type (0 = Test, 1 = Flagellocyte, etc.)
     cell_types[slot] = insertion_params.cell_type;
     
-    // Update live cell count
-    // If we used a free slot, we're replacing a dead cell, so live count increases but total stays the same
-    // If we used a new slot, both live and total counts are already updated by the atomic operations
-    if (used_free_slot) {
-        // Used a dead cell's slot - increment live count only
-        atomicAdd(&cell_count_buffer[1], 1u);
-    } else {
-        // Used a new slot - live count should match total count for new cells
-        // The total count was already incremented by atomicAdd, so we just set live count to match
-        atomicStore(&cell_count_buffer[1], slot + 1u);
-    }
+    // Update live cell count - always increment by 1
+    // Whether we used a recycled slot or a new slot, we're adding one live cell
+    atomicAdd(&cell_count_buffer[1], 1u);
 }
