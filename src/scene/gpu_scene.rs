@@ -263,6 +263,11 @@ impl GpuScene {
         let next_id: [u32; 1] = [0];
         queue.write_buffer(&gpu_triple_buffers.next_cell_id, 0, bytemuck::cast_slice(&next_id));
         
+        // Initialize ring_state to [head=0, tail=0, next_slot_id=0, reservation_count=0]
+        // CRITICAL: Without this, the ring buffer slot recycling system won't work correctly.
+        let ring_state: [u32; 4] = [0, 0, 0, 0];
+        queue.write_buffer(&gpu_triple_buffers.ring_state, 0, bytemuck::cast_slice(&ring_state));
+        
         // Create adhesion buffer system
         // Support 20,000 genomes * 40 modes each = 800,000 modes total
         let max_modes: u32 = 40 * crate::simulation::gpu_physics::MAX_GENOMES as u32;
@@ -414,6 +419,9 @@ impl GpuScene {
         // Reset GPU next_cell_id buffer to 0
         let next_id: [u32; 1] = [0];
         queue.write_buffer(&self.gpu_triple_buffers.next_cell_id, 0, bytemuck::cast_slice(&next_id));
+        // Reset ring_state buffer to [head=0, tail=0, next_slot_id=0, reservation_count=0]
+        let ring_state: [u32; 4] = [0, 0, 0, 0];
+        queue.write_buffer(&self.gpu_triple_buffers.ring_state, 0, bytemuck::cast_slice(&ring_state));
         // Reset deterministic cell addition system
         self.gpu_triple_buffers.reset_slot_allocator();
 
@@ -543,6 +551,16 @@ impl GpuScene {
     fn run_physics(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, delta_time: f32, world_diameter: f32) {
         if self.current_cell_count == 0 {
             return;
+        }
+        
+        // DEBUG: Log ring state every 60 frames to track slot recycling
+        static DEBUG_FRAME_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let frame = DEBUG_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if frame % 60 == 0 {
+            let ring_state = self.gpu_triple_buffers.debug_read_ring_state_blocking(device, queue);
+            let cell_count = self.gpu_triple_buffers.debug_read_cell_count_blocking(device, queue);
+            println!("[DEBUG RING] frame={} ring_state=[head={}, tail={}, next_slot={}, reservations={}] cell_count=[total={}, live={}]",
+                frame, ring_state[0], ring_state[1], ring_state[2], ring_state[3], cell_count[0], cell_count[1]);
         }
 
         // Execute pure GPU physics pipeline (7 compute shader stages + cave collision if enabled)
@@ -1011,10 +1029,11 @@ impl GpuScene {
         world_position: glam::Vec3,
         genome: &Genome,
     ) -> Option<usize> {
-        // Check capacity
-        if self.current_cell_count >= self.gpu_triple_buffers.capacity {
-            return None;
-        }
+        // Note: We don't block insertion based on current_cell_count because:
+        // 1. current_cell_count is the "high water mark" - it never decreases when cells die
+        // 2. Dead cell slots are recycled via a GPU ring buffer
+        // 3. The GPU cell_insertion shader handles slot allocation from the ring buffer
+        // 4. The shader will silently fail if truly at capacity (no ring buffer slots and at max)
         
         // Find or add the genome (add_genome now updates existing genomes with same name)
         let (genome_id, needs_sync) = match self.add_genome(device, genome.clone()) {

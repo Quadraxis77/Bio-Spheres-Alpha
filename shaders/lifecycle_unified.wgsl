@@ -179,8 +179,10 @@ fn allocate_slot() -> u32 {
     return new_slot;
 }
 
+// Pass 1: Death detection only - pushes free slots to ring buffer
+// Must run BEFORE division_scan to ensure dead slots are available for reuse
 @compute @workgroup_size(256)
-fn death_and_division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
     let cell_count = atomicLoad(&cell_count_buffer[0]);
     
@@ -203,16 +205,31 @@ fn death_and_division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) 
         
         // Clear division flag
         division_flags[cell_idx] = 0u;
+    } else if (is_dead) {
+        // Already dead, ensure division flag is clear
+        division_flags[cell_idx] = 0u;
+    }
+}
+
+// Pass 2: Division slot allocation - pops free slots from ring buffer
+// Must run AFTER death_scan so recycled slots are available
+@compute @workgroup_size(256)
+fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let cell_idx = global_id.x;
+    let cell_count = atomicLoad(&cell_count_buffer[0]);
+    
+    if (cell_idx >= cell_count) {
         return;
     }
     
-    if (is_dead) {
-        // Already dead, nothing to do
+    // Skip dead cells
+    if (death_flags[cell_idx] == 1u) {
         division_flags[cell_idx] = 0u;
         return;
     }
     
     // === DIVISION DETECTION ===
+    let mass = positions_out[cell_idx].w;
     let birth_time = birth_times[cell_idx];
     let split_interval = split_intervals[cell_idx];
     let split_mass = split_masses[cell_idx];

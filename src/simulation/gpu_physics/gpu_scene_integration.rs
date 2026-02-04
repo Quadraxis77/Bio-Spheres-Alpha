@@ -267,15 +267,16 @@ pub fn execute_lifecycle_pipeline(
     // Calculate workgroup counts - dispatch for capacity, shaders check cell_count
     let cell_workgroups_lifecycle = (triple_buffers.capacity + WORKGROUP_SIZE_LIFECYCLE - 1) / WORKGROUP_SIZE_LIFECYCLE;
     
-    // Execute NEW unified lifecycle pipeline (2-stage with ring buffer)
-    // Stage 1: Unified death + division scan (handles slot allocation via ring buffer)
+    // Execute 3-stage lifecycle pipeline with ring buffer for slot recycling
+    // Stage 1: Death scan - detects dead cells and pushes slots to ring buffer
+    // Must complete BEFORE division scan so recycled slots are available
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Lifecycle Pipeline - Unified Death/Division Scan"),
+            label: Some("Lifecycle Pipeline - Death Scan"),
             timestamp_writes: None,
         });
         
-        compute_pass.set_pipeline(&pipelines.lifecycle_unified);
+        compute_pass.set_pipeline(&pipelines.lifecycle_death_scan);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.set_bind_group(2, cell_state_read_bind_group, &[]);
@@ -301,7 +302,24 @@ pub fn execute_lifecycle_pipeline(
         drop(compute_pass);
     }
     
-    // Stage 2: Division execute (uses pre-allocated slots from unified scan)
+    // Stage 2: Division scan - allocates slots from ring buffer for dividing cells
+    // Runs AFTER death scan so recycled slots are available
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Lifecycle Pipeline - Division Scan"),
+            timestamp_writes: None,
+        });
+        
+        compute_pass.set_pipeline(&pipelines.lifecycle_division_scan);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
+        compute_pass.set_bind_group(2, cell_state_read_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
+        
+        drop(compute_pass);
+    }
+    
+    // Stage 3: Division execute (uses pre-allocated slots from division scan)
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Lifecycle Pipeline - Division Execute Ring"),

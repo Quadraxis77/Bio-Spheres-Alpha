@@ -266,8 +266,12 @@ pub struct GpuPhysicsPipelines {
     // Adhesion physics pipeline
     pub adhesion_physics: wgpu::ComputePipeline,
     
-    // Lifecycle pipelines (2-stage with ring buffer for slot allocation)
-    pub lifecycle_unified: wgpu::ComputePipeline,
+    // Lifecycle pipelines (3-stage with ring buffer for slot allocation)
+    // Stage 1: Death scan - detects dead cells and pushes slots to ring buffer
+    pub lifecycle_death_scan: wgpu::ComputePipeline,
+    // Stage 2: Division scan - allocates slots from ring buffer for dividing cells
+    pub lifecycle_division_scan: wgpu::ComputePipeline,
+    // Stage 3: Division execute - creates child cells in allocated slots
     pub lifecycle_division_execute: wgpu::ComputePipeline,
     
     // Adhesion cleanup pipeline (runs after death scan)
@@ -537,13 +541,23 @@ impl GpuPhysicsPipelines {
             "Adhesion Physics",
         );
         
-        // Lifecycle pipelines (2-stage with ring buffer for slot allocation)
-        let lifecycle_unified = Self::create_compute_pipeline(
+        // Lifecycle pipelines (3-stage with ring buffer for slot allocation)
+        // Stage 1: Death scan - detects dead cells, pushes slots to ring buffer
+        let lifecycle_death_scan = Self::create_compute_pipeline(
             device,
             include_str!("../../../shaders/lifecycle_unified.wgsl"),
-            "death_and_division_scan",
+            "death_scan",
             &[&physics_layout, &lifecycle_layout, &cell_state_read_layout],
-            "Lifecycle Unified",
+            "Lifecycle Death Scan",
+        );
+        
+        // Stage 2: Division scan - allocates slots from ring buffer for dividing cells
+        let lifecycle_division_scan = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/lifecycle_unified.wgsl"),
+            "division_scan",
+            &[&physics_layout, &lifecycle_layout, &cell_state_read_layout],
+            "Lifecycle Division Scan",
         );
         
         let lifecycle_division_execute = Self::create_compute_pipeline(
@@ -589,7 +603,8 @@ impl GpuPhysicsPipelines {
             cell_boost,
             nutrient_transport,
             adhesion_physics,
-            lifecycle_unified,
+            lifecycle_death_scan,
+            lifecycle_division_scan,
             lifecycle_division_execute,
             adhesion_cleanup,
             swim_force,

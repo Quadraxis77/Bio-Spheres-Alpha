@@ -195,17 +195,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Step 2: Check for cell death from starvation (preliminary check)
     // We'll do a final check after transport
+    // NOTE: Do NOT set death_flags here - let lifecycle death_scan handle it
+    // death_scan checks mass < threshold and pushes slots to ring buffer
     let preliminary_mass_delta = fixed_to_float(atomicLoad(&mass_deltas[cell_idx]));
     let preliminary_final_mass = current_mass + preliminary_mass_delta;
     
     if (preliminary_final_mass < MIN_CELL_MASS) {
-        death_flags[cell_idx] = 1u;  // Mark for death
-        // CRITICAL: Write the reduced mass before returning so lifecycle_death_scan sees it
+        // Write the reduced mass so lifecycle death_scan can detect it
         let pos = positions_out[cell_idx].xyz;
         positions_out[cell_idx] = vec4<f32>(pos, max(preliminary_final_mass, 0.0));
         return;  // Skip nutrient transport for dying cells
-    } else {
-        death_flags[cell_idx] = 0u;  // Still alive (preliminary)
     }
     
     // Step 3: Nutrient transport between adhesion-connected cells
@@ -300,10 +299,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let final_mass_delta = fixed_to_float(atomicLoad(&mass_deltas[cell_idx]));
     let final_mass = current_mass + final_mass_delta;
     
-    // Final death check after transport
-    if (final_mass < MIN_CELL_MASS) {
-        death_flags[cell_idx] = 1u;
-    }
+    // NOTE: Do NOT set death_flags here - lifecycle death_scan checks mass and handles it
+    // This ensures proper ring buffer slot recycling
     
     // Update mass in positions buffer
     let pos = positions_out[cell_idx].xyz;

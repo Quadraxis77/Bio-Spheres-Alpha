@@ -1647,6 +1647,45 @@ impl GpuTripleBufferSystem {
         }
     }
     
+    /// DEBUG: Blocking readback of ring_state buffer [head, tail, next_slot_id, reservation_count].
+    pub fn debug_read_ring_state_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> [u32; 4] {
+        let read_size = 16u64; // 4 x u32
+        
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Debug Ring State Staging"),
+            size: read_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Debug Ring State Readback"),
+        });
+        encoder.copy_buffer_to_buffer(&self.ring_state, 0, &staging, 0, read_size);
+        queue.submit(std::iter::once(encoder.finish()));
+        
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        
+        if rx.recv().ok().and_then(|r| r.ok()).is_some() {
+            let view = slice.get_mapped_range();
+            let data: &[u32] = bytemuck::cast_slice(&view);
+            let result = [data[0], data[1], data[2], data[3]];
+            drop(view);
+            staging.unmap();
+            result
+        } else {
+            [0, 0, 0, 0]
+        }
+    }
+    
     /// DEBUG: Blocking readback of mode_indices buffer.
     pub fn debug_read_mode_indices_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue, count: usize) -> Vec<u32> {
         if count == 0 {
