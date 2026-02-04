@@ -185,6 +185,17 @@ impl NutrientParticleRenderer {
                     },
                     count: None,
                 },
+                // Nutrient voxels buffer (read) - stores which voxels have nutrients
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -343,6 +354,7 @@ impl NutrientParticleRenderer {
         device: &wgpu::Device,
         fluid_state_buffer: &wgpu::Buffer,
         solid_mask_buffer: &wgpu::Buffer,
+        nutrient_voxels_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Nutrient Extract Bind Group"),
@@ -367,6 +379,10 @@ impl NutrientParticleRenderer {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: self.params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: nutrient_voxels_buffer.as_entire_binding(),
                 },
             ],
         })

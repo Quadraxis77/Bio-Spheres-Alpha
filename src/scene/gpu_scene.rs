@@ -9,7 +9,7 @@ use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesio
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
-use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager};
+use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, PhagocyteConsumptionSystem};
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
@@ -209,6 +209,10 @@ pub struct GpuScene {
     nutrient_extract_bind_group: Option<wgpu::BindGroup>,
     /// Cached nutrient particle render bind group
     nutrient_render_bind_group: Option<wgpu::BindGroup>,
+    /// Phagocyte nutrient consumption system
+    phagocyte_consumption: Option<PhagocyteConsumptionSystem>,
+    /// Cached phagocyte consumption nutrient bind group (physics bind group created fresh each frame)
+    phagocyte_nutrient_bind_group: Option<wgpu::BindGroup>,
 }
 
 impl GpuScene {
@@ -369,6 +373,8 @@ impl GpuScene {
             nutrient_spawn_probability: 0.05,  // 5% spawn probability
             nutrient_extract_bind_group: None,
             nutrient_render_bind_group: None,
+            phagocyte_consumption: None,
+            phagocyte_nutrient_bind_group: None,
         }
     }
 
@@ -580,8 +586,55 @@ impl GpuScene {
             &self.cached_bind_groups,
         );
         
+        // Run phagocyte nutrient consumption (after physics so positions are updated)
+        self.run_phagocyte_consumption(device, encoder, queue);
+        
         // Copy GPU physics output to instance builder's buffers
         self.copy_buffers_to_instance_builder(encoder);
+    }
+    
+    /// Run phagocyte nutrient consumption compute shader
+    fn run_phagocyte_consumption(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
+        if self.current_cell_count == 0 {
+            return;
+        }
+        
+        let (consumption_system, fluid_sim) = match (&self.phagocyte_consumption, &self.fluid_simulator) {
+            (Some(c), Some(f)) => (c, f),
+            _ => return,
+        };
+        
+        // Update params with current grid settings
+        let world_diameter = self.config.sphere_radius * 2.0;
+        let grid_resolution = 128u32;
+        let cell_size = world_diameter / grid_resolution as f32;
+        let grid_origin = [-world_diameter / 2.0, -world_diameter / 2.0, -world_diameter / 2.0];
+        consumption_system.update_params(queue, grid_resolution, cell_size, grid_origin);
+        
+        // Create physics bind group fresh each frame (buffer index changes with triple buffering)
+        let output_idx = self.gpu_triple_buffers.output_buffer_index();
+        let physics_bg = consumption_system.create_physics_bind_group(
+            device,
+            &self.gpu_triple_buffers.physics_params,
+            &self.gpu_triple_buffers.position_and_mass[output_idx],
+            &self.gpu_triple_buffers.cell_count_buffer,
+        );
+        
+        // Create nutrient bind group (can be cached as these buffers don't change)
+        if self.phagocyte_nutrient_bind_group.is_none() {
+            self.phagocyte_nutrient_bind_group = Some(consumption_system.create_nutrient_bind_group(
+                device,
+                fluid_sim.current_state_buffer(),
+                fluid_sim.nutrient_voxels_buffer(),
+                &self.gpu_triple_buffers.cell_types,
+                &self.gpu_triple_buffers.max_cell_sizes,
+            ));
+        }
+        
+        // Run consumption shader
+        if let Some(ref nutrient_bg) = &self.phagocyte_nutrient_bind_group {
+            consumption_system.run(encoder, &physics_bg, nutrient_bg, self.current_cell_count);
+        }
     }
     
     /// Copy data from triple buffers to instance builder
@@ -2255,7 +2308,34 @@ impl GpuScene {
         // Initialize nutrient particle renderer
         self.initialize_nutrient_particle_renderer(device, queue, surface_format);
 
+        // Initialize phagocyte consumption system
+        self.initialize_phagocyte_consumption(device);
+
         log::info!("GPU fluid simulator initialized with solid mask, water bitfield, and nutrient particles for cell buoyancy");
+    }
+
+    /// Initialize the phagocyte nutrient consumption system
+    fn initialize_phagocyte_consumption(&mut self, device: &wgpu::Device) {
+        if self.phagocyte_consumption.is_some() {
+            return;
+        }
+
+        if self.fluid_simulator.is_some() {
+            let world_diameter = self.config.sphere_radius * 2.0;
+            let grid_resolution = 128u32;
+            let cell_size = world_diameter / grid_resolution as f32;
+            let grid_origin = [-world_diameter / 2.0, -world_diameter / 2.0, -world_diameter / 2.0];
+
+            let consumption_system = PhagocyteConsumptionSystem::new(
+                device,
+                grid_resolution,
+                cell_size,
+                grid_origin,
+            );
+
+            self.phagocyte_consumption = Some(consumption_system);
+            log::info!("Phagocyte consumption system initialized");
+        }
     }
 
     /// Step the GPU fluid simulation and update water bitfield for cell buoyancy
@@ -2264,6 +2344,18 @@ impl GpuScene {
             simulator.step(device, queue, encoder, dt, self.gravity, self.gravity_dir, self.lateral_flow_probabilities, self.condensation_probability, self.vaporization_probability);
             // Update water bitfield for cell physics (compressed 32x for fast lookup)
             simulator.update_water_bitfield(device, encoder);
+            
+            // Populate nutrients every frame with drifting noise pattern
+            // The shader uses time to create rolling/drifting nutrient zones
+            simulator.populate_nutrients(device, queue, encoder, self.nutrient_density);
+        }
+    }
+
+    /// Force immediate repopulation of nutrients (e.g., after density change)
+    pub fn repopulate_nutrients(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(ref simulator) = self.fluid_simulator {
+            simulator.populate_nutrients(device, queue, encoder, self.nutrient_density);
+            log::info!("Nutrients repopulated with density: {}", self.nutrient_density);
         }
     }
 
@@ -2499,7 +2591,12 @@ impl GpuScene {
         if let (Some(ref particle_renderer), Some(ref fluid_sim)) =
             (&self.nutrient_particle_renderer, &self.fluid_simulator) {
             self.nutrient_extract_bind_group = Some(
-                particle_renderer.create_extract_bind_group(device, fluid_sim.current_state_buffer(), fluid_sim.solid_mask_buffer())
+                particle_renderer.create_extract_bind_group(
+                    device, 
+                    fluid_sim.current_state_buffer(), 
+                    fluid_sim.solid_mask_buffer(),
+                    fluid_sim.nutrient_voxels_buffer()
+                )
             );
             log::info!("Nutrient extract bind group created");
         }

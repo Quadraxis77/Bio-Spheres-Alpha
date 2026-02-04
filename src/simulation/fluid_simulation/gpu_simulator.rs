@@ -83,6 +83,20 @@ pub struct WaterGridParams {
     pub _pad1: f32,
 }
 
+/// Nutrient population params (must match nutrient_populate.wgsl)
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct NutrientPopulateParams {
+    pub grid_resolution: u32,
+    pub cell_size: f32,
+    pub grid_origin_x: f32,
+    pub grid_origin_y: f32,
+    pub grid_origin_z: f32,
+    pub world_radius: f32,
+    pub nutrient_density: f32,
+    pub time: f32,
+}
+
 /// GPU Fluid Simulator
 pub struct GpuFluidSimulator {
     // Single voxel state buffer
@@ -123,6 +137,12 @@ pub struct GpuFluidSimulator {
     bitfield_params_buffer: wgpu::Buffer,
     bitfield_pipeline: wgpu::ComputePipeline,
     bitfield_bind_group_layout: wgpu::BindGroupLayout,
+
+    // Nutrient system - stores which voxels have nutrients (1 = has nutrient, 0 = empty)
+    nutrient_voxels_buffer: wgpu::Buffer,
+    nutrient_populate_params_buffer: wgpu::Buffer,
+    nutrient_populate_pipeline: wgpu::ComputePipeline,
+    nutrient_populate_bind_group_layout: wgpu::BindGroupLayout,
 
     /// Whether simulation is paused
     pub paused: bool,
@@ -435,6 +455,92 @@ impl GpuFluidSimulator {
             cache: None,
         });
 
+        // === Nutrient system - tracks which voxels have nutrients ===
+        // One u32 per voxel (1 = has nutrient, 0 = empty)
+        let nutrient_buffer_size = (TOTAL_VOXELS * std::mem::size_of::<u32>()) as u64;
+        let nutrient_voxels_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Nutrient Voxels Buffer"),
+            size: nutrient_buffer_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Nutrient populate params buffer
+        let nutrient_populate_params = NutrientPopulateParams {
+            grid_resolution: GRID_RESOLUTION,
+            cell_size,
+            grid_origin_x: grid_origin.x,
+            grid_origin_y: grid_origin.y,
+            grid_origin_z: grid_origin.z,
+            world_radius,
+            nutrient_density: 0.3,  // Default density
+            time: 0.0,
+        };
+
+        let nutrient_populate_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Nutrient Populate Params Buffer"),
+            contents: bytemuck::cast_slice(&[nutrient_populate_params]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Nutrient populate bind group layout
+        let nutrient_populate_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Nutrient Populate Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        // Nutrient populate shader and pipeline
+        let nutrient_populate_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Nutrient Populate Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/nutrient_populate.wgsl").into()),
+        });
+
+        let nutrient_populate_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Nutrient Populate Pipeline Layout"),
+            bind_group_layouts: &[&nutrient_populate_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let nutrient_populate_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Nutrient Populate Pipeline"),
+            layout: Some(&nutrient_populate_pipeline_layout),
+            module: &nutrient_populate_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         Self {
             state_buffer,
             solid_mask_buffer,
@@ -456,6 +562,10 @@ impl GpuFluidSimulator {
             bitfield_params_buffer,
             bitfield_pipeline,
             bitfield_bind_group_layout,
+            nutrient_voxels_buffer,
+            nutrient_populate_params_buffer,
+            nutrient_populate_pipeline,
+            nutrient_populate_bind_group_layout,
             fluid_type: std::cell::Cell::new(1u32), // Default to water
             paused: false,
         }
@@ -755,5 +865,61 @@ impl GpuFluidSimulator {
         };
 
         queue.write_buffer(&self.water_grid_params_buffer, 0, bytemuck::cast_slice(&[water_grid_params]));
+    }
+
+    /// Get the nutrient voxels buffer
+    pub fn nutrient_voxels_buffer(&self) -> &wgpu::Buffer {
+        &self.nutrient_voxels_buffer
+    }
+
+    /// Populate nutrients in water voxels using drifting noise pattern
+    /// Called every frame to create rolling/drifting nutrient zones
+    pub fn populate_nutrients(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, nutrient_density: f32) {
+        let world_diameter = self.world_radius * 2.0;
+        let cell_size = world_diameter / GRID_RESOLUTION as f32;
+        let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
+
+        // Update params
+        let params = NutrientPopulateParams {
+            grid_resolution: GRID_RESOLUTION,
+            cell_size,
+            grid_origin_x: grid_origin.x,
+            grid_origin_y: grid_origin.y,
+            grid_origin_z: grid_origin.z,
+            world_radius: self.world_radius,
+            nutrient_density,
+            time: self.time.get(),
+        };
+        queue.write_buffer(&self.nutrient_populate_params_buffer, 0, bytemuck::cast_slice(&[params]));
+
+        // Create bind group
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Nutrient Populate Bind Group"),
+            layout: &self.nutrient_populate_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.nutrient_populate_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.state_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.nutrient_voxels_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let workgroup_count = (GRID_RESOLUTION + 3) / 4;
+
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Nutrient Populate Pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.nutrient_populate_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
     }
 }
