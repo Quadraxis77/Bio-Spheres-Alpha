@@ -3,7 +3,6 @@
 //! This scene runs the full GPU-accelerated simulation using compute shaders.
 //! Optimized for large-scale simulations with thousands of cells.
 
-use crate::cell::types::CellType;
 use crate::genome::Genome;
 use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, NutrientParticleRenderer, SteamParticleRenderer, TailRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
@@ -574,6 +573,7 @@ impl GpuScene {
             &self.gpu_physics_pipelines,
             &mut self.gpu_triple_buffers,
             &self.cached_bind_groups,
+            &self.adhesion_buffers,
             self.current_time,
         );
         
@@ -3200,7 +3200,9 @@ impl Scene for GpuScene {
         );
 
         // Render flagellocyte tails using GPU instance buffer
-        // Render tails for Flagellocytes only
+        // With dynamic instance allocation, flagellocytes are scattered throughout the buffer.
+        // We use the main indirect buffer (total visible count) - the shader filters by cell_type
+        // and outputs degenerate triangles for non-flagellocytes.
         self.tail_renderer.render_from_gpu_buffer(
             device,
             queue,
@@ -3208,7 +3210,7 @@ impl Scene for GpuScene {
             view,
             &self.renderer.depth_view,
             self.instance_builder.get_instance_buffer(),
-            self.instance_builder.get_indirect_buffer_for_type(CellType::Flagellocyte),
+            self.instance_builder.get_indirect_buffer(),  // Use total visible count, not per-type
             self.camera.position(),
             self.camera.rotation,
             self.current_time,

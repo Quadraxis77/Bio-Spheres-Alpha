@@ -253,6 +253,7 @@ pub fn execute_lifecycle_pipeline(
     pipelines: &GpuPhysicsPipelines,
     triple_buffers: &mut GpuTripleBufferSystem,
     cached_bind_groups: &CachedBindGroups,
+    adhesion_buffers: &super::AdhesionBuffers,
     _current_time: f32,
 ) {
     // Get current buffer index (already rotated by physics pipeline)
@@ -330,9 +331,20 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.set_bind_group(2, cell_state_write_bind_group, &[]);
-        compute_pass.set_bind_group(3, &cached_bind_groups.lifecycle_adhesion, &[]);
+        compute_pass.set_bind_group(3, &cached_bind_groups.division_execute_adhesion, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
     }
+    
+    // Sync next_adhesion_id to adhesion_counts[0] so adhesion line renderer sees GPU-created adhesions
+    // The division shader atomically increments next_adhesion_id when creating adhesions,
+    // but the adhesion line shader reads from adhesion_counts[0] for the total count.
+    encoder.copy_buffer_to_buffer(
+        &adhesion_buffers.next_adhesion_id,
+        0,
+        &adhesion_buffers.adhesion_counts,
+        0,  // offset 0 = total_adhesion_count
+        4,  // 4 bytes (u32)
+    );
 }
 
 /// Rebuild spatial grid after lifecycle pipeline

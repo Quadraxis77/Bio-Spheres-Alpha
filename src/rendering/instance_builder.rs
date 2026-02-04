@@ -543,7 +543,7 @@ impl InstanceBuilder {
         let indirect_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Builder Indirect"),
             size: 16, // 4 u32s
-            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         

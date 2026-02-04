@@ -209,8 +209,10 @@ pub struct CachedBindGroups {
     pub adhesion: wgpu::BindGroup,
     /// Force accumulation bind group (same for all frames)
     pub force_accum: wgpu::BindGroup,
-    /// Lifecycle adhesion bind group (same for all frames)
+    /// Lifecycle adhesion bind group (same for all frames) - for adhesion_cleanup
     pub lifecycle_adhesion: wgpu::BindGroup,
+    /// Division execute adhesion bind group (same for all frames) - for division shader
+    pub division_execute_adhesion: wgpu::BindGroup,
     /// Division scan adhesion bind group (read-only, same for all frames)
     pub division_scan_adhesion: wgpu::BindGroup,
     /// Clear forces bind group (same for all frames)
@@ -318,6 +320,7 @@ pub struct GpuPhysicsPipelines {
     pub adhesion_layout: wgpu::BindGroupLayout,
     pub force_accum_layout: wgpu::BindGroupLayout,
     pub lifecycle_adhesion_layout: wgpu::BindGroupLayout,
+    pub division_execute_adhesion_layout: wgpu::BindGroupLayout,
     pub division_scan_adhesion_layout: wgpu::BindGroupLayout,
     
     // Clear forces bind group layout
@@ -361,6 +364,7 @@ impl GpuPhysicsPipelines {
         let adhesion_layout = Self::create_adhesion_bind_group_layout(device);
         let force_accum_layout = Self::create_force_accum_bind_group_layout(device);
         let lifecycle_adhesion_layout = Self::create_lifecycle_adhesion_bind_group_layout(device);
+        let division_execute_adhesion_layout = Self::create_division_execute_adhesion_bind_group_layout(device);
         let division_scan_adhesion_layout = Self::create_division_scan_adhesion_bind_group_layout(device);
         
         // Create new bind group layouts for force accumulation pipeline
@@ -564,7 +568,7 @@ impl GpuPhysicsPipelines {
             device,
             include_str!("../../../shaders/lifecycle_division_execute_ring.wgsl"),
             "main",
-            &[&physics_layout, &lifecycle_layout, &cell_state_write_layout, &lifecycle_adhesion_layout],
+            &[&physics_layout, &lifecycle_layout, &cell_state_write_layout, &division_execute_adhesion_layout],
             "Lifecycle Division Execute",
         );
         
@@ -631,6 +635,7 @@ impl GpuPhysicsPipelines {
             adhesion_layout,
             force_accum_layout,
             lifecycle_adhesion_layout,
+            division_execute_adhesion_layout,
             division_scan_adhesion_layout,
             clear_forces_layout,
             collision_force_accum_layout,
@@ -896,6 +901,14 @@ impl GpuPhysicsPipelines {
                     binding: 20,
                     resource: buffers.mode_cell_types.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 21,
+                    resource: buffers.child_a_keep_adhesion_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 22,
+                    resource: buffers.child_b_keep_adhesion_flags.as_entire_binding(),
+                },
             ],
         })
     }
@@ -1041,8 +1054,11 @@ impl GpuPhysicsPipelines {
         // Force accumulation bind group (same for all frames)
         let force_accum = self.create_force_accum_bind_group(device, adhesion_buffers);
         
-        // Lifecycle adhesion bind group (same for all frames)
-        let lifecycle_adhesion = self.create_lifecycle_adhesion_bind_group(device, adhesion_buffers, buffers);
+        // Lifecycle adhesion bind group (same for all frames) - for adhesion_cleanup
+        let lifecycle_adhesion = self.create_lifecycle_adhesion_bind_group(device, adhesion_buffers);
+        
+        // Division execute adhesion bind group (same for all frames) - for division shader
+        let division_execute_adhesion = self.create_division_execute_adhesion_bind_group(device, adhesion_buffers);
         
         // Division scan adhesion bind group (read-only, same for all frames)
         let division_scan_adhesion = self.create_division_scan_adhesion_bind_group(device, adhesion_buffers, buffers);
@@ -1099,6 +1115,7 @@ impl GpuPhysicsPipelines {
             adhesion,
             force_accum,
             lifecycle_adhesion,
+            division_execute_adhesion,
             division_scan_adhesion,
             clear_forces,
             collision_force_accum,
@@ -1872,6 +1889,28 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
+                    // Child A keep adhesion flags (for inheritance)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 21,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Child B keep adhesion flags (for inheritance)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 22,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             })
         }
@@ -2132,7 +2171,8 @@ impl GpuPhysicsPipelines {
         })
     }
     
-    /// Create lifecycle adhesion bind group layout (Group 3 in lifecycle division execute shader)
+    /// Create lifecycle adhesion bind group layout (Group 2 in adhesion_cleanup shader)
+    /// Used for adhesion cleanup - 4 bindings: connections, counts, indices, free_slots
     fn create_lifecycle_adhesion_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Lifecycle Adhesion Bind Group Layout"),
@@ -2181,23 +2221,44 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 4: Child A keep adhesion flags (read-only)
+            ],
+        })
+    }
+    
+    /// Create division execute adhesion bind group layout (Group 3 in lifecycle division execute shader)
+    /// Matches shader: binding 0 = adhesion_connections, binding 1 = cell_adhesion_indices, binding 2 = next_adhesion_id
+    fn create_division_execute_adhesion_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Division Execute Adhesion Bind Group Layout"),
+            entries: &[
+                // Binding 0: Adhesion connections (read-write)
                 wgpu::BindGroupLayoutEntry {
-                    binding: 4,
+                    binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
                     count: None,
                 },
-                // Binding 5: Child B keep adhesion flags (read-only)
+                // Binding 1: Cell adhesion indices (read-write)
                 wgpu::BindGroupLayoutEntry {
-                    binding: 5,
+                    binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Next adhesion ID (atomic counter)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -2307,12 +2368,12 @@ impl GpuPhysicsPipelines {
         })
     }
     
-    /// Create lifecycle adhesion bind group (Group 3 in lifecycle division execute shader)
+    /// Create lifecycle adhesion bind group (Group 2 in adhesion_cleanup shader)
+    /// Used for adhesion cleanup - 4 bindings: connections, counts, indices, free_slots
     fn create_lifecycle_adhesion_bind_group(
         &self,
         device: &wgpu::Device,
         adhesion_buffers: &super::AdhesionBuffers,
-        triple_buffers: &GpuTripleBufferSystem,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Lifecycle Adhesion Bind Group"),
@@ -2334,13 +2395,32 @@ impl GpuPhysicsPipelines {
                     binding: 3,
                     resource: adhesion_buffers.free_adhesion_slots.as_entire_binding(),
                 },
+            ],
+        })
+    }
+    
+    /// Create division execute adhesion bind group (Group 3 in lifecycle division execute shader)
+    /// Matches shader: binding 0 = adhesion_connections, binding 1 = cell_adhesion_indices, binding 2 = next_adhesion_id
+    fn create_division_execute_adhesion_bind_group(
+        &self,
+        device: &wgpu::Device,
+        adhesion_buffers: &super::AdhesionBuffers,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Division Execute Adhesion Bind Group"),
+            layout: &self.division_execute_adhesion_layout,
+            entries: &[
                 wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: triple_buffers.child_a_keep_adhesion_flags.as_entire_binding(),
+                    binding: 0,
+                    resource: adhesion_buffers.adhesion_connections.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: triple_buffers.child_b_keep_adhesion_flags.as_entire_binding(),
+                    binding: 1,
+                    resource: adhesion_buffers.cell_adhesion_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: adhesion_buffers.next_adhesion_id.as_entire_binding(),
                 },
             ],
         })

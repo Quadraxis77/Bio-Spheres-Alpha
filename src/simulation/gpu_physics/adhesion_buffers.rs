@@ -43,6 +43,9 @@ pub struct AdhesionBuffers {
     /// Free adhesion slot stack
     pub free_adhesion_slots: wgpu::Buffer,
     
+    /// Next adhesion ID counter (atomic u32 for GPU-side allocation)
+    pub next_adhesion_id: wgpu::Buffer,
+    
     /// Angular velocities for torque calculations (triple buffered)
     pub angular_velocities: [wgpu::Buffer; 3],
     
@@ -126,6 +129,14 @@ impl AdhesionBuffers {
             "Free Adhesion Slots",
         );
         
+        // Next adhesion ID counter (atomic u32 for GPU-side allocation)
+        // Use 16 bytes to meet wgpu minimum storage buffer size requirements
+        let next_adhesion_id = Self::create_storage_buffer(
+            device,
+            16, // 4 u32s for alignment (only first one used)
+            "Next Adhesion ID",
+        );
+        
         // Angular velocities: Vec4 per cell, triple buffered
         let buffer_size = cell_capacity as u64 * 16;
         let angular_velocities = [
@@ -154,6 +165,7 @@ impl AdhesionBuffers {
             adhesion_settings,
             adhesion_counts,
             free_adhesion_slots,
+            next_adhesion_id,
             angular_velocities,
             force_accum_x,
             force_accum_y,
@@ -197,6 +209,10 @@ impl AdhesionBuffers {
         // Initialize all cell adhesion indices to -1
         let empty_indices: Vec<i32> = vec![-1; self.cell_capacity as usize * MAX_ADHESIONS_PER_CELL];
         queue.write_buffer(&self.cell_adhesion_indices, 0, bytemuck::cast_slice(&empty_indices));
+        
+        // Initialize next_adhesion_id to 0
+        let zero: [u32; 1] = [0];
+        queue.write_buffer(&self.next_adhesion_id, 0, bytemuck::cast_slice(&zero));
         
         // Reset CPU-side state
         self.slot_allocator.reset();

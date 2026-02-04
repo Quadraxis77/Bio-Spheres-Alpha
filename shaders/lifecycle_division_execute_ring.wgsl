@@ -158,6 +158,14 @@ var<storage, read_write> cell_types: array<u32>;
 @group(2) @binding(20)
 var<storage, read> mode_cell_types: array<u32>;
 
+// Child A keep adhesion flags: one bool per mode (stored as u32)
+@group(2) @binding(21)
+var<storage, read> child_a_keep_adhesion_flags: array<u32>;
+
+// Child B keep adhesion flags: one bool per mode (stored as u32)
+@group(2) @binding(22)
+var<storage, read> child_b_keep_adhesion_flags: array<u32>;
+
 // Adhesion bind group (group 3)
 @group(3) @binding(0)
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
@@ -176,8 +184,38 @@ fn rotate_vector_by_quat(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
     return v + ((uv * q.w) + uuv) * 2.0;
 }
 
+// Quaternion conjugate (inverse for unit quaternions)
+fn quat_conjugate(q: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(-q.xyz, q.w);
+}
+
+// Rotate vector by inverse quaternion (for local space transformation)
+fn rotate_vector_by_quat_inverse(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
+    return rotate_vector_by_quat(v, quat_conjugate(q));
+}
+
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     return clamp(mass, 0.5, 2.0);
+}
+
+// Zone classification constants (matching CPU: sin(2°) ≈ 0.0349)
+const EQUATORIAL_THRESHOLD: f32 = 0.0349;
+const ZONE_A: u32 = 0u;  // Negative dot (opposite to split)
+const ZONE_B: u32 = 1u;  // Positive dot (same as split)
+const ZONE_C: u32 = 2u;  // Equatorial (perpendicular to split)
+
+// Classify adhesion bond direction relative to split direction
+// Matches CPU classify_bond_direction() exactly
+fn classify_zone(anchor_direction: vec3<f32>, split_direction: vec3<f32>) -> u32 {
+    let dot_product = dot(normalize(anchor_direction), normalize(split_direction));
+    
+    if (abs(dot_product) <= EQUATORIAL_THRESHOLD) {
+        return ZONE_C;  // Equatorial
+    } else if (dot_product > 0.0) {
+        return ZONE_B;  // Same direction as split
+    } else {
+        return ZONE_A;  // Opposite to split
+    }
 }
 
 fn quat_multiply(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
@@ -190,6 +228,22 @@ fn quat_multiply(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
 }
 
 const MAX_ADHESIONS_PER_CELL: u32 = 10u;
+
+// Calculate child anchor direction using geometric approach (matches reference)
+// child_pos_parent_frame: child position in parent's local frame
+// neighbor_pos_parent_frame: neighbor position in parent's local frame (from anchor * distance)
+// child_orientation_delta: child's orientation relative to parent (from genome mode)
+fn calculate_child_anchor_direction(
+    child_pos_parent_frame: vec3<f32>,
+    neighbor_pos_parent_frame: vec3<f32>,
+    child_orientation_delta: vec4<f32>
+) -> vec3<f32> {
+    // Direction from child to neighbor in parent frame
+    let direction_to_neighbor = normalize(neighbor_pos_parent_frame - child_pos_parent_frame);
+    // Transform to child's local space using inverse of orientation delta
+    let inv_delta = quat_conjugate(child_orientation_delta);
+    return normalize(rotate_vector_by_quat(direction_to_neighbor, inv_delta));
+}
 
 @compute @workgroup_size(128)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -332,23 +386,61 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Update total cell count if we used a new slot beyond current count
     atomicMax(&cell_count_buffer[0], child_b_slot + 1u);
     
+    // Track sibling adhesion slot for inheritance (0xFFFFFFFF = invalid/not created)
+    var sibling_adhesion_slot: u32 = 0xFFFFFFFFu;
+    
     // === Create sibling adhesion if parent_make_adhesion is enabled ===
     let make_adhesion = parent_make_adhesion_flags[parent_mode_idx];
     if (make_adhesion == 1u) {
         let adhesion_id = atomicAdd(&next_adhesion_id[0], 1u);
         if (adhesion_id < arrayLength(&adhesion_connections)) {
+            // Calculate anchor directions in each child's LOCAL space
+            // Normalize split direction first (matching CPU implementation)
+            let split_dir_normalized = normalize(split_dir_local);
+            
+            // Direction from A to B in parent's local frame (A points toward B)
+            let dir_a_to_b_parent = -split_dir_normalized;  // Child A anchor points toward Child B
+            let dir_b_to_a_parent = split_dir_normalized;   // Child B anchor points toward Child A
+            
+            // Transform to each child's local space using inverse of child orientation
+            // Check if child orientations are identity (or near-identity) to avoid numerical issues
+            var anchor_a_local: vec3<f32>;
+            var anchor_b_local: vec3<f32>;
+            
+            // Child orientation is identity if w ≈ 1 and xyz ≈ 0
+            let child_a_is_identity = abs(child_a_orientation.w - 1.0) < 0.01 && length(child_a_orientation.xyz) < 0.01;
+            let child_b_is_identity = abs(child_b_orientation.w - 1.0) < 0.01 && length(child_b_orientation.xyz) < 0.01;
+            
+            if (child_a_is_identity) {
+                anchor_a_local = dir_a_to_b_parent;
+            } else {
+                anchor_a_local = normalize(rotate_vector_by_quat_inverse(dir_a_to_b_parent, child_a_orientation));
+            }
+            
+            if (child_b_is_identity) {
+                anchor_b_local = dir_b_to_a_parent;
+            } else {
+                anchor_b_local = normalize(rotate_vector_by_quat_inverse(dir_b_to_a_parent, child_b_orientation));
+            }
+            
+            // Classify zones based on anchor direction vs split direction (matching CPU)
+            // Each cell's zone is classified using its own anchor and split direction
+            let zone_a = classify_zone(anchor_a_local, split_dir_normalized);
+            let zone_b = classify_zone(anchor_b_local, split_dir_normalized);
+            
             var connection: AdhesionConnection;
             connection.cell_a_index = cell_idx;
             connection.cell_b_index = child_b_slot;
             connection.mode_index = parent_mode_idx;
             connection.is_active = 1u;
-            connection.zone_a = 0u;
-            connection.zone_b = 0u;
+            connection.zone_a = zone_a;
+            connection.zone_b = zone_b;
             connection._align_pad = vec2<u32>(0u, 0u);
-            connection.anchor_direction_a = vec4<f32>(split_dir, 0.0);
-            connection.anchor_direction_b = vec4<f32>(-split_dir, 0.0);
-            connection.twist_reference_a = vec4<f32>(0.0, 1.0, 0.0, 0.0);
-            connection.twist_reference_b = vec4<f32>(0.0, 1.0, 0.0, 0.0);
+            connection.anchor_direction_a = vec4<f32>(anchor_a_local, 0.0);
+            connection.anchor_direction_b = vec4<f32>(anchor_b_local, 0.0);
+            // Set twist references to child rotations (parent_rotation * child_orientation)
+            connection.twist_reference_a = child_a_rotation;
+            connection.twist_reference_b = child_b_rotation;
             connection._padding = vec2<u32>(0u, 0u);
             adhesion_connections[adhesion_id] = connection;
             
@@ -366,6 +458,277 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 if (cell_adhesion_indices[base_b + i] < 0) {
                     cell_adhesion_indices[base_b + i] = i32(adhesion_id);
                     break;
+                }
+            }
+            
+            // Track sibling adhesion slot to skip during inheritance
+            sibling_adhesion_slot = adhesion_id;
+        }
+    }
+    
+    // === Zone-Based Adhesion Inheritance ===
+    // Process parent's existing adhesions and distribute to children based on zone classification
+    // - Zone A (negative dot with split dir) -> Child B
+    // - Zone B (positive dot with split dir) -> Child A  
+    // - Zone C (equatorial) -> Both children (duplicate)
+    
+    let child_a_keep = child_a_keep_adhesion_flags[parent_mode_idx] == 1u;
+    let child_b_keep = child_b_keep_adhesion_flags[parent_mode_idx] == 1u;
+    
+    // Skip inheritance if neither child keeps adhesions
+    if (!child_a_keep && !child_b_keep) {
+        return;
+    }
+    
+    let parent_adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
+    let child_a_adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
+    let child_b_adhesion_base = child_b_slot * MAX_ADHESIONS_PER_CELL;
+    
+    // Save parent's adhesion indices BEFORE modifying them
+    var parent_adhesion_indices: array<i32, 10>;
+    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+        parent_adhesion_indices[i] = cell_adhesion_indices[parent_adhesion_base + i];
+    }
+    
+    // Clear Child A's adhesion indices (parent slot) - we'll rebuild them
+    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+        cell_adhesion_indices[child_a_adhesion_base + i] = -1;
+        cell_adhesion_indices[child_b_adhesion_base + i] = -1;
+    }
+    
+    // Track adhesion counts for each child
+    var child_a_adhesion_count = 0u;
+    var child_b_adhesion_count = 0u;
+    
+    // Re-add the sibling adhesion (if created)
+    if (sibling_adhesion_slot != 0xFFFFFFFFu) {
+        if (child_a_adhesion_count < MAX_ADHESIONS_PER_CELL) {
+            cell_adhesion_indices[child_a_adhesion_base + child_a_adhesion_count] = i32(sibling_adhesion_slot);
+            child_a_adhesion_count++;
+        }
+        if (child_b_adhesion_count < MAX_ADHESIONS_PER_CELL) {
+            cell_adhesion_indices[child_b_adhesion_base + child_b_adhesion_count] = i32(sibling_adhesion_slot);
+            child_b_adhesion_count++;
+        }
+    }
+    
+    // Calculate geometric parameters for anchor calculation
+    let child_offset = parent_radius * 0.25;
+    let split_dir_normalized = normalize(split_dir_local);
+    let child_a_pos_parent_frame = split_dir_normalized * child_offset;
+    let child_b_pos_parent_frame = -split_dir_normalized * child_offset;
+    
+    // Fixed radius for adhesion distance calculation
+    let FIXED_RADIUS: f32 = 1.0;
+    
+    // Process inherited adhesions
+    for (var parent_slot = 0u; parent_slot < MAX_ADHESIONS_PER_CELL; parent_slot++) {
+        let adh_idx_signed = parent_adhesion_indices[parent_slot];
+        
+        if (adh_idx_signed < 0) {
+            continue;
+        }
+        
+        let adh_idx = u32(adh_idx_signed);
+        
+        // Skip sibling adhesion (already handled)
+        if (adh_idx == sibling_adhesion_slot) {
+            continue;
+        }
+        
+        let conn = adhesion_connections[adh_idx];
+        
+        if (conn.is_active == 0u) {
+            continue;
+        }
+        
+        // Determine which side of connection parent is on
+        let is_parent_cell_a = conn.cell_a_index == cell_idx;
+        let is_parent_cell_b = conn.cell_b_index == cell_idx;
+        
+        if (!is_parent_cell_a && !is_parent_cell_b) {
+            continue;
+        }
+        
+        let neighbor_idx = select(conn.cell_a_index, conn.cell_b_index, is_parent_cell_a);
+        
+        // Get parent's anchor direction (LOCAL space)
+        var parent_anchor_dir_local: vec3<f32>;
+        if (is_parent_cell_a) {
+            parent_anchor_dir_local = conn.anchor_direction_a.xyz;
+        } else {
+            parent_anchor_dir_local = conn.anchor_direction_b.xyz;
+        }
+        
+        // Classify zone based on LOCAL anchor direction vs LOCAL split direction
+        let zone = classify_zone(parent_anchor_dir_local, split_dir_local);
+        
+        // Determine which child(ren) inherit
+        var give_to_child_a = false;
+        var give_to_child_b = false;
+        
+        if (zone == ZONE_A && child_b_keep) {
+            give_to_child_b = true;
+        } else if (zone == ZONE_B && child_a_keep) {
+            give_to_child_a = true;
+        } else if (zone == ZONE_C) {
+            if (child_a_keep) { give_to_child_a = true; }
+            if (child_b_keep) { give_to_child_b = true; }
+        }
+        
+        if (!give_to_child_a && !give_to_child_b) {
+            adhesion_connections[adh_idx].is_active = 0u;
+            continue;
+        }
+        
+        // Calculate center-to-center distance
+        let rest_length = 1.0;
+        let center_to_center_dist = rest_length + FIXED_RADIUS + FIXED_RADIUS;
+        let neighbor_pos_parent_frame = parent_anchor_dir_local * center_to_center_dist;
+        
+        // Get neighbor rotation for anchor calculation
+        let neighbor_rotation = rotations_in[neighbor_idx];
+        let relative_rotation = quat_multiply(quat_conjugate(neighbor_rotation), parent_rotation);
+        
+        if (give_to_child_a && !give_to_child_b) {
+            // Only Child A inherits
+            let child_anchor = calculate_child_anchor_direction(
+                child_a_pos_parent_frame,
+                neighbor_pos_parent_frame,
+                child_a_orientation
+            );
+            
+            let dir_to_child_parent_frame = normalize(child_a_pos_parent_frame - neighbor_pos_parent_frame);
+            let neighbor_anchor = normalize(rotate_vector_by_quat(dir_to_child_parent_frame, relative_rotation));
+            
+            if (is_parent_cell_a) {
+                adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_anchor, 0.0);
+                adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(neighbor_anchor, 0.0);
+                adhesion_connections[adh_idx].twist_reference_a = child_a_rotation;
+                adhesion_connections[adh_idx].zone_a = classify_zone(child_anchor, split_dir_local);
+            } else {
+                adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_anchor, 0.0);
+                adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(neighbor_anchor, 0.0);
+                adhesion_connections[adh_idx].twist_reference_b = child_a_rotation;
+                adhesion_connections[adh_idx].zone_b = classify_zone(child_anchor, split_dir_local);
+            }
+            
+            if (child_a_adhesion_count < MAX_ADHESIONS_PER_CELL) {
+                cell_adhesion_indices[child_a_adhesion_base + child_a_adhesion_count] = i32(adh_idx);
+                child_a_adhesion_count++;
+            }
+            
+        } else if (give_to_child_b && !give_to_child_a) {
+            // Only Child B inherits
+            let child_anchor = calculate_child_anchor_direction(
+                child_b_pos_parent_frame,
+                neighbor_pos_parent_frame,
+                child_b_orientation
+            );
+            
+            let dir_to_child_parent_frame = normalize(child_b_pos_parent_frame - neighbor_pos_parent_frame);
+            let neighbor_anchor = normalize(rotate_vector_by_quat(dir_to_child_parent_frame, relative_rotation));
+            
+            if (is_parent_cell_a) {
+                adhesion_connections[adh_idx].cell_a_index = child_b_slot;
+                adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_anchor, 0.0);
+                adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(neighbor_anchor, 0.0);
+                adhesion_connections[adh_idx].twist_reference_a = child_b_rotation;
+                adhesion_connections[adh_idx].zone_a = classify_zone(child_anchor, split_dir_local);
+            } else {
+                adhesion_connections[adh_idx].cell_b_index = child_b_slot;
+                adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_anchor, 0.0);
+                adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(neighbor_anchor, 0.0);
+                adhesion_connections[adh_idx].twist_reference_b = child_b_rotation;
+                adhesion_connections[adh_idx].zone_b = classify_zone(child_anchor, split_dir_local);
+            }
+            
+            if (child_b_adhesion_count < MAX_ADHESIONS_PER_CELL) {
+                cell_adhesion_indices[child_b_adhesion_base + child_b_adhesion_count] = i32(adh_idx);
+                child_b_adhesion_count++;
+            }
+            
+        } else {
+            // Zone C: Both children inherit - duplicate the adhesion
+            let child_a_anchor = calculate_child_anchor_direction(
+                child_a_pos_parent_frame,
+                neighbor_pos_parent_frame,
+                child_a_orientation
+            );
+            
+            let dir_to_child_a_parent_frame = normalize(child_a_pos_parent_frame - neighbor_pos_parent_frame);
+            let neighbor_anchor_to_a = normalize(rotate_vector_by_quat(dir_to_child_a_parent_frame, relative_rotation));
+            
+            // Update original connection for Child A
+            if (is_parent_cell_a) {
+                adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_a_anchor, 0.0);
+                adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(neighbor_anchor_to_a, 0.0);
+                adhesion_connections[adh_idx].twist_reference_a = child_a_rotation;
+                adhesion_connections[adh_idx].zone_a = classify_zone(child_a_anchor, split_dir_local);
+            } else {
+                adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_a_anchor, 0.0);
+                adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(neighbor_anchor_to_a, 0.0);
+                adhesion_connections[adh_idx].twist_reference_b = child_a_rotation;
+                adhesion_connections[adh_idx].zone_b = classify_zone(child_a_anchor, split_dir_local);
+            }
+            
+            if (child_a_adhesion_count < MAX_ADHESIONS_PER_CELL) {
+                cell_adhesion_indices[child_a_adhesion_base + child_a_adhesion_count] = i32(adh_idx);
+                child_a_adhesion_count++;
+            }
+            
+            // Create duplicate for Child B
+            let dup_slot = atomicAdd(&next_adhesion_id[0], 1u);
+            if (dup_slot < arrayLength(&adhesion_connections)) {
+                let child_b_anchor = calculate_child_anchor_direction(
+                    child_b_pos_parent_frame,
+                    neighbor_pos_parent_frame,
+                    child_b_orientation
+                );
+                
+                let dir_to_child_b_parent_frame = normalize(child_b_pos_parent_frame - neighbor_pos_parent_frame);
+                let neighbor_anchor_to_b = normalize(rotate_vector_by_quat(dir_to_child_b_parent_frame, relative_rotation));
+                
+                var dup_conn: AdhesionConnection;
+                dup_conn.mode_index = conn.mode_index;
+                dup_conn.is_active = 1u;
+                dup_conn._align_pad = vec2<u32>(0u, 0u);
+                dup_conn._padding = vec2<u32>(0u, 0u);
+                
+                if (is_parent_cell_a) {
+                    dup_conn.cell_a_index = child_b_slot;
+                    dup_conn.cell_b_index = neighbor_idx;
+                    dup_conn.anchor_direction_a = vec4<f32>(child_b_anchor, 0.0);
+                    dup_conn.anchor_direction_b = vec4<f32>(neighbor_anchor_to_b, 0.0);
+                    dup_conn.twist_reference_a = child_b_rotation;
+                    dup_conn.twist_reference_b = neighbor_rotation;
+                    dup_conn.zone_a = classify_zone(child_b_anchor, split_dir_local);
+                    dup_conn.zone_b = classify_zone(neighbor_anchor_to_b, split_dir_local);
+                } else {
+                    dup_conn.cell_a_index = neighbor_idx;
+                    dup_conn.cell_b_index = child_b_slot;
+                    dup_conn.anchor_direction_a = vec4<f32>(neighbor_anchor_to_b, 0.0);
+                    dup_conn.anchor_direction_b = vec4<f32>(child_b_anchor, 0.0);
+                    dup_conn.twist_reference_a = neighbor_rotation;
+                    dup_conn.twist_reference_b = child_b_rotation;
+                    dup_conn.zone_a = classify_zone(neighbor_anchor_to_b, split_dir_local);
+                    dup_conn.zone_b = classify_zone(child_b_anchor, split_dir_local);
+                }
+                
+                adhesion_connections[dup_slot] = dup_conn;
+                
+                if (child_b_adhesion_count < MAX_ADHESIONS_PER_CELL) {
+                    cell_adhesion_indices[child_b_adhesion_base + child_b_adhesion_count] = i32(dup_slot);
+                    child_b_adhesion_count++;
+                }
+                
+                // Add duplicate to neighbor's adhesion list
+                let neighbor_adhesion_base = neighbor_idx * MAX_ADHESIONS_PER_CELL;
+                for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+                    if (cell_adhesion_indices[neighbor_adhesion_base + i] == -1) {
+                        cell_adhesion_indices[neighbor_adhesion_base + i] = i32(dup_slot);
+                        break;
+                    }
                 }
             }
         }
