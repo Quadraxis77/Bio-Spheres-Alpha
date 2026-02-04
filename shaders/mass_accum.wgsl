@@ -59,12 +59,21 @@ var<storage, read> nutrient_gain_rates: array<f32>;
 @group(1) @binding(1)
 var<storage, read> max_cell_sizes: array<f32>;
 
+// Death flags to skip dead cells
+@group(1) @binding(2)
+var<storage, read> death_flags: array<u32>;
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
     // Read cell count from GPU buffer
     let cell_count = cell_count_buffer[0];
     if (cell_idx >= cell_count) {
+        return;
+    }
+    
+    // Skip dead cells - they're waiting to be recycled via ring buffer
+    if (death_flags[cell_idx] == 1u) {
         return;
     }
     

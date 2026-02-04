@@ -161,6 +161,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
+    // Skip dead cells - they're waiting to be recycled via ring buffer
+    if (death_flags[cell_idx] == 1u) {
+        return;
+    }
+    
     // Initialize mass delta to 0 (atomic)
     atomicStore(&mass_deltas[cell_idx], 0);
     
