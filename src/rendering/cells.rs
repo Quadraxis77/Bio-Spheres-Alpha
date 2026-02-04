@@ -728,23 +728,15 @@ impl CellRenderer {
             
             color_pass.set_bind_group(0, &self.bind_group, &[]);
 
-            // Render each cell type with its own pipeline
-            // Each type uses its own indirect buffer with dynamic instance counts
-            // Also use vertex buffer offset to read from correct partition
-            let cell_capacity = instance_builder.cell_capacity();
-            let partition_size = cell_capacity / CellType::MAX_TYPES;
+            // Render all cells with a single draw call
+            // Instance buffer is dynamically allocated (not partitioned by type)
+            // Cell type is stored in instance data (type_data_1.w) for shader to use
+            let pipeline = self.type_registry.get_pipeline(CellType::Test);
+            color_pass.set_pipeline(pipeline);
+            color_pass.set_vertex_buffer(0, instance_builder.instance_buffer.slice(..));
             
-            for cell_type in CellType::iter() {
-                let pipeline = self.type_registry.get_pipeline(cell_type);
-                color_pass.set_pipeline(pipeline);
-
-                // Set vertex buffer offset to read from this type's partition
-                let vertex_offset = (cell_type as usize * partition_size * std::mem::size_of::<CellInstance>()) as u64;
-                color_pass.set_vertex_buffer(0, instance_builder.instance_buffer.slice(vertex_offset..));
-
-                let indirect_buffer = instance_builder.get_indirect_buffer_for_type(cell_type);
-                color_pass.draw_indirect(indirect_buffer, 0);
-            }
+            // Use main indirect buffer which has total visible count
+            color_pass.draw_indirect(&instance_builder.indirect_buffer, 0);
         }
     }
 }

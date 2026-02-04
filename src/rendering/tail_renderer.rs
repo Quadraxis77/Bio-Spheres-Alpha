@@ -709,18 +709,13 @@ impl TailRenderer {
         self.width = width;
         self.height = height;
         
-        // Calculate partition offset for Flagellocytes (cell_type = 1)
-        // The instance buffer is partitioned by cell type to support multi-pipeline rendering
-        // Partition size = cell_capacity / MAX_TYPES (30)
-        use crate::cell::types::CellType;
-        let partition_size = cell_capacity / CellType::MAX_TYPES;
-        let flagellocyte_offset = (CellType::Flagellocyte as usize) * partition_size;
+        // With dynamic instance allocation, Flagellocytes are mixed throughout the buffer
+        // The shader will filter by cell_type (stored in instance.type_data_1.w)
+        // No partition offset needed - shader iterates through all cells
+        let _cell_capacity = cell_capacity; // Keep for potential future use
 
-        log::info!("Tail Renderer: cell_capacity={}, partition_size={}, flagellocyte_offset={}",
-                   cell_capacity, partition_size, flagellocyte_offset);
-
-        // Update uniforms (pass partition_offset to camera uniform)
-        self.update_camera(queue, camera_pos, camera_rotation, time, flagellocyte_offset as u32);
+        // Update uniforms (no partition offset with dynamic allocation)
+        self.update_camera(queue, camera_pos, camera_rotation, time, 0);
         self.update_lighting(queue);
 
         // Set up indexed indirect buffer using LOD 2 (medium-high detail)
@@ -730,12 +725,9 @@ impl TailRenderer {
 
         // Source format (draw_indirect): [vertex_count, instance_count, first_vertex, first_instance]
         // Target format (draw_indexed_indirect): [index_count, instance_count, first_index, base_vertex, first_instance]
-        // first_instance is set to 0 since we handle partition offset in the shader via uniform
+        // first_instance is 0 - shader iterates all instances and filters by cell_type
         let indexed_indirect_data: [u32; 5] = [lod.index_count, 0, lod.index_offset, 0, 0];
         queue.write_buffer(&self.indexed_indirect_buffer, 0, bytemuck::cast_slice(&indexed_indirect_data));
-
-        log::info!("Tail Renderer: index_count={}, first_index={}, partition_offset passed to shader={}",
-                   lod.index_count, lod.index_offset, flagellocyte_offset);
 
         // Copy instance_count from indirect buffer (offset 4) to indexed indirect buffer (offset 4)
         encoder.copy_buffer_to_buffer(

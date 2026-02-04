@@ -582,25 +582,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         instance.type_data_1 = vec4<f32>(0.0, 0.0, f32(params.lod_debug_colors), f32(cell_type));
     }
 
-    // Fixed-partition instance allocation by type
-    // Each type gets a fixed partition of the instance buffer to avoid overlaps
-    // Partition size = capacity / MAX_TYPES (30)
-    let partition_size = params.cell_capacity / 30u; // MAX_TYPES = 30
-    let base_offset = cell_type * partition_size;
+    // Dynamic instance allocation - single buffer for all cell types
+    // No partitioning - cells are allocated sequentially regardless of type
+    let output_index = atomicAdd(&counters[0], 1u);
 
-    // Allocate within this type's partition
-    let counter_index = 4u + cell_type;
-    let local_index = atomicAdd(&counters[counter_index], 1u);
-    let output_index = base_offset + local_index;
-
-    // Bounds check to prevent overflow into next partition or out of buffer
+    // Bounds check
     if (output_index >= params.cell_capacity) {
-        return; // Skip this cell if out of bounds
+        return;
     }
 
-    // Increment total visible count
-    atomicAdd(&counters[0], 1u);
+    // Also track per-type counts for stats (counters[4..4+MAX_TYPES])
+    let counter_index = 4u + cell_type;
+    atomicAdd(&counters[counter_index], 1u);
 
-    // Write to partitioned position
+    // Write instance
     instances[output_index] = instance;
 }
