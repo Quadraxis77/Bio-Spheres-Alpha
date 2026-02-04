@@ -701,7 +701,7 @@ impl GpuScene {
             Some(id) => id,
             None => {
                 // Add as new genome if not found
-                return self.add_genome(device, genome.clone());
+                return self.add_genome(device, genome.clone()).map(|(id, _)| id);
             }
         };
         
@@ -725,28 +725,54 @@ impl GpuScene {
         Some(genome_id)
     }
     
-    /// Add a genome to the scene and return its ID.
-    /// Checks for duplicate genomes and reuses existing ones.
-    pub fn add_genome(&mut self, _device: &wgpu::Device, genome: Genome) -> Option<usize> {
+    /// Add a genome to the scene and return its ID and whether it needs GPU sync.
+    /// If an IDENTICAL genome exists (same name AND content), reuses it.
+    /// If content differs, adds as a NEW genome to preserve existing cells' behavior.
+    /// Returns (genome_id, needs_sync) where needs_sync is true if genome was added.
+    pub fn add_genome(&mut self, _device: &wgpu::Device, genome: Genome) -> Option<(usize, bool)> {
         // Check if an identical genome already exists
         for (id, existing) in self.genomes.iter().enumerate() {
             if existing.name == genome.name
                 && existing.modes.len() == genome.modes.len()
                 && existing.initial_mode == genome.initial_mode
                 && existing.initial_orientation == genome.initial_orientation
+                && Self::modes_are_identical(&existing.modes, &genome.modes)
             {
-                // Genome already exists, reuse it
-                log::info!("Reusing existing genome {} (total: {})", id, self.genomes.len());
-                return Some(id);
+                // Genome is truly identical, reuse it
+                log::info!("Reusing identical genome {} (total: {})", id, self.genomes.len());
+                return Some((id, false)); // needs_sync = false, nothing changed
             }
         }
 
-        // No match found, add new genome
+        // Either no match or content differs - add as new genome
+        // This preserves existing cells' behavior when genome is modified
         let id = self.genomes.len();
         self.genomes.push(genome);
 
         log::info!("Added new genome {} (total: {})", id, self.genomes.len());
-        Some(id)
+        Some((id, true)) // needs_sync = true because genome was added
+    }
+    
+    /// Check if two mode lists are identical (for genome deduplication)
+    fn modes_are_identical(a: &[crate::genome::ModeSettings], b: &[crate::genome::ModeSettings]) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        for (ma, mb) in a.iter().zip(b.iter()) {
+            // Compare key mode properties that affect cell behavior
+            if ma.cell_type != mb.cell_type
+                || ma.split_interval != mb.split_interval
+                || ma.split_mass != mb.split_mass
+                || ma.max_splits != mb.max_splits
+                || ma.membrane_stiffness != mb.membrane_stiffness
+                || ma.nutrient_gain_rate != mb.nutrient_gain_rate
+                || ma.max_cell_size != mb.max_cell_size
+                || ma.swim_force != mb.swim_force
+            {
+                return false;
+            }
+        }
+        true
     }
     
     /// Incremental sync of a single genome's data to GPU buffers
@@ -937,20 +963,18 @@ impl GpuScene {
             return None;
         }
         
-        // Find or add the genome
-        let genome_count_before = self.genomes.len();
-        let genome_id = match self.add_genome(device, genome.clone()) {
-            Some(id) => id,
+        // Find or add the genome (add_genome now updates existing genomes with same name)
+        let (genome_id, needs_sync) = match self.add_genome(device, genome.clone()) {
+            Some((id, sync)) => (id, sync),
             None => {
                 log::error!("Failed to add genome - at maximum capacity");
                 return None;
             }
         };
-        let genome_was_added = self.genomes.len() > genome_count_before;
         let mode_idx = genome.initial_mode.max(0) as usize;
         
-        // If a new genome was added, sync settings to GPU
-        if genome_was_added {
+        // Sync settings to GPU if genome was added or updated
+        if needs_sync {
             self.sync_adhesion_settings(queue);
         }
         
