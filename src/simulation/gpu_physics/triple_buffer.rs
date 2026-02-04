@@ -945,8 +945,12 @@ impl GpuTripleBufferSystem {
         // Total: 12 floats = 48 bytes per mode
         let mut properties_data: Vec<[f32; 12]> = Vec::new();
         
-        for genome in genomes {
-            for mode in &genome.modes {
+        let mut global_mode_idx = 0usize;
+        for (genome_idx, genome) in genomes.iter().enumerate() {
+            for (mode_idx, mode) in genome.modes.iter().enumerate() {
+                log::debug!("[SYNC MODE PROPS] genome={} mode={} global={} nutrient_priority={} prioritize_when_low={} cell_type={:?}",
+                    genome_idx, mode_idx, global_mode_idx, mode.nutrient_priority, mode.prioritize_when_low, mode.cell_type);
+                global_mode_idx += 1;
                 // Convert max_splits: -1 (infinite) -> 0 (unlimited in GPU)
                 let gpu_max_splits = if mode.max_splits < 0 { 0.0 } else { mode.max_splits as f32 };
                 properties_data.push([
@@ -1000,12 +1004,35 @@ impl GpuTripleBufferSystem {
     }
     
     /// Incremental sync of mode properties for a single genome
-    pub fn incremental_sync_mode_properties(&self, _device: &wgpu::Device, genome_id: usize, global_start_index: usize, mode_count: usize) {
-        // This would need access to the specific genome data
-        // For now, we'll use the existing sync_mode_properties but with better isolation
-        // In a full implementation, this would only update the specific genome's portion
-        log::info!("Incremental sync of mode properties for genome {} at index {} ({} modes)", 
-            genome_id, global_start_index, mode_count);
+    pub fn incremental_sync_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
+        // Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval] (vec4)
+        //                  [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
+        //                  [max_splits, split_ratio, padding, padding] (vec4)
+        // Total: 12 floats = 48 bytes per mode
+        let mut properties_data: Vec<[f32; 12]> = Vec::new();
+        
+        for mode in &genome.modes {
+            let gpu_max_splits = if mode.max_splits < 0 { 0.0 } else { mode.max_splits as f32 };
+            properties_data.push([
+                mode.nutrient_gain_rate,
+                mode.max_cell_size,
+                mode.membrane_stiffness,
+                mode.split_interval,
+                mode.split_mass,
+                mode.nutrient_priority,
+                mode.swim_force,
+                if mode.prioritize_when_low { 1.0 } else { 0.0 },
+                gpu_max_splits,
+                mode.split_ratio,
+                0.0, // padding
+                0.0, // padding
+            ]);
+        }
+        
+        if !properties_data.is_empty() {
+            let offset = (global_start_index * 48) as u64; // 48 bytes per mode
+            queue.write_buffer(&self.mode_properties, offset, bytemuck::cast_slice(&properties_data));
+        }
     }
     
     /// Incremental sync of child mode indices for a single genome
@@ -1300,6 +1327,13 @@ impl GpuTripleBufferSystem {
     pub fn reset_slot_allocator(&mut self) {
         self.slot_allocator.reset();
         self.cell_addition_pipeline.clear_pending();
+    }
+    
+    /// Reset ring buffers to empty state (for scene reset)
+    /// Clears ring_state to [0, 0, 0, 0] (head=0, tail=0, next_slot_id=0, reservation_count=0)
+    pub fn reset_ring_buffers(&self, queue: &wgpu::Queue) {
+        let ring_state_data: [u32; 4] = [0, 0, 0, 0];
+        queue.write_buffer(&self.ring_state, 0, bytemuck::cast_slice(&ring_state_data));
     }
     
     /// Synchronize slot allocator with canonical state

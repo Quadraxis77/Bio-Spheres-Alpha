@@ -91,6 +91,7 @@ pub fn execute_gpu_physics_step(
     cached_bind_groups: &CachedBindGroups,
     delta_time: f32,
     current_time: f32,
+    current_frame: i32,
     world_diameter: f32,
     gravity: f32,
     gravity_dir: [bool; 3],
@@ -107,7 +108,7 @@ pub fn execute_gpu_physics_step(
     let params = PhysicsParams {
         delta_time,
         current_time,
-        current_frame: 0,
+        current_frame,
         cell_count: 0, // Placeholder - shaders read from cell_count_buffer
         world_size,
         boundary_stiffness: 500.0,
@@ -126,6 +127,10 @@ pub fn execute_gpu_physics_step(
         _padding: [0.0; 48],
     };
     queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
+    
+    // Clear mass_deltas buffer before nutrient transport (prevents race condition where
+    // atomicStore inside shader overwrites transfers from other cells)
+    encoder.clear_buffer(&triple_buffers.mass_deltas_buffer, 0, None);
     
     // Use cached bind groups (no per-frame allocation!)
     let physics_bind_group = &cached_bind_groups.physics[current_index];

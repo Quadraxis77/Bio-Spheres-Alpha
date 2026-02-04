@@ -96,6 +96,8 @@ pub struct GpuScene {
     parent_make_adhesion_flags: Vec<bool>,
     /// Accumulated time for fixed timestep physics
     time_accumulator: f32,
+    /// Current frame counter (for shader time-based logic)
+    current_frame: i32,
     /// Whether this is the first frame (no Hi-Z data yet)
     first_frame: bool,
     /// Whether GPU readbacks are enabled (cell count, etc.)
@@ -316,6 +318,7 @@ impl GpuScene {
             genome_buffer_manager,
             parent_make_adhesion_flags: Vec::new(),
             time_accumulator: 0.0,
+            current_frame: 0,
             first_frame: true,
             readbacks_enabled: true,
             time_scale: 1.0,
@@ -397,6 +400,7 @@ impl GpuScene {
         self.next_cell_id = 0;
         self.current_time = 0.0;
         self.time_accumulator = 0.0;
+        self.current_frame = 0;
         self.paused = false;
         self.first_frame = true;
         
@@ -415,6 +419,8 @@ impl GpuScene {
         queue.write_buffer(&self.gpu_triple_buffers.next_cell_id, 0, bytemuck::cast_slice(&next_id));
         // Reset deterministic cell addition system
         self.gpu_triple_buffers.reset_slot_allocator();
+        // Reset ring buffers to empty state
+        self.gpu_triple_buffers.reset_ring_buffers(queue);
 
         // Mark GPU buffers as needing sync (will be no-op since cell_count is 0)
         self.gpu_triple_buffers.mark_needs_sync();
@@ -545,6 +551,9 @@ impl GpuScene {
         }
 
         // Execute pure GPU physics pipeline (7 compute shader stages + cave collision if enabled)
+        // Run phagocyte nutrient consumption BEFORE physics so nutrients are available for transport
+        self.run_phagocyte_consumption(device, encoder, queue);
+        
         // Cell count is read from GPU buffer by shaders
         // Uses cached bind groups (no per-frame allocation!)
         execute_gpu_physics_step(
@@ -556,12 +565,16 @@ impl GpuScene {
             &self.cached_bind_groups,
             delta_time,
             self.current_time,
+            self.current_frame,
             world_diameter,
             self.gravity,
             self.gravity_dir,
             self.cave_renderer.as_ref(),
             self.cave_physics_bind_groups.as_ref(),
         );
+        
+        // Increment frame counter for time-based shader logic
+        self.current_frame = self.current_frame.wrapping_add(1);
         
         // Execute lifecycle pipeline for cell division (4 compute shader stages)
         // This handles death detection, free slot compaction, and cell division
@@ -585,9 +598,6 @@ impl GpuScene {
             &self.gpu_triple_buffers,
             &self.cached_bind_groups,
         );
-        
-        // Run phagocyte nutrient consumption (after physics so positions are updated)
-        self.run_phagocyte_consumption(device, encoder, queue);
         
         // Copy GPU physics output to instance builder's buffers
         self.copy_buffers_to_instance_builder(encoder);
@@ -748,7 +758,7 @@ impl GpuScene {
     
     /// Update the working genome with new settings.
     /// Performs incremental update to avoid affecting other genomes
-    pub fn update_genome(&mut self, device: &wgpu::Device, genome: &Genome) -> Option<usize> {
+    pub fn update_genome(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, genome: &Genome) -> Option<usize> {
         // Find existing genome by name
         let genome_id = match self.genomes.iter().position(|g| g.name == genome.name) {
             Some(id) => id,
@@ -758,12 +768,13 @@ impl GpuScene {
             }
         };
         
-        // Check if genome actually changed by comparing key fields
+        // Check if genome actually changed by comparing key fields including mode contents
         let existing_genome = &self.genomes[genome_id];
         let genome_unchanged = existing_genome.name == genome.name 
             && existing_genome.modes.len() == genome.modes.len()
             && existing_genome.initial_mode == genome.initial_mode
-            && existing_genome.initial_orientation == genome.initial_orientation;
+            && existing_genome.initial_orientation == genome.initial_orientation
+            && Self::modes_are_identical(&existing_genome.modes, &genome.modes);
             
         if genome_unchanged {
             return Some(genome_id); // No change needed
@@ -773,7 +784,7 @@ impl GpuScene {
         self.genomes[genome_id] = genome.clone();
         
         // Perform incremental sync of only this genome's data
-        self.incremental_sync_genome(device, genome_id);
+        self.incremental_sync_genome(device, queue, genome_id);
         
         Some(genome_id)
     }
@@ -830,18 +841,19 @@ impl GpuScene {
     
     /// Incremental sync of a single genome's data to GPU buffers
     /// This avoids rebuilding the entire buffer layout which would affect other genomes
-    fn incremental_sync_genome(&mut self, device: &wgpu::Device, genome_id: usize) {
-        let genome = &self.genomes[genome_id];
-        
+    fn incremental_sync_genome(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, genome_id: usize) {
         // Calculate global mode index range for this genome
         let global_start_index = self.get_global_mode_index(genome_id, 0);
-        let mode_count = genome.modes.len();
+        let mode_count = self.genomes[genome_id].modes.len();
         
         // Update adhesion settings for this genome's modes only
         self.incremental_sync_adhesion_settings(genome_id, global_start_index, mode_count);
         
+        // Clone genome to avoid borrow conflicts
+        let genome = self.genomes[genome_id].clone();
+        
         // Update mode properties for this genome's modes only
-        self.gpu_triple_buffers.incremental_sync_mode_properties(device, genome_id, global_start_index, mode_count);
+        self.gpu_triple_buffers.incremental_sync_mode_properties(queue, &genome, global_start_index);
         
         // Update child mode indices for this genome's modes only
         self.gpu_triple_buffers.incremental_sync_child_mode_indices(device, genome_id, global_start_index, mode_count);
@@ -853,7 +865,7 @@ impl GpuScene {
         self.gpu_triple_buffers.incremental_sync_mode_cell_types(device, genome_id, global_start_index, mode_count);
         
         // Update parent_make_adhesion flags for this genome's modes only
-        self.incremental_sync_parent_make_adhesion_flags(genome_id, global_start_index, mode_count);
+        self.incremental_sync_parent_make_adhesion_flags(queue, genome_id, global_start_index, mode_count);
         
         log::info!("Incrementally synced genome {} (modes: {} at global index {})", 
             genome_id, mode_count, global_start_index);
@@ -894,7 +906,7 @@ impl GpuScene {
     }
     
     /// Incremental sync of parent_make_adhesion flags for a single genome
-    fn incremental_sync_parent_make_adhesion_flags(&mut self, genome_id: usize, global_start_index: usize, mode_count: usize) {
+    fn incremental_sync_parent_make_adhesion_flags(&mut self, queue: &wgpu::Queue, genome_id: usize, global_start_index: usize, mode_count: usize) {
         let genome = &self.genomes[genome_id];
         
         // Ensure parent_make_adhesion_flags is large enough
@@ -904,9 +916,17 @@ impl GpuScene {
         }
         
         // Update flags for this genome's modes only
+        let mut flags_data: Vec<u32> = Vec::with_capacity(mode_count);
         for (i, mode) in genome.modes.iter().enumerate() {
             let global_index = global_start_index + i;
             self.parent_make_adhesion_flags[global_index] = mode.parent_make_adhesion;
+            flags_data.push(if mode.parent_make_adhesion { 1 } else { 0 });
+        }
+        
+        // Sync to GPU buffer at the correct offset
+        if !flags_data.is_empty() {
+            let offset = (global_start_index * std::mem::size_of::<u32>()) as u64;
+            queue.write_buffer(&self.gpu_triple_buffers.parent_make_adhesion_flags, offset, bytemuck::cast_slice(&flags_data));
         }
     }
     

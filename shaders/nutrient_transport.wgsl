@@ -66,11 +66,18 @@ var<storage, read> mode_indices: array<u32>;
 var<storage, read> genome_ids: array<u32>;
 
 // Adhesion system bind group (group 2)
+// Matches adhesion_layout: binding 0 = connections, 1 = settings, 2 = counts, 3 = cell_adhesion_indices
 @group(2) @binding(0)
 var<storage, read> adhesion_connections: array<AdhesionConnection>;
 
 @group(2) @binding(1)
-var<storage, read> adhesion_indices: array<array<i32, 20>>;
+var<storage, read> adhesion_settings: array<vec4<f32>>;  // Not used but must match layout
+
+@group(2) @binding(2)
+var<storage, read> adhesion_counts: array<u32>;  // Not used but must match layout
+
+@group(2) @binding(3)
+var<storage, read> adhesion_indices: array<array<i32, 10>>;  // MAX_ADHESIONS_PER_CELL = 10
 
 // Nutrient transport bind group (group 3) - mass deltas and mode properties
 @group(3) @binding(0)
@@ -88,7 +95,7 @@ var<storage, read> split_ready_frame: array<i32>;
 @group(3) @binding(4)
 var<storage, read> mode_cell_types: array<u32>;
 
-// Adhesion connection structure (exactly 96 bytes, matching reference)
+// Adhesion connection structure (exactly 104 bytes, matching Rust GpuAdhesionConnection)
 struct AdhesionConnection {
     cell_a_index: u32,
     cell_b_index: u32,
@@ -96,12 +103,12 @@ struct AdhesionConnection {
     is_active: u32,
     zone_a: u32,
     zone_b: u32,
-    anchor_direction_a: vec3<f32>,
-    _pad_a: f32,
-    anchor_direction_b: vec3<f32>,
-    _pad_b: f32,
+    _align_pad: vec2<u32>,            // Padding to align anchor_direction_a
+    anchor_direction_a: vec4<f32>,    // xyz = direction, w = padding
+    anchor_direction_b: vec4<f32>,    // xyz = direction, w = padding
     twist_reference_a: vec4<f32>,
     twist_reference_b: vec4<f32>,
+    _padding: vec2<u32>,              // Final padding to match 104 bytes
 }
 
 // Mode properties structure (48 bytes per mode)
@@ -166,8 +173,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Initialize mass delta to 0 (atomic)
-    atomicStore(&mass_deltas[cell_idx], 0);
+    // NOTE: mass_deltas is cleared by CPU before this shader runs (encoder.clear_buffer)
+    // This prevents a race condition where atomicStore would overwrite transfers from other cells
     
     // Read current mass from positions buffer
     let current_mass = positions_out[cell_idx].w;
@@ -198,25 +205,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         atomicAdd(&mass_deltas[cell_idx], consumption_fixed);
     }
     
-    // Step 2: Check for cell death from starvation (preliminary check)
-    // We'll do a final check after transport
-    // NOTE: Do NOT set death_flags here - let lifecycle death_scan handle it
-    // death_scan checks mass < threshold and pushes slots to ring buffer
-    let preliminary_mass_delta = fixed_to_float(atomicLoad(&mass_deltas[cell_idx]));
-    let preliminary_final_mass = current_mass + preliminary_mass_delta;
+    // NOTE: No early death check here - we must let transport happen first
+    // so starving cells can receive nutrients from neighbors before dying
     
-    if (preliminary_final_mass < MIN_CELL_MASS) {
-        // Write the reduced mass so lifecycle death_scan can detect it
-        let pos = positions_out[cell_idx].xyz;
-        positions_out[cell_idx] = vec4<f32>(pos, max(preliminary_final_mass, 0.0));
-        return;  // Skip nutrient transport for dying cells
-    }
-    
-    // Step 3: Nutrient transport between adhesion-connected cells
+    // Step 2: Nutrient transport between adhesion-connected cells
     // Process adhesions where this cell is cell_a (to avoid double processing)
     let adhesion_list = adhesion_indices[cell_idx];
     
-    for (var i = 0; i < 20; i++) {
+    for (var i = 0; i < 10; i++) {  // MAX_ADHESIONS_PER_CELL = 10
         let adhesion_idx = adhesion_list[i];
         if (adhesion_idx < 0 || adhesion_idx >= i32(arrayLength(&adhesion_connections))) {
             continue;
