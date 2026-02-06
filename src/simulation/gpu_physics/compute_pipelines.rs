@@ -556,11 +556,12 @@ impl GpuPhysicsPipelines {
         );
         
         // Stage 2: Division scan - allocates slots from ring buffer for dividing cells
+        // Group 3 = division_scan_adhesion_layout for neighbor deferral check
         let lifecycle_division_scan = Self::create_compute_pipeline(
             device,
             include_str!("../../../shaders/lifecycle_unified.wgsl"),
             "division_scan",
-            &[&physics_layout, &lifecycle_layout, &cell_state_read_layout],
+            &[&physics_layout, &lifecycle_layout, &cell_state_read_layout, &division_scan_adhesion_layout],
             "Lifecycle Division Scan",
         );
         

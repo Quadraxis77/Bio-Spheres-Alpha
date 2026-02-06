@@ -113,6 +113,31 @@ var<storage, read> mode_cell_types: array<u32>;
 @group(2) @binding(9)
 var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
 
+// Adhesion bind group (group 3) - read-only for neighbor deferral check in division_scan
+@group(3) @binding(0)
+var<storage, read> adhesion_connections: array<AdhesionConnection>;
+
+@group(3) @binding(1)
+var<storage, read> cell_adhesion_indices: array<i32>;
+
+// Adhesion connection structure (104 bytes matching Rust GpuAdhesionConnection)
+struct AdhesionConnection {
+    cell_a_index: u32,
+    cell_b_index: u32,
+    mode_index: u32,
+    is_active: u32,
+    zone_a: u32,
+    zone_b: u32,
+    _align_pad: vec2<u32>,
+    anchor_direction_a: vec4<f32>,
+    anchor_direction_b: vec4<f32>,
+    twist_reference_a: vec4<f32>,
+    twist_reference_b: vec4<f32>,
+    _padding: vec2<u32>,
+};
+
+const MAX_ADHESIONS_PER_CELL: u32 = 10u;
+
 // Constants
 const DEATH_MASS_THRESHOLD: f32 = 0.5;
 const RING_BUFFER_CAPACITY: u32 = 262144u; // 256K slots, must match Rust side (supports 200K cells)
@@ -253,20 +278,126 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let time_ready = (behavior.ignores_split_interval != 0u) || (age >= split_interval);
     let splits_remaining = current_splits < max_split || max_split == 0u;
     
-    if (mass_ready && time_ready && splits_remaining) {
-        // Cell wants to divide - try to allocate a slot
-        let child_slot = allocate_slot();
-        
-        if (child_slot != 0xFFFFFFFFu) {
-            // Successfully allocated slot
-            division_flags[cell_idx] = 1u;
-            division_slot_assignments[cell_idx] = child_slot;
-            atomicAdd(&ring_state[3], 1u); // Debug counter
-        } else {
-            // At capacity, defer division
-            division_flags[cell_idx] = 0u;
+    let wants_to_divide = mass_ready && time_ready && splits_remaining;
+    
+    if (!wants_to_divide) {
+        division_flags[cell_idx] = 0u;
+        return;
+    }
+    
+    // Check if cell has room for the new sibling adhesion (max adhesions check)
+    let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
+    var adhesion_count = 0u;
+    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+        if (cell_adhesion_indices[adhesion_base + i] >= 0) {
+            adhesion_count++;
         }
+    }
+    if (adhesion_count >= MAX_ADHESIONS_PER_CELL) {
+        division_flags[cell_idx] = 0u;
+        return;
+    }
+    
+    // === DEFERRAL CHECK ===
+    // Check if any neighbor (via adhesion) also wants to divide.
+    // If so, the cell with the HIGHER index defers to avoid race conditions
+    // during adhesion inheritance in division_execute.
+    //
+    // This ensures deterministic behavior: when two connected cells both want
+    // to divide, only the one with the lower index divides this frame.
+    // The deferred cell will divide next frame after adhesion inheritance is complete.
+    //
+    // CRITICAL: This check must happen BEFORE allocate_slot() to avoid
+    // consuming and leaking ring buffer slots for cells that won't divide.
+    
+    var should_defer = false;
+    
+    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+        let adh_idx_signed = cell_adhesion_indices[adhesion_base + i];
+        
+        // Skip empty slots
+        if (adh_idx_signed < 0) {
+            continue;
+        }
+        
+        let adh_idx = u32(adh_idx_signed);
+        let conn = adhesion_connections[adh_idx];
+        
+        // Skip inactive connections
+        if (conn.is_active == 0u) {
+            continue;
+        }
+        
+        // Get the neighbor's index
+        var neighbor_idx: u32;
+        if (conn.cell_a_index == cell_idx) {
+            neighbor_idx = conn.cell_b_index;
+        } else if (conn.cell_b_index == cell_idx) {
+            neighbor_idx = conn.cell_a_index;
+        } else {
+            // Connection doesn't involve this cell (shouldn't happen)
+            continue;
+        }
+        
+        // Skip if neighbor is out of bounds or dead
+        if (neighbor_idx >= cell_count || death_flags[neighbor_idx] == 1u) {
+            continue;
+        }
+        
+        // Re-evaluate ALL division criteria for the neighbor
+        // (can't trust flags - they haven't been written yet by other threads)
+        let neighbor_mass = positions_out[neighbor_idx].w;
+        let neighbor_split_mass = split_masses[neighbor_idx];
+        
+        // Quick check: neighbor set to "never split"
+        if (neighbor_split_mass > 3.0) {
+            continue;
+        }
+        
+        let neighbor_birth_time = birth_times[neighbor_idx];
+        let neighbor_split_interval = split_intervals[neighbor_idx];
+        let neighbor_current_splits = split_counts[neighbor_idx];
+        let neighbor_max_splits = max_splits[neighbor_idx];
+        let neighbor_age = params.current_time - neighbor_birth_time;
+        
+        // Derive neighbor's cell_type from mode (always up-to-date)
+        let neighbor_mode_idx = mode_indices[neighbor_idx];
+        let neighbor_cell_type = mode_cell_types[neighbor_mode_idx];
+        let neighbor_behavior = type_behaviors[neighbor_cell_type];
+        
+        let neighbor_mass_ready = neighbor_mass >= neighbor_split_mass;
+        let neighbor_time_ready = (neighbor_behavior.ignores_split_interval != 0u) || (neighbor_age >= neighbor_split_interval);
+        let neighbor_splits_remaining = neighbor_current_splits < neighbor_max_splits || neighbor_max_splits == 0u;
+        
+        let neighbor_wants_to_divide = neighbor_mass_ready && neighbor_time_ready && neighbor_splits_remaining;
+        
+        if (!neighbor_wants_to_divide) {
+            continue;
+        }
+        
+        // Neighbor wants to split too - lower index wins priority
+        if (neighbor_idx < cell_idx) {
+            should_defer = true;
+            break;
+        }
+    }
+    
+    // If we should defer, don't divide this frame
+    if (should_defer) {
+        division_flags[cell_idx] = 0u;
+        return;
+    }
+    
+    // Deferral check passed - now try to allocate a slot
+    let child_slot = allocate_slot();
+    
+    if (child_slot != 0xFFFFFFFFu) {
+        // Successfully allocated slot
+        division_flags[cell_idx] = 1u;
+        division_slot_assignments[cell_idx] = child_slot;
+        atomicAdd(&ring_state[3], 1u); // Debug counter
     } else {
+        // At capacity, defer division
         division_flags[cell_idx] = 0u;
     }
 }

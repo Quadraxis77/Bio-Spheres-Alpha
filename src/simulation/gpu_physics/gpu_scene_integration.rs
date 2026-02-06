@@ -320,6 +320,7 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.set_bind_group(2, cell_state_read_bind_group, &[]);
+        compute_pass.set_bind_group(3, &cached_bind_groups.division_scan_adhesion, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
         
         drop(compute_pass);
