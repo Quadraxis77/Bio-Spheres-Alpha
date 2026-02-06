@@ -219,6 +219,46 @@ pub struct GenomeEditorState {
     /// Flag to indicate mesh needs regeneration (iso level changed)
     pub fluid_mesh_needs_regen: bool,
     
+    // Light field & volumetric fog settings
+    /// Light direction (x, y, z) - will be normalized
+    pub light_dir: [f32; 3],
+    /// Whether volumetric fog is enabled
+    pub show_volumetric_fog: bool,
+    /// Fog density (0.0 = no fog, 1.0 = dense)
+    pub fog_density: f32,
+    /// Number of fog ray march steps
+    pub fog_steps: u32,
+    /// Light color RGB
+    pub light_color: [f32; 3],
+    /// Light intensity multiplier
+    pub light_intensity: f32,
+    /// Fog/shadow color RGB
+    pub fog_color: [f32; 3],
+    /// Scattering anisotropy (Henyey-Greenstein g, 0 = isotropic, ~0.7 = forward scatter)
+    pub fog_scattering_anisotropy: f32,
+    /// Fog absorption coefficient
+    pub fog_absorption: f32,
+    /// Height fog density
+    pub fog_height_density: f32,
+    /// Height fog falloff
+    pub fog_height_falloff: f32,
+    /// Light field max ray march steps
+    pub light_field_max_steps: u32,
+    /// Light field step size multiplier
+    pub light_field_step_size: f32,
+    /// Absorption per solid voxel
+    pub light_field_absorption_solid: f32,
+    /// Absorption per cell-occupied voxel
+    pub light_field_absorption_cell: f32,
+    /// Ambient light floor
+    pub light_field_ambient_floor: f32,
+    /// Photocyte mass gain rate at full light
+    pub photocyte_mass_per_second: f32,
+    /// Photocyte minimum light threshold
+    pub photocyte_min_light_threshold: f32,
+    /// Flag to indicate light params need GPU update
+    pub light_params_dirty: bool,
+    
     // Orientation gizmo state
     /// Whether the orientation gizmo is visible
     pub gizmo_visible: bool,
@@ -256,6 +296,11 @@ impl GenomeEditorState {
         let (fluid_gravity, fluid_gravity_x, fluid_gravity_y, fluid_gravity_z, 
              fluid_vorticity_epsilon, fluid_pressure_iterations, fluid_lateral_flow_probabilities,
              _fluid_continuous_spawn, selected_fluid_type, fluid_condensation_probability, fluid_vaporization_probability, nutrient_density) = Self::load_fluid_settings();
+        
+        let (light_dir, show_volumetric_fog, fog_density, fog_steps, light_color, light_intensity,
+             fog_color, fog_scattering_anisotropy, fog_absorption, fog_height_density, fog_height_falloff,
+             light_field_max_steps, light_field_step_size, light_field_absorption_solid,
+             light_field_absorption_cell, light_field_ambient_floor) = Self::load_light_settings();
         
         Self {
             renaming_mode: None,
@@ -340,6 +385,25 @@ impl GenomeEditorState {
             fluid_rim: 0.5,
             fluid_mesh_params_dirty: false,
             fluid_mesh_needs_regen: false,
+            light_dir,
+            show_volumetric_fog,
+            fog_density,
+            fog_steps,
+            light_color,
+            light_intensity,
+            fog_color,
+            fog_scattering_anisotropy,
+            fog_absorption,
+            fog_height_density,
+            fog_height_falloff,
+            light_field_max_steps,
+            light_field_step_size,
+            light_field_absorption_solid,
+            light_field_absorption_cell,
+            light_field_ambient_floor,
+            photocyte_mass_per_second: 0.3,
+            photocyte_min_light_threshold: 0.05,
+            light_params_dirty: true,
             gizmo_visible: true,
             split_rings_visible: true,
             radial_menu: crate::ui::radial_menu::RadialMenuState::new(),
@@ -533,6 +597,173 @@ impl GenomeEditorState {
         
         // Return defaults
         (0.5, 100.0, 2u32, 0.5, 1.0, 0.0, 12345u32, 128u32)
+    }
+    
+    /// Save light settings to disk.
+    pub fn save_light_settings(&self) {
+        if let Err(e) = Self::save_light_settings_to_file(
+            self.light_dir,
+            self.show_volumetric_fog,
+            self.fog_density,
+            self.fog_steps,
+            self.light_color,
+            self.light_intensity,
+            self.fog_color,
+            self.fog_scattering_anisotropy,
+            self.fog_absorption,
+            self.fog_height_density,
+            self.fog_height_falloff,
+            self.light_field_max_steps,
+            self.light_field_step_size,
+            self.light_field_absorption_solid,
+            self.light_field_absorption_cell,
+            self.light_field_ambient_floor,
+        ) {
+            log::warn!("Failed to save light settings: {}", e);
+        }
+    }
+    
+    fn save_light_settings_to_file(
+        light_dir: [f32; 3],
+        show_volumetric_fog: bool,
+        fog_density: f32,
+        fog_steps: u32,
+        light_color: [f32; 3],
+        light_intensity: f32,
+        fog_color: [f32; 3],
+        fog_scattering_anisotropy: f32,
+        fog_absorption: f32,
+        fog_height_density: f32,
+        fog_height_falloff: f32,
+        light_field_max_steps: u32,
+        light_field_step_size: f32,
+        light_field_absorption_solid: f32,
+        light_field_absorption_cell: f32,
+        light_field_ambient_floor: f32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        #[derive(serde::Serialize)]
+        struct LightSettings {
+            light_dir: [f32; 3],
+            show_volumetric_fog: bool,
+            fog_density: f32,
+            fog_steps: u32,
+            light_color: [f32; 3],
+            light_intensity: f32,
+            fog_color: [f32; 3],
+            fog_scattering_anisotropy: f32,
+            fog_absorption: f32,
+            fog_height_density: f32,
+            fog_height_falloff: f32,
+            light_field_max_steps: u32,
+            light_field_step_size: f32,
+            light_field_absorption_solid: f32,
+            light_field_absorption_cell: f32,
+            light_field_ambient_floor: f32,
+        }
+        
+        let settings = LightSettings {
+            light_dir,
+            show_volumetric_fog,
+            fog_density,
+            fog_steps,
+            light_color,
+            light_intensity,
+            fog_color,
+            fog_scattering_anisotropy,
+            fog_absorption,
+            fog_height_density,
+            fog_height_falloff,
+            light_field_max_steps,
+            light_field_step_size,
+            light_field_absorption_solid,
+            light_field_absorption_cell,
+            light_field_ambient_floor,
+        };
+        
+        let path = PathBuf::from("light_settings.ron");
+        let contents = ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default())?;
+        std::fs::write(path, contents)?;
+        Ok(())
+    }
+    
+    /// Load light settings from disk, or return defaults if file doesn't exist.
+    pub fn load_light_settings() -> ([f32; 3], bool, f32, u32, [f32; 3], f32, [f32; 3], f32, f32, f32, f32, u32, f32, f32, f32, f32) {
+        #[derive(serde::Deserialize)]
+        struct LightSettings {
+            light_dir: [f32; 3],
+            show_volumetric_fog: bool,
+            fog_density: f32,
+            fog_steps: u32,
+            light_color: [f32; 3],
+            light_intensity: f32,
+            fog_color: [f32; 3],
+            fog_scattering_anisotropy: f32,
+            fog_absorption: f32,
+            fog_height_density: f32,
+            fog_height_falloff: f32,
+            light_field_max_steps: u32,
+            light_field_step_size: f32,
+            light_field_absorption_solid: f32,
+            light_field_absorption_cell: f32,
+            light_field_ambient_floor: f32,
+        }
+        
+        let path = PathBuf::from("light_settings.ron");
+        
+        if path.exists() {
+            match std::fs::read_to_string(&path) {
+                Ok(contents) => {
+                    match ron::from_str::<LightSettings>(&contents) {
+                        Ok(s) => {
+                            return (
+                                s.light_dir,
+                                s.show_volumetric_fog,
+                                s.fog_density,
+                                s.fog_steps,
+                                s.light_color,
+                                s.light_intensity,
+                                s.fog_color,
+                                s.fog_scattering_anisotropy,
+                                s.fog_absorption,
+                                s.fog_height_density,
+                                s.fog_height_falloff,
+                                s.light_field_max_steps,
+                                s.light_field_step_size,
+                                s.light_field_absorption_solid,
+                                s.light_field_absorption_cell,
+                                s.light_field_ambient_floor,
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to parse light settings: {}. Using defaults.", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to read light settings: {}. Using defaults.", e);
+                }
+            }
+        }
+        
+        // Return defaults
+        (
+            [-0.5, 0.7, 0.5],  // light_dir
+            true,               // show_volumetric_fog
+            0.15,               // fog_density
+            48,                 // fog_steps
+            [1.0, 0.95, 0.85], // light_color
+            2.0,                // light_intensity
+            [0.4, 0.5, 0.6],   // fog_color
+            0.6,                // fog_scattering_anisotropy
+            0.13,               // fog_absorption
+            1.35,               // fog_height_density
+            0.002,              // fog_height_falloff
+            128,                // light_field_max_steps
+            2.0,                // light_field_step_size
+            8.0,                // light_field_absorption_solid
+            5.0,                // light_field_absorption_cell
+            0.02,               // light_field_ambient_floor
+        )
     }
     
     /// Load fluid settings from disk, or return defaults if file doesn't exist.

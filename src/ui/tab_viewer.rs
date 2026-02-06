@@ -62,6 +62,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::CaveSystem => render_cave_system(ui, self.context),
             Panel::FluidSettings => render_fluid_settings(ui, self.context),
             Panel::WorldSettings => render_world_settings(ui, self.context, self.state),
+            Panel::LightSettings => render_light_settings(ui, self.context),
             Panel::TimeScrubber => render_time_scrubber(ui, self.context),
             Panel::ThemeEditor => render_theme_editor(ui),
             Panel::CameraSettings => render_camera_settings(ui, self.context),
@@ -969,6 +970,162 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
     
     ui.add_space(10.0);
 }
+/// Render the Light & Fog settings panel for light field, photocyte, and volumetric fog controls.
+fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
+    if !context.is_gpu_mode() {
+        ui.label("Light & Fog settings are only available in GPU mode.");
+        return;
+    }
+    
+    let has_light_field = context.scene_manager.gpu_scene()
+        .map(|s| s.light_field_system.is_some())
+        .unwrap_or(false);
+    
+    if !has_light_field {
+        ui.label("Light field system not initialized.");
+        ui.add_space(5.0);
+        ui.label("Initialize the fluid system first to enable light & fog.");
+        return;
+    }
+    
+    let mut changed = false;
+    
+    // === Light Direction ===
+    ui.heading("Light Direction");
+    ui.add_space(4.0);
+    
+    ui.label("X:");
+    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[0], -1.0..=1.0)
+        .step_by(0.01).fixed_decimals(2)).changed();
+    ui.label("Y:");
+    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[1], -1.0..=1.0)
+        .step_by(0.01).fixed_decimals(2)).changed();
+    ui.label("Z:");
+    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[2], -1.0..=1.0)
+        .step_by(0.01).fixed_decimals(2)).changed();
+    
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        if ui.button("☀ Top-Down").clicked() {
+            context.editor_state.light_dir = [0.0, 1.0, 0.0];
+            changed = true;
+        }
+        if ui.button("🌅 Sunset").clicked() {
+            context.editor_state.light_dir = [-0.7, 0.3, 0.5];
+            changed = true;
+        }
+        if ui.button("↗ Default").clicked() {
+            context.editor_state.light_dir = [-0.5, 0.7, 0.5];
+            changed = true;
+        }
+    });
+    
+    // === Light Color ===
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("Light Color");
+    ui.add_space(4.0);
+    
+    let mut color = context.editor_state.light_color;
+    ui.label("R:");
+    changed |= ui.add(egui::Slider::new(&mut color[0], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+    ui.label("G:");
+    changed |= ui.add(egui::Slider::new(&mut color[1], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+    ui.label("B:");
+    changed |= ui.add(egui::Slider::new(&mut color[2], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+    context.editor_state.light_color = color;
+    
+    ui.label("Intensity:");
+    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_intensity, 0.1..=10.0)
+        .step_by(0.1).fixed_decimals(1)).changed();
+    
+    // === Light Field Settings ===
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("Light Field (Shadows)");
+    ui.add_space(4.0);
+    
+    ui.label("Ray Steps:");
+    let mut steps = context.editor_state.light_field_max_steps as i32;
+    if ui.add(egui::Slider::new(&mut steps, 1..=256)).changed() {
+        context.editor_state.light_field_max_steps = steps as u32;
+        changed = true;
+    }
+    
+    ui.label("Step Size:");
+    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_step_size, 0.5..=4.0)
+        .step_by(0.1).fixed_decimals(1)).changed();
+    
+    ui.label("Solid Absorption:");
+    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_absorption_solid, 0.1..=20.0)
+        .step_by(0.1).fixed_decimals(1)).changed();
+    
+    ui.label("Cell Absorption:");
+    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_absorption_cell, 0.0..=5.0)
+        .step_by(0.05).fixed_decimals(2)).changed();
+    
+    ui.label("Ambient Floor:");
+    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_ambient_floor, 0.0..=0.2)
+        .step_by(0.005).fixed_decimals(3)).changed();
+    
+    // === Volumetric Fog ===
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("Volumetric Fog");
+    ui.add_space(4.0);
+    
+    changed |= ui.checkbox(&mut context.editor_state.show_volumetric_fog, "Enable Volumetric Fog").changed();
+    
+    if context.editor_state.show_volumetric_fog {
+        ui.add_space(4.0);
+        ui.label("Fog Density:");
+        changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_density, 0.0..=2.0)
+            .step_by(0.01).fixed_decimals(2)).changed();
+        
+        ui.label("Fog Steps:");
+        let mut fsteps = context.editor_state.fog_steps as i32;
+        if ui.add(egui::Slider::new(&mut fsteps, 8..=128)).changed() {
+            context.editor_state.fog_steps = fsteps as u32;
+            changed = true;
+        }
+        
+        ui.label("Scattering Anisotropy:");
+        changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_scattering_anisotropy, 0.0..=0.95)
+            .step_by(0.01).fixed_decimals(2)).changed();
+        
+        ui.label("Absorption:");
+        changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_absorption, 0.0..=2.0)
+            .step_by(0.01).fixed_decimals(2)).changed();
+        
+        ui.add_space(4.0);
+        let mut fog_col = context.editor_state.fog_color;
+        ui.label("Fog Color R:");
+        changed |= ui.add(egui::Slider::new(&mut fog_col[0], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+        ui.label("Fog Color G:");
+        changed |= ui.add(egui::Slider::new(&mut fog_col[1], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+        ui.label("Fog Color B:");
+        changed |= ui.add(egui::Slider::new(&mut fog_col[2], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+        context.editor_state.fog_color = fog_col;
+        
+        ui.add_space(4.0);
+        ui.label("Height Fog Density:");
+        changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_height_density, 0.0..=2.0)
+            .step_by(0.01).fixed_decimals(2)).changed();
+        
+        ui.label("Height Fog Falloff:");
+        changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_height_falloff, 0.001..=0.1)
+            .step_by(0.001).fixed_decimals(3)).changed();
+    }
+    
+    // Mark dirty and save if any parameter changed
+    if changed {
+        context.editor_state.light_params_dirty = true;
+        context.editor_state.save_light_settings();
+    }
+    
+    ui.add_space(10.0);
+}
+
 /// Render the TimeScrubber panel (placeholder).
 fn render_time_scrubber(ui: &mut Ui, context: &mut PanelContext) {
     ui.heading("Time Scrubber");

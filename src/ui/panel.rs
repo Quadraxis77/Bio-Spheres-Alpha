@@ -52,6 +52,8 @@ pub enum Panel {
     FluidSettings,
     /// World settings for simulation parameters and physics.
     WorldSettings,
+    /// Light field and volumetric fog settings.
+    LightSettings,
 
     // Genome editor sub-panels
     /// Cell modes list panel.
@@ -96,6 +98,7 @@ impl Panel {
             Panel::CaveSystem => true,
             Panel::FluidSettings => true,
             Panel::WorldSettings => true,
+            Panel::LightSettings => true,
             Panel::Help => true,
 
             // Preview mode only (genome editing)
@@ -144,6 +147,7 @@ impl Panel {
                 Panel::CaveSystem,
                 Panel::FluidSettings,
                 Panel::WorldSettings,
+                Panel::LightSettings,
                 Panel::GizmoSettings,
             ],
         }
@@ -170,6 +174,7 @@ impl Panel {
             Panel::CaveSystem,
             Panel::FluidSettings,
             Panel::WorldSettings,
+            Panel::LightSettings,
             Panel::Modes,
             Panel::NameTypeEditor,
             Panel::AdhesionSettings,
@@ -203,6 +208,7 @@ impl Panel {
             Panel::CaveSystem => "Cave System",
             Panel::FluidSettings => "Fluid System",
             Panel::WorldSettings => "World Settings",
+            Panel::LightSettings => "Light & Fog",
             Panel::Modes => "Modes",
             Panel::NameTypeEditor => "Name & Type",
             Panel::AdhesionSettings => "Adhesion Settings",

@@ -4,11 +4,11 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, NutrientParticleRenderer, SteamParticleRenderer, TailRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
+use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, NutrientParticleRenderer, SteamParticleRenderer, TailRenderer, VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
-use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, PhagocyteConsumptionSystem};
+use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem};
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
@@ -214,6 +214,12 @@ pub struct GpuScene {
     phagocyte_consumption: Option<PhagocyteConsumptionSystem>,
     /// Cached phagocyte consumption nutrient bind group (physics bind group created fresh each frame)
     phagocyte_nutrient_bind_group: Option<wgpu::BindGroup>,
+    /// Light field system for photocyte nutrients and volumetric fog
+    pub light_field_system: Option<LightFieldSystem>,
+    /// Volumetric fog renderer
+    pub volumetric_fog_renderer: Option<VolumetricFogRenderer>,
+    /// Whether to show volumetric fog
+    pub show_volumetric_fog: bool,
 }
 
 impl GpuScene {
@@ -377,6 +383,9 @@ impl GpuScene {
             nutrient_render_bind_group: None,
             phagocyte_consumption: None,
             phagocyte_nutrient_bind_group: None,
+            light_field_system: None,
+            volumetric_fog_renderer: None,
+            show_volumetric_fog: false,
         }
     }
 
@@ -645,6 +654,31 @@ impl GpuScene {
         if let Some(ref nutrient_bg) = &self.phagocyte_nutrient_bind_group {
             consumption_system.run(encoder, &physics_bg, nutrient_bg, self.current_cell_count);
         }
+    }
+    
+    /// Run light field computation and photocyte light consumption.
+    /// Must run every frame (even with 0 cells) so cave shadows are computed for volumetric fog.
+    fn run_light_field(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
+        let (light_field, fluid_sim) = match (&self.light_field_system, &self.fluid_simulator) {
+            (Some(l), Some(f)) => (l, f),
+            _ => return,
+        };
+        
+        let output_idx = self.gpu_triple_buffers.output_buffer_index();
+        
+        light_field.run(
+            encoder,
+            device,
+            queue,
+            fluid_sim.solid_mask_buffer(),
+            &self.gpu_triple_buffers.position_and_mass[output_idx],
+            &self.gpu_triple_buffers.cell_count_buffer,
+            &self.gpu_triple_buffers.physics_params,
+            &self.gpu_triple_buffers.cell_types,
+            &self.gpu_triple_buffers.max_cell_sizes,
+            self.current_cell_count,
+            self.current_time,
+        );
     }
     
     /// Copy data from triple buffers to instance builder
@@ -1851,6 +1885,14 @@ impl GpuScene {
         );
         self.solid_mask_generator = Some(solid_mask_generator);
         
+        // Create light field system for photocyte nutrients and volumetric fog
+        let light_field_system = LightFieldSystem::new(device, world_radius);
+        self.light_field_system = Some(light_field_system);
+        
+        // Create volumetric fog renderer
+        let volumetric_fog_renderer = VolumetricFogRenderer::new(device, surface_format);
+        self.volumetric_fog_renderer = Some(volumetric_fog_renderer);
+        
         true
     }
     
@@ -2736,6 +2778,34 @@ impl GpuScene {
         self.vaporization_probability = vaporization.clamp(0.0, 1.0);
     }
 
+    /// Apply light & fog parameters from editor state to GPU systems
+    pub fn apply_light_params_from_editor(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
+        // Update light field system parameters
+        if let Some(ref mut light_field) = self.light_field_system {
+            light_field.set_light_dir(editor_state.light_dir);
+            light_field.set_max_steps(editor_state.light_field_max_steps);
+            light_field.set_absorption_solid(editor_state.light_field_absorption_solid);
+            light_field.set_absorption_cell(editor_state.light_field_absorption_cell);
+            light_field.set_ambient_floor(editor_state.light_field_ambient_floor);
+            light_field.set_mass_per_second(editor_state.photocyte_mass_per_second);
+            light_field.set_min_light_threshold(editor_state.photocyte_min_light_threshold);
+        }
+        
+        // Update volumetric fog renderer parameters
+        if let Some(ref mut fog_renderer) = self.volumetric_fog_renderer {
+            fog_renderer.enabled = editor_state.show_volumetric_fog;
+            fog_renderer.fog_density = editor_state.fog_density;
+            fog_renderer.fog_steps = editor_state.fog_steps;
+            fog_renderer.light_color = editor_state.light_color;
+            fog_renderer.light_intensity = editor_state.light_intensity;
+            fog_renderer.fog_color = editor_state.fog_color;
+            fog_renderer.scattering_anisotropy = editor_state.fog_scattering_anisotropy;
+            fog_renderer.absorption = editor_state.fog_absorption;
+            fog_renderer.height_fog_density = editor_state.fog_height_density;
+            fog_renderer.height_fog_falloff = editor_state.fog_height_falloff;
+        }
+    }
+    
     /// Apply cave parameters from editor state
     pub fn apply_cave_params_from_editor(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
         if !editor_state.cave_params_dirty {
@@ -3499,6 +3569,37 @@ impl Scene for GpuScene {
                 self.camera.position(),
                 self.camera.rotation,
             );
+        }
+
+        // Compute light field every frame (needed for volumetric fog shadows + photocyte nutrients)
+        // Runs outside of run_physics() so it executes even with 0 cells
+        if !self.paused || self.show_volumetric_fog {
+            self.run_light_field(device, &mut encoder, queue);
+        }
+
+        // Render volumetric fog if enabled (post-process over scene)
+        if self.show_volumetric_fog {
+            if let (Some(ref fog_renderer), Some(ref light_field), Some(ref fluid_sim)) =
+                (&self.volumetric_fog_renderer, &self.light_field_system, &self.fluid_simulator)
+            {
+                fog_renderer.render(
+                    &mut encoder,
+                    queue,
+                    view,
+                    &self.renderer.depth_view,
+                    device,
+                    light_field.light_field_buffer(),
+                    fluid_sim.solid_mask_buffer(),
+                    view_proj,
+                    self.camera.position(),
+                    self.current_time,
+                    light_field.light_dir(),
+                    128, // GRID_RESOLUTION
+                    light_field.cell_size(),
+                    light_field.grid_origin(),
+                    light_field.world_radius(),
+                );
+            }
         }
 
         // Generate Hi-Z from depth buffer for next frame's occlusion culling

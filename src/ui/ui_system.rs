@@ -778,6 +778,26 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
                 state.set_panel_locked(&world_name, !world_locked);
             }
         });
+        
+        // Light & Fog Settings (GPU mode only)
+        let light_open = is_panel_open(dock_manager.current_tree(), &Panel::LightSettings);
+        let light_name = format!("{:?}", Panel::LightSettings);
+        let light_locked = state.is_panel_locked(&light_name);
+        
+        ui.horizontal(|ui| {
+            if ui.selectable_label(light_open, "  Light & Fog").clicked() {
+                if light_open {
+                    close_panel(dock_manager.current_tree_mut(), &Panel::LightSettings);
+                } else {
+                    open_panel(dock_manager.current_tree_mut(), &Panel::LightSettings);
+                }
+            }
+            
+            let lock_icon = if light_locked { "🔒" } else { "🔓" };
+            if ui.small_button(lock_icon).clicked() {
+                state.set_panel_locked(&light_name, !light_locked);
+            }
+        });
     }
 
     ui.separator();

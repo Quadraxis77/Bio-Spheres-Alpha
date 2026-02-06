@@ -410,6 +410,15 @@ impl App {
                     self.editor_state.cave_params_dirty = false;
                 }
                 
+                // Apply light & fog parameters from UI if they changed
+                if self.editor_state.light_params_dirty {
+                    gpu_scene.apply_light_params_from_editor(&self.editor_state);
+                    self.editor_state.light_params_dirty = false;
+                }
+                
+                // Sync volumetric fog visibility toggle
+                gpu_scene.show_volumetric_fog = self.editor_state.show_volumetric_fog;
+                
                 // Sync fluid voxel visibility toggle
                 gpu_scene.show_fluid_voxels = self.editor_state.fluid_show_test_voxels;
                 

@@ -14,6 +14,7 @@ pub mod genome_compaction;
 pub mod gpu_cell_inspector;
 pub mod gpu_scene_integration;
 pub mod gpu_tool_operations;
+pub mod light_field;
 pub mod phagocyte_consumption;
 pub mod triple_buffer;
 
@@ -26,5 +27,6 @@ pub use genome_buffers::{GenomeBufferGroup, GenomeBufferManager, MAX_GENOMES};
 pub use gpu_cell_inspector::{AsyncReadbackManager, GpuCellInspector, ReadbackId, ReadbackResult, ReadbackStats};
 pub use gpu_scene_integration::{execute_gpu_physics_step, execute_lifecycle_pipeline};
 pub use gpu_tool_operations::GpuToolOperations;
+pub use light_field::LightFieldSystem;
 pub use phagocyte_consumption::PhagocyteConsumptionSystem;
 pub use triple_buffer::GpuTripleBufferSystem;

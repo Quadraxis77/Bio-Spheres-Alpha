@@ -1,10 +1,10 @@
 (
-    density: 0.5,
+    density: 0.59000003,
     scale: 100.0,
     octaves: 2,
     persistence: 0.1,
     threshold: 1.0,
     smoothness: 0.0,
-    seed: 7982,
+    seed: 5482,
     resolution: 128,
 )
