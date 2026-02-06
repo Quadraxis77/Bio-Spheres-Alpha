@@ -71,7 +71,7 @@ impl Default for CaveParams {
             octaves: 2,  // Updated to 2 as requested
             persistence: 0.5,
             threshold: 1.0,
-            smoothness: 1.0,  // Updated to 1.0 as requested
+            smoothness: 0.0,  // Updated to 0.0 as requested
             seed: 12345,
             grid_resolution: 128,  // Updated to 128 as requested
             triangle_count: 0,

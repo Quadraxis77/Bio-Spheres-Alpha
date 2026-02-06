@@ -500,7 +500,7 @@ impl GenomeEditorState {
             resolution: u32,
         }
         
-        fn default_resolution() -> u32 { 64 }
+        fn default_resolution() -> u32 { 128 }
         
         let path = PathBuf::from("cave_settings.ron");
         
@@ -532,7 +532,7 @@ impl GenomeEditorState {
         }
         
         // Return defaults
-        (1.0, 10.0, 4u32, 0.5, 0.5, 0.1, 12345u32, 64u32)
+        (0.5, 100.0, 2u32, 0.5, 1.0, 0.0, 12345u32, 128u32)
     }
     
     /// Load fluid settings from disk, or return defaults if file doesn't exist.
