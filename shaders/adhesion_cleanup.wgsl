@@ -55,7 +55,7 @@ struct AdhesionConnection {
 };
 
 // Maximum adhesions per cell (reduced for 200K cell support)
-const MAX_ADHESIONS_PER_CELL: u32 = 10u;
+const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 
 @group(0) @binding(0)
 var<uniform> params: PhysicsParams;

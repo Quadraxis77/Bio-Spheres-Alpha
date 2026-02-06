@@ -10,5 +10,5 @@
     selected_fluid_type: 1,
     condensation_probability: 0.05,
     vaporization_probability: 0.009,
-    nutrient_density: 0.5,
+    nutrient_density: 0.4,
 )

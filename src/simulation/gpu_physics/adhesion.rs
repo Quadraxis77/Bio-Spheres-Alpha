@@ -25,7 +25,7 @@
 use bytemuck::{Pod, Zeroable};
 
 /// Maximum adhesions per cell (reduced from 20 for 200K cell support)
-pub const MAX_ADHESIONS_PER_CELL: usize = 10;
+pub const MAX_ADHESIONS_PER_CELL: usize = 20;
 
 /// Maximum total adhesion connections
 /// For 200K cells with up to 20 adhesions each, theoretical max is 2M

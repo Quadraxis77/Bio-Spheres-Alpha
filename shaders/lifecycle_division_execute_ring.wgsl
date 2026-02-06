@@ -176,6 +176,46 @@ var<storage, read_write> cell_adhesion_indices: array<i32>;
 @group(3) @binding(2)
 var<storage, read_write> next_adhesion_id: array<atomic<u32>>;
 
+// Free adhesion slot stack (for reuse of freed adhesion slots)
+@group(3) @binding(3)
+var<storage, read_write> free_adhesion_slots: array<u32>;
+
+// Adhesion counts: [0] = total, [1] = live, [2] = free_top, [3] = padding
+@group(3) @binding(4)
+var<storage, read_write> adhesion_counts: array<atomic<u32>>;
+
+// Allocate an adhesion slot, preferring to reuse freed slots.
+// Uses compare-and-swap on adhesion_counts[2] (free_top) to safely pop from the stack.
+// Falls back to monotonic next_adhesion_id if the free stack is empty.
+// Returns 0xFFFFFFFF if at capacity.
+fn allocate_adhesion_slot() -> u32 {
+    // Try to pop from free adhesion slot stack first
+    loop {
+        let free_top = atomicLoad(&adhesion_counts[2]);
+        if (free_top == 0u) {
+            break; // Stack empty, fall back to monotonic
+        }
+        let result = atomicCompareExchangeWeak(&adhesion_counts[2], free_top, free_top - 1u);
+        if (result.exchanged) {
+            let slot = free_adhesion_slots[free_top - 1u];
+            // Increment live count
+            atomicAdd(&adhesion_counts[1], 1u);
+            return slot;
+        }
+        // CAS failed (another thread popped), retry
+    }
+    
+    // Free stack empty - fall back to monotonic allocation
+    let slot = atomicAdd(&next_adhesion_id[0], 1u);
+    if (slot < arrayLength(&adhesion_connections)) {
+        // Increment live count
+        atomicAdd(&adhesion_counts[1], 1u);
+        return slot;
+    }
+    // At capacity
+    return 0xFFFFFFFFu;
+}
+
 // Helper functions
 fn rotate_vector_by_quat(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
     let qvec = q.xyz;
@@ -227,7 +267,7 @@ fn quat_multiply(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
     );
 }
 
-const MAX_ADHESIONS_PER_CELL: u32 = 10u;
+const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 
 // Calculate child anchor direction using geometric approach (matches reference)
 // child_pos_parent_frame: child position in parent's local frame
@@ -392,8 +432,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // === Create sibling adhesion if parent_make_adhesion is enabled ===
     let make_adhesion = parent_make_adhesion_flags[parent_mode_idx];
     if (make_adhesion == 1u) {
-        let adhesion_id = atomicAdd(&next_adhesion_id[0], 1u);
-        if (adhesion_id < arrayLength(&adhesion_connections)) {
+        let adhesion_id = allocate_adhesion_slot();
+        if (adhesion_id != 0xFFFFFFFFu) {
             // Calculate anchor directions in each child's LOCAL space
             // Normalize split direction first (matching CPU implementation)
             let split_dir_normalized = normalize(split_dir_local);
@@ -485,7 +525,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_b_adhesion_base = child_b_slot * MAX_ADHESIONS_PER_CELL;
     
     // Save parent's adhesion indices BEFORE modifying them
-    var parent_adhesion_indices: array<i32, 10>;
+    var parent_adhesion_indices: array<i32, 20>;
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
         parent_adhesion_indices[i] = cell_adhesion_indices[parent_adhesion_base + i];
     }
@@ -678,8 +718,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
             
             // Create duplicate for Child B
-            let dup_slot = atomicAdd(&next_adhesion_id[0], 1u);
-            if (dup_slot < arrayLength(&adhesion_connections)) {
+            let dup_slot = allocate_adhesion_slot();
+            if (dup_slot != 0xFFFFFFFFu) {
                 let child_b_anchor = calculate_child_anchor_direction(
                     child_b_pos_parent_frame,
                     neighbor_pos_parent_frame,

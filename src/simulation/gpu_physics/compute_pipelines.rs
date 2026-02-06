@@ -2227,7 +2227,8 @@ impl GpuPhysicsPipelines {
     }
     
     /// Create division execute adhesion bind group layout (Group 3 in lifecycle division execute shader)
-    /// Matches shader: binding 0 = adhesion_connections, binding 1 = cell_adhesion_indices, binding 2 = next_adhesion_id
+    /// Matches shader: binding 0 = adhesion_connections, binding 1 = cell_adhesion_indices,
+    /// binding 2 = next_adhesion_id, binding 3 = free_adhesion_slots, binding 4 = adhesion_counts
     fn create_division_execute_adhesion_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Division Execute Adhesion Bind Group Layout"),
@@ -2254,9 +2255,31 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 2: Next adhesion ID (atomic counter)
+                // Binding 2: Next adhesion ID (atomic counter, fallback allocator)
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Free adhesion slots stack (for reuse)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 4: Adhesion counts [total, live, free_top, padding] (atomic)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -2401,7 +2424,8 @@ impl GpuPhysicsPipelines {
     }
     
     /// Create division execute adhesion bind group (Group 3 in lifecycle division execute shader)
-    /// Matches shader: binding 0 = adhesion_connections, binding 1 = cell_adhesion_indices, binding 2 = next_adhesion_id
+    /// Matches shader: binding 0 = adhesion_connections, binding 1 = cell_adhesion_indices,
+    /// binding 2 = next_adhesion_id, binding 3 = free_adhesion_slots, binding 4 = adhesion_counts
     fn create_division_execute_adhesion_bind_group(
         &self,
         device: &wgpu::Device,
@@ -2422,6 +2446,14 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: adhesion_buffers.next_adhesion_id.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: adhesion_buffers.free_adhesion_slots.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: adhesion_buffers.adhesion_counts.as_entire_binding(),
                 },
             ],
         })

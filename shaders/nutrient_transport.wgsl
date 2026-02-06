@@ -77,7 +77,7 @@ var<storage, read> adhesion_settings: array<vec4<f32>>;  // Not used but must ma
 var<storage, read> adhesion_counts: array<u32>;  // Not used but must match layout
 
 @group(2) @binding(3)
-var<storage, read> adhesion_indices: array<array<i32, 10>>;  // MAX_ADHESIONS_PER_CELL = 10
+var<storage, read> adhesion_indices: array<array<i32, 20>>;  // MAX_ADHESIONS_PER_CELL = 20
 
 // Nutrient transport bind group (group 3) - mass deltas and mode properties
 @group(3) @binding(0)
@@ -212,7 +212,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Process adhesions where this cell is cell_a (to avoid double processing)
     let adhesion_list = adhesion_indices[cell_idx];
     
-    for (var i = 0; i < 10; i++) {  // MAX_ADHESIONS_PER_CELL = 10
+    for (var i = 0; i < 20; i++) {  // MAX_ADHESIONS_PER_CELL = 20
         let adhesion_idx = adhesion_list[i];
         if (adhesion_idx < 0 || adhesion_idx >= i32(arrayLength(&adhesion_connections))) {
             continue;

@@ -123,7 +123,7 @@ var<storage, read_write> torque_accum_z: array<atomic<i32>>;
 const FIXED_POINT_SCALE: f32 = 1000.0;
 
 const PI: f32 = 3.14159265359;
-const MAX_ADHESIONS_PER_CELL: u32 = 10u;
+const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     let volume = mass / 1.0;

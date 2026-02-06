@@ -136,7 +136,7 @@ struct AdhesionConnection {
     _padding: vec2<u32>,
 };
 
-const MAX_ADHESIONS_PER_CELL: u32 = 10u;
+const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 
 // Constants
 const DEATH_MASS_THRESHOLD: f32 = 0.5;
