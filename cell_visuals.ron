@@ -15,7 +15,7 @@
             tail_segments: 10.0,
         ),
         (
-            specular_strength: 0.3,
+            specular_strength: 0.48,
             specular_power: 32.0,
             fresnel_strength: 0.2,
             membrane_noise_scale: 0.0,
@@ -43,7 +43,7 @@
             tail_segments: 10.0,
         ),
         (
-            specular_strength: 0.3,
+            specular_strength: 0.52,
             specular_power: 32.0,
             fresnel_strength: 0.2,
             membrane_noise_scale: 0.0,

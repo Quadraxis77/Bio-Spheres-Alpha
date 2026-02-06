@@ -562,6 +562,8 @@ impl GpuScene {
         // Execute pure GPU physics pipeline (7 compute shader stages + cave collision if enabled)
         // Run phagocyte nutrient consumption BEFORE physics so nutrients are available for transport
         self.run_phagocyte_consumption(device, encoder, queue);
+        // Run photocyte light consumption each physics step (reads pre-computed light field)
+        self.run_photocyte_light_consumption(device, encoder, queue);
         
         // Cell count is read from GPU buffer by shaders
         // Uses cached bind groups (no per-frame allocation!)
@@ -656,8 +658,9 @@ impl GpuScene {
         }
     }
     
-    /// Run light field computation and photocyte light consumption.
+    /// Run light field computation only (no photocyte consumption).
     /// Must run every frame (even with 0 cells) so cave shadows are computed for volumetric fog.
+    /// Photocyte consumption runs separately inside each physics step.
     fn run_light_field(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
         let (light_field, fluid_sim) = match (&self.light_field_system, &self.fluid_simulator) {
             (Some(l), Some(f)) => (l, f),
@@ -666,18 +669,42 @@ impl GpuScene {
         
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
         
-        light_field.run(
+        light_field.run_light_field_only(
             encoder,
             device,
             queue,
             fluid_sim.solid_mask_buffer(),
             &self.gpu_triple_buffers.position_and_mass[output_idx],
             &self.gpu_triple_buffers.cell_count_buffer,
+            self.current_cell_count,
+            self.current_time,
+        );
+    }
+    
+    /// Run photocyte light consumption compute shader.
+    /// Called inside each physics step so photocytes gain/lose mass at the same rate as other cells.
+    fn run_photocyte_light_consumption(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
+        if self.current_cell_count == 0 {
+            return;
+        }
+        
+        let light_field = match &self.light_field_system {
+            Some(l) => l,
+            None => return,
+        };
+        
+        let output_idx = self.gpu_triple_buffers.output_buffer_index();
+        
+        light_field.run_photocyte_only(
+            encoder,
+            device,
+            queue,
+            &self.gpu_triple_buffers.position_and_mass[output_idx],
+            &self.gpu_triple_buffers.cell_count_buffer,
             &self.gpu_triple_buffers.physics_params,
             &self.gpu_triple_buffers.cell_types,
             &self.gpu_triple_buffers.max_cell_sizes,
             self.current_cell_count,
-            self.current_time,
         );
     }
     
@@ -3161,6 +3188,12 @@ impl Scene for GpuScene {
             self.copy_buffers_to_instance_builder(&mut encoder);
         }
 
+        // Compute light field once per frame BEFORE physics loop
+        // Needed for: (1) photocyte consumption inside each physics step, (2) volumetric fog rendering
+        if !self.paused || self.show_volumetric_fog {
+            self.run_light_field(device, &mut encoder, queue);
+        }
+
         // Execute GPU physics pipeline if not paused and has cells
         // Use fixed timestep accumulator for consistent physics behavior
         if !self.paused {
@@ -3569,12 +3602,6 @@ impl Scene for GpuScene {
                 self.camera.position(),
                 self.camera.rotation,
             );
-        }
-
-        // Compute light field every frame (needed for volumetric fog shadows + photocyte nutrients)
-        // Runs outside of run_physics() so it executes even with 0 cells
-        if !self.paused || self.show_volumetric_fog {
-            self.run_light_field(device, &mut encoder, queue);
         }
 
         // Render volumetric fog if enabled (post-process over scene)

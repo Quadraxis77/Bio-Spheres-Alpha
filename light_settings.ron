@@ -1,9 +1,9 @@
 (
-    light_dir: (-0.5, 0.7, 0.5),
+    light_dir: (0.0, 1.0, 0.0),
     show_volumetric_fog: true,
     fog_density: 0.15,
     fog_steps: 48,
-    light_color: (1.0, 0.95, 0.85),
+    light_color: (1.0, 0.95, 0.95),
     light_intensity: 2.0,
     fog_color: (0.4, 0.5, 0.6),
     fog_scattering_anisotropy: 0.6,
@@ -12,7 +12,7 @@
     fog_height_falloff: 0.002,
     light_field_max_steps: 128,
     light_field_step_size: 2.0,
-    light_field_absorption_solid: 8.0,
+    light_field_absorption_solid: 20.0,
     light_field_absorption_cell: 5.0,
     light_field_ambient_floor: 0.02,
 )

@@ -818,6 +818,50 @@ impl LightFieldSystem {
         }
     }
 
+    /// Run only the photocyte light consumption step.
+    /// Call this inside each physics step so photocytes gain/lose mass at the same rate as other cells.
+    /// Requires the light field to have been computed already this frame.
+    pub fn run_photocyte_only(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        positions_buffer: &wgpu::Buffer,
+        cell_count_buffer: &wgpu::Buffer,
+        physics_params_buffer: &wgpu::Buffer,
+        cell_types_buffer: &wgpu::Buffer,
+        max_cell_sizes_buffer: &wgpu::Buffer,
+        cell_count: u32,
+    ) {
+        if cell_count == 0 {
+            return;
+        }
+
+        self.update_photocyte_params(queue);
+
+        let photocyte_physics_bg = self.create_photocyte_physics_bind_group(
+            device,
+            physics_params_buffer,
+            positions_buffer,
+            cell_count_buffer,
+        );
+        let photocyte_system_bg = self.create_photocyte_system_bind_group(
+            device,
+            cell_types_buffer,
+            max_cell_sizes_buffer,
+        );
+
+        let cell_workgroups = (cell_count + 255) / 256;
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Photocyte Light Consumption (physics step)"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.photocyte_light_pipeline);
+        pass.set_bind_group(0, &photocyte_physics_bg, &[]);
+        pass.set_bind_group(1, &photocyte_system_bg, &[]);
+        pass.dispatch_workgroups(cell_workgroups, 1, 1);
+    }
+
     /// Run only the light field computation (without photocyte consumption)
     /// Useful when you only need the light field for rendering (volumetric fog)
     pub fn run_light_field_only(

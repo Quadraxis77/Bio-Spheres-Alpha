@@ -156,25 +156,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Get max mass for this cell
     let max_mass = max_cell_sizes[cell_idx];
     
-    // Don't gain mass if already at max
-    if (current_mass >= max_mass) {
-        return;
-    }
-    
     // Sample light intensity at cell position (trilinear interpolated)
     let light_intensity = sample_light(pos);
     
-    // Apply threshold - no gain below minimum light level
-    if (light_intensity < photocyte_params.min_light_threshold) {
-        return;
+    var new_mass = current_mass;
+    
+    if (light_intensity >= photocyte_params.min_light_threshold) {
+        // In light: gain mass proportional to light intensity
+        let effective_intensity = (light_intensity - photocyte_params.min_light_threshold) 
+                                / (1.0 - photocyte_params.min_light_threshold);
+        let mass_gain = photocyte_params.mass_per_second_full_light * effective_intensity * params.delta_time;
+        new_mass = min(current_mass + mass_gain, max_mass);
+    } else {
+        // In shadow: metabolic cost — photocytes slowly lose mass without light
+        // Loss rate is half of max gain rate
+        let mass_loss = photocyte_params.mass_per_second_full_light * 0.5 * params.delta_time;
+        new_mass = max(current_mass - mass_loss, 0.1);  // Don't go below minimum viable mass
     }
     
-    // Calculate mass gain: rate * light_intensity * dt
-    let effective_intensity = (light_intensity - photocyte_params.min_light_threshold) 
-                            / (1.0 - photocyte_params.min_light_threshold);
-    let mass_gain = photocyte_params.mass_per_second_full_light * effective_intensity * params.delta_time;
-    
-    // Apply mass gain
-    let new_mass = min(current_mass + mass_gain, max_mass);
-    positions[cell_idx] = vec4<f32>(pos, new_mass);
+    // Only write if mass actually changed
+    if (new_mass != current_mass) {
+        positions[cell_idx] = vec4<f32>(pos, new_mass);
+    }
 }
