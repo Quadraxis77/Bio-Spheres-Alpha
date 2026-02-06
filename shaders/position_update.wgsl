@@ -175,7 +175,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Apply velocity damping (matching CPU: damping^(dt*100))
     let damping_factor = pow(params.acceleration_damping, params.delta_time * 100.0);
-    let new_vel = (vel + velocity_change) * damping_factor;
+    var new_vel = (vel + velocity_change) * damping_factor;
+    
+    // Clamp velocity to max 5 units/second
+    let speed = length(new_vel);
+    if (speed > 5.0) {
+        new_vel = (new_vel / speed) * 5.0;
+    }
     
     // Simple position update
     let new_pos = pos + new_vel * params.delta_time;

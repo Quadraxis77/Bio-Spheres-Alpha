@@ -172,14 +172,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Get current cell count
-    let current_count = atomicLoad(&cell_count_buffer[0]);
-    
-    // Check capacity limits
-    if (current_count >= params.cell_capacity) {
-        // Capacity exceeded, cannot insert cell
-        return;
-    }
+    // Slot allocation via ring buffer handles capacity checks correctly:
+    // - Recycled slots from dead cells are always valid (already within capacity)
+    // - New slots via next_slot_id are checked against cell_capacity below
+    // NOTE: We do NOT check cell_count_buffer[0] here because it is a high-water
+    // mark that never decreases when cells die. Checking it would permanently block
+    // insertion once the peak count reaches capacity, even with many dead/recycled slots.
     
     // Use ring buffer for slot allocation (matches lifecycle_unified.wgsl)
     // Try to pop a recycled slot from the ring buffer first

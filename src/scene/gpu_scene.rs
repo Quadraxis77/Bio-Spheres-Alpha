@@ -823,7 +823,7 @@ impl GpuScene {
             return false;
         }
         for (ma, mb) in a.iter().zip(b.iter()) {
-            // Compare key mode properties that affect cell behavior
+            // Compare key mode properties that affect cell behavior AND visuals
             if ma.cell_type != mb.cell_type
                 || ma.split_interval != mb.split_interval
                 || ma.split_mass != mb.split_mass
@@ -832,6 +832,9 @@ impl GpuScene {
                 || ma.nutrient_gain_rate != mb.nutrient_gain_rate
                 || ma.max_cell_size != mb.max_cell_size
                 || ma.swim_force != mb.swim_force
+                || ma.color != mb.color
+                || ma.emissive != mb.emissive
+                || ma.opacity != mb.opacity
             {
                 return false;
             }

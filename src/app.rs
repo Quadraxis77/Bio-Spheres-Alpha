@@ -609,13 +609,11 @@ impl App {
                 }
             }
             
-            // Sync genome changes to GPU scene if in GPU mode
-            // This ensures cell_type changes are reflected in the mode_cell_types buffer
-            if current_mode == crate::ui::types::SimulationMode::Gpu {
-                if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
-                    gpu_scene.update_genome(&self.device, &self.queue, &self.working_genome);
-                }
-            }
+            // NOTE: In GPU mode, we do NOT call update_genome here because that would
+            // modify the existing genome in place, changing the behavior of all existing
+            // cells using that genome. Instead, edited genomes are added as NEW genomes
+            // during cell insertion (via add_genome in insert_cell_from_genome), preserving
+            // existing cells' behavior while allowing new cells to use the edited settings.
             
             output
         };

@@ -300,18 +300,24 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // === DEFERRAL CHECK ===
     // Check if any neighbor (via adhesion) also wants to divide.
-    // If so, the cell with the HIGHER index defers to avoid race conditions
-    // during adhesion inheritance in division_execute.
+    // If so, the cell with the HIGHER index defers for ONE frame to avoid
+    // race conditions during adhesion inheritance in division_execute.
+    // After one frame of deferral, the cell force-splits regardless.
     //
-    // This ensures deterministic behavior: when two connected cells both want
-    // to divide, only the one with the lower index divides this frame.
-    // The deferred cell will divide next frame after adhesion inheritance is complete.
+    // division_flags encoding:
+    //   0 = not dividing
+    //   1 = dividing this frame (slot allocated)
+    //   2 = deferred last frame (will force-split this frame)
     //
     // CRITICAL: This check must happen BEFORE allocate_slot() to avoid
     // consuming and leaking ring buffer slots for cells that won't divide.
     
+    // If this cell was deferred last frame (flag == 2), skip deferral and force-split
+    let was_deferred = division_flags[cell_idx] == 2u;
+    
     var should_defer = false;
     
+    if (!was_deferred) {
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
         let adh_idx_signed = cell_adhesion_indices[adhesion_base + i];
         
@@ -375,16 +381,32 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
         
+        // Also check neighbor's adhesion capacity (must match the check at line ~296)
+        // Without this, a neighbor blocked by full adhesion slots still causes deferral,
+        // leading to a permanent deadlock where neither cell ever divides.
+        let neighbor_adhesion_base = neighbor_idx * MAX_ADHESIONS_PER_CELL;
+        var neighbor_adhesion_count = 0u;
+        for (var j = 0u; j < MAX_ADHESIONS_PER_CELL; j++) {
+            if (cell_adhesion_indices[neighbor_adhesion_base + j] >= 0) {
+                neighbor_adhesion_count++;
+            }
+        }
+        if (neighbor_adhesion_count >= MAX_ADHESIONS_PER_CELL) {
+            // Neighbor can't actually divide (adhesion slots full), don't defer
+            continue;
+        }
+        
         // Neighbor wants to split too - lower index wins priority
         if (neighbor_idx < cell_idx) {
             should_defer = true;
             break;
         }
     }
+    } // end if (!was_deferred)
     
-    // If we should defer, don't divide this frame
+    // If we should defer, mark as deferred (flag = 2) so we force-split next frame
     if (should_defer) {
-        division_flags[cell_idx] = 0u;
+        division_flags[cell_idx] = 2u;
         return;
     }
     
