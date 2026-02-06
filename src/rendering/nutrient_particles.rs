@@ -76,7 +76,7 @@ impl NutrientParticleRenderer {
         width: u32,
         height: u32,
     ) -> Self {
-        let max_particles = 400_000u32;  // Support up to 400k nutrient particles (doubled)
+        let max_particles = 800_000u32;  // Support up to 800k nutrient particles
 
         // Create render shader
         let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
