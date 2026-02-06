@@ -113,7 +113,7 @@ pub fn execute_gpu_physics_step(
         world_size,
         boundary_stiffness: 500.0,
         gravity,
-        acceleration_damping: 0.98,
+        acceleration_damping: 0.998,
         grid_resolution: GRID_RESOLUTION as i32,
         grid_cell_size: world_size / GRID_RESOLUTION as f32,
         max_cells_per_grid: 16,
