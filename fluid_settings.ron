@@ -6,7 +6,7 @@
     vorticity_epsilon: 0.05,
     pressure_iterations: 10,
     lateral_flow_probabilities: (1.0, 0.8, 0.6, 0.9),
-    continuous_spawn: true,
+    continuous_spawn: false,
     selected_fluid_type: 1,
     condensation_probability: 0.006,
     vaporization_probability: 0.006,

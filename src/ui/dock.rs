@@ -397,7 +397,10 @@ pub fn create_default_gpu_layout() -> DockState<Panel> {
     let [_center, left] = tree.split_left(NodeIndex::root(), 0.20, vec![Panel::CellInspector]);
 
     // Split the left panel vertically for Scene Manager below Cell Inspector
-    tree.split_below(left, 0.5, vec![Panel::SceneManager]);
+    let [_left_top, left_bottom] = tree.split_below(left, 0.5, vec![Panel::SceneManager]);
+
+    // Add WorldSettings and LightSettings tabs below Scene Manager
+    tree.split_below(left_bottom, 0.5, vec![Panel::WorldSettings, Panel::LightSettings]);
 
     // Split right panel (20% width) from the center
     let [center, right] = tree.split_right(NodeIndex::root(), 0.80, vec![Panel::RenderingControls]);

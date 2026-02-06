@@ -750,7 +750,7 @@ impl GenomeEditorState {
             [-0.5, 0.7, 0.5],  // light_dir
             true,               // show_volumetric_fog
             0.15,               // fog_density
-            48,                 // fog_steps
+            20,                 // fog_steps
             [1.0, 0.95, 0.85], // light_color
             2.0,                // light_intensity
             [0.4, 0.5, 0.6],   // fog_color

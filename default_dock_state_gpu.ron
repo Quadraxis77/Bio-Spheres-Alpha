@@ -175,8 +175,9 @@
                     ),
                     tabs: [
                         WorldSettings,
+                        LightSettings,
                     ],
-                    active: (0),
+                    active: (1),
                     scroll: 0.0,
                     collapsed: false,
                 )),
