@@ -2982,7 +2982,7 @@ impl GpuScene {
 
 impl Scene for GpuScene {
     fn update(&mut self, dt: f32) {
-        if self.paused || self.current_cell_count == 0 {
+        if self.paused {
             return;
         }
 
@@ -3090,7 +3090,7 @@ impl Scene for GpuScene {
 
         // Execute GPU physics pipeline if not paused and has cells
         // Use fixed timestep accumulator for consistent physics behavior
-        if !self.paused && self.current_cell_count > 0 {
+        if !self.paused {
             let fixed_dt = self.config.fixed_timestep;
             // Allow more steps when time_scale > 1 (fast forward)
             let max_steps = (4.0 * self.time_scale).ceil() as i32;
