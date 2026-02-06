@@ -712,13 +712,13 @@ impl GpuTripleBufferSystem {
                     stiffnesses_data.push(mode.membrane_stiffness);
                 } else {
                     max_splits_data.push(0); // Unlimited if mode not found
-                    nutrient_gain_rates_data.push(0.2); // Default nutrient gain rate
+                    nutrient_gain_rates_data.push(0.3); // Default nutrient gain rate (increased from 0.2)
                     max_cell_sizes_data.push(2.0); // Default max cell size
                     stiffnesses_data.push(50.0); // Default membrane stiffness
                 }
             } else {
                 max_splits_data.push(0); // Unlimited if genome not found
-                nutrient_gain_rates_data.push(0.2); // Default nutrient gain rate
+                nutrient_gain_rates_data.push(0.3); // Default nutrient gain rate (increased from 0.2)
                 max_cell_sizes_data.push(2.0); // Default max cell size
                 stiffnesses_data.push(50.0); // Default membrane stiffness
             }

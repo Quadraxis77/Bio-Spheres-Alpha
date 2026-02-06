@@ -133,8 +133,8 @@ const MIN_CELL_MASS: f32 = 0.5;
 const DANGER_THRESHOLD: f32 = 0.6;
 const PRIORITY_BOOST: f32 = 10.0;
 const TRANSPORT_RATE: f32 = 0.5;
-const BASE_METABOLISM_RATE: f32 = 0.05;  // Base metabolic cost per second for all cells
-const SWIM_CONSUMPTION_RATE: f32 = 0.2;  // Additional 0.2 mass per second at full swim force
+const BASE_METABOLISM_RATE: f32 = 0.025;  // Base metabolic cost per second for all cells (reduced from 0.05 for 2x longevity)
+const SWIM_CONSUMPTION_RATE: f32 = 0.1;  // Additional 0.1 mass per second at full swim force (reduced from 0.2 for 2x longevity)
 const DEFER_FRAMES: i32 = 32;  // 0.5 seconds at 64 FPS = 32 frames
 
 // Fixed-point conversion for atomic operations (matching other shaders)

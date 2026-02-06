@@ -30,7 +30,7 @@ pub struct PhagocyteConsumptionSystem {
 
 impl PhagocyteConsumptionSystem {
     pub fn new(device: &wgpu::Device, grid_resolution: u32, cell_size: f32, grid_origin: [f32; 3]) -> Self {
-        let mass_per_nutrient = 0.1;  // Default mass gain per nutrient
+        let mass_per_nutrient = 0.2;  // Increased mass gain per nutrient (from 0.1 for better efficiency)
         
         // Create params buffer with initial values
         let _initial_params = NutrientConsumptionParams {

@@ -445,7 +445,7 @@ pub fn consume_swim_nutrients(
     const MIN_CELL_MASS: f32 = 0.5;
     // Fixed consumption rate - NOT adjustable by user
     // This creates a direct tradeoff: faster swimming = higher nutrient cost
-    const CONSUMPTION_RATE: f32 = 0.2; // mass per second at full swim force
+    const CONSUMPTION_RATE: f32 = 0.1; // mass per second at full swim force (reduced from 0.2 for 2x longevity)
     
     let mut cells_to_remove = Vec::new();
     
