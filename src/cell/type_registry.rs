@@ -218,6 +218,24 @@ impl CellTypeRegistry {
                     },
                     count: None,
                 },
+                // Hex bake texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Hex bake sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         })
     }
@@ -290,16 +308,10 @@ impl CellTypeRegistry {
     
     /// Load shader source for a cell type.
     ///
-    /// This uses include_str! at compile time for built-in shaders.
-    /// Each cell type has its own shader: cell_0.wgsl, cell_1.wgsl, etc.
-    fn load_shader_source(cell_type: CellType) -> &'static str {
-        match cell_type {
-            CellType::Test => include_str!("../../shaders/cells/cell_0.wgsl"),
-            CellType::Flagellocyte => include_str!("../../shaders/cells/cell_1.wgsl"),
-            CellType::Phagocyte => include_str!("../../shaders/cells/cell_2.wgsl"),
-            CellType::Photocyte => include_str!("../../shaders/cells/cell_3.wgsl"),
-            CellType::Lipocyte => include_str!("../../shaders/cells/cell_4.wgsl"),
-        }
+    /// All cell types use the unified 3-layer procedural shader.
+    /// Cell type branching happens inside the shader via type_data_1.w.
+    fn load_shader_source(_cell_type: CellType) -> &'static str {
+        include_str!("../../shaders/cells/cell_unified.wgsl")
     }
     
     /// Get the vertex buffer layout for cell instances.

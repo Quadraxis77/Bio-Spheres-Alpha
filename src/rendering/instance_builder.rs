@@ -217,7 +217,13 @@ struct GpuCellTypeVisuals {
     // tail_speed removed - now calculated from swim_force in shader
     tail_taper: f32,
     tail_segments: f32,
-    _pad: [f32; 4], // Padding to 64 bytes (16 floats)
+    // Goldberg ridge parameters (used by Photocyte membrane)
+    goldberg_scale: f32,
+    goldberg_ridge_width: f32,
+    goldberg_meander: f32,
+    goldberg_ridge_strength: f32,
+    nucleus_scale: f32,
+    _pad: f32,
 }
 
 /// Per-cell instance data for GPU rendering.
@@ -1163,7 +1169,13 @@ impl InstanceBuilder {
                 // tail_speed removed - calculated from swim_force in shader
                 tail_taper: v.tail_taper,
                 tail_segments: v.tail_segments,
-                _pad: [0.0; 4],
+                // Goldberg ridge parameters
+                goldberg_scale: v.goldberg_scale,
+                goldberg_ridge_width: v.goldberg_ridge_width,
+                goldberg_meander: v.goldberg_meander,
+                goldberg_ridge_strength: v.goldberg_ridge_strength,
+                nucleus_scale: v.nucleus_scale,
+                _pad: 0.0,
             })
             .collect();
         

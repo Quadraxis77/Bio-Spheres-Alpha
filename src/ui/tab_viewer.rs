@@ -2465,6 +2465,65 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut visuals.tail_segments).speed(1.0).range(4.0..=64.0));
                 });
             }
+
+            // Goldberg ridge section (only for Photocyte cell type)
+            if cell_types.get(selected_idx) == Some(&CellType::Photocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Membrane Ridges").strong());
+                ui.add_space(4.0);
+
+                // Nucleus Scale
+                ui.label("Nucleus Scale:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.nucleus_scale, 0.1..=0.95).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.nucleus_scale).speed(0.01).range(0.1..=0.95));
+                });
+
+                // Subdivision level (1-6)
+                ui.label("Subdivision:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_scale, 1.0..=6.0).show_value(false).integer());
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_scale).speed(1.0).range(1.0..=6.0));
+                });
+
+                // Ridge Width
+                ui.label("Ridge Width:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.01..=0.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_width).speed(0.005).range(0.01..=0.5));
+                });
+
+                // Meander
+                ui.label("Meander:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=0.3).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_meander).speed(0.005).range(0.0..=0.3));
+                });
+
+                // Ridge Strength (normal perturbation)
+                ui.label("Ridge Depth:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.0..=0.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_strength).speed(0.005).range(0.0..=0.5));
+                });
+            }
         });
 }
 

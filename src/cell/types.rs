@@ -164,6 +164,18 @@ pub struct CellTypeVisuals {
     pub tail_taper: f32,
     /// Number of segments used to render the tail (4 - 64, default 10)
     pub tail_segments: f32,
+
+    // Geodesic ridge parameters (used by Photocyte cell type membrane)
+    /// Icosphere subdivision level (1-6, default 3)
+    pub goldberg_scale: f32,
+    /// Gaussian half-width of the ridge line (0.01-0.5, default 0.12)
+    pub goldberg_ridge_width: f32,
+    /// How far edges meander organically (0.0-0.3, default 0.08)
+    pub goldberg_meander: f32,
+    /// How much normals deflect at ridges for 3D depth (0.0-0.5, default 0.15)
+    pub goldberg_ridge_strength: f32,
+    /// Nucleus sphere scale relative to cell radius (0.0-0.95, default 0.6)
+    pub nucleus_scale: f32,
 }
 
 impl Default for CellTypeVisuals {
@@ -182,6 +194,12 @@ impl Default for CellTypeVisuals {
             tail_frequency: 1.0,
             tail_taper: 1.0,
             tail_segments: 10.0,
+            // Geodesic ridge defaults
+            goldberg_scale: 3.0,
+            goldberg_ridge_width: 0.12,
+            goldberg_meander: 0.08,
+            goldberg_ridge_strength: 0.15,
+            nucleus_scale: 0.6,
         }
     }
 }
@@ -374,8 +392,8 @@ impl CellType {
     /// Get the path to the appearance shader for this cell type.
     /// All cell types now use the unified shader.
     pub fn shader_path(&self) -> &'static str {
-        // All cell types use the textured shader
-        "shaders/cells/textured_cell.wgsl"
+        // All cell types use the unified 3-layer procedural shader
+        "shaders/cells/cell_unified.wgsl"
     }
 
     /// Get GPU behavior flags for this cell type.

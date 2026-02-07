@@ -117,7 +117,7 @@ impl CellRenderer {
     /// * `capacity` - Initial instance buffer capacity
     pub fn new(
         device: &wgpu::Device,
-        _queue: &wgpu::Queue,
+        queue: &wgpu::Queue,
         config: &wgpu::SurfaceConfiguration,
         capacity: usize,
     ) -> Self {
@@ -149,7 +149,10 @@ impl CellRenderer {
             mapped_at_creation: false,
         });
         
-        // Create bind group without texture atlas
+        // Bake hex pattern texture via compute shader
+        let (hex_texture_view, hex_sampler) = Self::bake_hex_texture(device, queue);
+        
+        // Create bind group with hex bake texture
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cell Renderer Bind Group"),
             layout: &type_registry.bind_group_layout,
@@ -161,6 +164,14 @@ impl CellRenderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: lighting_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&hex_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&hex_sampler),
                 },
             ],
         });
@@ -195,6 +206,110 @@ impl CellRenderer {
         }
     }
     
+    /// Bake the Goldberg hex triplet pattern into an equirectangular texture via compute shader.
+    /// Returns (texture_view, sampler). Run once at init — the texture is static.
+    fn bake_hex_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::TextureView, wgpu::Sampler) {
+        let tex_width = 512u32;
+        let tex_height = 256u32;
+
+        // Create the output texture (RG32Float for edge_dist + is_hex)
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Hex Bake Texture"),
+            size: wgpu::Extent3d {
+                width: tex_width,
+                height: tex_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Create sampler with linear filtering and repeat wrapping (for longitude wrap)
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Hex Bake Sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        // Create compute pipeline
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Hex Bake Compute Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/hex_bake.wgsl").into()),
+        });
+
+        let bake_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Hex Bake Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Hex Bake Pipeline Layout"),
+            bind_group_layouts: &[&bake_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Hex Bake Compute Pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        let bake_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Hex Bake Bind Group"),
+            layout: &bake_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+            ],
+        });
+
+        // Dispatch compute shader
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Hex Bake Encoder"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Hex Bake Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&compute_pipeline);
+            pass.set_bind_group(0, &bake_bind_group, &[]);
+            // Workgroup size is 8x8, dispatch enough to cover tex_width x tex_height
+            pass.dispatch_workgroups(
+                (tex_width + 7) / 8,
+                (tex_height + 7) / 8,
+                1,
+            );
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+
+        (texture_view, sampler)
+    }
+
     fn create_depth_texture(
         device: &wgpu::Device,
         width: u32,
@@ -226,7 +341,7 @@ impl CellRenderer {
         // Load depth shader (uses unified cell shader)
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Cell Depth Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cells/textured_cell.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cells/cell_unified.wgsl").into()),
         });
         
         // Create pipeline layout
@@ -524,7 +639,19 @@ impl CellRenderer {
             };
             
             // Ensure cell_type is stored in data[7] for hybrid shader branching
+            data.data[4] = visuals.nucleus_scale;
             data.data[7] = cell_type_index as f32;
+            
+            // Pack Goldberg ridge params into type_data[0..3] for non-tail cells
+            // (Flagellocyte tail params are already packed by its behavior module)
+            let cell_type = CellType::all().get(cell_type_index).copied().unwrap_or(CellType::Test);
+            if cell_type != CellType::Flagellocyte {
+                data.data[0] = visuals.goldberg_scale;
+                data.data[1] = visuals.goldberg_ridge_width;
+                data.data[2] = visuals.goldberg_meander;
+                data.data[3] = visuals.goldberg_ridge_strength;
+            }
+            
             let type_data = data;
             
             // Build instance

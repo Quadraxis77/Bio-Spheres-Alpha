@@ -177,9 +177,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let damping_factor = pow(params.acceleration_damping, params.delta_time * 100.0);
     var new_vel = (vel + velocity_change) * damping_factor;
     
-    // Clamp velocity to max 20 units/second
+    // Clamp velocity to max 10 units/second
     let speed = length(new_vel);
-    if (speed > 50.0) {
+    if (speed > 10.0) {
         new_vel = (new_vel / speed) * 50.0;
     }
     

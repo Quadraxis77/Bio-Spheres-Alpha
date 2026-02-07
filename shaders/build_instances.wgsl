@@ -63,7 +63,13 @@ struct CellTypeVisuals {
     // tail_speed removed - now calculated from swim_force in mode_properties
     tail_taper: f32,
     tail_segments: f32,
-    _pad: vec4<f32>, // Padding to 64 bytes (16 floats)
+    // Goldberg ridge parameters (used by Photocyte membrane)
+    goldberg_scale: f32,
+    goldberg_ridge_width: f32,
+    goldberg_meander: f32,
+    goldberg_ridge_strength: f32,
+    nucleus_scale: f32,
+    _pad: f32,
 }
 
 // Mode properties (per-mode settings from genome)
@@ -577,9 +583,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         instance.type_data_0 = vec4<f32>(uv_min_x, uv_min_y, uv_max_x, uv_max_y);
         instance.type_data_1 = vec4<f32>(f32(lod_level), clamped_screen_radius, f32(params.lod_debug_colors), f32(cell_type)); // cell_type in .w
     } else {
-        // Unknown type or no special rendering: use default empty data
-        instance.type_data_0 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-        instance.type_data_1 = vec4<f32>(0.0, 0.0, f32(params.lod_debug_colors), f32(cell_type));
+        // Default: pack Goldberg ridge params for photocytes (and zeros for others)
+        // type_data_0: [goldberg_scale, goldberg_ridge_width, goldberg_meander, goldberg_ridge_strength]
+        // type_data_1: [0, 0, debug_colors, cell_type]
+        if (cell_type < params.cell_type_count) {
+            let visuals = cell_type_visuals[cell_type];
+            instance.type_data_0 = vec4<f32>(
+                visuals.goldberg_scale,
+                visuals.goldberg_ridge_width,
+                visuals.goldberg_meander,
+                visuals.goldberg_ridge_strength
+            );
+        } else {
+            instance.type_data_0 = vec4<f32>(3.0, 0.12, 0.08, 0.15);
+        }
+        var nuc_scale = 0.6;
+        if (cell_type < params.cell_type_count) {
+            nuc_scale = cell_type_visuals[cell_type].nucleus_scale;
+        }
+        instance.type_data_1 = vec4<f32>(nuc_scale, 0.0, f32(params.lod_debug_colors), f32(cell_type));
     }
 
     // Dynamic instance allocation - single buffer for all cell types

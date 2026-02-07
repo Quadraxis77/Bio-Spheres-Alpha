@@ -555,9 +555,10 @@ impl GpuScene {
 
     /// Run physics step using GPU compute shaders with zero CPU involvement.
     fn run_physics(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, delta_time: f32, world_diameter: f32) {
-        if self.current_cell_count == 0 {
-            return;
-        }
+        // Note: No CPU-side early-out on current_cell_count here.
+        // The GPU shaders check cell_count_buffer[0] (high water mark) internally.
+        // Using the async-readback live count would cause premature physics freeze
+        // when the readback lags behind the actual GPU state.
 
         // Execute pure GPU physics pipeline (7 compute shader stages + cave collision if enabled)
         // Run phagocyte nutrient consumption BEFORE physics so nutrients are available for transport
