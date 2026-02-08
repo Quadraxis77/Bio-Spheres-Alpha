@@ -56,9 +56,9 @@ var<storage, read_write> nutrient_voxels: array<atomic<u32>>;
 @group(1) @binding(3)
 var<storage, read> cell_types: array<u32>;
 
-// Max cell sizes per cell (from genome mode) - group 1, binding 4
+// Split mass thresholds per cell (mass cap = 2x split_mass) - group 1, binding 4
 @group(1) @binding(4)
-var<storage, read> max_cell_sizes: array<f32>;
+var<storage, read> split_masses: array<f32>;
 
 // Phagocyte cell type constant
 const PHAGOCYTE_TYPE: u32 = 2u;
@@ -136,8 +136,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pos = pos_mass.xyz;
     let current_mass = pos_mass.w;
     
-    // Get max mass for this cell
-    let max_mass = max_cell_sizes[cell_idx];
+    // Mass cap: 2x split_mass
+    let max_mass = split_masses[cell_idx] * 2.0;
     
     // Don't consume if already at max mass
     if (current_mass >= max_mass) {

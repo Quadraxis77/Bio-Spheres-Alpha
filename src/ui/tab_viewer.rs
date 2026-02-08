@@ -1712,6 +1712,16 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut mode.split_ratio).speed(0.01).range(0.0..=1.0));
                 });
 
+                ui.add_space(4.0);
+                ui.label("Max Cell Size:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.max_cell_size, 0.5..=2.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.max_cell_size).speed(0.01).range(0.5..=2.0));
+                });
+
                 ui.label("Membrane Stiffness:");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();

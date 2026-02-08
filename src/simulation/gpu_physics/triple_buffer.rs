@@ -1331,9 +1331,24 @@ impl GpuTripleBufferSystem {
     
     /// Reset ring buffers to empty state (for scene reset)
     /// Clears ring_state to [0, 0, 0, 0] (head=0, tail=0, next_slot_id=0, reservation_count=0)
+    /// Also clears death_flags, division_flags, and lifecycle_counts so stale state
+    /// from the previous simulation doesn't leak into the new one.
+    /// Without clearing death_flags, the death_scan shader's `is_dead && !was_dead` check
+    /// would treat recycled slots as "already dead" and never push them back into the ring.
     pub fn reset_ring_buffers(&self, queue: &wgpu::Queue) {
         let ring_state_data: [u32; 4] = [0, 0, 0, 0];
         queue.write_buffer(&self.ring_state, 0, bytemuck::cast_slice(&ring_state_data));
+        
+        // Clear death_flags so no slots appear "already dead" after reset
+        let zeros = vec![0u8; self.capacity as usize * 4];
+        queue.write_buffer(&self.death_flags, 0, &zeros);
+        
+        // Clear division_flags to prevent stale division attempts
+        queue.write_buffer(&self.division_flags, 0, &zeros);
+        
+        // Clear lifecycle_counts (3 x u32 = 12 bytes)
+        let lifecycle_zeros: [u32; 3] = [0, 0, 0];
+        queue.write_buffer(&self.lifecycle_counts, 0, bytemuck::cast_slice(&lifecycle_zeros));
     }
     
     /// Synchronize slot allocator with canonical state

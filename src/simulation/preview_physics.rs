@@ -293,7 +293,7 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
             }
 
             let current_mass = state.masses[i];
-            let max_mass = mode.max_cell_size;
+            let max_mass = mode.split_mass * 2.0;
 
             if current_mass < max_mass {
                 let mass_gain = mode.nutrient_gain_rate * dt;
@@ -301,7 +301,7 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
                     let new_mass = (current_mass + mass_gain).min(max_mass);
                     if new_mass != current_mass {
                         state.masses[i] = new_mass;
-                        let new_radius = new_mass.clamp(0.5, 2.0);
+                        let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
                         if new_radius != state.radii[i] {
                             state.radii[i] = new_radius;
                             state.masses_changed = true;
@@ -408,7 +408,10 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
             let new_mass = (state.masses[i] + mass_deltas[i]).max(0.0);
             if new_mass != state.masses[i] {
                 state.masses[i] = new_mass;
-                let new_radius = new_mass.clamp(0.5, 2.0);
+                let max_size = genome.modes.get(state.mode_indices[i])
+                    .map(|m| m.max_cell_size)
+                    .unwrap_or(2.0);
+                let new_radius = new_mass.min(max_size).clamp(0.5, 2.0);
                 if new_radius != state.radii[i] {
                     state.radii[i] = new_radius;
                     state.masses_changed = true;

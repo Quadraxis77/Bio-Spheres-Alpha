@@ -56,7 +56,7 @@ var<storage, read> light_field: array<f32>;  // Per-voxel light intensity (0.0-1
 var<storage, read> cell_types: array<u32>;  // Per-cell type ID
 
 @group(1) @binding(3)
-var<storage, read> max_cell_sizes: array<f32>;  // Per-cell max mass from genome
+var<storage, read> split_masses: array<f32>;  // Per-cell split mass threshold (mass cap = 2x)
 
 // Photocyte cell type constant
 const PHOTOCYTE_TYPE: u32 = 3u;
@@ -153,8 +153,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pos = pos_mass.xyz;
     let current_mass = pos_mass.w;
     
-    // Get max mass for this cell
-    let max_mass = max_cell_sizes[cell_idx];
+    // Mass cap: 2x split_mass
+    let max_mass = split_masses[cell_idx] * 2.0;
     
     // Sample light intensity at cell position (trilinear interpolated)
     let light_intensity = sample_light(pos);

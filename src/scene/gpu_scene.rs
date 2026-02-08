@@ -649,7 +649,7 @@ impl GpuScene {
                 fluid_sim.current_state_buffer(),
                 fluid_sim.nutrient_voxels_buffer(),
                 &self.gpu_triple_buffers.cell_types,
-                &self.gpu_triple_buffers.max_cell_sizes,
+                &self.gpu_triple_buffers.split_masses,
             ));
         }
         
@@ -704,7 +704,7 @@ impl GpuScene {
             &self.gpu_triple_buffers.cell_count_buffer,
             &self.gpu_triple_buffers.physics_params,
             &self.gpu_triple_buffers.cell_types,
-            &self.gpu_triple_buffers.max_cell_sizes,
+            &self.gpu_triple_buffers.split_masses,
             self.current_cell_count,
         );
     }

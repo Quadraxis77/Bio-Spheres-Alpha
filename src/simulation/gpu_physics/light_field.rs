@@ -400,7 +400,7 @@ impl LightFieldSystem {
                         },
                         count: None,
                     },
-                    // Binding 3: max_cell_sizes (read-only storage)
+                    // Binding 3: split_masses (read-only storage)
                     wgpu::BindGroupLayoutEntry {
                         binding: 3,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -700,7 +700,7 @@ impl LightFieldSystem {
         &self,
         device: &wgpu::Device,
         cell_types_buffer: &wgpu::Buffer,
-        max_cell_sizes_buffer: &wgpu::Buffer,
+        split_masses_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Photocyte System Bind Group"),
@@ -720,7 +720,7 @@ impl LightFieldSystem {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: max_cell_sizes_buffer.as_entire_binding(),
+                    resource: split_masses_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -741,7 +741,7 @@ impl LightFieldSystem {
         cell_count_buffer: &wgpu::Buffer,
         physics_params_buffer: &wgpu::Buffer,
         cell_types_buffer: &wgpu::Buffer,
-        max_cell_sizes_buffer: &wgpu::Buffer,
+        split_masses_buffer: &wgpu::Buffer,
         cell_count: u32,
         time: f32,
     ) {
@@ -767,7 +767,7 @@ impl LightFieldSystem {
         let photocyte_system_bg = self.create_photocyte_system_bind_group(
             device,
             cell_types_buffer,
-            max_cell_sizes_buffer,
+            split_masses_buffer,
         );
 
         // Step 1: Clear occupancy grid
@@ -830,7 +830,7 @@ impl LightFieldSystem {
         cell_count_buffer: &wgpu::Buffer,
         physics_params_buffer: &wgpu::Buffer,
         cell_types_buffer: &wgpu::Buffer,
-        max_cell_sizes_buffer: &wgpu::Buffer,
+        split_masses_buffer: &wgpu::Buffer,
         cell_count: u32,
     ) {
         if cell_count == 0 {
@@ -848,7 +848,7 @@ impl LightFieldSystem {
         let photocyte_system_bg = self.create_photocyte_system_bind_group(
             device,
             cell_types_buffer,
-            max_cell_sizes_buffer,
+            split_masses_buffer,
         );
 
         let cell_workgroups = (cell_count + 255) / 256;

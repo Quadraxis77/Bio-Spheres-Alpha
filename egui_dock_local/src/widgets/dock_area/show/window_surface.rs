@@ -44,14 +44,21 @@ impl<Tab> DockArea<'_, Tab> {
         let title = {
             let node_id = self.dock_state[surf_index]
                 .focused_leaf()
-                .unwrap_or_else(|| {
+                .or_else(|| {
                     for node_index in self.dock_state[surf_index].breadth_first_index_iter() {
                         if self.dock_state[surf_index][node_index].is_leaf() {
-                            return node_index;
+                            return Some(node_index);
                         }
                     }
-                    unreachable!("a window surface should never be empty")
+                    None
                 });
+            let Some(node_id) = node_id else {
+                // Surface was emptied (e.g. by retain_tabs) but not yet removed.
+                // Schedule it for removal and skip rendering.
+                self.to_remove
+                    .push(TabRemoval::Window(surf_index));
+                return;
+            };
             let leaf = self.dock_state[surf_index][node_id].get_leaf_mut().unwrap();
             
             // Check if the leaf has any tabs before accessing them

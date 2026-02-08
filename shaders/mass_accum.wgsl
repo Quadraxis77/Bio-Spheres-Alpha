@@ -7,7 +7,7 @@
 //
 // Mass growth formula:
 //   new_mass = old_mass + nutrient_gain_rate * delta_time
-//   capped at max_cell_size (storage capacity = 2x split_mass)
+//   capped at 2x split_mass (storage capacity for division)
 //
 // The nutrient_gain_rate is set per-cell from the genome mode's nutrient_gain_rate
 // field (default: 0.2 mass per second for Test cells, 0.0 for others).
@@ -55,9 +55,9 @@ var<storage, read_write> cell_count_buffer: array<u32>;
 @group(1) @binding(0)
 var<storage, read> nutrient_gain_rates: array<f32>;
 
-// Max cell sizes per cell (from genome mode)
+// Split mass thresholds per cell (mass cap = 2x split_mass)
 @group(1) @binding(1)
-var<storage, read> max_cell_sizes: array<f32>;
+var<storage, read> split_masses: array<f32>;
 
 // Death flags to skip dead cells
 @group(1) @binding(2)
@@ -81,14 +81,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pos_mass = positions_out[cell_idx];
     let current_mass = pos_mass.w;
     
-    // Read per-cell nutrient gain rate and max size from genome mode
+    // Read per-cell nutrient gain rate and split mass from genome mode
     let nutrient_gain_rate = nutrient_gain_rates[cell_idx];
-    let max_mass = max_cell_sizes[cell_idx];
+    let split_mass = split_masses[cell_idx];
     
-    // Nutrient storage cap: 2x split_mass (allows storage for division plus buffer)
-    // This matches the reference implementation's storage capacity logic
+    // Mass cap: 2x split_mass (allows storage for division plus buffer)
+    let max_mass = split_mass * 2.0;
     
-    // Only grow if below max size
+    // Only grow if below mass cap
     var new_mass = current_mass;
     if (current_mass < max_mass) {
         // Calculate mass increase: mass += nutrient_gain_rate * delta_time

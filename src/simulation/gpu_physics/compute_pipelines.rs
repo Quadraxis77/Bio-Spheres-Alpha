@@ -914,7 +914,7 @@ impl GpuPhysicsPipelines {
         })
     }
     
-    /// Create mass accumulation bind group (nutrient gain rates and max cell sizes per cell)
+    /// Create mass accumulation bind group (nutrient gain rates and split masses per cell)
     pub fn create_mass_accum_bind_group(
         &self,
         device: &wgpu::Device,
@@ -930,7 +930,7 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buffers.max_cell_sizes.as_entire_binding(),
+                    resource: buffers.split_masses.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -1917,7 +1917,7 @@ impl GpuPhysicsPipelines {
         }
     }
     
-    /// Create mass accumulation bind group layout (nutrient gain rates and max cell sizes per cell)
+    /// Create mass accumulation bind group layout (nutrient gain rates and split masses per cell)
     fn create_mass_accum_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Mass Accumulation Bind Group Layout"),
@@ -1933,7 +1933,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Max cell sizes (read-only)
+                // Split masses (read-only) - mass cap = 2x split_mass
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
