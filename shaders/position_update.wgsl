@@ -180,7 +180,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Clamp velocity to max 10 units/second
     let speed = length(new_vel);
     if (speed > 10.0) {
-        new_vel = (new_vel / speed) * 50.0;
+        new_vel = (new_vel / speed) * 10.0;
     }
     
     // Simple position update
