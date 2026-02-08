@@ -515,8 +515,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_a_keep = child_a_keep_adhesion_flags[parent_mode_idx] == 1u;
     let child_b_keep = child_b_keep_adhesion_flags[parent_mode_idx] == 1u;
     
-    // Skip inheritance if neither child keeps adhesions
+    // If neither child keeps adhesions, clear parent's old inherited connections
+    // but preserve the sibling adhesion that was just created
     if (!child_a_keep && !child_b_keep) {
+        let clear_base = cell_idx * MAX_ADHESIONS_PER_CELL;
+        for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+            let adh_idx_signed = cell_adhesion_indices[clear_base + i];
+            if (adh_idx_signed >= 0 && u32(adh_idx_signed) != sibling_adhesion_slot) {
+                // Deactivate old inherited connection (not the sibling)
+                adhesion_connections[u32(adh_idx_signed)].is_active = 0u;
+                cell_adhesion_indices[clear_base + i] = -1;
+            }
+        }
         return;
     }
     

@@ -897,6 +897,14 @@ impl GpuScene {
                 || ma.color != mb.color
                 || ma.emissive != mb.emissive
                 || ma.opacity != mb.opacity
+                || ma.parent_make_adhesion != mb.parent_make_adhesion
+                || ma.child_a.keep_adhesion != mb.child_a.keep_adhesion
+                || ma.child_b.keep_adhesion != mb.child_b.keep_adhesion
+                || ma.child_a.orientation != mb.child_a.orientation
+                || ma.child_b.orientation != mb.child_b.orientation
+                || ma.child_a.mode_number != mb.child_a.mode_number
+                || ma.child_b.mode_number != mb.child_b.mode_number
+                || ma.parent_split_direction != mb.parent_split_direction
             {
                 return false;
             }
@@ -931,6 +939,9 @@ impl GpuScene {
         
         // Update parent_make_adhesion flags for this genome's modes only
         self.incremental_sync_parent_make_adhesion_flags(queue, genome_id, global_start_index, mode_count);
+        
+        // Update child keep adhesion flags for this genome's modes only
+        self.incremental_sync_child_keep_adhesion_flags(queue, genome_id, global_start_index, mode_count);
         
         log::info!("Incrementally synced genome {} (modes: {} at global index {})", 
             genome_id, mode_count, global_start_index);
@@ -992,6 +1003,25 @@ impl GpuScene {
         if !flags_data.is_empty() {
             let offset = (global_start_index * std::mem::size_of::<u32>()) as u64;
             queue.write_buffer(&self.gpu_triple_buffers.parent_make_adhesion_flags, offset, bytemuck::cast_slice(&flags_data));
+        }
+    }
+    
+    /// Incremental sync of child keep adhesion flags for a single genome
+    fn incremental_sync_child_keep_adhesion_flags(&self, queue: &wgpu::Queue, genome_id: usize, global_start_index: usize, mode_count: usize) {
+        let genome = &self.genomes[genome_id];
+        
+        let mut child_a_flags: Vec<u32> = Vec::with_capacity(mode_count);
+        let mut child_b_flags: Vec<u32> = Vec::with_capacity(mode_count);
+        
+        for mode in &genome.modes {
+            child_a_flags.push(if mode.child_a.keep_adhesion { 1 } else { 0 });
+            child_b_flags.push(if mode.child_b.keep_adhesion { 1 } else { 0 });
+        }
+        
+        if !child_a_flags.is_empty() {
+            let offset = (global_start_index * std::mem::size_of::<u32>()) as u64;
+            queue.write_buffer(&self.gpu_triple_buffers.child_a_keep_adhesion_flags, offset, bytemuck::cast_slice(&child_a_flags));
+            queue.write_buffer(&self.gpu_triple_buffers.child_b_keep_adhesion_flags, offset, bytemuck::cast_slice(&child_b_flags));
         }
     }
     
