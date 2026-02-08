@@ -9,6 +9,6 @@
     continuous_spawn: false,
     selected_fluid_type: 1,
     condensation_probability: 0.004,
-    vaporization_probability: 0.0,
+    vaporization_probability: 0.004,
     nutrient_density: 0.33,
 )

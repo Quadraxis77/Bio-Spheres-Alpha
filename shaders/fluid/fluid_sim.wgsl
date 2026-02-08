@@ -1008,6 +1008,7 @@ fn fluid_init_sphere(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // Continuous water spawn function
+// Spawn zone probes downward from the intended Y to avoid embedding in solids (e.g. cave ceilings)
 @compute @workgroup_size(4, 4, 4)
 fn fluid_spawn_continuous(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = params.grid_resolution;
@@ -1016,7 +1017,6 @@ fn fluid_spawn_continuous(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    let idx = grid_index(gid.x, gid.y, gid.z);
     let world_pos = grid_to_world(gid.x, gid.y, gid.z);
 
     // Spawn zone: horizontal plane at top of world, centered
@@ -1027,25 +1027,47 @@ fn fluid_spawn_continuous(@builtin(global_invocation_id) gid: vec3<u32>) {
     let horizontal_dist = length(world_pos.xz - spawn_center.xz);
     let vertical_dist = abs(world_pos.y - spawn_center.y);
 
-    // Check if position is within spawn zone (circular area)
-    if horizontal_dist < spawn_radius && vertical_dist < spawn_thickness && is_in_bounds(world_pos) && !is_solid(gid.x, gid.y, gid.z) {
-        // Use time-based animation for pulsing effect
-        let pulse = sin(params.time * 2.0) * 0.5 + 0.5; // Oscillates between 0 and 1
-        let spawn_probability = 0.3 + pulse * 0.4; // 30% to 70% chance
-        
-        // Hash-based randomization for natural flow
-        let pos_hash = hash_position(gid);
-        let time_hash = u32(params.time * 1000.0);
-        let combined_hash = pos_hash ^ time_hash;
-        
-        // Spawn fluid based on probability
-        if (combined_hash & 255u) < u32(spawn_probability * 255.0) {
-            // Only spawn if current cell is empty
-            let current_state = atomicLoad(&voxels[idx]);
-            if get_fluid_type(current_state) == 0u {
-                // Spawn selected fluid type with full fill
-                atomicStore(&voxels[idx], (65535u << 16u) | params.spawn_fluid_type);
-            }
+    // Check if position is within the horizontal spawn zone and vertical band
+    if horizontal_dist >= spawn_radius || vertical_dist >= spawn_thickness || !is_in_bounds(world_pos) {
+        return;
+    }
+
+    // Probe downward from this voxel's Y through the entire volume to find
+    // the first non-solid, in-bounds position below cave ceilings or other solids
+    var spawn_y = gid.y;
+    while spawn_y > 0u && is_solid(gid.x, spawn_y, gid.z) {
+        spawn_y -= 1u;
+    }
+
+    // If the bottom voxel is still solid, no spawnable space exists in this column
+    if is_solid(gid.x, spawn_y, gid.z) {
+        return;
+    }
+
+    // Verify the probed position is still in bounds
+    let probed_world_pos = grid_to_world(gid.x, spawn_y, gid.z);
+    if !is_in_bounds(probed_world_pos) {
+        return;
+    }
+
+    let idx = grid_index(gid.x, spawn_y, gid.z);
+
+    // Use time-based animation for pulsing effect
+    let pulse = sin(params.time * 2.0) * 0.5 + 0.5; // Oscillates between 0 and 1
+    let spawn_probability = 0.3 + pulse * 0.4; // 30% to 70% chance
+    
+    // Hash-based randomization for natural flow
+    let pos_hash = hash_position(gid);
+    let time_hash = u32(params.time * 1000.0);
+    let combined_hash = pos_hash ^ time_hash;
+    
+    // Spawn fluid based on probability
+    if (combined_hash & 255u) < u32(spawn_probability * 255.0) {
+        // Only spawn if current cell is empty
+        let current_state = atomicLoad(&voxels[idx]);
+        if get_fluid_type(current_state) == 0u {
+            // Spawn selected fluid type with full fill
+            atomicStore(&voxels[idx], (65535u << 16u) | params.spawn_fluid_type);
         }
     }
 }

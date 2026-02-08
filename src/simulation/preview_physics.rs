@@ -324,7 +324,7 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
 pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome: &Genome, dt: f32) {
     const DANGER_THRESHOLD: f32 = 0.6;
     const PRIORITY_BOOST: f32 = 10.0;
-    const TRANSPORT_RATE: f32 = 0.5;
+    const TRANSPORT_RATE: f32 = 2.0;
     
     // Collect mass deltas to apply atomically after processing all adhesions
     let mut mass_deltas = vec![0.0f32; state.cell_count];

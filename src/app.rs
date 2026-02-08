@@ -495,8 +495,11 @@ impl App {
                 self.ui.state.world_settings.gravity_z,
             ];
 
-            // Apply lateral flow probabilities from UI
+            // Apply fluid settings from UI
             gpu_scene.lateral_flow_probabilities = self.editor_state.fluid_lateral_flow_probabilities;
+            gpu_scene.condensation_probability = self.editor_state.fluid_condensation_probability;
+            gpu_scene.vaporization_probability = self.editor_state.fluid_vaporization_probability;
+            gpu_scene.nutrient_density = self.editor_state.nutrient_density;
 
             // Set culling mode based on enabled flags
             let culling_mode = match (self.ui.state.frustum_enabled, self.ui.state.occlusion_enabled) {
