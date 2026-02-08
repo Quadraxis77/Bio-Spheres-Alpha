@@ -5,6 +5,6 @@
     persistence: 0.1,
     threshold: 1.0,
     smoothness: 0.0,
-    seed: 5482,
+    seed: 6475,
     resolution: 128,
 )

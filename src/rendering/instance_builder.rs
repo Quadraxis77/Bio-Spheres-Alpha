@@ -1015,10 +1015,10 @@ impl InstanceBuilder {
                     if mode_idx < genome.modes.len() {
                         genome.modes[mode_idx].cell_type as u32
                     } else {
-                        0 // Default to Test cell type
+                        2 // Default to Phagocyte cell type
                     }
                 } else {
-                    0 // Default to Test cell type
+                    2 // Default to Phagocyte cell type
                 };
                 self.temp_cell_types.push(cell_type);
             }

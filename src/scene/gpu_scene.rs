@@ -3135,6 +3135,7 @@ impl Scene for GpuScene {
         lod_threshold_medium: f32,
         lod_threshold_high: f32,
         _lod_debug_colors: bool,
+        outline_width: f32,
     ) {
         // Sync adhesion settings to GPU when genomes are added or modified
         self.sync_adhesion_settings(queue);
@@ -3354,6 +3355,7 @@ impl Scene for GpuScene {
             lod_threshold_low,
             lod_threshold_medium,
             lod_threshold_high,
+            outline_width,
         );
 
         // Render flagellocyte tails using GPU instance buffer

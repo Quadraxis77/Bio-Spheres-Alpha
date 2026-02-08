@@ -521,6 +521,7 @@ impl App {
             self.ui.state.lod_threshold_medium,
             self.ui.state.lod_threshold_high,
             self.ui.state.lod_debug_colors,
+            self.editor_state.cell_outline_width,
         );
         
         // Update culling stats from GPU scene using non-blocking async read

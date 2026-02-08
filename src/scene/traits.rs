@@ -29,6 +29,7 @@ pub trait Scene {
         lod_threshold_medium: f32,
         lod_threshold_high: f32,
         lod_debug_colors: bool,
+        outline_width: f32,
     );
 
     /// Handle window resize.

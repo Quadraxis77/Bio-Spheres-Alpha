@@ -209,6 +209,9 @@ impl Default for CellTypeVisuals {
 pub struct CellTypeVisualsStore {
     /// Visual settings indexed by cell type
     pub visuals: Vec<CellTypeVisuals>,
+    /// Cell outline width for cel-shaded black outline effect (0.0 = off)
+    #[serde(default)]
+    pub cell_outline_width: f32,
 }
 
 impl Default for CellTypeVisualsStore {
@@ -218,6 +221,7 @@ impl Default for CellTypeVisualsStore {
                 .iter()
                 .map(|_| CellTypeVisuals::default())
                 .collect(),
+            cell_outline_width: 0.0,
         }
     }
 }
@@ -226,9 +230,10 @@ impl CellTypeVisualsStore {
     const FILE_PATH: &'static str = "cell_visuals.ron";
 
     /// Save cell type visuals to disk.
-    pub fn save(visuals: &[CellTypeVisuals]) -> Result<(), CellVisualsError> {
+    pub fn save(visuals: &[CellTypeVisuals], cell_outline_width: f32) -> Result<(), CellVisualsError> {
         let store = CellTypeVisualsStore {
             visuals: visuals.to_vec(),
+            cell_outline_width,
         };
         let path = PathBuf::from(Self::FILE_PATH);
         let contents = ron::ser::to_string_pretty(&store, ron::ser::PrettyConfig::default())?;
@@ -238,7 +243,7 @@ impl CellTypeVisualsStore {
     }
 
     /// Load cell type visuals from disk, or return defaults if file doesn't exist.
-    pub fn load() -> Vec<CellTypeVisuals> {
+    pub fn load() -> (Vec<CellTypeVisuals>, f32) {
         let path = PathBuf::from(Self::FILE_PATH);
         
         if path.exists() {
@@ -250,7 +255,7 @@ impl CellTypeVisualsStore {
                     while visuals.len() < CellType::all().len() {
                         visuals.push(CellTypeVisuals::default());
                     }
-                    return visuals;
+                    return (visuals, store.cell_outline_width);
                 }
                 Err(e) => {
                     log::warn!("Failed to load cell type visuals: {}. Using defaults.", e);
@@ -258,7 +263,8 @@ impl CellTypeVisualsStore {
             }
         }
         
-        Self::default().visuals
+        let default = Self::default();
+        (default.visuals, default.cell_outline_width)
     }
 
     fn load_from_file(path: &PathBuf) -> Result<Self, CellVisualsError> {

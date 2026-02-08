@@ -47,7 +47,7 @@ struct LightingUniform {
     light_dir: [f32; 3],
     ambient: f32,
     light_color: [f32; 3],
-    _padding: f32,
+    outline_width: f32,
 }
 
 /// Cell group for batched rendering by type.
@@ -500,12 +500,12 @@ impl CellRenderer {
     }
     
     /// Update lighting uniform buffer.
-    fn update_lighting(&self, queue: &wgpu::Queue) {
+    fn update_lighting(&self, queue: &wgpu::Queue, outline_width: f32) {
         let lighting_uniform = LightingUniform {
             light_dir: [-0.5, -0.7, -0.5], // Normalized in shader
             ambient: 0.15,
             light_color: [1.0, 0.98, 0.95],
-            _padding: 0.0,
+            outline_width,
         };
         
         queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
@@ -703,6 +703,7 @@ impl CellRenderer {
         lod_threshold_medium: f32,
         lod_threshold_high: f32,
         _lod_debug_colors: bool,
+        outline_width: f32,
     ) {
         if state.cell_count == 0 {
             return;
@@ -733,7 +734,7 @@ impl CellRenderer {
         
         // Update uniforms
         self.update_camera(queue, camera_pos, camera_rotation, current_time, lod_scale_factor, lod_threshold_low, lod_threshold_medium, lod_threshold_high);
-        self.update_lighting(queue);
+        self.update_lighting(queue, outline_width);
         
         // Get cell groups for batched rendering
         let groups = self.group_cells_by_type(state, genome);
@@ -818,10 +819,11 @@ impl CellRenderer {
         lod_threshold_low: f32,
         lod_threshold_medium: f32,
         lod_threshold_high: f32,
+        outline_width: f32,
     ) {
         // Update uniforms with LOD settings from UI
         self.update_camera(queue, camera_pos, camera_rotation, current_time, lod_scale_factor, lod_threshold_low, lod_threshold_medium, lod_threshold_high);
-        self.update_lighting(queue);
+        self.update_lighting(queue, outline_width);
         
         // Note: Depth pre-pass is skipped for ray-marched billboards because the
         // fragment shader discards pixels outside the sphere. See render_with_depth_prepass

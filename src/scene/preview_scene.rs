@@ -152,6 +152,7 @@ impl Scene for PreviewScene {
         lod_threshold_medium: f32,
         lod_threshold_high: f32,
         lod_debug_colors: bool,
+        outline_width: f32,
     ) {
         // Calculate view-projection matrix (same as used by cell renderer)
         let view_matrix = glam::Mat4::look_at_rh(
@@ -219,6 +220,7 @@ impl Scene for PreviewScene {
             lod_threshold_medium,
             lod_threshold_high,
             lod_debug_colors,
+            outline_width,
         );
 
         // Pass 2.5: Render flagellocyte tails

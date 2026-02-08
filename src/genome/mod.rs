@@ -144,7 +144,7 @@ impl Default for ModeSettings {
             color: Vec3::new(1.0, 1.0, 1.0),
             opacity: 1.0, // Default: fully opaque
             emissive: 0.0, // Default: no glow
-            cell_type: 0,
+            cell_type: 2,
             parent_make_adhesion: false,
             split_mass: 1.5,
             split_interval: 5.0,

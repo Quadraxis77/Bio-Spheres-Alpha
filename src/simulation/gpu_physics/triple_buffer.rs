@@ -742,10 +742,10 @@ impl GpuTripleBufferSystem {
                     if mode_idx < genome.modes.len() {
                         genome.modes[mode_idx].cell_type as u32
                     } else {
-                        0 // Default to Test cell type
+                        2 // Default to Phagocyte cell type
                     }
                 } else {
-                    0 // Default to Test cell type
+                    2 // Default to Phagocyte cell type
                 }
             })
             .collect();
@@ -844,10 +844,10 @@ impl GpuTripleBufferSystem {
                     if mode_idx < genome.modes.len() {
                         genome.modes[mode_idx].cell_type as u32
                     } else {
-                        0 // Default to Test cell type
+                        2 // Default to Phagocyte cell type
                     }
                 } else {
-                    0 // Default to Test cell type
+                    2 // Default to Phagocyte cell type
                 }
             })
             .collect();

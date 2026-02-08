@@ -1265,7 +1265,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     color: glam::Vec3::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0), // Convert to Vec3
                     opacity: 1.0,
                     emissive: 0.0,
-                    cell_type: 0, // Default to Test
+                    cell_type: 2, // Default to Phagocyte
                     parent_make_adhesion: false, // Default to no adhesion
                     split_mass: 1.5,
                     split_interval: 5.0,
@@ -2310,6 +2310,22 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
+
+            // Global outline setting (applies to all cell types)
+            ui.label(egui::RichText::new("Cell Outline").strong());
+            ui.add_space(4.0);
+            ui.label("Outline Width:");
+            ui.horizontal(|ui| {
+                let available = ui.available_width();
+                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                ui.style_mut().spacing.slider_width = slider_width;
+                ui.add(egui::Slider::new(&mut context.editor_state.cell_outline_width, 0.0..=0.5).show_value(false));
+                ui.add(egui::DragValue::new(&mut context.editor_state.cell_outline_width).speed(0.01).range(0.0..=0.5));
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
 
             // Ensure we have visuals for all cell types
             let cell_types = CellType::all();

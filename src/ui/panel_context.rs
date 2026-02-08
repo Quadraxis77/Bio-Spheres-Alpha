@@ -275,6 +275,8 @@ pub struct GenomeEditorState {
     pub drag_distance: f32,
     
     // Cell type visuals state
+    /// Cell outline width for cel-shaded black outline effect (0.0 = off, 0.3 = thick)
+    pub cell_outline_width: f32,
     /// Visual settings per cell type (indexed by CellType)
     pub cell_type_visuals: Vec<crate::cell::types::CellTypeVisuals>,
     /// Currently selected cell type index for the visuals panel
@@ -301,6 +303,8 @@ impl GenomeEditorState {
              fog_color, fog_scattering_anisotropy, fog_absorption, fog_height_density, fog_height_falloff,
              light_field_max_steps, light_field_step_size, light_field_absorption_solid,
              light_field_absorption_cell, light_field_ambient_floor) = Self::load_light_settings();
+        
+        let (cell_type_visuals, cell_outline_width) = crate::cell::types::CellTypeVisualsStore::load();
         
         Self {
             renaming_mode: None,
@@ -408,7 +412,8 @@ impl GenomeEditorState {
             split_rings_visible: true,
             radial_menu: crate::ui::radial_menu::RadialMenuState::new(),
             drag_distance: 0.0,
-            cell_type_visuals: crate::cell::types::CellTypeVisualsStore::load(),
+            cell_outline_width,
+            cell_type_visuals,
             selected_cell_type: 0,
             mode_graph_state: crate::genome::node_graph::ModeGraphState::new(),
             toggle_mode_graph_panel: false,
@@ -418,7 +423,7 @@ impl GenomeEditorState {
 
     /// Save cell type visuals to disk.
     pub fn save_cell_type_visuals(&self) {
-        if let Err(e) = crate::cell::types::CellTypeVisualsStore::save(&self.cell_type_visuals) {
+        if let Err(e) = crate::cell::types::CellTypeVisualsStore::save(&self.cell_type_visuals, self.cell_outline_width) {
             log::error!("Failed to save cell type visuals: {}", e);
         }
     }

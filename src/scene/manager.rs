@@ -299,6 +299,7 @@ impl SceneManager {
         lod_threshold_medium: f32,
         lod_threshold_high: f32,
         lod_debug_colors: bool,
+        outline_width: f32,
     ) {
         self.active_scene_mut().render(
             device, 
@@ -311,6 +312,7 @@ impl SceneManager {
             lod_threshold_medium,
             lod_threshold_high,
             lod_debug_colors,
+            outline_width,
         );
     }
 

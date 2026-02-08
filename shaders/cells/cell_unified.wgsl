@@ -23,7 +23,7 @@ struct Lighting {
     light_dir: vec3<f32>,
     ambient: f32,
     light_color: vec3<f32>,
-    _padding: f32,
+    outline_width: f32,
 }
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -665,8 +665,15 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let sss = max(dot(world_normal_front, light_dir), 0.0) * 0.12;
     let sss_color = base_color * sss;
 
-    let final_color = composited + specular + fresnel_contribution + sss_color
+    var final_color = composited + specular + fresnel_contribution + sss_color
                     + composited * in.visual_params.w; // emissive
+
+    // Cel-shaded black outline: hard black band at the silhouette edge
+    if (lighting.outline_width > 0.0) {
+        let aa = fwidth(z_front);
+        let outline = smoothstep(lighting.outline_width - aa, lighting.outline_width + aa, z_front);
+        final_color = mix(vec3<f32>(0.0, 0.0, 0.0), final_color, outline);
+    }
 
     // ====================================================================
     // Sphere depth (front surface)
