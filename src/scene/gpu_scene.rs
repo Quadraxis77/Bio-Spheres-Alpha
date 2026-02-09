@@ -617,9 +617,10 @@ impl GpuScene {
     
     /// Run phagocyte nutrient consumption compute shader
     fn run_phagocyte_consumption(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
-        if self.current_cell_count == 0 {
-            return;
-        }
+        // Note: No CPU-side early-out on current_cell_count here.
+        // The GPU shader reads cell_count_buffer[0] (high water mark) for bounds checking.
+        // Using the async-readback live count would cause premature consumption freeze
+        // when the readback lags behind the actual GPU state.
         
         let (consumption_system, fluid_sim) = match (&self.phagocyte_consumption, &self.fluid_simulator) {
             (Some(c), Some(f)) => (c, f),
@@ -653,9 +654,10 @@ impl GpuScene {
             ));
         }
         
-        // Run consumption shader
+        // Run consumption shader - use capacity for dispatch so all slots are covered;
+        // the shader reads cell_count_buffer[0] internally for bounds checking
         if let Some(ref nutrient_bg) = &self.phagocyte_nutrient_bind_group {
-            consumption_system.run(encoder, &physics_bg, nutrient_bg, self.current_cell_count);
+            consumption_system.run(encoder, &physics_bg, nutrient_bg, self.gpu_triple_buffers.capacity);
         }
     }
     
@@ -677,7 +679,7 @@ impl GpuScene {
             fluid_sim.solid_mask_buffer(),
             &self.gpu_triple_buffers.position_and_mass[output_idx],
             &self.gpu_triple_buffers.cell_count_buffer,
-            self.current_cell_count,
+            self.gpu_triple_buffers.capacity,
             self.current_time,
         );
     }
@@ -685,9 +687,10 @@ impl GpuScene {
     /// Run photocyte light consumption compute shader.
     /// Called inside each physics step so photocytes gain/lose mass at the same rate as other cells.
     fn run_photocyte_light_consumption(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
-        if self.current_cell_count == 0 {
-            return;
-        }
+        // Note: No CPU-side early-out on current_cell_count here.
+        // The GPU shader reads cell_count_buffer[0] (high water mark) for bounds checking.
+        // Using the async-readback live count would cause premature consumption freeze
+        // when the readback lags behind the actual GPU state.
         
         let light_field = match &self.light_field_system {
             Some(l) => l,
@@ -705,7 +708,7 @@ impl GpuScene {
             &self.gpu_triple_buffers.physics_params,
             &self.gpu_triple_buffers.cell_types,
             &self.gpu_triple_buffers.split_masses,
-            self.current_cell_count,
+            self.gpu_triple_buffers.capacity,
         );
     }
     

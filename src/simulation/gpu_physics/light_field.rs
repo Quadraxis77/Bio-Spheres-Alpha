@@ -833,9 +833,8 @@ impl LightFieldSystem {
         split_masses_buffer: &wgpu::Buffer,
         cell_count: u32,
     ) {
-        if cell_count == 0 {
-            return;
-        }
+        // Note: Don't early-out on cell_count == 0. The caller passes capacity
+        // and the shader reads cell_count_buffer[0] for actual bounds checking.
 
         self.update_photocyte_params(queue);
 

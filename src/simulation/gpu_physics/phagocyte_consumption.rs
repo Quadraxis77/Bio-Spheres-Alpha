@@ -281,10 +281,8 @@ impl PhagocyteConsumptionSystem {
         nutrient_bind_group: &wgpu::BindGroup,
         cell_count: u32,
     ) {
-        if cell_count == 0 {
-            return;
-        }
-        
+        // Note: Don't early-out on cell_count == 0. The caller passes capacity
+        // and the shader reads cell_count_buffer[0] for actual bounds checking.
         let workgroup_count = (cell_count + 255) / 256;
         
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
