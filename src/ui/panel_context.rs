@@ -26,8 +26,10 @@ pub enum SceneModeRequest {
     SwitchToGpu,
     /// Request to toggle pause state
     TogglePause,
-    /// Request to reset the simulation
+    /// Request to reset the simulation (cells + fluid)
     Reset,
+    /// Request to reset cells only (keep fluid/water)
+    ResetCellsOnly,
     /// Request to toggle fast forward mode (2x speed)
     ToggleFastForward,
     /// Request to set simulation speed

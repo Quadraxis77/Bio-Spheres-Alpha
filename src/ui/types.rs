@@ -292,6 +292,10 @@ pub struct GlobalUiState {
     #[serde(skip)]
     pub show_low_fps_dialog: bool,
 
+    /// Whether the low FPS dialog is suppressed for this session
+    #[serde(skip)]
+    pub suppress_low_fps_dialog: bool,
+
     /// Whether the reset confirmation dialog is shown
     #[serde(skip)]
     pub show_reset_dialog: bool,
@@ -368,6 +372,7 @@ impl Default for GlobalUiState {
             lod_debug_colors: false,
             world_settings: WorldSettings::default(),
             show_low_fps_dialog: false,
+            suppress_low_fps_dialog: false,
             show_reset_dialog: false,
             mode_request: None,
         }

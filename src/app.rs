@@ -677,6 +677,31 @@ impl App {
                         self.editor_state.cave_params_dirty = false;
                     }
                 }
+                crate::ui::panel_context::SceneModeRequest::ResetCellsOnly => {
+                    // Use capacity from UI slider
+                    let capacity = self.ui.state.world_settings.cell_capacity;
+                    
+                    // Recreate GPU scene with appropriate capacity if needed
+                    self.scene_manager.recreate_gpu_scene_with_capacity(
+                        &self.device,
+                        &self.queue,
+                        &self.config,
+                        self.ui.state.world_diameter,
+                        capacity,
+                        &self.editor_state,
+                    );
+                    
+                    // Reset the GPU scene (cells only, keep fluid)
+                    if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                        gpu_scene.reset(&self.queue);
+
+                        // Reapply saved cave settings after reset
+                        self.editor_state.cave_params_dirty = true;
+                        gpu_scene.apply_cave_params_from_editor(&self.editor_state);
+                        gpu_scene.update_cave_params(&self.device, &self.queue);
+                        self.editor_state.cave_params_dirty = false;
+                    }
+                }
                 crate::ui::panel_context::SceneModeRequest::SetSpeed(speed) => {
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                         gpu_scene.time_scale = speed;

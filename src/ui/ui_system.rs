@@ -362,8 +362,8 @@ impl UiSystem {
             let fps = performance.fps();
             let sim_speed = scene_manager.gpu_scene().map(|s| s.time_scale).unwrap_or(1.0);
             
-            // Only show dialog if FPS < 15 and speed > 1x and dialog not already shown
-            if fps < 15.0 && sim_speed > 1.0 && !ui_state_copy.show_low_fps_dialog {
+            // Only show dialog if FPS < 15 and speed > 1x and dialog not already shown and not suppressed
+            if fps < 15.0 && sim_speed > 1.0 && !ui_state_copy.show_low_fps_dialog && !ui_state_copy.suppress_low_fps_dialog {
                 ui_state_copy.show_low_fps_dialog = true;
                 // Pause simulation while dialog is shown
                 *scene_request = crate::ui::panel_context::SceneModeRequest::TogglePause;
@@ -391,6 +391,8 @@ impl UiSystem {
                                 ui_state_copy.show_low_fps_dialog = false;
                             }
                         });
+                        ui.add_space(4.0);
+                        ui.checkbox(&mut ui_state_copy.suppress_low_fps_dialog, "Don't ask again this session");
                     });
             }
             
@@ -401,16 +403,20 @@ impl UiSystem {
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(&self.ctx, |ui| {
-                        ui.label("Are you sure you want to reset the simulation?");
-                        ui.add_space(8.0);
-                        ui.label("All cells will be removed.");
+                        ui.label("What would you like to reset?");
                         ui.add_space(12.0);
                         
-                        ui.horizontal(|ui| {
-                            if ui.button("Reset").clicked() {
+                        ui.vertical(|ui| {
+                            if ui.button("Reset Everything").on_hover_text("Remove all cells and clear water/fluid").clicked() {
                                 *scene_request = crate::ui::panel_context::SceneModeRequest::Reset;
                                 ui_state_copy.show_reset_dialog = false;
                             }
+                            ui.add_space(4.0);
+                            if ui.button("Reset Cells Only").on_hover_text("Remove all cells but keep water/fluid").clicked() {
+                                *scene_request = crate::ui::panel_context::SceneModeRequest::ResetCellsOnly;
+                                ui_state_copy.show_reset_dialog = false;
+                            }
+                            ui.add_space(4.0);
                             if ui.button("Cancel").clicked() {
                                 ui_state_copy.show_reset_dialog = false;
                             }
