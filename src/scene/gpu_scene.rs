@@ -890,6 +890,7 @@ impl GpuScene {
                 || ma.nutrient_gain_rate != mb.nutrient_gain_rate
                 || ma.max_cell_size != mb.max_cell_size
                 || ma.swim_force != mb.swim_force
+                || ma.buoyancy_force != mb.buoyancy_force
                 || ma.color != mb.color
                 || ma.emissive != mb.emissive
                 || ma.opacity != mb.opacity

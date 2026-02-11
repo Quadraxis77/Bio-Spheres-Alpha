@@ -95,8 +95,60 @@ var<storage, read> pbd_pos_y: array<i32>;
 @group(2) @binding(8)
 var<storage, read> pbd_pos_z: array<i32>;
 
+// Cell type behavior flags for parameterized shader logic
+struct CellTypeBehaviorFlags {
+    ignores_split_interval: u32,
+    applies_swim_force: u32,
+    uses_texture_atlas: u32,
+    has_procedural_tail: u32,
+    gains_mass_from_light: u32,
+    is_storage_cell: u32,
+    applies_buoyancy: u32,
+    _padding: array<u32, 9>,
+}
+
+// Spatial grid + cell type data (group 3)
+@group(3) @binding(5)
+var<storage, read> mode_indices: array<u32>;
+
+@group(3) @binding(6)
+var<storage, read> mode_cell_types: array<u32>;
+
+@group(3) @binding(7)
+var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
+
+// Mode properties (per-mode settings from genome)
+// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, split_ratio, buoyancy_force, padding]
+// Total: 12 floats = 48 bytes per mode
+struct ModeProperties {
+    nutrient_gain_rate: f32,
+    max_cell_size: f32,
+    membrane_stiffness: f32,
+    split_interval: f32,
+    split_mass: f32,
+    nutrient_priority: f32,
+    swim_force: f32,
+    prioritize_when_low: f32,
+    max_splits: f32,
+    split_ratio: f32,
+    buoyancy_force: f32,
+    _pad0: f32,
+}
+
+@group(3) @binding(8)
+var<storage, read> mode_properties: array<ModeProperties>;
+
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const WATER_GRID_X_GROUPS: u32 = 4u;  // 128 / 32 = 4 u32s per row
+
+// Archimedes buoyancy constants
+// F_buoyancy = ρ_fluid × V_cell × g × buoyancy_force (opposing gravity)
+// ρ_fluid = density of water in simulation units
+// V_cell = (4/3)π r³ where r is derived from mass (assuming unit density cells)
+// buoyancy_force = per-mode slider (0.0 to 1.0) controlling buoyancy strength
+const WATER_DENSITY: f32 = 1.0;
+const PI: f32 = 3.14159265;
+const BUOYANCY_BASE_SCALE: f32 = 4.0;  // Base amplification, scaled by per-mode buoyancy_force
 
 // Convert fixed-point i32 back to float
 fn fixed_to_float(v: i32) -> f32 {
@@ -173,6 +225,32 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     force.x += gravity_force * params.gravity_dir_x;
     force.y += gravity_force * params.gravity_dir_y;
     force.z += gravity_force * params.gravity_dir_z;
+
+    // Archimedes buoyancy for Buoyocyte cells submerged in water
+    // F_buoyancy = ρ_fluid × V_cell × g (opposing gravity direction)
+    if (in_water) {
+        let mode_idx = mode_indices[cell_idx];
+        let cell_type = mode_cell_types[mode_idx];
+        let behavior = type_behaviors[cell_type];
+        if (behavior.applies_buoyancy == 1u) {
+            let mode = mode_properties[mode_idx];
+            if (mode.buoyancy_force > 0.0) {
+                // Cell radius from mass assuming unit-density sphere: m = (4/3)πr³ → r = (3m/4π)^(1/3)
+                let radius = pow(3.0 * mass / (4.0 * PI), 1.0 / 3.0);
+                let volume = (4.0 / 3.0) * PI * radius * radius * radius;
+                // Buoyant force magnitude = ρ_fluid × V × |g| × base_scale × buoyancy_force
+                let buoyancy_magnitude = WATER_DENSITY * volume * abs(params.gravity) * BUOYANCY_BASE_SCALE * mode.buoyancy_force;
+                // Apply buoyancy opposing gravity direction
+                // gravity is negative (e.g. -9.8), gravity_dir is positive mask (0 or 1)
+                // gravity pushes down: force += gravity * mass * dir (negative)
+                // buoyancy must push up: force -= gravity_sign * magnitude * dir
+                let gravity_sign = sign(params.gravity);
+                force.x -= gravity_sign * buoyancy_magnitude * params.gravity_dir_x;
+                force.y -= gravity_sign * buoyancy_magnitude * params.gravity_dir_y;
+                force.z -= gravity_sign * buoyancy_magnitude * params.gravity_dir_z;
+            }
+        }
+    }
 
     // Read previous acceleration for Verlet integration
     let old_acceleration = prev_accelerations[cell_idx].xyz;

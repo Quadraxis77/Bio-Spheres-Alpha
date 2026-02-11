@@ -235,6 +235,7 @@ impl PreviewState {
             mode.nutrient_gain_rate.to_bits().hash(&mut hasher);
             mode.max_cell_size.to_bits().hash(&mut hasher);
             mode.swim_force.to_bits().hash(&mut hasher);
+            mode.buoyancy_force.to_bits().hash(&mut hasher);
             mode.nutrient_priority.to_bits().hash(&mut hasher);
             mode.prioritize_when_low.hash(&mut hasher);
             // Hash child settings

@@ -1276,6 +1276,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     mode_a_after_splits: -1,
                     mode_b_after_splits: -1,
                     swim_force: 0.5,
+                    buoyancy_force: 0.0,
                     membrane_stiffness: 50.0, // Default: moderate membrane stiffness
                     child_a: crate::genome::ChildSettings {
                         mode_number: selected_index as i32,
@@ -1617,6 +1618,17 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.style_mut().spacing.slider_width = slider_width;
                         ui.add(egui::Slider::new(&mut mode.swim_force, 0.0..=3.0).show_value(false));
                         ui.add(egui::DragValue::new(&mut mode.swim_force).speed(0.01).range(0.0..=3.0));
+                    });
+                });
+            } else if mode.cell_type == 5 { // Buoyocyte (cell_type == 5)
+                group_container(ui, "Buoyocyte Functions", egui::Color32::from_rgb(140, 220, 200), |ui| {
+                    ui.label("Buoyancy Force:");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.buoyancy_force, 0.0..=1.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.buoyancy_force).speed(0.01).range(0.0..=1.0));
                     });
                 });
             }

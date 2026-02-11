@@ -28,7 +28,7 @@ struct PhysicsParams {
 }
 
 // Mode properties (per-mode settings from genome)
-// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3]
+// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, split_ratio, buoyancy_force, padding]
 // Total: 12 floats = 48 bytes per mode
 struct ModeProperties {
     nutrient_gain_rate: f32,
@@ -40,9 +40,9 @@ struct ModeProperties {
     swim_force: f32,
     prioritize_when_low: f32,
     max_splits: f32,
+    split_ratio: f32,
+    buoyancy_force: f32,
     _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
 }
 
 // Cell type behavior flags for parameterized shader logic
@@ -53,7 +53,8 @@ struct CellTypeBehaviorFlags {
     has_procedural_tail: u32,
     gains_mass_from_light: u32,
     is_storage_cell: u32,
-    _padding: array<u32, 10>,
+    applies_buoyancy: u32,
+    _padding: array<u32, 9>,
 }
 
 @group(0) @binding(0)

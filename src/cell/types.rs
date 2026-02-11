@@ -119,8 +119,10 @@ pub struct GpuCellTypeBehaviorFlags {
     pub gains_mass_from_light: u32,
     /// If 1, cell is a storage specialist
     pub is_storage_cell: u32,
+    /// If 1, cell applies Archimedes buoyancy when submerged in water
+    pub applies_buoyancy: u32,
     /// Padding to 64 bytes for alignment
-    pub _padding: [u32; 10],
+    pub _padding: [u32; 9],
 }
 
 impl Default for GpuCellTypeBehaviorFlags {
@@ -132,7 +134,8 @@ impl Default for GpuCellTypeBehaviorFlags {
             has_procedural_tail: 0,
             gains_mass_from_light: 0,
             is_storage_cell: 0,
-            _padding: [0; 10],
+            applies_buoyancy: 0,
+            _padding: [0; 9],
         }
     }
 }
@@ -337,11 +340,12 @@ pub enum CellType {
     Phagocyte = 2,
     Photocyte = 3,
     Lipocyte = 4,
+    Buoyocyte = 5,
 }
 
 impl CellType {
     /// Number of registered cell types. Update when adding new types.
-    pub const COUNT: usize = 5;
+    pub const COUNT: usize = 6;
 
     /// Maximum number of cell types supported by GPU buffers.
     pub const MAX_TYPES: usize = 30;
@@ -354,6 +358,7 @@ impl CellType {
             CellType::Phagocyte,
             CellType::Photocyte,
             CellType::Lipocyte,
+            CellType::Buoyocyte,
         ]
     }
 
@@ -370,12 +375,13 @@ impl CellType {
             CellType::Phagocyte => "Phagocyte",
             CellType::Photocyte => "Photocyte",
             CellType::Lipocyte => "Lipocyte",
+            CellType::Buoyocyte => "Buoyocyte",
         }
     }
 
     /// Get all cell type names as a slice.
     pub const fn names() -> &'static [&'static str] {
-        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte"]
+        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte", "Buoyocyte"]
     }
 
     /// Convert from integer index to cell type.
@@ -386,6 +392,7 @@ impl CellType {
             2 => Some(CellType::Phagocyte),
             3 => Some(CellType::Photocyte),
             4 => Some(CellType::Lipocyte),
+            5 => Some(CellType::Buoyocyte),
             _ => None,
         }
     }
@@ -411,6 +418,10 @@ impl CellType {
                 mode.max_cell_size = 2.0;
                 mode.split_mass = 3.1;
             }
+            CellType::Buoyocyte => {
+                mode.max_cell_size = 2.0;
+                mode.buoyancy_force = 0.5;
+            }
             _ => {}
         }
     }
@@ -426,7 +437,8 @@ impl CellType {
                 has_procedural_tail: 0,
                 gains_mass_from_light: 0,
                 is_storage_cell: 0,
-                _padding: [0; 10],
+                applies_buoyancy: 0,
+                _padding: [0; 9],
             },
             CellType::Flagellocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 1,
@@ -435,7 +447,8 @@ impl CellType {
                 has_procedural_tail: 1,
                 gains_mass_from_light: 0,
                 is_storage_cell: 0,
-                _padding: [0; 10],
+                applies_buoyancy: 0,
+                _padding: [0; 9],
             },
             CellType::Phagocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,
@@ -444,7 +457,8 @@ impl CellType {
                 has_procedural_tail: 0,
                 gains_mass_from_light: 0,
                 is_storage_cell: 0,
-                _padding: [0; 10],
+                applies_buoyancy: 0,
+                _padding: [0; 9],
             },
             CellType::Photocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,
@@ -453,7 +467,8 @@ impl CellType {
                 has_procedural_tail: 0,
                 gains_mass_from_light: 1,
                 is_storage_cell: 0,
-                _padding: [0; 10],
+                applies_buoyancy: 0,
+                _padding: [0; 9],
             },
             CellType::Lipocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,
@@ -462,7 +477,18 @@ impl CellType {
                 has_procedural_tail: 0,
                 gains_mass_from_light: 0,
                 is_storage_cell: 1,
-                _padding: [0; 10],
+                applies_buoyancy: 0,
+                _padding: [0; 9],
+            },
+            CellType::Buoyocyte => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 0,
+                applies_swim_force: 0,
+                uses_texture_atlas: 1,
+                has_procedural_tail: 0,
+                gains_mass_from_light: 0,
+                is_storage_cell: 0,
+                applies_buoyancy: 1,
+                _padding: [0; 9],
             },
         }
     }

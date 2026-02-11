@@ -38,7 +38,8 @@ struct CellTypeBehaviorFlags {
     has_procedural_tail: u32,
     gains_mass_from_light: u32,
     is_storage_cell: u32,
-    _padding: array<u32, 10>,
+    applies_buoyancy: u32,
+    _padding: array<u32, 9>,
 }
 
 // Adhesion connection structure (104 bytes)

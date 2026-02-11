@@ -112,6 +112,8 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub swim_force: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub buoyancy_force: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_b: Option<SerializableChildSettings>,
@@ -234,6 +236,7 @@ fn mode_to_serializable(
         mode_a_after_splits: diff_i32(mode.mode_a_after_splits, default.mode_a_after_splits),
         mode_b_after_splits: diff_i32(mode.mode_b_after_splits, default.mode_b_after_splits),
         swim_force: diff_f32(mode.swim_force, default.swim_force),
+        buoyancy_force: diff_f32(mode.buoyancy_force, default.buoyancy_force),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(&mode.adhesion_settings, &default.adhesion_settings),
@@ -271,6 +274,7 @@ impl SerializableModeSettings {
             || self.mode_a_after_splits.is_some()
             || self.mode_b_after_splits.is_some()
             || self.swim_force.is_some()
+            || self.buoyancy_force.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -389,6 +393,9 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(swim_force) = ser.swim_force {
         mode.swim_force = swim_force;
+    }
+    if let Some(buoyancy_force) = ser.buoyancy_force {
+        mode.buoyancy_force = buoyancy_force;
     }
     if let Some(ref child_a) = ser.child_a {
         apply_child_settings(&mut mode.child_a, child_a);

@@ -111,6 +111,9 @@ pub struct ModeSettings {
     // Flagellocyte settings
     pub swim_force: f32, // Forward thrust force (0.0 to 1.0, for Flagellocyte cells)
     
+    // Buoyocyte settings
+    pub buoyancy_force: f32, // Buoyancy strength multiplier (0.0 to 1.0, for Buoyocyte cells)
+    
     // Membrane settings
     pub membrane_stiffness: f32, // Cell membrane stiffness for collision response (0.0 = no repulsion, higher = more rigid)
 
@@ -161,6 +164,7 @@ impl Default for ModeSettings {
             mode_a_after_splits: -1, // Use normal child_a mode by default
             mode_b_after_splits: -1, // Use normal child_b mode by default
             swim_force: 0.5, // Default swim force for flagellocytes
+            buoyancy_force: 0.0, // Default: no buoyancy (Buoyocyte apply_mode_defaults sets this)
             membrane_stiffness: 50.0, // Default: moderate membrane stiffness
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),

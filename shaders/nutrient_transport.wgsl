@@ -112,7 +112,7 @@ struct AdhesionConnection {
 }
 
 // Mode properties structure (48 bytes per mode)
-// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3]
+// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, split_ratio, buoyancy_force, padding]
 struct ModeProperties {
     nutrient_gain_rate: f32,
     max_cell_size: f32,
@@ -123,9 +123,9 @@ struct ModeProperties {
     swim_force: f32,
     prioritize_when_low: f32,  // 1.0 = true, 0.0 = false
     max_splits: f32,
+    split_ratio: f32,
+    buoyancy_force: f32,
     _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
 }
 
 // Constants matching reference implementation
@@ -218,8 +218,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             mass_loss = BASE_METABOLISM_RATE * params.delta_time;
         }
 
-        // Additional consumption from swim force (Flagellocytes only, cell_type 5)
-        if (cell_type == 5u && mode.swim_force > 0.0) {
+        // Additional consumption from swim force (Flagellocytes only, cell_type 1)
+        if (cell_type == 1u && mode.swim_force > 0.0) {
             mass_loss += mode.swim_force * SWIM_CONSUMPTION_RATE * params.delta_time;
         }
 

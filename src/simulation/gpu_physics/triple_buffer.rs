@@ -527,7 +527,7 @@ impl GpuTripleBufferSystem {
         let mode_cell_types = Self::create_storage_buffer(device, max_modes * 4, "Mode Cell Types");
         
         // Behavior flags per cell type for parameterized shader logic
-        // Each GpuCellTypeBehaviorFlags struct is 64 bytes (6 u32 fields + 10 u32 padding)
+        // Each GpuCellTypeBehaviorFlags struct is 64 bytes (7 u32 fields + 9 u32 padding)
         let behavior_flags = Self::create_storage_buffer(device, 30 * 64, "Behavior Flags"); // CellType::MAX_TYPES = 30
         
         Self {
@@ -973,7 +973,7 @@ impl GpuTripleBufferSystem {
     pub fn sync_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
         // Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval] (vec4)
         //                  [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
-        //                  [max_splits, split_ratio, padding, padding] (vec4)
+        //                  [max_splits, split_ratio, buoyancy_force, padding] (vec4)
         // Total: 12 floats = 48 bytes per mode
         let mut properties_data: Vec<[f32; 12]> = Vec::new();
         
@@ -995,8 +995,8 @@ impl GpuTripleBufferSystem {
                     mode.swim_force,
                     if mode.prioritize_when_low { 1.0 } else { 0.0 },
                     gpu_max_splits,
-                    mode.split_ratio, // split_ratio instead of padding
-                    0.0, // padding
+                    mode.split_ratio,
+                    mode.buoyancy_force,
                     0.0, // padding
                 ]);
             }
@@ -1039,7 +1039,7 @@ impl GpuTripleBufferSystem {
     pub fn incremental_sync_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
         // Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval] (vec4)
         //                  [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
-        //                  [max_splits, split_ratio, padding, padding] (vec4)
+        //                  [max_splits, split_ratio, buoyancy_force, padding] (vec4)
         // Total: 12 floats = 48 bytes per mode
         let mut properties_data: Vec<[f32; 12]> = Vec::new();
         
@@ -1056,7 +1056,7 @@ impl GpuTripleBufferSystem {
                 if mode.prioritize_when_low { 1.0 } else { 0.0 },
                 gpu_max_splits,
                 mode.split_ratio,
-                0.0, // padding
+                mode.buoyancy_force,
                 0.0, // padding
             ]);
         }
