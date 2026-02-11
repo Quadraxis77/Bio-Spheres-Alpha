@@ -1,6 +1,16 @@
-// Nutrient Population Shader
-// Uses noise to populate nutrient voxels in water areas
-// Run once on initialization or periodically to replenish nutrients
+// Nutrient Population Shader (Lifecycle-based)
+//
+// Manages per-voxel nutrient lifecycles with staggered crossfade.
+// Each nutrient has a randomized spawn time and lifetime so they don't all
+// appear/disappear at once. The crossfade ensures consistent overall density.
+//
+// nutrient_voxels encoding (u32):
+//   0              = empty (no nutrient)
+//   bits 0-15      = spawn time (in tenths of a second, wrapping at 65536 = ~109 min)
+//   bits 16-31     = lifetime duration (in tenths of a second, randomized per-voxel)
+//
+// A nutrient is "alive" when: (current_time_tenths - spawn_time) < lifetime
+// Fade-in during first fade_duration, fade-out during last fade_duration.
 
 struct NutrientPopulateParams {
     grid_resolution: u32,
@@ -10,7 +20,11 @@ struct NutrientPopulateParams {
     grid_origin_z: f32,
     world_radius: f32,
     nutrient_density: f32,   // 0.0 = sparse, 1.0 = dense
-    time: f32,               // For time-based variation
+    time: f32,               // Current time in seconds
+    base_lifetime: f32,      // Base lifetime in seconds (e.g. 8.0)
+    lifetime_variance: f32,  // Random variance range in seconds (e.g. 4.0)
+    fade_duration: f32,      // Crossfade duration in seconds (e.g. 1.5)
+    spawn_rate: f32,         // Probability of spawning per eligible empty voxel per frame (e.g. 0.02)
 }
 
 @group(0) @binding(0)
@@ -23,7 +37,7 @@ var<storage, read> fluid_state: array<u32>;
 var<storage, read_write> nutrient_voxels: array<atomic<u32>>;
 
 // Smooth interpolation function
-fn smoothstep(t: f32) -> f32 {
+fn smoothstep_custom(t: f32) -> f32 {
     return t * t * (3.0 - 2.0 * t);
 }
 
@@ -47,17 +61,17 @@ fn value_noise_3d(pos: vec3<f32>, seed: u32) -> f32 {
     let h111 = fract(sin(dot(vec3<f32>(ix + 1.0, iy + 1.0, iz + 1.0) + vec3<f32>(f32(seed)), vec3<f32>(127.1, 311.7, 74.7))) * 43758.5453);
     
     // Interpolate along X
-    let x00 = mix(h000, h100, smoothstep(fx));
-    let x01 = mix(h001, h101, smoothstep(fx));
-    let x10 = mix(h010, h110, smoothstep(fx));
-    let x11 = mix(h011, h111, smoothstep(fx));
+    let x00 = mix(h000, h100, smoothstep_custom(fx));
+    let x01 = mix(h001, h101, smoothstep_custom(fx));
+    let x10 = mix(h010, h110, smoothstep_custom(fx));
+    let x11 = mix(h011, h111, smoothstep_custom(fx));
     
     // Interpolate along Y
-    let y0 = mix(x00, x10, smoothstep(fy));
-    let y1 = mix(x01, x11, smoothstep(fy));
+    let y0 = mix(x00, x10, smoothstep_custom(fy));
+    let y1 = mix(x01, x11, smoothstep_custom(fy));
     
     // Interpolate along Z
-    return mix(y0, y1, smoothstep(fz));
+    return mix(y0, y1, smoothstep_custom(fz));
 }
 
 // Fractal Brownian Motion - combines multiple octaves of value noise
@@ -136,6 +150,53 @@ fn is_water_isolated(x: u32, y: u32, z: u32) -> bool {
     return water_neighbors == 0u;
 }
 
+// Fast hash for per-voxel randomization (returns 0.0-1.0)
+fn voxel_hash(voxel_index: u32, seed: u32) -> f32 {
+    let n = voxel_index * 1103515245u + seed * 12345u + 2531011u;
+    return f32((n >> 16u) & 0x7FFFu) / 32767.0;
+}
+
+// Pack spawn_time (tenths) and lifetime (tenths) into a u32
+// spawn_time in bits 0-15, lifetime in bits 16-31
+fn pack_nutrient(spawn_time_tenths: u32, lifetime_tenths: u32) -> u32 {
+    return (spawn_time_tenths & 0xFFFFu) | ((lifetime_tenths & 0xFFFFu) << 16u);
+}
+
+// Unpack spawn_time (tenths) from packed nutrient value
+fn unpack_spawn_time(packed: u32) -> u32 {
+    return packed & 0xFFFFu;
+}
+
+// Unpack lifetime (tenths) from packed nutrient value
+fn unpack_lifetime(packed: u32) -> u32 {
+    return (packed >> 16u) & 0xFFFFu;
+}
+
+// Get current time in tenths of a second (wrapping u16)
+fn current_time_tenths() -> u32 {
+    return u32(params.time * 10.0) & 0xFFFFu;
+}
+
+// Calculate age of a nutrient in tenths of a second (handles u16 wrapping)
+fn nutrient_age_tenths(spawn_time: u32) -> u32 {
+    let now = current_time_tenths();
+    return (now - spawn_time) & 0xFFFFu;
+}
+
+// Check if a nutrient is still alive or in its fade-out grace period
+// Keeps the nutrient in the buffer for an extra fade_duration so the
+// extract shader can render the fade-out before it's cleared.
+fn is_nutrient_alive(packed: u32) -> bool {
+    if (packed == 0u) {
+        return false;
+    }
+    let spawn_time = unpack_spawn_time(packed);
+    let lifetime = unpack_lifetime(packed);
+    let fade_tenths = u32(params.fade_duration * 10.0);
+    let age = nutrient_age_tenths(spawn_time);
+    return age < (lifetime + fade_tenths);
+}
+
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let res = params.grid_resolution;
@@ -146,41 +207,100 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     let voxel_index = global_id.x + global_id.y * res + global_id.z * res * res;
     
-    // Only populate nutrients in water voxels
+    // Read current nutrient state
+    let current = atomicLoad(&nutrient_voxels[voxel_index]);
+    
+    // If not a water voxel, clear any nutrient
     if (!is_water_voxel(voxel_index)) {
-        atomicStore(&nutrient_voxels[voxel_index], 0u);
+        if (current != 0u) {
+            atomicStore(&nutrient_voxels[voxel_index], 0u);
+        }
         return;
     }
     
     // Skip isolated water voxels
     if (is_water_isolated(global_id.x, global_id.y, global_id.z)) {
-        atomicStore(&nutrient_voxels[voxel_index], 0u);
+        if (current != 0u) {
+            atomicStore(&nutrient_voxels[voxel_index], 0u);
+        }
         return;
     }
     
-    // Get world position for noise sampling
+    // --- Batch placement model ---
+    //
+    // Each cycle (base_lifetime seconds), a single noise pattern determines which
+    // voxels get nutrients. The pattern is fixed for the entire cycle — it does NOT
+    // drift or change until the next cycle begins with a fresh noise seed.
+    // Per-voxel lifetime randomization staggers the fade-out within a batch.
+    
     let world_pos = voxel_to_world(voxel_index);
     
-    // Add time-based drift to create rolling/drifting nutrient zones
-    // Drift speed is slow (0.5 units/sec) for gentle movement
-    let drift_speed = 0.5;
-    let drift_offset = vec3<f32>(
-        params.time * drift_speed * 0.7,   // Drift along X
-        params.time * drift_speed * 0.3,   // Slower drift along Y  
-        params.time * drift_speed * 0.5    // Medium drift along Z
+    // Determine which cycle we're in. Each cycle gets a unique noise seed.
+    let cycle_index = u32(params.time / params.base_lifetime);
+    let cycle_seed = cycle_index * 5381u + 31u;
+    
+    // Evaluate noise pattern for THIS cycle (stable for entire cycle duration)
+    // The seed offsets the sampling position so each cycle has a different pattern
+    let seed_offset = vec3<f32>(
+        f32(cycle_seed & 0xFFu) * 0.37,
+        f32((cycle_seed >> 8u) & 0xFFu) * 0.53,
+        f32((cycle_seed >> 16u) & 0xFFu) * 0.71
     );
-    let drifting_pos = world_pos + drift_offset;
+    let noise = fbm(world_pos + seed_offset, 20.0, 3u, 0.5);
     
-    // Use FBM noise for uneven distribution with drifting coordinates
-    let noise = fbm(drifting_pos, 20.0, 3u, 0.5);
-    
-    // Use density parameter to control threshold
+    // Density threshold from user setting
     let threshold = 1.0 - params.nutrient_density;
+    let in_eligible_zone = noise > threshold;
     
-    // Nutrient present if noise exceeds threshold
-    if (noise > threshold) {
+    // --- Lifecycle management ---
+    
+    if (current != 0u) {
+        if (is_nutrient_alive(current) && in_eligible_zone) {
+            // Still alive and still in this cycle's pattern, keep it
+            return;
+        } else {
+            // Expired or pattern changed — clear it
+            atomicStore(&nutrient_voxels[voxel_index], 0u);
+            // Fall through: if we're in a new cycle and eligible, spawn below
+            if (!in_eligible_zone) {
+                return;
+            }
+        }
+    }
+    
+    // --- Spawn logic ---
+    
+    if (!in_eligible_zone) {
+        return;
+    }
+    
+    // Per-voxel lifetime randomization (deterministic per voxel+cycle)
+    // This staggers the fade-out so not all particles disappear at the exact same frame
+    let lifetime_rand = voxel_hash(voxel_index, cycle_seed + 7777u);
+    let lifetime_seconds = params.base_lifetime + (lifetime_rand * 2.0 - 1.0) * params.lifetime_variance;
+    let lifetime_tenths = u32(max(lifetime_seconds, 2.0) * 10.0);
+    
+    // Per-voxel spawn delay: small random offset (0 to fade_duration) so they don't
+    // ALL pop in on the exact same frame — creates a brief staggered fade-in
+    let spawn_delay_rand = voxel_hash(voxel_index, cycle_seed + 3333u);
+    let spawn_delay_tenths = u32(spawn_delay_rand * params.fade_duration * 10.0);
+    
+    // The batch's nominal spawn time is the start of this cycle
+    let cycle_start_tenths = u32(f32(cycle_index) * params.base_lifetime * 10.0) & 0xFFFFu;
+    let spawn_time = (cycle_start_tenths + spawn_delay_tenths) & 0xFFFFu;
+    
+    // Only actually spawn if we've reached this voxel's delayed spawn time
+    let now = current_time_tenths();
+    let time_since_cycle_start = (now - cycle_start_tenths) & 0xFFFFu;
+    if (time_since_cycle_start < spawn_delay_tenths) {
+        return;  // Not yet — stagger the fade-in
+    }
+    
+    let packed = pack_nutrient(spawn_time, lifetime_tenths);
+    
+    if (packed == 0u) {
         atomicStore(&nutrient_voxels[voxel_index], 1u);
     } else {
-        atomicStore(&nutrient_voxels[voxel_index], 0u);
+        atomicStore(&nutrient_voxels[voxel_index], packed);
     }
 }

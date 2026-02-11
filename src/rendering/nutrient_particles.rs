@@ -28,7 +28,8 @@ pub struct NutrientExtractParams {
     pub world_radius: f32,
     pub spawn_probability: f32,  // Legacy parameter (kept for compatibility)
     pub nutrient_density: f32,   // Density parameter (0.0 = sparse, 1.0 = dense)
-    pub _padding: [f32; 2],      // Pad to 48 bytes for WGSL struct alignment
+    pub fade_duration: f32,      // Crossfade duration in seconds (e.g. 1.5)
+    pub _padding: f32,           // Pad for WGSL struct alignment
 }
 
 /// Particle counter (for atomic counting in compute shader)
@@ -435,7 +436,8 @@ impl NutrientParticleRenderer {
             world_radius,
             spawn_probability: self.spawn_probability,
             nutrient_density,
-            _padding: [0.0; 2],
+            fade_duration: 5.0,
+            _padding: 0.0,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 

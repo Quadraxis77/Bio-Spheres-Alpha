@@ -85,6 +85,16 @@ var<uniform> water_params: WaterGridParams;
 @group(2) @binding(5)
 var<storage, read> water_bitfield: array<u32>;
 
+// PBD position corrections from adhesion physics (group 2, bindings 6-8)
+@group(2) @binding(6)
+var<storage, read> pbd_pos_x: array<i32>;
+
+@group(2) @binding(7)
+var<storage, read> pbd_pos_y: array<i32>;
+
+@group(2) @binding(8)
+var<storage, read> pbd_pos_z: array<i32>;
+
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const WATER_GRID_X_GROUPS: u32 = 4u;  // 128 / 32 = 4 u32s per row
 
@@ -138,8 +148,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    let pos = positions_in[cell_idx].xyz;
-    let mass = positions_in[cell_idx].w;
+    // Read from positions_out which has PBD corrections already applied by iterative adhesion loop
+    let pos = positions_out[cell_idx].xyz;
+    let mass = positions_out[cell_idx].w;
     let vel = velocities_in[cell_idx].xyz;
     
     // Read accumulated forces from collision and adhesion stages (convert from fixed-point)
@@ -221,6 +232,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             final_vel = vel_tangent + vel_normal_damped * inward_dir;
         }
     }
+    
+    // PBD position corrections are already applied to positions_out by the iterative
+    // adhesion loop (apply_pbd shader). No need to read PBD accumulators here.
     
     // Write updated position and velocity
     positions_out[cell_idx] = vec4<f32>(final_pos, mass);

@@ -851,7 +851,7 @@ impl CanonicalState {
         for genome in genomes {
             if let Some(m) = genome.modes.first() {
                 // Hash key adhesion parameter (scaled to avoid float precision issues)
-                new_hash ^= (m.adhesion_settings.linear_spring_stiffness * 1000.0) as u64;
+                new_hash ^= (m.adhesion_settings.stiffness * 1000.0) as u64;
             }
         }
         
@@ -864,16 +864,9 @@ impl CanonicalState {
                     // Copy all adhesion settings for fast access during physics
                     self.cached_adhesion_settings.push(AdhesionSettings {
                         can_break: mode.adhesion_settings.can_break,
-                        break_force: mode.adhesion_settings.break_force,
-                        rest_length: mode.adhesion_settings.rest_length,
-                        linear_spring_stiffness: mode.adhesion_settings.linear_spring_stiffness,
-                        linear_spring_damping: mode.adhesion_settings.linear_spring_damping,
-                        orientation_spring_stiffness: mode.adhesion_settings.orientation_spring_stiffness,
-                        orientation_spring_damping: mode.adhesion_settings.orientation_spring_damping,
-                        max_angular_deviation: mode.adhesion_settings.max_angular_deviation,
-                        twist_constraint_stiffness: mode.adhesion_settings.twist_constraint_stiffness,
-                        twist_constraint_damping: mode.adhesion_settings.twist_constraint_damping,
-                        enable_twist_constraint: mode.adhesion_settings.enable_twist_constraint,
+                        adhesin_length: mode.adhesion_settings.adhesin_length,
+                        adhesin_stretch: mode.adhesion_settings.adhesin_stretch,
+                        stiffness: mode.adhesion_settings.stiffness,
                     });
                 }
             }

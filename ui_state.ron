@@ -1,34 +1,11 @@
 (
-    current_mode: Gpu,
+    current_mode: Preview,
     ui_scale: 1.0,
     windows_locked: false,
     lock_tab_bar: false,
     lock_tabs: false,
     lock_close_buttons: false,
     scene_configs: {
-        Gpu: (
-            visibility: (
-                show_cell_inspector: true,
-                show_genome_editor: false,
-                show_scene_manager: true,
-                show_performance_monitor: true,
-                show_rendering_controls: true,
-                show_time_scrubber: false,
-                show_theme_editor: false,
-                show_camera_settings: true,
-                show_lighting_settings: false,
-            ),
-            locked_windows: [
-                "SceneManager",
-                "Viewport",
-                "RightPanel",
-            ],
-            lock_settings: (
-                lock_tab_bar: false,
-                lock_tabs: false,
-                lock_close_buttons: false,
-            ),
-        ),
         Preview: (
             visibility: (
                 show_cell_inspector: false,
@@ -42,15 +19,38 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "BottomPanel",
-                "QuaternionBall",
-                "Viewport",
-                "TimeSlider",
                 "CircleSliders",
-                "RightPanel",
                 "LeftPanel",
+                "BottomPanel",
+                "TimeSlider",
                 "Modes",
+                "SceneManager",
+                "Viewport",
+                "RightPanel",
+                "QuaternionBall",
                 "NameTypeEditor",
+            ],
+            lock_settings: (
+                lock_tab_bar: false,
+                lock_tabs: false,
+                lock_close_buttons: false,
+            ),
+        ),
+        Gpu: (
+            visibility: (
+                show_cell_inspector: true,
+                show_genome_editor: false,
+                show_scene_manager: true,
+                show_performance_monitor: true,
+                show_rendering_controls: true,
+                show_time_scrubber: false,
+                show_theme_editor: false,
+                show_camera_settings: true,
+                show_lighting_settings: false,
+            ),
+            locked_windows: [
+                "RightPanel",
+                "Viewport",
                 "SceneManager",
             ],
             lock_settings: (
@@ -76,7 +76,7 @@
     lod_debug_colors: false,
     world_settings: (
         cell_capacity: 100000,
-        gravity: -50.0,
+        gravity: 0.0,
         gravity_x: false,
         gravity_y: true,
         gravity_z: false,

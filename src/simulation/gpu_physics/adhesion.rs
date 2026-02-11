@@ -112,54 +112,30 @@ impl GpuAdhesionConnection {
     }
 }
 
-/// GPU-side adhesion settings (48 bytes, matching reference GPUModeAdhesionSettings)
+/// GPU-side adhesion settings (PBD-based, 16 bytes)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct GpuAdhesionSettings {
     /// Whether adhesion can break (bool as i32)
     pub can_break: i32,
-    /// Force threshold for breaking
-    pub break_force: f32,
-    /// Natural rest length of the bond
-    pub rest_length: f32,
-    /// Linear spring stiffness
-    pub linear_spring_stiffness: f32,
-    /// Linear spring damping
-    pub linear_spring_damping: f32,
-    /// Orientation spring stiffness
-    pub orientation_spring_stiffness: f32,
-    /// Orientation spring damping
-    pub orientation_spring_damping: f32,
-    /// Maximum angular deviation (degrees)
-    pub max_angular_deviation: f32,
-    /// Twist constraint stiffness
-    pub twist_constraint_stiffness: f32,
-    /// Twist constraint damping
-    pub twist_constraint_damping: f32,
-    /// Whether twist constraint is enabled (bool as i32)
-    pub enable_twist_constraint: i32,
-    /// Padding to 48 bytes
-    pub _padding: i32,
+    /// Rest offset beyond touching distance (0.0-1.0, scaled by 50x in shader)
+    pub adhesin_length: f32,
+    /// Controls bond softness AND break distance threshold (0.0-1.0)
+    pub adhesin_stretch: f32,
+    /// Hinge/orientation correction strength (0.0-1.0)
+    pub stiffness: f32,
 }
 
 // Verify size at compile time
-const _: () = assert!(std::mem::size_of::<GpuAdhesionSettings>() == 48);
+const _: () = assert!(std::mem::size_of::<GpuAdhesionSettings>() == 16);
 
 impl Default for GpuAdhesionSettings {
     fn default() -> Self {
         Self {
             can_break: 1,
-            break_force: 10.0,
-            rest_length: 1.0,
-            linear_spring_stiffness: 150.0,
-            linear_spring_damping: 5.0,
-            orientation_spring_stiffness: 10.0,
-            orientation_spring_damping: 2.0,
-            max_angular_deviation: 0.0,
-            twist_constraint_stiffness: 2.0,
-            twist_constraint_damping: 0.5,
-            enable_twist_constraint: 1,
-            _padding: 0,
+            adhesin_length: 0.0,
+            adhesin_stretch: 0.0,
+            stiffness: 1.0,
         }
     }
 }

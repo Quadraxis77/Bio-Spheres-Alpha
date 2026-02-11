@@ -134,8 +134,10 @@ const DANGER_THRESHOLD: f32 = 0.6;
 const PRIORITY_BOOST: f32 = 10.0;
 const TRANSPORT_RATE: f32 = 2.0;
 const BASE_METABOLISM_RATE: f32 = 0.025;  // Base metabolic cost per second for all cells (reduced from 0.05 for 2x longevity)
+const LIPOCYTE_METABOLISM_RATE: f32 = 0.0125;  // Lipocytes are metabolically efficient (half base rate)
 const SWIM_CONSUMPTION_RATE: f32 = 0.1;  // Additional 0.1 mass per second at full swim force (reduced from 0.2 for 2x longevity)
 const DEFER_FRAMES: i32 = 32;  // 0.5 seconds at 64 FPS = 32 frames
+const LIPOCYTE_TYPE: u32 = 4u;  // Cell type ID for Lipocyte (storage cell)
 
 // Fixed-point conversion for atomic operations (matching other shaders)
 const FIXED_POINT_SCALE: f32 = 1000.0;
@@ -189,12 +191,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Test cells (cell_type 0) have no metabolism - they auto-gain from nutrient_gain_rate
-    // All other cells have base metabolism
+    // All other cells have base metabolism (Lipocytes at half rate - metabolically efficient storage)
     if (cell_type != 0u && mode_idx < arrayLength(&mode_properties)) {
         let mode = mode_properties[mode_idx];
 
         // Base metabolism: consume nutrients to stay alive
-        var mass_loss = BASE_METABOLISM_RATE * params.delta_time;
+        // Lipocytes are metabolically efficient - half the base rate
+        let metabolism_rate = select(BASE_METABOLISM_RATE, LIPOCYTE_METABOLISM_RATE, cell_type == LIPOCYTE_TYPE);
+        var mass_loss = metabolism_rate * params.delta_time;
 
         // Additional consumption from swim force (Flagellocytes only)
         if (mode.swim_force > 0.0) {
@@ -254,6 +258,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let mode_a = mode_properties[mode_a_idx];
         let mode_b = mode_properties[mode_b_idx];
         
+        // Get cell types for both cells
+        let type_a = mode_cell_types[mode_a_idx];
+        let type_b = mode_cell_types[mode_b_idx];
+        let is_lipocyte_a = type_a == LIPOCYTE_TYPE;
+        let is_lipocyte_b = type_b == LIPOCYTE_TYPE;
+        
         // Get base priorities
         let base_priority_a = mode_a.nutrient_priority;
         let base_priority_b = mode_b.nutrient_priority;
@@ -277,13 +287,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Calculate mass transfer (positive = A -> B, negative = B -> A)
         let mass_transfer = pressure_diff * TRANSPORT_RATE * params.delta_time;
         
-        // Apply transfer with minimum thresholds
-        let min_mass_a = select(0.0, 0.1, prioritize_a);
-        let min_mass_b = select(0.0, 0.1, prioritize_b);
+        // Donor protection floor: when a Lipocyte pulls from a non-Lipocyte neighbor,
+        // the donor can't be drained below its split_mass (healthy operating level).
+        // This prevents Lipocytes from starving their neighbors.
+        // When the neighbor IS a Lipocyte (storage-to-storage), use the normal prioritize_when_low floor.
+        let donor_floor_a = select(
+            select(0.0, 0.1, prioritize_a),  // Normal floor
+            mode_a.split_mass,               // Lipocyte pulling: protect donor at split_mass
+            is_lipocyte_b && !is_lipocyte_a  // B is Lipocyte pulling from A
+        );
+        let donor_floor_b = select(
+            select(0.0, 0.1, prioritize_b),  // Normal floor
+            mode_b.split_mass,               // Lipocyte pulling: protect donor at split_mass
+            is_lipocyte_a && !is_lipocyte_b  // A is Lipocyte pulling from B
+        );
         
         let actual_transfer = select(
-            max(mass_transfer, -(mass_b - min_mass_b)),  // B -> A: limit by B's mass
-            min(mass_transfer, mass_a - min_mass_a),     // A -> B: limit by A's mass
+            max(mass_transfer, -(mass_b - donor_floor_b)),  // B -> A: limit by B's available mass
+            min(mass_transfer, mass_a - donor_floor_a),     // A -> B: limit by A's available mass
             mass_transfer > 0.0
         );
         

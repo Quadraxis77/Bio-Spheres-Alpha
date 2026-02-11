@@ -60,8 +60,13 @@ var<storage, read> cell_types: array<u32>;
 @group(1) @binding(4)
 var<storage, read> split_masses: array<f32>;
 
+// Death flags - skip dead cells
+@group(1) @binding(5)
+var<storage, read> death_flags: array<u32>;
+
 // Phagocyte cell type constant
 const PHAGOCYTE_TYPE: u32 = 2u;
+const DEATH_MASS_THRESHOLD: f32 = 0.5;
 
 // Convert world position to voxel grid index
 fn world_to_voxel_index(world_pos: vec3<f32>) -> u32 {
@@ -97,23 +102,38 @@ fn is_water_voxel(voxel_index: u32) -> bool {
     return fluid_type == 1u;
 }
 
-// Check if voxel has a nutrient (atomically read)
+// Unpack spawn_time (tenths) from packed nutrient value
+fn unpack_spawn_time(packed: u32) -> u32 {
+    return packed & 0xFFFFu;
+}
+
+// Unpack lifetime (tenths) from packed nutrient value
+fn unpack_lifetime(packed: u32) -> u32 {
+    return (packed >> 16u) & 0xFFFFu;
+}
+
+// Get current time in tenths of a second (wrapping u16)
+fn current_time_tenths_phago() -> u32 {
+    return u32(params.current_time * 10.0) & 0xFFFFu;
+}
+
+// Check if voxel has a nutrient (non-zero means the populate shader kept it alive)
 fn has_nutrient(voxel_index: u32) -> bool {
     if (voxel_index == 0xFFFFFFFFu) {
         return false;
     }
-    return atomicLoad(&nutrient_voxels[voxel_index]) == 1u;
+    return atomicLoad(&nutrient_voxels[voxel_index]) != 0u;
 }
 
-// Try to consume nutrient from voxel (atomic compare-exchange)
-// Returns true if successfully consumed
+// Try to consume nutrient from voxel (atomic exchange to 0)
+// Returns true if successfully consumed a nutrient
 fn try_consume_nutrient(voxel_index: u32) -> bool {
     if (voxel_index == 0xFFFFFFFFu) {
         return false;
     }
-    // Try to atomically change from 1 (has nutrient) to 0 (empty)
-    let result = atomicCompareExchangeWeak(&nutrient_voxels[voxel_index], 1u, 0u);
-    return result.exchanged;
+    // Atomically swap to 0 — if we got a non-zero value, we consumed it
+    let old_value = atomicExchange(&nutrient_voxels[voxel_index], 0u);
+    return old_value != 0u;
 }
 
 @compute @workgroup_size(256)
@@ -122,6 +142,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_count = cell_count_buffer[0];
     
     if (cell_idx >= cell_count) {
+        return;
+    }
+    
+    // Skip dead cells
+    if (death_flags[cell_idx] == 1u) {
         return;
     }
     

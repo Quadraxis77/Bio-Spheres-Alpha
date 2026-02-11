@@ -936,13 +936,8 @@ impl<'a> PanelContext<'a> {
         self.scene_manager.active_scene().cell_count()
     }
     
-    /// Get the GPU cell count buffer (GPU-only, no CPU readback).
-    /// Returns None if not in GPU mode.
-    /// Note: This returns the canonical state cell count as the GPU scene
-    /// now uses GPU cell count buffer exclusively without async readback.
-    pub fn gpu_cell_count(&self) -> Option<u32> {
-        self.scene_manager.gpu_scene().map(|s| s.current_cell_count)
-    }
+    /// GPU cell count is no longer tracked on the CPU side.
+    /// Use the performance monitor's culling stats for accurate cell count.
     
     /// Get the GPU scene capacity.
     /// Returns None if not in GPU mode.

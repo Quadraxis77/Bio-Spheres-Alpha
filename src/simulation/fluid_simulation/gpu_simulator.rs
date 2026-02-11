@@ -95,6 +95,10 @@ pub struct NutrientPopulateParams {
     pub world_radius: f32,
     pub nutrient_density: f32,
     pub time: f32,
+    pub base_lifetime: f32,
+    pub lifetime_variance: f32,
+    pub fade_duration: f32,
+    pub spawn_rate: f32,
 }
 
 /// GPU Fluid Simulator
@@ -475,6 +479,10 @@ impl GpuFluidSimulator {
             world_radius,
             nutrient_density: 0.3,  // Default density
             time: 0.0,
+            base_lifetime: 30.0,
+            lifetime_variance: 10.0,
+            fade_duration: 5.0,
+            spawn_rate: 0.1,
         };
 
         let nutrient_populate_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -889,6 +897,10 @@ impl GpuFluidSimulator {
             world_radius: self.world_radius,
             nutrient_density,
             time: self.time.get(),
+            base_lifetime: 30.0,
+            lifetime_variance: 10.0,
+            fade_duration: 5.0,
+            spawn_rate: 0.1,
         };
         queue.write_buffer(&self.nutrient_populate_params_buffer, 0, bytemuck::cast_slice(&[params]));
 

@@ -38,6 +38,9 @@ pub struct DeterministicSlotAllocator {
     capacity: u32,
     /// Next cell ID to assign
     next_cell_id: u32,
+    /// High water mark: max(slot_index + 1) ever allocated
+    /// This is what cell_count_buffer[0] should contain so all occupied slots get processed
+    high_water_mark: u32,
 }
 
 impl DeterministicSlotAllocator {
@@ -50,6 +53,7 @@ impl DeterministicSlotAllocator {
             free_slots,
             capacity,
             next_cell_id: 1, // Start from 1 (0 reserved for invalid)
+            high_water_mark: 0,
         }
     }
     
@@ -65,6 +69,11 @@ impl DeterministicSlotAllocator {
         let cell_id = self.next_cell_id;
         
         self.next_cell_id += 1;
+        
+        // Update high water mark
+        if slot + 1 > self.high_water_mark {
+            self.high_water_mark = slot + 1;
+        }
         
         Some((slot, cell_id))
     }
@@ -97,10 +106,21 @@ impl DeterministicSlotAllocator {
         self.free_slots.len()
     }
     
+    /// Get the high water mark (max slot index + 1 ever allocated)
+    pub fn high_water_mark(&self) -> u32 {
+        self.high_water_mark
+    }
+    
+    /// Set the high water mark (used when syncing with canonical state)
+    pub fn set_high_water_mark(&mut self, hwm: u32) {
+        self.high_water_mark = hwm;
+    }
+    
     /// Reset allocator to initial state
     pub fn reset(&mut self) {
         self.free_slots = (0..self.capacity).collect();
         self.next_cell_id = 1;
+        self.high_water_mark = 0;
     }
     
     /// Set the next cell ID (for synchronization with canonical state)
@@ -285,9 +305,13 @@ pub struct GpuTripleBufferSystem {
     /// Used for collision repulsion strength
     pub stiffnesses: wgpu::Buffer,
     
-    /// GPU-side cell count buffer: [0] = total cells, [1] = live cells
+    /// GPU-side cell count buffer: [0] = high water mark, [1] = live cells
     /// Updated by division shader, read by all other shaders
     pub cell_count_buffer: wgpu::Buffer,
+    
+    /// Previous high water mark buffer (single u32)
+    /// Copied from cell_count_buffer[0] before death_scan clears and rebuilds it
+    pub prev_high_water_mark_buffer: wgpu::Buffer,
     
 
     
@@ -461,9 +485,13 @@ impl GpuTripleBufferSystem {
         let max_cell_sizes = Self::create_storage_buffer(device, f32_per_cell, "Max Cell Sizes");
         let stiffnesses = Self::create_storage_buffer(device, f32_per_cell, "Stiffnesses");
         
-        // GPU-side cell count: [0] = total cells, [1] = live cells
+        // GPU-side cell count: [0] = high water mark, [1] = live cells
         // Must be zero-initialized so shaders start with 0 cells
         let cell_count_buffer = Self::create_zero_initialized_storage_buffer(device, 8, "Cell Count Buffer");
+        
+        // Previous high water mark (single u32) - separate buffer because wgpu forbids same-buffer copies
+        // Copied from cell_count_buffer[0] before death_scan clears and rebuilds it
+        let prev_high_water_mark_buffer = Self::create_zero_initialized_storage_buffer(device, 4, "Prev High Water Mark");
         
         // Cell count readback buffer for async GPU-to-CPU transfer
         let cell_count_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -535,6 +563,7 @@ impl GpuTripleBufferSystem {
             max_cell_sizes,
             stiffnesses,
             cell_count_buffer,
+            prev_high_water_mark_buffer,
             genome_mode_data,
             child_mode_indices,
             parent_make_adhesion_flags,
@@ -604,7 +633,10 @@ impl GpuTripleBufferSystem {
         self.sync_slot_allocator_with_canonical(state);
         
         // Always update GPU cell count buffer, even when cell_count is 0
-        let cell_counts: [u32; 2] = [state.cell_count as u32, state.cell_count as u32];
+        // [0] = high water mark (for shader dispatch bounds), [1] = live count (for display)
+        // After sync_slot_allocator_with_canonical, high_water_mark is set correctly
+        let high_water_mark = self.slot_allocator.high_water_mark();
+        let cell_counts: [u32; 2] = [high_water_mark, state.cell_count as u32];
         queue.write_buffer(&self.cell_count_buffer, 0, bytemuck::cast_slice(&cell_counts));
         
         if state.cell_count == 0 {
@@ -1172,9 +1204,8 @@ impl GpuTripleBufferSystem {
             cell_type,
         );
         
-        // Update GPU cell count
-        let new_count = self.slot_allocator.allocated_count();
-        self.update_gpu_cell_count(queue, new_count);
+        // Update GPU cell count (high water mark + live count)
+        self.update_gpu_cell_count(queue);
         
         Some((slot, cell_id))
     }
@@ -1197,8 +1228,12 @@ impl GpuTripleBufferSystem {
     }
     
     /// Update GPU cell count buffer
-    pub fn update_gpu_cell_count(&self, queue: &wgpu::Queue, new_count: u32) {
-        let cell_counts: [u32; 2] = [new_count, new_count];
+    /// [0] = high water mark (max slot + 1, for shader dispatch bounds)
+    /// [1] = live cell count (for display/inspector)
+    pub fn update_gpu_cell_count(&self, queue: &wgpu::Queue) {
+        let high_water_mark = self.slot_allocator.high_water_mark();
+        let live_count = self.slot_allocator.allocated_count();
+        let cell_counts: [u32; 2] = [high_water_mark, live_count];
         queue.write_buffer(&self.cell_count_buffer, 0, bytemuck::cast_slice(&cell_counts));
     }
     
@@ -1575,8 +1610,10 @@ impl GpuTripleBufferSystem {
         }
         
         // Update GPU cell count buffer after insertions
+        // [0] = high water mark (for shader dispatch bounds), [1] = live count (for display)
         if !self.pending_cell_insertions.is_empty() {
-            let cell_counts: [u32; 2] = [state.cell_count as u32, state.cell_count as u32];
+            let high_water_mark = self.slot_allocator.high_water_mark();
+            let cell_counts: [u32; 2] = [high_water_mark, state.cell_count as u32];
             queue.write_buffer(&self.cell_count_buffer, 0, bytemuck::cast_slice(&cell_counts));
         }
         

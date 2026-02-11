@@ -209,10 +209,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             atomicSub(&ring_state[2], 1u);
             return;
         }
-        
-        // Update total cell count (high water mark)
-        atomicMax(&cell_count_buffer[0], slot + 1u);
     }
+    
+    // Always update high water mark - needed for both new AND recycled slots
+    // because death_scan compaction may have shrunk cell_count_buffer[0] below this slot
+    atomicMax(&cell_count_buffer[0], slot + 1u);
     
     // Ensure slot is within bounds
     if (slot >= params.cell_capacity) {

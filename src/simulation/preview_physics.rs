@@ -359,6 +359,10 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         let mass_a = state.masses[cell_a];
         let mass_b = state.masses[cell_b];
         
+        // Identify Lipocytes (storage cells)
+        let is_lipocyte_a = mode_a.cell_type == 4; // Lipocyte
+        let is_lipocyte_b = mode_b.cell_type == 4;
+        
         // Get base priorities
         let base_priority_a = mode_a.nutrient_priority;
         let base_priority_b = mode_b.nutrient_priority;
@@ -385,16 +389,31 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         // Calculate mass transfer (positive = A -> B, negative = B -> A)
         let mass_transfer = pressure_diff * TRANSPORT_RATE * dt;
         
-        // Apply transfer with minimum thresholds
-        let min_mass_a = if mode_a.prioritize_when_low { 0.1 } else { 0.0 };
-        let min_mass_b = if mode_b.prioritize_when_low { 0.1 } else { 0.0 };
+        // Donor protection floor: when a Lipocyte pulls from a non-Lipocyte neighbor,
+        // the donor can't be drained below its split_mass (healthy operating level).
+        // This prevents Lipocytes from starving their neighbors.
+        // When the neighbor IS a Lipocyte (storage-to-storage), use the normal prioritize_when_low floor.
+        let donor_floor_a = if is_lipocyte_b && !is_lipocyte_a {
+            mode_a.split_mass // Lipocyte B pulling from A: protect A at split_mass
+        } else if mode_a.prioritize_when_low {
+            0.1
+        } else {
+            0.0
+        };
+        let donor_floor_b = if is_lipocyte_a && !is_lipocyte_b {
+            mode_b.split_mass // Lipocyte A pulling from B: protect B at split_mass
+        } else if mode_b.prioritize_when_low {
+            0.1
+        } else {
+            0.0
+        };
         
         let actual_transfer = if mass_transfer > 0.0 {
-            // A -> B: limit by A's available mass
-            mass_transfer.min(mass_a - min_mass_a)
+            // A -> B: limit by A's available mass above donor floor
+            mass_transfer.min(mass_a - donor_floor_a)
         } else {
-            // B -> A: limit by B's available mass
-            mass_transfer.max(-(mass_b - min_mass_b))
+            // B -> A: limit by B's available mass above donor floor
+            mass_transfer.max(-(mass_b - donor_floor_b))
         };
         
         // Accumulate deltas
@@ -513,17 +532,23 @@ pub fn physics_step_with_genome(
     state.update_membrane_stiffness_from_genome(genome);
     
     if state.adhesion_connections.active_count > 0 && !state.cached_adhesion_settings.is_empty() {
-        crate::cell::compute_adhesion_forces_parallel(
+        // PBD adhesion: directly modifies positions and rotations (no forces/torques)
+        let bonds_to_break = crate::cell::solve_adhesion_pbd(
             &state.adhesion_connections,
-            &state.positions[..state.cell_count],
-            &state.velocities[..state.cell_count],
-            &state.rotations[..state.cell_count],
-            &state.angular_velocities[..state.cell_count],
+            &mut state.positions[..state.cell_count],
+            &mut state.rotations[..state.cell_count],
+            &state.radii[..state.cell_count],
             &state.masses[..state.cell_count],
             &state.cached_adhesion_settings,
-            &mut state.forces[..state.cell_count],
-            &mut state.torques[..state.cell_count],
         );
+        
+        // Remove broken bonds (iterate in reverse to preserve indices)
+        for &bond_idx in bonds_to_break.iter().rev() {
+            let cell_a = state.adhesion_connections.cell_a_index[bond_idx];
+            let cell_b = state.adhesion_connections.cell_b_index[bond_idx];
+            state.adhesion_manager.remove_adhesion(&mut state.adhesion_connections, bond_idx);
+            let _ = (cell_a, cell_b); // indices used by remove_adhesion internally
+        }
     }
 
     // Skip swim forces in preview mode - flagellocyte thrust is GPU-only

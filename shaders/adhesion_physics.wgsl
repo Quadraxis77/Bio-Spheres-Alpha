@@ -1,7 +1,17 @@
-// Adhesion Physics Compute Shader
-// Processes adhesions PER-CELL (matching reference implementation)
-// Each thread handles ONE cell and iterates through its adhesion indices
-// Forces are accumulated to atomic force buffers (matching collision detection)
+// Adhesion Physics Compute Shader — PBD (Position-Based Dynamics)
+//
+// Each thread handles ONE cell and accumulates position/rotation corrections
+// from all its adhesion bonds. Corrections are written via atomic fixed-point
+// accumulators so that multiple bonds per cell compose correctly.
+//
+// Three constraint passes are fused into one per-cell loop:
+//   1. Distance constraint — keeps bonded cells at target distance
+//   2. Hinge spring — corrects orientation based on bond angle deviation
+//   3. Twist constraint — hardcoded PBD twist correction using anchor refs
+//
+// Bond breaking is signalled by writing to the force_accum buffers with a
+// sentinel value (the host reads back and removes broken bonds).
+//
 // Workgroup size: 256 threads for optimal GPU occupancy
 
 struct PhysicsParams {
@@ -23,20 +33,12 @@ struct PhysicsParams {
     _pad2: f32,
 }
 
-// Adhesion settings (48 bytes, matching reference GPUModeAdhesionSettings)
+// Adhesion settings (PBD-based, 16 bytes)
 struct AdhesionSettings {
     can_break: i32,
-    break_force: f32,
-    rest_length: f32,
-    linear_spring_stiffness: f32,
-    linear_spring_damping: f32,
-    orientation_spring_stiffness: f32,
-    orientation_spring_damping: f32,
-    max_angular_deviation: f32,
-    twist_constraint_stiffness: f32,
-    twist_constraint_damping: f32,
-    enable_twist_constraint: i32,
-    _padding: i32,
+    adhesin_length: f32,
+    adhesin_stretch: f32,
+    stiffness: f32,
 }
 
 // Adhesion connection structure (104 bytes matching Rust GpuAdhesionConnection)
@@ -100,34 +102,40 @@ var<storage, read_write> rotations_out: array<vec4<f32>>;
 @group(2) @binding(3)
 var<storage, read_write> angular_velocities_out: array<vec4<f32>>;
 
-// Force accumulation buffers (group 3) - atomic i32 for multi-adhesion accumulation
+// PBD position correction accumulators (group 3) — atomic i32 fixed-point
 @group(3) @binding(0)
-var<storage, read_write> force_accum_x: array<atomic<i32>>;
+var<storage, read_write> pbd_pos_x: array<atomic<i32>>;
 
 @group(3) @binding(1)
-var<storage, read_write> force_accum_y: array<atomic<i32>>;
+var<storage, read_write> pbd_pos_y: array<atomic<i32>>;
 
 @group(3) @binding(2)
-var<storage, read_write> force_accum_z: array<atomic<i32>>;
+var<storage, read_write> pbd_pos_z: array<atomic<i32>>;
 
-// Torque accumulation buffers - atomic i32 for multi-adhesion accumulation
+// PBD rotation correction accumulators (axis*angle, fixed-point)
 @group(3) @binding(3)
-var<storage, read_write> torque_accum_x: array<atomic<i32>>;
+var<storage, read_write> pbd_rot_x: array<atomic<i32>>;
 
 @group(3) @binding(4)
-var<storage, read_write> torque_accum_y: array<atomic<i32>>;
+var<storage, read_write> pbd_rot_y: array<atomic<i32>>;
 
 @group(3) @binding(5)
-var<storage, read_write> torque_accum_z: array<atomic<i32>>;
+var<storage, read_write> pbd_rot_z: array<atomic<i32>>;
 
 const FIXED_POINT_SCALE: f32 = 1000.0;
-
 const PI: f32 = 3.14159265359;
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 
+// PBD solver constants (matching CPU)
+const MAX_PBD_CORRECTION: f32 = 8.0;
+const MAX_HINGE_SPRING: f32 = 8.0;
+const HINGE_CORRECTION_RATE: f32 = 0.8;
+const TWIST_CORRECTION_RATE: f32 = 0.2;
+const MAX_TWIST_CORRECTION: f32 = 0.5;
+const PBD_ITERATIONS: f32 = 8.0; // Must match dispatch loop count in gpu_scene_integration.rs
+
 fn calculate_radius_from_mass(mass: f32) -> f32 {
-    let volume = mass / 1.0;
-    return pow(volume * 3.0 / (4.0 * PI), 1.0 / 3.0);
+    return clamp(mass, 0.5, 2.0);
 }
 
 // Quaternion multiplication
@@ -163,14 +171,19 @@ fn quat_to_axis_angle(q: vec4<f32>) -> vec4<f32> {
 }
 
 fn quat_from_two_vectors(from_vec: vec3<f32>, to: vec3<f32>) -> vec4<f32> {
-    let v1 = normalize(from_vec);
-    let v2 = normalize(to);
+    let from_len = length(from_vec);
+    let to_len = length(to);
+    if (from_len < 0.0001 || to_len < 0.0001) {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    let v1 = from_vec / from_len;
+    let v2 = to / to_len;
     let cos_angle = dot(v1, v2);
-    
+
     if (cos_angle > 0.9999) {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
-    
+
     if (cos_angle < -0.9999) {
         var axis: vec3<f32>;
         if (abs(v1.x) < abs(v1.y) && abs(v1.x) < abs(v1.z)) {
@@ -182,7 +195,7 @@ fn quat_from_two_vectors(from_vec: vec3<f32>, to: vec3<f32>) -> vec4<f32> {
         }
         return vec4<f32>(axis, 0.0);
     }
-    
+
     let halfway = normalize(v1 + v2);
     let axis = vec3<f32>(
         v1.y * halfway.z - v1.z * halfway.y,
@@ -193,307 +206,222 @@ fn quat_from_two_vectors(from_vec: vec3<f32>, to: vec3<f32>) -> vec4<f32> {
     return normalize(vec4<f32>(axis, w));
 }
 
-// Compute adhesion forces between this cell and another
-// Returns (force, torque) for THIS cell only
-fn compute_adhesion_forces_for_cell(
-    this_cell_idx: u32,
-    pos_a: vec3<f32>,
-    pos_b: vec3<f32>,
-    vel_a: vec3<f32>,
-    vel_b: vec3<f32>,
-    rot_a: vec4<f32>,
-    rot_b: vec4<f32>,
-    ang_vel_a: vec3<f32>,
-    ang_vel_b: vec3<f32>,
-    connection: AdhesionConnection,
-    settings: AdhesionSettings,
-    is_cell_a: bool,
-) -> array<vec3<f32>, 2> {
-    var force = vec3<f32>(0.0);
-    var torque = vec3<f32>(0.0);
-    
-    // Connection vector from A to B
-    let delta_pos = pos_b - pos_a;
-    let dist = length(delta_pos);
-    if (dist < 0.0001) {
-        return array<vec3<f32>, 2>(force, torque);
-    }
-    
-    let adhesion_dir = delta_pos / dist;
-    let rest_length = settings.rest_length;
-    
-    // Linear spring force (matching reference exactly)
-    let force_mag = settings.linear_spring_stiffness * (dist - rest_length);
-    let spring_force = adhesion_dir * force_mag;
-    
-    // Linear damping (matching reference exactly)
-    let rel_vel = vel_b - vel_a;
-    let damp_mag = 1.0 - settings.linear_spring_damping * dot(rel_vel, adhesion_dir);
-    let damping_force = -adhesion_dir * damp_mag;
-    
-    // Apply force based on which cell we are
-    if (is_cell_a) {
-        force += spring_force + damping_force;
-    } else {
-        force -= spring_force + damping_force;
-    }
-    
-    // Transform anchor directions to world space
-    var anchor_a: vec3<f32>;
-    var anchor_b: vec3<f32>;
-    
-    if (length(connection.anchor_direction_a.xyz) < 0.001 && length(connection.anchor_direction_b.xyz) < 0.001) {
-        anchor_a = vec3<f32>(1.0, 0.0, 0.0);
-        anchor_b = vec3<f32>(-1.0, 0.0, 0.0);
-    } else {
-        anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
-        anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
-    }
-    
-    // Calculate torques for both cells
-    var torque_a = vec3<f32>(0.0);
-    var torque_b = vec3<f32>(0.0);
-    
-    // Orientation spring for cell A
-    let axis_a = cross(anchor_a, adhesion_dir);
-    let sin_a = length(axis_a);
-    let cos_a = dot(anchor_a, adhesion_dir);
-    let angle_a = atan2(sin_a, cos_a);
-    if (sin_a > 0.0001) {
-        let norm_axis_a = normalize(axis_a);
-        let spring_torque_a = norm_axis_a * angle_a * settings.orientation_spring_stiffness;
-        let damping_torque_a = -norm_axis_a * dot(ang_vel_a, norm_axis_a) * settings.orientation_spring_damping;
-        torque_a += spring_torque_a + damping_torque_a;
-    }
-    
-    // Orientation spring for cell B
-    let axis_b = cross(anchor_b, -adhesion_dir);
-    let sin_b = length(axis_b);
-    let cos_b = dot(anchor_b, -adhesion_dir);
-    let angle_b = atan2(sin_b, cos_b);
-    if (sin_b > 0.0001) {
-        let norm_axis_b = normalize(axis_b);
-        let spring_torque_b = norm_axis_b * angle_b * settings.orientation_spring_stiffness;
-        let damping_torque_b = -norm_axis_b * dot(ang_vel_b, norm_axis_b) * settings.orientation_spring_damping;
-        torque_b += spring_torque_b + damping_torque_b;
-    }
-    
-    // Twist constraints (matching reference: 0.3 stiffness, 0.4 damping multipliers)
-    if (settings.enable_twist_constraint != 0 &&
-        length(connection.twist_reference_a) > 0.001 &&
-        length(connection.twist_reference_b) > 0.001) {
-        
-        let adhesion_axis = normalize(delta_pos);
-        
-        let current_anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
-        let current_anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
-        
-        let target_anchor_a = adhesion_axis;
-        let target_anchor_b = -adhesion_axis;
-        
-        let alignment_rot_a = quat_from_two_vectors(current_anchor_a, target_anchor_a);
-        let alignment_rot_b = quat_from_two_vectors(current_anchor_b, target_anchor_b);
-        
-        let target_orientation_a = quat_multiply(alignment_rot_a, connection.twist_reference_a);
-        let target_orientation_b = quat_multiply(alignment_rot_b, connection.twist_reference_b);
-        
-        let correction_rot_a = quat_multiply(target_orientation_a, quat_conjugate(rot_a));
-        let correction_rot_b = quat_multiply(target_orientation_b, quat_conjugate(rot_b));
-        
-        let axis_angle_a = quat_to_axis_angle(correction_rot_a);
-        let axis_angle_b = quat_to_axis_angle(correction_rot_b);
-        
-        var twist_correction_a = axis_angle_a.w * dot(axis_angle_a.xyz, adhesion_axis);
-        var twist_correction_b = axis_angle_b.w * dot(axis_angle_b.xyz, adhesion_axis);
-        
-        twist_correction_a = clamp(twist_correction_a, -1.57, 1.57);
-        twist_correction_b = clamp(twist_correction_b, -1.57, 1.57);
-        
-        let twist_torque_a = adhesion_axis * twist_correction_a * settings.twist_constraint_stiffness * 0.3;
-        let twist_torque_b = adhesion_axis * twist_correction_b * settings.twist_constraint_stiffness * 0.3;
-        
-        let angular_vel_a_proj = dot(ang_vel_a, adhesion_axis);
-        let angular_vel_b_proj = dot(ang_vel_b, adhesion_axis);
-        let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
-        
-        let twist_damping_a = -adhesion_axis * relative_angular_vel * settings.twist_constraint_damping * 0.4;
-        let twist_damping_b = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping * 0.4;
-        
-        torque_a += twist_torque_a + twist_damping_a;
-        torque_b += twist_torque_b + twist_damping_b;
-    }
-    
-    // Apply tangential forces from torques
-    // For Newton's third law: force on A must equal -force on B
-    // The reference applies asymmetric forces which violates this
-    // We compute symmetric forces by averaging the torque effects
-    let avg_torque = (torque_a + torque_b) * 0.5;
-    let tangential_force = cross(delta_pos, avg_torque);
-    
-    // Cell A gets positive force, Cell B gets negative (equal and opposite)
-    if (is_cell_a) {
-        force -= tangential_force;
-        torque = torque_a;
-    } else {
-        force += tangential_force;
-        torque = torque_b;
-    }
-    
-    return array<vec3<f32>, 2>(force, torque);
-}
-
 // Convert float to fixed-point i32 for atomic accumulation
 fn float_to_fixed(v: f32) -> i32 {
     return i32(v * FIXED_POINT_SCALE);
 }
 
-// Process adhesions PER-CELL (matching reference implementation)
-// Each thread handles ONE cell and iterates through its adhesion indices
-// Forces are accumulated to atomic buffers (matching collision detection pattern)
+// PBD adhesion solver — per-cell
+// Each thread accumulates position and rotation corrections from all bonds,
+// then writes them to atomic accumulators. The position_update shader applies them.
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
     let cell_count = cell_count_buffer[0];
-    
+
     if (cell_idx >= cell_count) {
         return;
     }
-    
-    // Load this cell's data
-    let my_pos = positions_in[cell_idx].xyz;
-    let my_mass = positions_in[cell_idx].w;
-    let my_vel = velocities_in[cell_idx].xyz;
+
+    // Load this cell's data from positions_out (updated each PBD iteration)
+    let my_pos = positions_out[cell_idx].xyz;
+    let my_mass = positions_out[cell_idx].w;
     let my_rot = rotations_in[cell_idx];
-    let my_ang_vel = angular_velocities_in[cell_idx].xyz;
     let my_radius = calculate_radius_from_mass(my_mass);
-    
-    // Accumulate forces and torques from all adhesions
-    var total_force = vec3<f32>(0.0);
-    var total_torque = vec3<f32>(0.0);
-    
-    // Iterate through this cell's adhesion indices (up to 10)
+    let my_inv_mass = 1.0 / max(my_mass, 0.001);
+
+    // Accumulate corrections
+    var pos_correction = vec3<f32>(0.0);
+    var rot_correction = vec3<f32>(0.0); // axis * angle accumulator
+
     let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
     let total_adhesion_count = adhesion_counts[0];
-    
+
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
         let adhesion_idx_signed = cell_adhesion_indices[adhesion_base + i];
-        
-        // Skip empty slots (negative index)
+
         if (adhesion_idx_signed < 0) {
             continue;
         }
-        
+
         let adhesion_idx = u32(adhesion_idx_signed);
-        
-        // Validate adhesion index
         if (adhesion_idx >= total_adhesion_count) {
             continue;
         }
-        
+
         let connection = adhesion_connections[adhesion_idx];
-        
-        // Skip inactive connections
         if (connection.is_active == 0u) {
             continue;
         }
-        
-        // Validate connection indices
         if (connection.cell_a_index >= cell_count || connection.cell_b_index >= cell_count) {
             continue;
         }
-        
-        // Verify this cell is part of the connection
+
         let is_cell_a = (connection.cell_a_index == cell_idx);
         let is_cell_b = (connection.cell_b_index == cell_idx);
         if (!is_cell_a && !is_cell_b) {
             continue;
         }
-        
-        // Get the other cell's index
+
         let other_idx = select(connection.cell_a_index, connection.cell_b_index, is_cell_a);
-        
-        // Validate other index
         if (other_idx >= cell_count) {
             continue;
         }
-        
-        // Load other cell's data
-        let other_pos = positions_in[other_idx].xyz;
-        let other_mass = positions_in[other_idx].w;
-        let other_vel = velocities_in[other_idx].xyz;
+
+        let other_pos = positions_out[other_idx].xyz;
+        let other_mass = positions_out[other_idx].w;
         let other_rot = rotations_in[other_idx];
-        let other_ang_vel = angular_velocities_in[other_idx].xyz;
-        
-        // Get adhesion settings for this mode
+        let other_radius = calculate_radius_from_mass(other_mass);
+        let other_inv_mass = 1.0 / max(other_mass, 0.001);
+
         let settings = adhesion_settings[connection.mode_index];
-        
-        // Compute forces for THIS cell only
-        // Always pass cell A data first, cell B data second (matching reference)
-        var pos_a: vec3<f32>;
-        var pos_b: vec3<f32>;
-        var vel_a: vec3<f32>;
-        var vel_b: vec3<f32>;
-        var rot_a: vec4<f32>;
-        var rot_b: vec4<f32>;
-        var ang_vel_a: vec3<f32>;
-        var ang_vel_b: vec3<f32>;
-        
-        if (is_cell_a) {
-            pos_a = my_pos;
-            pos_b = other_pos;
-            vel_a = my_vel;
-            vel_b = other_vel;
-            rot_a = my_rot;
-            rot_b = other_rot;
-            ang_vel_a = my_ang_vel;
-            ang_vel_b = other_ang_vel;
+
+        // =====================================================================
+        // DISTANCE CONSTRAINT
+        // =====================================================================
+        // Always compute delta as B - A (matching CPU) regardless of which cell we are
+        let pos_a = select(other_pos, my_pos, is_cell_a);
+        let pos_b = select(my_pos, other_pos, is_cell_a);
+        let delta = pos_b - pos_a;
+        let dist = length(delta);
+        let sum_radii = my_radius + other_radius;
+        let rest_offset = settings.adhesin_length * 50.0;
+        let target_dist = sum_radii + rest_offset;
+        let error = dist - target_dist;
+        let softness = 1.0 - settings.adhesin_stretch * 0.8;
+
+        var normal: vec3<f32>;
+        if (dist < 0.001) {
+            if (abs(error) < 0.001) {
+                continue;
+            }
+            let anchor_world = rotate_vector_by_quat(connection.anchor_direction_a.xyz, my_rot);
+            if (length(anchor_world) > 0.001) {
+                normal = normalize(anchor_world);
+            } else {
+                normal = vec3<f32>(1.0, 0.0, 0.0);
+            }
         } else {
-            pos_a = other_pos;
-            pos_b = my_pos;
-            vel_a = other_vel;
-            vel_b = my_vel;
-            rot_a = other_rot;
-            rot_b = my_rot;
-            ang_vel_a = other_ang_vel;
-            ang_vel_b = my_ang_vel;
+            normal = delta / dist;
         }
-        
-        let result = compute_adhesion_forces_for_cell(
-            cell_idx,
-            pos_a, pos_b,
-            vel_a, vel_b,
-            rot_a, rot_b,
-            ang_vel_a, ang_vel_b,
-            connection, settings,
-            is_cell_a
-        );
-        
-        total_force += result[0];
-        total_torque += result[1];
+
+        // normal always points A→B (matching CPU)
+        let correction = clamp(error * softness, -MAX_PBD_CORRECTION, MAX_PBD_CORRECTION);
+        let w_total = my_inv_mass + other_inv_mass;
+
+        if (w_total > 1e-10) {
+            let s = correction / w_total;
+            // CPU: positions[idx_a] += normal * s * inv_m1
+            //      positions[idx_b] -= normal * s * inv_m2
+            if (is_cell_a) {
+                pos_correction += normal * s * my_inv_mass;
+            } else {
+                pos_correction -= normal * s * my_inv_mass;
+            }
+        }
+
+        // =====================================================================
+        // HINGE SPRING (orientation + perpendicular lever)
+        // =====================================================================
+        if (settings.stiffness > 0.0 && dist > 0.001) {
+            let bond_dir = delta / dist;
+            let correction_strength = HINGE_CORRECTION_RATE * settings.stiffness;
+            let total_inv_m = my_inv_mass + other_inv_mass;
+
+            // Hinge for this cell
+            var my_anchor_dir: vec3<f32>;
+            var my_target_bond: vec3<f32>;
+            if (is_cell_a) {
+                my_anchor_dir = connection.anchor_direction_a.xyz;
+                my_target_bond = bond_dir;
+            } else {
+                my_anchor_dir = connection.anchor_direction_b.xyz;
+                my_target_bond = -bond_dir;
+            }
+
+            let local_bond = rotate_vector_by_quat(my_target_bond, quat_conjugate(my_rot));
+
+            if (length(my_anchor_dir) > 0.001) {
+                let cross_v = cross(my_anchor_dir, local_bond);
+                let sin_v = length(cross_v);
+                let cos_v = dot(my_anchor_dir, local_bond);
+                let dev_angle = atan2(sin_v, cos_v);
+
+                if (sin_v > 0.0001) {
+                    let axis_local = cross_v / sin_v;
+                    let corr_angle = dev_angle * correction_strength;
+
+                    // Rotation correction (in local space, will be applied as world-space axis*angle)
+                    // Divided by PBD_ITERATIONS because rotations_in is stale across iterations
+                    // (matching CPU which applies hinge once after distance iterations)
+                    let axis_world = rotate_vector_by_quat(axis_local, my_rot);
+                    rot_correction += axis_world * corr_angle / PBD_ITERATIONS;
+
+                    // Perpendicular translational lever
+                    if (total_inv_m > 1e-10) {
+                        let perp = cross(axis_world, my_target_bond);
+                        if (length(perp) > 0.001) {
+                            let perp_n = normalize(perp);
+                            let trans = clamp(dev_angle * correction_strength * dist, -MAX_HINGE_SPRING, MAX_HINGE_SPRING);
+                            pos_correction += perp_n * trans * (my_inv_mass / total_inv_m) / PBD_ITERATIONS;
+                        }
+                    }
+                }
+            }
+        }
+
+        // =====================================================================
+        // TWIST CONSTRAINT (hardcoded PBD)
+        // =====================================================================
+        if (dist > 0.001) {
+            let bond_axis = delta / dist;
+
+            var twist_ref: vec4<f32>;
+            var my_anchor: vec3<f32>;
+            var target_dir: vec3<f32>;
+            if (is_cell_a) {
+                twist_ref = connection.twist_reference_a;
+                my_anchor = connection.anchor_direction_a.xyz;
+                target_dir = bond_axis;
+            } else {
+                twist_ref = connection.twist_reference_b;
+                my_anchor = connection.anchor_direction_b.xyz;
+                target_dir = -bond_axis;
+            }
+
+            if (length(twist_ref) > 0.001) {
+                let anchor_world = rotate_vector_by_quat(my_anchor, my_rot);
+                let alignment_rot = quat_from_two_vectors(anchor_world, target_dir);
+                let target_orientation = normalize(quat_multiply(alignment_rot, twist_ref));
+                let correction_rot = normalize(quat_multiply(target_orientation, quat_conjugate(my_rot)));
+
+                let aa = quat_to_axis_angle(correction_rot);
+                let twist_amount = clamp(aa.w * dot(aa.xyz, bond_axis), -MAX_TWIST_CORRECTION, MAX_TWIST_CORRECTION);
+
+                if (abs(twist_amount) > 0.0001) {
+                    rot_correction += bond_axis * twist_amount * TWIST_CORRECTION_RATE / PBD_ITERATIONS;
+                }
+            }
+        }
     }
-    
-    // Clamp forces and torques to prevent instability
-    let max_force = 1000.0;
-    let max_torque = 100.0;
-    let force_mag = length(total_force);
-    let torque_mag = length(total_torque);
-    
-    if (force_mag > max_force) {
-        total_force = total_force * (max_force / force_mag);
+
+    // Clamp total corrections
+    let pos_mag = length(pos_correction);
+    if (pos_mag > MAX_PBD_CORRECTION) {
+        pos_correction = pos_correction * (MAX_PBD_CORRECTION / pos_mag);
     }
-    if (torque_mag > max_torque) {
-        total_torque = total_torque * (max_torque / torque_mag);
+    let rot_mag = length(rot_correction);
+    if (rot_mag > MAX_HINGE_SPRING) {
+        rot_correction = rot_correction * (MAX_HINGE_SPRING / rot_mag);
     }
-    
-    // Accumulate forces to atomic force buffers (matching collision detection pattern)
-    // Forces will be integrated in position_update shader using Verlet integration
-    atomicAdd(&force_accum_x[cell_idx], float_to_fixed(total_force.x));
-    atomicAdd(&force_accum_y[cell_idx], float_to_fixed(total_force.y));
-    atomicAdd(&force_accum_z[cell_idx], float_to_fixed(total_force.z));
-    
-    // Accumulate torques to atomic torque buffers
-    // Torques will be integrated in velocity_update shader
-    atomicAdd(&torque_accum_x[cell_idx], float_to_fixed(total_torque.x));
-    atomicAdd(&torque_accum_y[cell_idx], float_to_fixed(total_torque.y));
-    atomicAdd(&torque_accum_z[cell_idx], float_to_fixed(total_torque.z));
+
+    // Write position corrections to PBD accumulators
+    atomicAdd(&pbd_pos_x[cell_idx], float_to_fixed(pos_correction.x));
+    atomicAdd(&pbd_pos_y[cell_idx], float_to_fixed(pos_correction.y));
+    atomicAdd(&pbd_pos_z[cell_idx], float_to_fixed(pos_correction.z));
+
+    // Write rotation corrections to PBD accumulators
+    atomicAdd(&pbd_rot_x[cell_idx], float_to_fixed(rot_correction.x));
+    atomicAdd(&pbd_rot_y[cell_idx], float_to_fixed(rot_correction.y));
+    atomicAdd(&pbd_rot_z[cell_idx], float_to_fixed(rot_correction.z));
 }

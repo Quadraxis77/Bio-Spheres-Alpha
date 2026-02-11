@@ -82,6 +82,10 @@ var<storage, read_write> division_slot_assignments: array<u32>;
 @group(1) @binding(4)
 var<storage, read_write> ring_state: array<atomic<u32>>;
 
+// Previous high water mark (copied from cell_count_buffer[0] before death_scan clears it)
+@group(1) @binding(5)
+var<storage, read> prev_high_water_mark: array<u32>;
+
 // Cell state bind group (group 2)
 @group(2) @binding(0)
 var<storage, read> birth_times: array<f32>;
@@ -184,34 +188,43 @@ fn pop_free_slot() -> u32 {
 // First tries ring buffer, then falls back to append mode
 // Returns 0xFFFFFFFF if at capacity
 fn allocate_slot() -> u32 {
+    var slot: u32;
+    
     // Try to get a recycled slot from the ring buffer
     let recycled_slot = pop_free_slot();
     if (recycled_slot != 0xFFFFFFFFu) {
-        return recycled_slot;
+        slot = recycled_slot;
+    } else {
+        // Ring buffer empty, try to allocate new slot
+        let new_slot = atomicAdd(&ring_state[2], 1u);
+        if (new_slot >= params.cell_capacity) {
+            // At capacity, undo and fail
+            atomicSub(&ring_state[2], 1u);
+            return 0xFFFFFFFFu;
+        }
+        slot = new_slot;
     }
     
-    // Ring buffer empty, try to allocate new slot
-    let new_slot = atomicAdd(&ring_state[2], 1u);
-    if (new_slot >= params.cell_capacity) {
-        // At capacity, undo and fail
-        atomicSub(&ring_state[2], 1u);
-        return 0xFFFFFFFFu;
-    }
+    // Always update high water mark - needed for both new AND recycled slots
+    // because death_scan compaction may have shrunk cell_count_buffer[0] below this slot
+    atomicMax(&cell_count_buffer[0], slot + 1u);
     
-    // Update total cell count if needed
-    atomicMax(&cell_count_buffer[0], new_slot + 1u);
-    
-    return new_slot;
+    return slot;
 }
 
-// Pass 1: Death detection only - pushes free slots to ring buffer
-// Must run BEFORE division_scan to ensure dead slots are available for reuse
+// Pass 1: Death detection + high water mark compaction
+// Must run BEFORE division_scan to ensure dead slots are available for reuse.
+// Before this pass, the CPU:
+//   1. Copies cell_count_buffer[0] → prev_high_water_mark buffer (scan bounds for this pass)
+//   2. Clears cell_count_buffer[0] to 0 (will be rebuilt by alive cells via atomicMax)
+// This allows the high water mark to shrink when trailing cells die, preventing permanent perf loss.
 @compute @workgroup_size(256)
 fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
-    let cell_count = atomicLoad(&cell_count_buffer[0]);
+    // Read previous high water mark (copied by CPU before this pass into separate buffer)
+    let prev_hwm = prev_high_water_mark[0];
     
-    if (cell_idx >= cell_count) {
+    if (cell_idx >= prev_hwm) {
         return;
     }
     
@@ -233,6 +246,10 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     } else if (is_dead) {
         // Already dead, ensure division flag is clear
         division_flags[cell_idx] = 0u;
+    } else {
+        // Alive cell - rebuild high water mark in cell_count_buffer[0]
+        // This naturally shrinks the high water mark when trailing cells die.
+        atomicMax(&cell_count_buffer[0], cell_idx + 1u);
     }
 }
 

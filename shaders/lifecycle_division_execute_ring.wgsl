@@ -631,9 +631,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
         
-        // Calculate center-to-center distance
-        let rest_length = 1.0;
-        let center_to_center_dist = rest_length + FIXED_RADIUS + FIXED_RADIUS;
+        // Calculate center-to-center distance (PBD: adhesin_length * 50.0)
+        let rest_offset = 0.0; // Default adhesin_length=0.0 → offset=0.0
+        let center_to_center_dist = FIXED_RADIUS + FIXED_RADIUS + rest_offset;
         let neighbor_pos_parent_frame = parent_anchor_dir_local * center_to_center_dist;
         
         // Get neighbor rotation for anchor calculation

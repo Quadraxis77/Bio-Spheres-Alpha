@@ -57,6 +57,16 @@ var<storage, read_write> angular_velocities: array<vec4<f32>>;
 @group(1) @binding(4)
 var<storage, read_write> rotations: array<vec4<f32>>;
 
+// PBD rotation corrections from adhesion physics (group 1, bindings 5-7)
+@group(1) @binding(5)
+var<storage, read> pbd_rot_x: array<i32>;
+
+@group(1) @binding(6)
+var<storage, read> pbd_rot_y: array<i32>;
+
+@group(1) @binding(7)
+var<storage, read> pbd_rot_z: array<i32>;
+
 const PI: f32 = 3.14159265359;
 const FIXED_POINT_SCALE: f32 = 1000.0;
 
@@ -118,6 +128,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     angular_velocities[cell_idx] = vec4<f32>(new_ang_vel, 0.0);
     
     // Integrate rotation using angular velocity
+    var current_rot = rotations[cell_idx];
     let ang_vel_mag = length(new_ang_vel);
     if (ang_vel_mag > 0.0001) {
         let angle = ang_vel_mag * params.delta_time;
@@ -130,10 +141,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let delta_rotation = vec4<f32>(axis * sin_half, cos_half);
         
         // Apply rotation: new_rot = delta_rot * current_rot
-        let current_rot = rotations[cell_idx];
-        let new_rot = quat_multiply(delta_rotation, current_rot);
-        
-        // Normalize to prevent drift
-        rotations[cell_idx] = normalize(new_rot);
+        current_rot = quat_multiply(delta_rotation, current_rot);
     }
+    
+    // Apply PBD rotation corrections directly (axis * angle vector)
+    let pbd_rot = vec3<f32>(
+        fixed_to_float(pbd_rot_x[cell_idx]),
+        fixed_to_float(pbd_rot_y[cell_idx]),
+        fixed_to_float(pbd_rot_z[cell_idx])
+    );
+    let pbd_rot_mag = length(pbd_rot);
+    if (pbd_rot_mag > 0.0001) {
+        let pbd_axis = pbd_rot / pbd_rot_mag;
+        let pbd_half = pbd_rot_mag * 0.5;
+        let pbd_delta = vec4<f32>(pbd_axis * sin(pbd_half), cos(pbd_half));
+        current_rot = quat_multiply(pbd_delta, current_rot);
+    }
+    
+    // Normalize to prevent drift
+    rotations[cell_idx] = normalize(current_rot);
 }

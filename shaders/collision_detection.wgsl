@@ -97,12 +97,48 @@ var<storage, read_write> torque_accum_z: array<atomic<i32>>;
 @group(2) @binding(6)
 var<storage, read> rotations: array<vec4<f32>>;
 
+// Adhesion connectivity data for skipping collisions between bonded cells
+// cell_adhesion_indices: MAX_ADHESIONS_PER_CELL i32 indices per cell (-1 = empty)
+@group(2) @binding(7)
+var<storage, read> cell_adhesion_indices: array<i32>;
+
+// Adhesion connections: only need cell_a_index, cell_b_index, is_active
+// Full struct is 104 bytes = 26 x u32, laid out as:
+//   [0] = cell_a_index, [1] = cell_b_index, [2] = mode_index, [3] = is_active, ...
+// We read as flat u32 array and index manually.
+@group(2) @binding(8)
+var<storage, read> adhesion_connections_raw: array<u32>;
+
 const MAX_CELLS_PER_GRID: u32 = 16u;
+const MAX_ADHESIONS_PER_CELL: u32 = 20u;
+const ADHESION_STRIDE_U32: u32 = 26u; // 104 bytes / 4 = 26 u32s per connection
 const PI: f32 = 3.14159265359;
 const FIXED_POINT_SCALE: f32 = 1000.0;
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     return clamp(mass, 0.5, 2.0);
+}
+
+// Check if two cells are connected via an active adhesion bond
+fn are_cells_bonded(cell_a: u32, cell_b: u32) -> bool {
+    let base = cell_a * MAX_ADHESIONS_PER_CELL;
+    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+        let adhesion_idx = cell_adhesion_indices[base + i];
+        if (adhesion_idx < 0) {
+            continue;
+        }
+        let conn_base = u32(adhesion_idx) * ADHESION_STRIDE_U32;
+        let conn_cell_a = adhesion_connections_raw[conn_base + 0u];
+        let conn_cell_b = adhesion_connections_raw[conn_base + 1u];
+        let conn_active = adhesion_connections_raw[conn_base + 3u];
+        if (conn_active != 0u) {
+            if ((conn_cell_a == cell_a && conn_cell_b == cell_b) ||
+                (conn_cell_a == cell_b && conn_cell_b == cell_a)) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 // Rotate a vector by a quaternion
@@ -251,6 +287,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let min_dist = radius + other_radius;
             
             if (dist < min_dist) {
+                // Skip collision between adhesion-bonded cells (matching CPU behavior)
+                if (are_cells_bonded(cell_idx, other_idx)) {
+                    continue;
+                }
                 let coll_penetration = min_dist - dist;
                 
                 // Handle cells at same position - use deterministic separation direction

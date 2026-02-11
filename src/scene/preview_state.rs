@@ -211,16 +211,9 @@ impl PreviewState {
             
             // Hash adhesion settings
             mode.adhesion_settings.can_break.hash(&mut hasher);
-            mode.adhesion_settings.break_force.to_bits().hash(&mut hasher);
-            mode.adhesion_settings.rest_length.to_bits().hash(&mut hasher);
-            mode.adhesion_settings.linear_spring_stiffness.to_bits().hash(&mut hasher);
-            mode.adhesion_settings.linear_spring_damping.to_bits().hash(&mut hasher);
-            mode.adhesion_settings.orientation_spring_stiffness.to_bits().hash(&mut hasher);
-            mode.adhesion_settings.orientation_spring_damping.to_bits().hash(&mut hasher);
-            mode.adhesion_settings.max_angular_deviation.to_bits().hash(&mut hasher);
-            mode.adhesion_settings.twist_constraint_stiffness.to_bits().hash(&mut hasher);
-            mode.adhesion_settings.twist_constraint_damping.to_bits().hash(&mut hasher);
-            mode.adhesion_settings.enable_twist_constraint.hash(&mut hasher);
+            mode.adhesion_settings.adhesin_length.to_bits().hash(&mut hasher);
+            mode.adhesion_settings.adhesin_stretch.to_bits().hash(&mut hasher);
+            mode.adhesion_settings.stiffness.to_bits().hash(&mut hasher);
         }
         
         hasher.finish()

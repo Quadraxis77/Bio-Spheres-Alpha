@@ -16,9 +16,8 @@ pub use adhesion::{
     init_adhesion_indices,
 };
 pub use adhesion_forces::{
-    compute_adhesion_forces, 
-    compute_adhesion_forces_parallel, 
-    compute_adhesion_forces_batched,
+    solve_adhesion_pbd,
+    solve_adhesion_pbd_parallel,
 };
 pub use adhesion_manager::AdhesionConnectionManager;
 pub use adhesion_zones::{

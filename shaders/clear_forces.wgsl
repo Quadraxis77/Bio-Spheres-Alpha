@@ -59,6 +59,26 @@ var<storage, read_write> torque_accum_y: array<atomic<i32>>;
 @group(1) @binding(5)
 var<storage, read_write> torque_accum_z: array<atomic<i32>>;
 
+// PBD position correction accumulators
+@group(1) @binding(6)
+var<storage, read_write> pbd_pos_x: array<atomic<i32>>;
+
+@group(1) @binding(7)
+var<storage, read_write> pbd_pos_y: array<atomic<i32>>;
+
+@group(1) @binding(8)
+var<storage, read_write> pbd_pos_z: array<atomic<i32>>;
+
+// PBD rotation correction accumulators
+@group(1) @binding(9)
+var<storage, read_write> pbd_rot_x: array<atomic<i32>>;
+
+@group(1) @binding(10)
+var<storage, read_write> pbd_rot_y: array<atomic<i32>>;
+
+@group(1) @binding(11)
+var<storage, read_write> pbd_rot_z: array<atomic<i32>>;
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
@@ -75,4 +95,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     atomicStore(&torque_accum_x[cell_idx], 0);
     atomicStore(&torque_accum_y[cell_idx], 0);
     atomicStore(&torque_accum_z[cell_idx], 0);
+    
+    // Clear PBD correction accumulators to zero
+    atomicStore(&pbd_pos_x[cell_idx], 0);
+    atomicStore(&pbd_pos_y[cell_idx], 0);
+    atomicStore(&pbd_pos_z[cell_idx], 0);
+    atomicStore(&pbd_rot_x[cell_idx], 0);
+    atomicStore(&pbd_rot_y[cell_idx], 0);
+    atomicStore(&pbd_rot_z[cell_idx], 0);
 }

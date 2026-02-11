@@ -185,16 +185,23 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(2, &cached_bind_groups.collision_force_accum[current_index], &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 5: Adhesion physics (256 threads per workgroup, per-cell processing)
-        // Each thread handles ONE cell and iterates through its adhesion indices
-        // Forces are accumulated to force buffers (same as collision detection)
-        compute_pass.set_pipeline(&pipelines.adhesion_physics);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
-        compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
-        compute_pass.set_bind_group(3, &cached_bind_groups.force_accum, &[]);
-        // Dispatch based on cell count (per-cell processing)
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        // Stage 5: Iterative PBD adhesion physics (8 iterations, matching CPU)
+        // wgpu provides implicit barriers between dispatches within a compute pass.
+        // Each iteration: adhesion reads positions_out, writes PBD accumulators;
+        // apply_pbd applies accumulators to positions_out and clears them.
+        for _pbd_iter in 0..8u32 {
+            compute_pass.set_pipeline(&pipelines.adhesion_physics);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
+            compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
+            compute_pass.set_bind_group(3, &cached_bind_groups.force_accum, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+            
+            compute_pass.set_pipeline(&pipelines.apply_pbd);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.force_accum, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
         
         // Stage 5.5: Swim force (256 threads) - applies thrust for Flagellocyte cells
         // Accumulates swim force to force buffers based on cell rotation and mode swim_force setting
@@ -274,7 +281,19 @@ pub fn execute_lifecycle_pipeline(
     let cell_workgroups_lifecycle = (triple_buffers.capacity + WORKGROUP_SIZE_LIFECYCLE - 1) / WORKGROUP_SIZE_LIFECYCLE;
     
     // Execute 3-stage lifecycle pipeline with ring buffer for slot recycling
-    // Stage 1: Death scan - detects dead cells and pushes slots to ring buffer
+    
+    // Pre-stage: Copy cell_count_buffer[0] (high water mark) → prev_high_water_mark_buffer
+    // then clear cell_count_buffer[0] to 0. Death scan will rebuild [0] from alive cells via atomicMax,
+    // allowing the high water mark to shrink when trailing cells die.
+    // Uses a separate buffer because wgpu forbids copy_buffer_to_buffer on the same buffer.
+    encoder.copy_buffer_to_buffer(
+        &triple_buffers.cell_count_buffer, 0,           // src: cell_count_buffer[0]
+        &triple_buffers.prev_high_water_mark_buffer, 0, // dst: separate buffer
+        4, // 4 bytes = 1 x u32
+    );
+    encoder.clear_buffer(&triple_buffers.cell_count_buffer, 0, Some(4));
+    
+    // Stage 1: Death scan - detects dead cells, pushes slots to ring buffer, rebuilds high water mark
     // Must complete BEFORE division scan so recycled slots are available
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {

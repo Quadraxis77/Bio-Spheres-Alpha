@@ -268,6 +268,9 @@ pub struct GpuPhysicsPipelines {
     // Adhesion physics pipeline
     pub adhesion_physics: wgpu::ComputePipeline,
     
+    // Apply PBD corrections pipeline (per-iteration apply + clear)
+    pub apply_pbd: wgpu::ComputePipeline,
+    
     // Lifecycle pipelines (3-stage with ring buffer for slot allocation)
     // Stage 1: Death scan - detects dead cells and pushes slots to ring buffer
     pub lifecycle_death_scan: wgpu::ComputePipeline,
@@ -545,6 +548,15 @@ impl GpuPhysicsPipelines {
             "Adhesion Physics",
         );
         
+        // Apply PBD corrections pipeline (reads PBD accumulators, applies to positions_out, clears)
+        let apply_pbd = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/apply_pbd.wgsl"),
+            "main",
+            &[&physics_layout, &force_accum_layout],
+            "Apply PBD",
+        );
+        
         // Lifecycle pipelines (3-stage with ring buffer for slot allocation)
         // Stage 1: Death scan - detects dead cells, pushes slots to ring buffer
         let lifecycle_death_scan = Self::create_compute_pipeline(
@@ -608,6 +620,7 @@ impl GpuPhysicsPipelines {
             cell_boost,
             nutrient_transport,
             adhesion_physics,
+            apply_pbd,
             lifecycle_death_scan,
             lifecycle_division_scan,
             lifecycle_division_execute,
@@ -747,6 +760,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: buffers.ring_state.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.prev_high_water_mark_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -1525,6 +1542,17 @@ impl GpuPhysicsPipelines {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Previous high water mark (for death_scan compaction)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -2354,39 +2382,39 @@ impl GpuPhysicsPipelines {
         })
     }
     
-    /// Create force accumulation bind group (Group 3 in adhesion physics shader)
+    /// Create PBD correction bind group (Group 3 in adhesion physics shader)
     fn create_force_accum_bind_group(
         &self,
         device: &wgpu::Device,
         adhesion_buffers: &super::AdhesionBuffers,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Force Accumulation Bind Group"),
+            label: Some("PBD Correction Bind Group"),
             layout: &self.force_accum_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: adhesion_buffers.force_accum_x.as_entire_binding(),
+                    resource: adhesion_buffers.pbd_pos_x.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: adhesion_buffers.force_accum_y.as_entire_binding(),
+                    resource: adhesion_buffers.pbd_pos_y.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: adhesion_buffers.force_accum_z.as_entire_binding(),
+                    resource: adhesion_buffers.pbd_pos_z.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: adhesion_buffers.torque_accum_x.as_entire_binding(),
+                    resource: adhesion_buffers.pbd_rot_x.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: adhesion_buffers.torque_accum_y.as_entire_binding(),
+                    resource: adhesion_buffers.pbd_rot_y.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: adhesion_buffers.torque_accum_z.as_entire_binding(),
+                    resource: adhesion_buffers.pbd_rot_z.as_entire_binding(),
                 },
             ],
         })
@@ -2554,6 +2582,72 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 6: PBD position correction X (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 7: PBD position correction Y (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 8: PBD position correction Z (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 9: PBD rotation correction X (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 10: PBD rotation correction Y (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 11: PBD rotation correction Z (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -2640,6 +2734,28 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 7: Cell adhesion indices (read-only, for skipping bonded-cell collisions)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 8: Adhesion connections raw (read-only, for skipping bonded-cell collisions)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -2715,6 +2831,39 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 6: PBD position correction X (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 7: PBD position correction Y (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 8: PBD position correction Z (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -2779,6 +2928,39 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 5: PBD rotation correction X (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 6: PBD rotation correction Y (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 7: PBD rotation correction Z (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -2816,6 +2998,30 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: adhesion_buffers.torque_accum_z.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: adhesion_buffers.pbd_pos_x.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: adhesion_buffers.pbd_pos_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: adhesion_buffers.pbd_pos_z.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: adhesion_buffers.pbd_rot_x.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: adhesion_buffers.pbd_rot_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: adhesion_buffers.pbd_rot_z.as_entire_binding(),
                 },
             ],
         })
@@ -2860,6 +3066,14 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: triple_buffers.rotations[buffer_index].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: adhesion_buffers.cell_adhesion_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: adhesion_buffers.adhesion_connections.as_entire_binding(),
                 },
             ],
         })
@@ -2951,6 +3165,19 @@ impl GpuPhysicsPipelines {
                     binding: 5,
                     resource: water_bitfield_buffer.as_entire_binding(),
                 },
+                // PBD position corrections (bindings 6-8)
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: adhesion_buffers.pbd_pos_x.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: adhesion_buffers.pbd_pos_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: adhesion_buffers.pbd_pos_z.as_entire_binding(),
+                },
             ],
         })
     }
@@ -2985,6 +3212,19 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: triple_buffers.rotations[0].as_entire_binding(),
+                },
+                // PBD rotation corrections (bindings 5-7)
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: adhesion_buffers.pbd_rot_x.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: adhesion_buffers.pbd_rot_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: adhesion_buffers.pbd_rot_z.as_entire_binding(),
                 },
             ],
         })

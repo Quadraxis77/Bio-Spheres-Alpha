@@ -11,7 +11,7 @@
 //! ### Per-Cell Adhesion Indices (40 bytes each = 10 * i32)
 //! - `cell_adhesion_indices`: Array of 10 adhesion indices per cell (-1 = no connection)
 //!
-//! ### Adhesion Settings (48 bytes each)
+//! ### Adhesion Settings (16 bytes each, PBD)
 //! - `adhesion_settings`: Per-mode adhesion settings from genome
 //!
 //! ### Adhesion Counts
@@ -34,7 +34,7 @@ pub struct AdhesionBuffers {
     /// Per-cell adhesion indices (20 * i32 = 80 bytes per cell)
     pub cell_adhesion_indices: wgpu::Buffer,
     
-    /// Per-mode adhesion settings (48 bytes per mode)
+    /// Per-mode adhesion settings (16 bytes per mode, PBD)
     pub adhesion_settings: wgpu::Buffer,
     
     /// Adhesion counts: [total, live, free_top, padding]
@@ -66,6 +66,24 @@ pub struct AdhesionBuffers {
     
     /// Torque accumulation Z component (atomic i32, fixed-point scaled)
     pub torque_accum_z: wgpu::Buffer,
+    
+    /// PBD position correction X component (atomic i32, fixed-point scaled)
+    pub pbd_pos_x: wgpu::Buffer,
+    
+    /// PBD position correction Y component (atomic i32, fixed-point scaled)
+    pub pbd_pos_y: wgpu::Buffer,
+    
+    /// PBD position correction Z component (atomic i32, fixed-point scaled)
+    pub pbd_pos_z: wgpu::Buffer,
+    
+    /// PBD rotation correction X component (atomic i32, fixed-point scaled)
+    pub pbd_rot_x: wgpu::Buffer,
+    
+    /// PBD rotation correction Y component (atomic i32, fixed-point scaled)
+    pub pbd_rot_y: wgpu::Buffer,
+    
+    /// PBD rotation correction Z component (atomic i32, fixed-point scaled)
+    pub pbd_rot_z: wgpu::Buffer,
     
     /// Maximum adhesion connections
     pub max_connections: u32,
@@ -108,10 +126,10 @@ impl AdhesionBuffers {
             "Cell Adhesion Indices",
         );
         
-        // Per-mode adhesion settings: 48 bytes per mode
+        // Per-mode adhesion settings: 16 bytes per mode (PBD: can_break, adhesin_length, adhesin_stretch, stiffness)
         let adhesion_settings = Self::create_storage_buffer(
             device,
-            max_modes as u64 * 48,
+            max_modes as u64 * 16,
             "Adhesion Settings",
         );
         
@@ -154,6 +172,12 @@ impl AdhesionBuffers {
         let torque_accum_x = Self::create_storage_buffer(device, atomic_buffer_size, "Torque Accum X");
         let torque_accum_y = Self::create_storage_buffer(device, atomic_buffer_size, "Torque Accum Y");
         let torque_accum_z = Self::create_storage_buffer(device, atomic_buffer_size, "Torque Accum Z");
+        let pbd_pos_x = Self::create_storage_buffer(device, atomic_buffer_size, "PBD Pos X");
+        let pbd_pos_y = Self::create_storage_buffer(device, atomic_buffer_size, "PBD Pos Y");
+        let pbd_pos_z = Self::create_storage_buffer(device, atomic_buffer_size, "PBD Pos Z");
+        let pbd_rot_x = Self::create_storage_buffer(device, atomic_buffer_size, "PBD Rot X");
+        let pbd_rot_y = Self::create_storage_buffer(device, atomic_buffer_size, "PBD Rot Y");
+        let pbd_rot_z = Self::create_storage_buffer(device, atomic_buffer_size, "PBD Rot Z");
         
         // Initialize CPU-side caches
         let connections_cache = vec![GpuAdhesionConnection::inactive(); max_connections as usize];
@@ -173,6 +197,12 @@ impl AdhesionBuffers {
             torque_accum_x,
             torque_accum_y,
             torque_accum_z,
+            pbd_pos_x,
+            pbd_pos_y,
+            pbd_pos_z,
+            pbd_rot_x,
+            pbd_rot_y,
+            pbd_rot_z,
             max_connections,
             cell_capacity,
             max_modes,
@@ -234,17 +264,9 @@ impl AdhesionBuffers {
             for mode in &genome.modes {
                 let settings = GpuAdhesionSettings {
                     can_break: if mode.adhesion_settings.can_break { 1 } else { 0 },
-                    break_force: mode.adhesion_settings.break_force,
-                    rest_length: mode.adhesion_settings.rest_length,
-                    linear_spring_stiffness: mode.adhesion_settings.linear_spring_stiffness,
-                    linear_spring_damping: mode.adhesion_settings.linear_spring_damping,
-                    orientation_spring_stiffness: mode.adhesion_settings.orientation_spring_stiffness,
-                    orientation_spring_damping: mode.adhesion_settings.orientation_spring_damping,
-                    max_angular_deviation: mode.adhesion_settings.max_angular_deviation,
-                    twist_constraint_stiffness: mode.adhesion_settings.twist_constraint_stiffness,
-                    twist_constraint_damping: mode.adhesion_settings.twist_constraint_damping,
-                    enable_twist_constraint: if mode.adhesion_settings.enable_twist_constraint { 1 } else { 0 },
-                    _padding: 0,
+                    adhesin_length: mode.adhesion_settings.adhesin_length,
+                    adhesin_stretch: mode.adhesion_settings.adhesin_stretch,
+                    stiffness: mode.adhesion_settings.stiffness,
                 };
                 settings_data.push(settings);
             }

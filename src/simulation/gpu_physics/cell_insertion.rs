@@ -227,8 +227,8 @@ impl GpuCellInsertion {
                 let genome = &genomes[genome_id as usize];
                 if (mode_index as usize) < genome.modes.len() {
                     let mode = &genome.modes[mode_index as usize];
-                    // Flagellocytes (cell_type == 1) don't generate their own nutrients
-                    let nutrient_rate = if mode.cell_type == 1 { 0.0 } else { mode.nutrient_gain_rate };
+                    // Only Test cells (cell_type 0) auto-generate nutrients
+                    let nutrient_rate = if mode.cell_type == 0 { mode.nutrient_gain_rate } else { 0.0 };
                     (
                         mode.split_interval,
                         mode.split_mass,
@@ -329,8 +329,8 @@ impl GpuCellInsertion {
                 let genome = &genomes[genome_id as usize];
                 if (mode_index as usize) < genome.modes.len() {
                     let mode = &genome.modes[mode_index as usize];
-                    // Flagellocytes (cell_type == 1) don't generate their own nutrients
-                    let nutrient_rate = if mode.cell_type == 1 { 0.0 } else { mode.nutrient_gain_rate };
+                    // Only Test cells (cell_type 0) auto-generate nutrients
+                    let nutrient_rate = if mode.cell_type == 0 { mode.nutrient_gain_rate } else { 0.0 };
                     (
                         mode.split_interval,
                         mode.split_mass,

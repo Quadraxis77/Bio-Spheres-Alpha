@@ -14,6 +14,54 @@ use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 use wgpu::util::DeviceExt;
 
+/// DEBUG: Blocking readback of N elements from a GPU buffer.
+/// T must be Pod. Creates its own encoder+submit.
+fn debug_read_buffer_blocking<T: Pod + Zeroable>(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    buffer: &wgpu::Buffer,
+    count: usize,
+) -> Vec<T> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let elem_size = std::mem::size_of::<T>();
+    let read_size = (count * elem_size) as u64;
+    
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Debug Readback Staging"),
+        size: read_size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Debug Readback"),
+    });
+    encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, read_size);
+    queue.submit(std::iter::once(encoder.finish()));
+    
+    let slice = staging.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = tx.send(result);
+    });
+    let _ = device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    });
+    
+    if rx.recv().ok().and_then(|r| r.ok()).is_some() {
+        let view = slice.get_mapped_range();
+        let data: Vec<T> = bytemuck::cast_slice(&view).to_vec();
+        drop(view);
+        staging.unmap();
+        data
+    } else {
+        Vec::new()
+    }
+}
+
 /// Camera uniform for voxel rendering
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -152,10 +200,10 @@ pub struct GpuScene {
     pub vaporization_probability: f32,  // Water to Steam
     /// Nutrient particle density for noise-based spawning (0.0 to 1.0)
     pub nutrient_density: f32,  // Controls threshold for nutrient spawning
-    /// Current cell count (tracked on GPU, no CPU canonical state)
-    pub current_cell_count: u32,
     /// Next cell ID for deterministic cell creation
     next_cell_id: u32,
+    /// Whether any cells have been inserted (used to skip GPU physics when empty)
+    has_cells: bool,
     /// Tail renderer for flagellocyte cells
     pub tail_renderer: TailRenderer,
     /// Cave system renderer for procedural cave generation and collision
@@ -352,8 +400,8 @@ impl GpuScene {
             condensation_probability: 0.1,
             vaporization_probability: 0.1,
             nutrient_density: 0.2,  // Default nutrient density (20% of 0.5 range)
-            current_cell_count: 0,
             next_cell_id: 0,
+            has_cells: false,
             tail_renderer,
             cave_renderer,
             cave_params_dirty: false,
@@ -405,8 +453,8 @@ impl GpuScene {
 
     /// Reset the simulation to initial state.
     pub fn reset(&mut self, queue: &wgpu::Queue) {
-        self.current_cell_count = 0;
         self.next_cell_id = 0;
+        self.has_cells = false;
         self.current_time = 0.0;
         self.time_accumulator = 0.0;
         self.current_frame = 0;
@@ -441,7 +489,7 @@ impl GpuScene {
     /// Uses the new reference counting system to safely remove unused genomes.
     /// Returns the number of genomes removed.
     pub fn compact_genomes(&mut self) -> usize {
-        if self.genomes.is_empty() || self.current_cell_count == 0 {
+        if self.genomes.is_empty() || !self.has_cells {
             self.genomes.clear();
             self.parent_make_adhesion_flags.clear();
             // Clear all genome buffer groups
@@ -555,10 +603,11 @@ impl GpuScene {
 
     /// Run physics step using GPU compute shaders with zero CPU involvement.
     fn run_physics(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, delta_time: f32, world_diameter: f32) {
-        // Note: No CPU-side early-out on current_cell_count here.
-        // The GPU shaders check cell_count_buffer[0] (high water mark) internally.
-        // Using the async-readback live count would cause premature physics freeze
-        // when the readback lags behind the actual GPU state.
+        // Skip entire physics pipeline if no cells have ever been inserted
+        // This avoids dispatching ~12 compute shaders with 391 workgroups each when empty
+        if !self.has_cells {
+            return;
+        }
 
         // Execute pure GPU physics pipeline (7 compute shader stages + cave collision if enabled)
         // Run phagocyte nutrient consumption BEFORE physics so nutrients are available for transport
@@ -617,11 +666,6 @@ impl GpuScene {
     
     /// Run phagocyte nutrient consumption compute shader
     fn run_phagocyte_consumption(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
-        // Note: No CPU-side early-out on current_cell_count here.
-        // The GPU shader reads cell_count_buffer[0] (high water mark) for bounds checking.
-        // Using the async-readback live count would cause premature consumption freeze
-        // when the readback lags behind the actual GPU state.
-        
         let (consumption_system, fluid_sim) = match (&self.phagocyte_consumption, &self.fluid_simulator) {
             (Some(c), Some(f)) => (c, f),
             _ => return,
@@ -651,6 +695,7 @@ impl GpuScene {
                 fluid_sim.nutrient_voxels_buffer(),
                 &self.gpu_triple_buffers.cell_types,
                 &self.gpu_triple_buffers.split_masses,
+                &self.gpu_triple_buffers.death_flags,
             ));
         }
         
@@ -687,11 +732,6 @@ impl GpuScene {
     /// Run photocyte light consumption compute shader.
     /// Called inside each physics step so photocytes gain/lose mass at the same rate as other cells.
     fn run_photocyte_light_consumption(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
-        // Note: No CPU-side early-out on current_cell_count here.
-        // The GPU shader reads cell_count_buffer[0] (high water mark) for bounds checking.
-        // Using the async-readback live count would cause premature consumption freeze
-        // when the readback lags behind the actual GPU state.
-        
         let light_field = match &self.light_field_system {
             Some(l) => l,
             None => return,
@@ -960,17 +1000,9 @@ impl GpuScene {
         for mode in &genome.modes {
             let settings = crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings {
                 can_break: if mode.adhesion_settings.can_break { 1 } else { 0 },
-                break_force: mode.adhesion_settings.break_force,
-                rest_length: mode.adhesion_settings.rest_length,
-                linear_spring_stiffness: mode.adhesion_settings.linear_spring_stiffness,
-                linear_spring_damping: mode.adhesion_settings.linear_spring_damping,
-                orientation_spring_stiffness: mode.adhesion_settings.orientation_spring_stiffness,
-                orientation_spring_damping: mode.adhesion_settings.orientation_spring_damping,
-                max_angular_deviation: mode.adhesion_settings.max_angular_deviation,
-                twist_constraint_stiffness: mode.adhesion_settings.twist_constraint_stiffness,
-                twist_constraint_damping: mode.adhesion_settings.twist_constraint_damping,
-                enable_twist_constraint: if mode.adhesion_settings.enable_twist_constraint { 1 } else { 0 },
-                _padding: 0,
+                adhesin_length: mode.adhesion_settings.adhesin_length,
+                adhesin_stretch: mode.adhesion_settings.adhesin_stretch,
+                stiffness: mode.adhesion_settings.stiffness,
             };
             settings_data.push(settings);
         }
@@ -1129,11 +1161,8 @@ impl GpuScene {
         world_position: glam::Vec3,
         genome: &Genome,
     ) -> Option<usize> {
-        // Note: We don't block insertion based on current_cell_count because:
-        // 1. current_cell_count is the "high water mark" - it never decreases when cells die
-        // 2. Dead cell slots are recycled via a GPU ring buffer
-        // 3. The GPU cell_insertion shader handles slot allocation from the ring buffer
-        // 4. The shader will silently fail if truly at capacity (no ring buffer slots and at max)
+        // The GPU cell_insertion shader handles slot allocation from the ring buffer.
+        // It will silently fail if truly at capacity (no ring buffer slots and at max).
         
         // Find or add the genome (add_genome now updates existing genomes with same name)
         let (genome_id, needs_sync) = match self.add_genome(device, genome.clone()) {
@@ -1185,12 +1214,10 @@ impl GpuScene {
                 &self.genomes,
             );
             
-            // Update local tracking
-            let cell_index = self.current_cell_count as usize;
-            self.current_cell_count += 1;
             self.next_cell_id += 1;
+            self.has_cells = true;
             
-            Some(cell_index)
+            Some(0) // Actual slot is assigned by GPU shader
         } else {
             None
         }
@@ -1201,10 +1228,6 @@ impl GpuScene {
     /// This method queues a position update to be executed during the next render phase.
     /// It replaces the canonical state-based position updates.
     pub fn update_cell_position_gpu(&mut self, cell_index: u32, new_position: glam::Vec3) {
-        // Note: We don't check bounds here because the GPU cell count may be higher than
-        // current_cell_count due to cell division. The shader will validate bounds using
-        // the actual GPU cell_count_buffer value.
-        
         // Queue the position update to be executed during render
         // The shader will validate cell_index against the GPU cell count
         self.pending_position_update = Some((cell_index, new_position));
@@ -1220,7 +1243,7 @@ impl GpuScene {
     /// Update a cell's mass using GPU operations.
     /// Used by the boost tool to increase cell mass.
     pub fn set_cell_mass(&mut self, cell_idx: usize) {
-        if cell_idx >= self.current_cell_count as usize {
+        if cell_idx >= self.gpu_triple_buffers.capacity as usize {
             return;
         }
         
@@ -1246,10 +1269,6 @@ impl GpuScene {
     /// The cell's mass is set to 0, which causes the lifecycle death scan shader
     /// to mark it as dead and handle the actual removal through the lifecycle pipeline.
     pub fn remove_cell(&mut self, cell_idx: usize) -> bool {
-        // Note: We don't check bounds here because the GPU cell count may be higher than
-        // current_cell_count due to cell division. The shader will validate bounds using
-        // the actual GPU cell_count_buffer value.
-        
         // Queue the cell removal to be executed during render
         // The shader will validate cell_idx against the GPU cell count
         self.pending_cell_removal = Some(cell_idx as u32);
@@ -1418,7 +1437,6 @@ impl GpuScene {
             let physics_bind_group = &self.cached_bind_groups.physics[output_idx];
             
             // Use capacity for dispatch - the shader reads actual cell_count from cell_count_buffer
-            // This ensures all cells are checked even if current_cell_count is out of sync with GPU
             let dispatch_count = self.gpu_triple_buffers.capacity;
             tool_ops.find_cell_with_ray(
                 encoder,
@@ -1576,7 +1594,7 @@ impl GpuScene {
             delta_time: 0.0,
             current_time: self.current_time,
             current_frame: 0,
-            cell_count: self.current_cell_count,
+            cell_count: 0, // Shaders read from cell_count_buffer, not this field
             world_size: world_diameter,
             boundary_stiffness: 10.0,
             gravity: 0.0,
@@ -3249,6 +3267,74 @@ impl Scene for GpuScene {
             if steps >= max_steps {
                 self.time_accumulator = 0.0;
             }
+            
+            // DEBUG: Readback first 2 cells every 10 frames (more frequent to catch division)
+            if self.current_frame % 10 == 0 && self.has_cells {
+                // Submit current encoder so GPU work completes
+                queue.submit(std::iter::once(encoder.finish()));
+                
+                // Read back from BOTH input and output buffers to see what changed
+                let cur_idx = self.gpu_triple_buffers.current_index();
+                let out_idx = self.gpu_triple_buffers.output_buffer_index();
+                let positions_in = self.gpu_triple_buffers.debug_read_positions_blocking(device, queue, cur_idx, 2);
+                let positions_out = self.gpu_triple_buffers.debug_read_positions_blocking(device, queue, out_idx, 2);
+                
+                let vel_in = debug_read_buffer_blocking::<[f32; 4]>(
+                    device, queue, &self.gpu_triple_buffers.velocity[cur_idx], 2,
+                );
+                let vel_out = debug_read_buffer_blocking::<[f32; 4]>(
+                    device, queue, &self.gpu_triple_buffers.velocity[out_idx], 2,
+                );
+                
+                // Read adhesion counts
+                let adh_counts = debug_read_buffer_blocking::<u32>(
+                    device, queue, &self.adhesion_buffers.adhesion_counts, 4,
+                );
+                
+                // Read adhesion settings (first 4 entries, each 16 bytes = 4 floats)
+                let adh_settings = debug_read_buffer_blocking::<[f32; 4]>(
+                    device, queue, &self.adhesion_buffers.adhesion_settings, 4,
+                );
+                
+                // Read first adhesion connection (104 bytes = 26 u32s)
+                let adh_conn_raw = debug_read_buffer_blocking::<u32>(
+                    device, queue, &self.adhesion_buffers.adhesion_connections, 26,
+                );
+                
+                // Read all 3 buffers to check for stale data
+                let third_idx = (out_idx + 1) % 3;
+                let positions_third = self.gpu_triple_buffers.debug_read_positions_blocking(device, queue, third_idx, 2);
+                
+                println!("=== DEBUG FRAME {} (buf in={} out={} third={}) ===", self.current_frame, cur_idx, out_idx, third_idx);
+                println!("  Adhesion counts: total={}, live={}", 
+                    adh_counts.get(0).unwrap_or(&0), adh_counts.get(1).unwrap_or(&0));
+                if let Some(conn) = adh_conn_raw.get(0..4) {
+                    println!("  Conn[0]: cell_a={}, cell_b={}, mode={}, active={}", conn[0], conn[1], conn[2], conn[3]);
+                }
+                for (si, s) in adh_settings.iter().enumerate().take(2) {
+                    // s[0]=can_break(as f32 bits), s[1]=adhesin_length, s[2]=adhesin_stretch, s[3]=stiffness
+                    let can_break_bits = s[0].to_bits() as i32;
+                    println!("  Settings[{}]: can_break={}, adhesin_length={:.4}, adhesin_stretch={:.4}, stiffness={:.4}",
+                        si, can_break_bits, s[1], s[2], s[3]);
+                }
+                for i in 0..2 {
+                    if let (Some(pi), Some(po)) = (positions_in.get(i), positions_out.get(i)) {
+                        let pt = positions_third.get(i);
+                        let pt_z = pt.map(|p| p[2]).unwrap_or(0.0);
+                        println!("  Cell {} pos_in=({:.2}, {:.2}, {:.2}) m={:.2}  pos_out=({:.2}, {:.2}, {:.2}) m={:.2}  buf[{}].z={:.2}", 
+                            i, pi[0], pi[1], pi[2], pi[3], po[0], po[1], po[2], po[3], third_idx, pt_z);
+                    }
+                    if let (Some(vi), Some(vo)) = (vel_in.get(i), vel_out.get(i)) {
+                        println!("  Cell {} vel_in=({:.4}, {:.4}, {:.4})  vel_out=({:.4}, {:.4}, {:.4})", 
+                            i, vi[0], vi[1], vi[2], vo[0], vo[1], vo[2]);
+                    }
+                }
+                
+                // Create a new encoder to continue the frame
+                encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("GPU Scene Encoder (post-debug)"),
+                });
+            }
         }
 
         // Execute any pending position updates (drag tool) AFTER physics
@@ -3667,7 +3753,7 @@ impl Scene for GpuScene {
 
         // Generate Hi-Z from depth buffer for next frame's occlusion culling
         // Skip if no cells (nothing to cull) or culling is disabled
-        if self.current_cell_count > 0 && self.instance_builder.culling_mode() != CullingMode::Disabled {
+        if self.has_cells && self.instance_builder.culling_mode() != CullingMode::Disabled {
             self.hiz_generator.generate(
                 device,
                 queue,
@@ -3676,25 +3762,8 @@ impl Scene for GpuScene {
             );
         }
         
-        // Start async cell count readback (copy to readback buffer)
-        // Only start if no readback is pending
-        let should_start_readback = !self.gpu_triple_buffers.is_cell_count_read_pending();
-        if should_start_readback {
-            self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
-        }
-
-        // Single submit for all GPU work
+        // Single submit for all GPU work (zero CPU readback)
         queue.submit(std::iter::once(encoder.finish()));
-        
-        // Initiate the async map operation after submit (if we started a readback)
-        if should_start_readback {
-            self.gpu_triple_buffers.initiate_cell_count_map();
-        }
-        
-        // Poll for cell count readback completion and update current_cell_count
-        if let Some(count) = self.gpu_triple_buffers.poll_cell_count(device) {
-            self.current_cell_count = count;
-        }
 
         // Poll for steam particle count (GPU readback)
         if self.show_steam_particles {
@@ -3756,6 +3825,6 @@ impl Scene for GpuScene {
     }
 
     fn cell_count(&self) -> usize {
-        self.current_cell_count as usize
+        0 // Cell count is tracked on GPU only; no CPU readback
     }
 }

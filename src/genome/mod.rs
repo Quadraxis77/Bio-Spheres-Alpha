@@ -46,36 +46,36 @@ impl Default for ChildSettings {
     }
 }
 
-/// Adhesion configuration for cell connections
+/// Adhesion configuration for cell connections (PBD-based)
+///
+/// Uses Position-Based Dynamics for stable, intuitive adhesion physics.
+/// - Distance constraint: iterative position correction keeping bonded cells at target distance
+/// - Hinge spring: corrects cell orientation based on bond angle deviation
+/// - Twist constraint: hardcoded PBD twist correction using anchor reference frames
+/// - Bond breaking: stretch-distance-based removal
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdhesionSettings {
+    /// Whether bonds can break when stretched beyond threshold
     pub can_break: bool,
-    pub break_force: f32,
-    pub rest_length: f32,
-    pub linear_spring_stiffness: f32,
-    pub linear_spring_damping: f32,
-    pub orientation_spring_stiffness: f32,
-    pub orientation_spring_damping: f32,
-    pub max_angular_deviation: f32,
-    pub twist_constraint_stiffness: f32,
-    pub twist_constraint_damping: f32,
-    pub enable_twist_constraint: bool,
+    /// Rest offset beyond touching distance (0.0-1.0, scaled by 50x internally)
+    /// target_dist = r1 + r2 + adhesin_length * 50.0
+    pub adhesin_length: f32,
+    /// Controls bond softness AND break distance threshold (0.0-1.0)
+    /// softness = 1.0 - adhesin_stretch * 0.8
+    /// break_dist = (r1 + r2) * (1.3 + adhesin_stretch * 3.0) + adhesin_length * 50.0
+    pub adhesin_stretch: f32,
+    /// Hinge/orientation correction strength (0.0-1.0)
+    /// Controls how strongly cells are rotated to maintain bond rest angles
+    pub stiffness: f32,
 }
 
 impl Default for AdhesionSettings {
     fn default() -> Self {
         Self {
             can_break: true,
-            break_force: 10.0,
-            rest_length: 1.0,
-            linear_spring_stiffness: 150.0,
-            linear_spring_damping: 5.0,
-            orientation_spring_stiffness: 50.0,
-            orientation_spring_damping: 5.0,
-            max_angular_deviation: 0.0,
-            twist_constraint_stiffness: 2.0,
-            twist_constraint_damping: 0.5,
-            enable_twist_constraint: true,
+            adhesin_length: 0.0,
+            adhesin_stretch: 0.0,
+            stiffness: 1.0,
         }
     }
 }

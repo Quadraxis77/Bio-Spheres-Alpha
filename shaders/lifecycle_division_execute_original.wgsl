@@ -660,10 +660,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
         
-        // Calculate center-to-center distance using rest length (matches reference)
+        // Calculate center-to-center distance using fixed offset (PBD: adhesin_length * 50.0)
         // Use fixed radius to make adhesion independent of cell growth
-        let rest_length = 1.0; // Default rest length - could be read from mode settings
-        let center_to_center_dist = rest_length + FIXED_RADIUS + FIXED_RADIUS;
+        let rest_offset = 0.0; // Default adhesin_length=0.0 → offset=0.0 (could be read from mode settings)
+        let center_to_center_dist = FIXED_RADIUS + FIXED_RADIUS + rest_offset;
         
         // Calculate neighbor position in parent frame (from anchor direction * distance)
         let neighbor_pos_parent_frame = parent_anchor_dir_local * center_to_center_dist;

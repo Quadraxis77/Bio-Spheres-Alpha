@@ -136,25 +136,11 @@ pub struct SerializableAdhesionSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub can_break: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub break_force: Option<f32>,
+    pub adhesin_length: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub rest_length: Option<f32>,
+    pub adhesin_stretch: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub linear_spring_stiffness: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub linear_spring_damping: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub orientation_spring_stiffness: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub orientation_spring_damping: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_angular_deviation: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub twist_constraint_stiffness: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub twist_constraint_damping: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enable_twist_constraint: Option<bool>,
+    pub stiffness: Option<f32>,
 }
 
 
@@ -319,29 +305,15 @@ fn adhesion_to_serializable(
 ) -> Option<SerializableAdhesionSettings> {
     let ser = SerializableAdhesionSettings {
         can_break: diff_bool(adhesion.can_break, default.can_break),
-        break_force: diff_f32(adhesion.break_force, default.break_force),
-        rest_length: diff_f32(adhesion.rest_length, default.rest_length),
-        linear_spring_stiffness: diff_f32(adhesion.linear_spring_stiffness, default.linear_spring_stiffness),
-        linear_spring_damping: diff_f32(adhesion.linear_spring_damping, default.linear_spring_damping),
-        orientation_spring_stiffness: diff_f32(adhesion.orientation_spring_stiffness, default.orientation_spring_stiffness),
-        orientation_spring_damping: diff_f32(adhesion.orientation_spring_damping, default.orientation_spring_damping),
-        max_angular_deviation: diff_f32(adhesion.max_angular_deviation, default.max_angular_deviation),
-        twist_constraint_stiffness: diff_f32(adhesion.twist_constraint_stiffness, default.twist_constraint_stiffness),
-        twist_constraint_damping: diff_f32(adhesion.twist_constraint_damping, default.twist_constraint_damping),
-        enable_twist_constraint: diff_bool(adhesion.enable_twist_constraint, default.enable_twist_constraint),
+        adhesin_length: diff_f32(adhesion.adhesin_length, default.adhesin_length),
+        adhesin_stretch: diff_f32(adhesion.adhesin_stretch, default.adhesin_stretch),
+        stiffness: diff_f32(adhesion.stiffness, default.stiffness),
     };
 
     if ser.can_break.is_some()
-        || ser.break_force.is_some()
-        || ser.rest_length.is_some()
-        || ser.linear_spring_stiffness.is_some()
-        || ser.linear_spring_damping.is_some()
-        || ser.orientation_spring_stiffness.is_some()
-        || ser.orientation_spring_damping.is_some()
-        || ser.max_angular_deviation.is_some()
-        || ser.twist_constraint_stiffness.is_some()
-        || ser.twist_constraint_damping.is_some()
-        || ser.enable_twist_constraint.is_some()
+        || ser.adhesin_length.is_some()
+        || ser.adhesin_stretch.is_some()
+        || ser.stiffness.is_some()
     {
         Some(ser)
     } else {
@@ -448,35 +420,14 @@ fn apply_adhesion_settings(adhesion: &mut AdhesionSettings, ser: &SerializableAd
     if let Some(can_break) = ser.can_break {
         adhesion.can_break = can_break;
     }
-    if let Some(break_force) = ser.break_force {
-        adhesion.break_force = break_force;
+    if let Some(adhesin_length) = ser.adhesin_length {
+        adhesion.adhesin_length = adhesin_length;
     }
-    if let Some(rest_length) = ser.rest_length {
-        adhesion.rest_length = rest_length;
+    if let Some(adhesin_stretch) = ser.adhesin_stretch {
+        adhesion.adhesin_stretch = adhesin_stretch;
     }
-    if let Some(stiffness) = ser.linear_spring_stiffness {
-        adhesion.linear_spring_stiffness = stiffness;
-    }
-    if let Some(damping) = ser.linear_spring_damping {
-        adhesion.linear_spring_damping = damping;
-    }
-    if let Some(stiffness) = ser.orientation_spring_stiffness {
-        adhesion.orientation_spring_stiffness = stiffness;
-    }
-    if let Some(damping) = ser.orientation_spring_damping {
-        adhesion.orientation_spring_damping = damping;
-    }
-    if let Some(max_angular) = ser.max_angular_deviation {
-        adhesion.max_angular_deviation = max_angular;
-    }
-    if let Some(stiffness) = ser.twist_constraint_stiffness {
-        adhesion.twist_constraint_stiffness = stiffness;
-    }
-    if let Some(damping) = ser.twist_constraint_damping {
-        adhesion.twist_constraint_damping = damping;
-    }
-    if let Some(enable) = ser.enable_twist_constraint {
-        adhesion.enable_twist_constraint = enable;
+    if let Some(stiffness) = ser.stiffness {
+        adhesion.stiffness = stiffness;
     }
 }
 

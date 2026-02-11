@@ -332,12 +332,6 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
     ui.heading("Cell Inspector");
     ui.separator();
     
-    // Show GPU cell count (from canonical state, no async readback)
-    if let Some(gpu_count) = context.gpu_cell_count() {
-        ui.label(format!("Total Cells: {} (GPU)", gpu_count));
-    } else {
-        ui.label(format!("Total Cells: {}", context.cell_count()));
-    }
     
     // Get the inspected cell index from radial menu state
     let inspected_cell = context.editor_state.radial_menu.inspected_cell;
@@ -1524,100 +1518,38 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
             // Breaking Properties Group (Red)
             group_container(ui, "Breaking Properties", egui::Color32::from_rgb(200, 100, 100), |ui| {
                 ui.checkbox(&mut mode.adhesion_settings.can_break, "Adhesion Can Break");
+            });
 
-                ui.label("Adhesion Break Force:");
+            // Bond Distance Group (Orange)
+            group_container(ui, "Bond Distance", egui::Color32::from_rgb(200, 150, 80), |ui| {
+                ui.label("Adhesin Length:");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                     ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.break_force, 0.1..=100.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.break_force).speed(0.1).range(0.1..=100.0));
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.adhesin_length, 0.0..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.adhesin_length).speed(0.01).range(0.0..=1.0));
+                });
+
+                ui.label("Adhesin Stretch:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.adhesin_stretch, 0.0..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.adhesin_stretch).speed(0.01).range(0.0..=1.0));
                 });
             });
 
-            // Physical Properties Group (Orange)
-            group_container(ui, "Physical Properties", egui::Color32::from_rgb(200, 150, 80), |ui| {
-                ui.label("Adhesion Rest Length:");
+            // Orientation Group (Green)
+            group_container(ui, "Orientation Stiffness", egui::Color32::from_rgb(100, 180, 120), |ui| {
+                ui.label("Hinge Stiffness:");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                     ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.rest_length, 0.5..=5.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.rest_length).speed(0.01).range(0.5..=5.0));
-                });
-            });
-
-            // Linear Spring Group (Blue)
-            group_container(ui, "Linear Spring", egui::Color32::from_rgb(100, 150, 200), |ui| {
-                ui.label("Linear Spring Stiffness:");
-                ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.linear_spring_stiffness, 0.1..=500.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.linear_spring_stiffness).speed(0.1).range(0.1..=500.0));
-                });
-
-                ui.label("Linear Spring Damping:");
-                ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.linear_spring_damping, 0.0..=10.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.linear_spring_damping).speed(0.01).range(0.0..=10.0));
-                });
-            });
-
-            // Orientation Spring Group (Green)
-            group_container(ui, "Orientation Spring", egui::Color32::from_rgb(100, 180, 120), |ui| {
-                ui.label("Orientation Spring Stiffness:");
-                ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.orientation_spring_stiffness, 0.1..=100.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.orientation_spring_stiffness).speed(0.1).range(0.1..=100.0));
-                });
-
-                ui.label("Orientation Spring Damping:");
-                ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.orientation_spring_damping, 0.0..=10.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.orientation_spring_damping).speed(0.01).range(0.0..=10.0));
-                });
-
-                ui.label("Max Angular Deviation:");
-                ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.max_angular_deviation, 0.0..=180.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.max_angular_deviation).speed(0.1).range(0.0..=180.0));
-                });
-            });
-
-            // Twist Constraint Group (Purple)
-            group_container(ui, "Twist Constraint", egui::Color32::from_rgb(160, 120, 180), |ui| {
-                ui.checkbox(&mut mode.adhesion_settings.enable_twist_constraint, "Enable Twist Constraint");
-
-                ui.label("Twist Constraint Stiffness:");
-                ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.twist_constraint_stiffness, 0.0..=2.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.twist_constraint_stiffness).speed(0.01).range(0.0..=2.0));
-                });
-
-                ui.label("Twist Constraint Damping:");
-                ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.twist_constraint_damping, 0.0..=10.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.twist_constraint_damping).speed(0.01).range(0.0..=10.0));
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.stiffness, 0.0..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.stiffness).speed(0.01).range(0.0..=1.0));
                 });
             });
         });
