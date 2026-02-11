@@ -57,12 +57,12 @@ impl Default for ChildSettings {
 pub struct AdhesionSettings {
     /// Whether bonds can break when stretched beyond threshold
     pub can_break: bool,
-    /// Rest offset beyond touching distance (0.0-1.0, scaled by 50x internally)
-    /// target_dist = r1 + r2 + adhesin_length * 50.0
+    /// Bond distance as fraction of sum_radii (-1.0 to 1.0)
+    /// target_dist = (r1 + r2) * (1.0 + adhesin_length), clamped to min 10% of sum_radii
+    /// 0.0 = touching, 1.0 = one diameter gap, -0.5 = 50% overlap, -0.9 = near-full overlap
     pub adhesin_length: f32,
     /// Controls bond softness AND break distance threshold (0.0-1.0)
     /// softness = 1.0 - adhesin_stretch * 0.8
-    /// break_dist = (r1 + r2) * (1.3 + adhesin_stretch * 3.0) + adhesin_length * 50.0
     pub adhesin_stretch: f32,
     /// Hinge/orientation correction strength (0.0-1.0)
     /// Controls how strongly cells are rotated to maintain bond rest angles
@@ -75,7 +75,7 @@ impl Default for AdhesionSettings {
             can_break: true,
             adhesin_length: 0.0,
             adhesin_stretch: 0.0,
-            stiffness: 1.0,
+            stiffness: 0.25,
         }
     }
 }

@@ -293,7 +293,7 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let age = params.current_time - birth_time;
     let mass_ready = mass >= split_mass;
     let time_ready = (behavior.ignores_split_interval != 0u) || (age >= split_interval);
-    let splits_remaining = current_splits < max_split || max_split == 0u;
+    let splits_remaining = max_split >= 999999u || current_splits < max_split;
     
     let wants_to_divide = mass_ready && time_ready && splits_remaining;
     
@@ -383,7 +383,7 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         
         let neighbor_mass_ready = neighbor_mass >= neighbor_split_mass;
         let neighbor_time_ready = (neighbor_behavior.ignores_split_interval != 0u) || (neighbor_age >= neighbor_split_interval);
-        let neighbor_splits_remaining = neighbor_current_splits < neighbor_max_splits || neighbor_max_splits == 0u;
+        let neighbor_splits_remaining = neighbor_max_splits >= 999999u || neighbor_current_splits < neighbor_max_splits;
         
         let neighbor_wants_to_divide = neighbor_mass_ready && neighbor_time_ready && neighbor_splits_remaining;
         

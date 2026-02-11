@@ -238,12 +238,10 @@ fn create_inherited_adhesion(
     };
     
     // Get rest offset from child's mode (not parent's)
-    // PBD target_dist = r1 + r2 + adhesin_length * 50.0
-    let rest_offset = child_mode.adhesion_settings.adhesin_length * 50.0;
-    
     // HARDCODED RADIUS: Use fixed radius value (1.0) to ensure adhesion is completely independent of cell growth
     const FIXED_RADIUS: f32 = 1.0;
-    let center_to_center_dist = FIXED_RADIUS + FIXED_RADIUS + rest_offset;
+    let sum_radii = FIXED_RADIUS + FIXED_RADIUS;
+    let center_to_center_dist = (sum_radii * (1.0 + child_mode.adhesion_settings.adhesin_length)).max(sum_radii * 0.1);
     
     // Calculate positions in parent frame for geometric anchor placement (MATCHES C++)
     let child_pos_parent_frame = if is_child_a {

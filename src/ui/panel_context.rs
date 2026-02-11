@@ -132,6 +132,10 @@ pub struct GenomeEditorState {
     pub max_preview_duration: f32,
     /// Whether the time slider is being dragged
     pub time_slider_dragging: bool,
+    /// Resimulation progress (0.0 = not started, 1.0 = complete)
+    pub resim_progress: f32,
+    /// Resimulation progress as a fraction of the slider range (for bar positioning on time axis)
+    pub resim_progress_time_frac: f32,
     
     // Cave system parameters
     pub cave_density: f32,
@@ -340,6 +344,8 @@ impl GenomeEditorState {
             time_value: 0.0,
             max_preview_duration: 60.0,
             time_slider_dragging: false,
+            resim_progress: 1.0,
+            resim_progress_time_frac: 1.0,
             cave_density,
             cave_scale,
             cave_octaves,

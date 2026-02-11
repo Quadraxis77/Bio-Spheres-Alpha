@@ -575,14 +575,19 @@ impl App {
                     // Copy the genome data for editing
                     self.working_genome = preview_scene.genome.clone();
                     
-                    // Sync simulation time to UI slider (when not dragging)
-                    if !self.editor_state.time_slider_dragging {
-                        let sim_time = preview_scene.get_time_for_ui();
-                        // Only update if significantly different (avoid jitter)
-                        if (self.editor_state.time_value - sim_time).abs() > 0.1 {
-                            self.editor_state.time_value = sim_time.clamp(0.0, self.editor_state.max_preview_duration);
-                        }
-                    }
+                    // Sync resimulation progress for UI progress bar
+                    self.editor_state.resim_progress = preview_scene.resimulation_progress();
+                    
+                    // Sync resim progress time as fraction of slider range for bar positioning
+                    self.editor_state.resim_progress_time_frac = if self.editor_state.max_preview_duration > 0.0 {
+                        preview_scene.sim_progress_time() / self.editor_state.max_preview_duration
+                    } else {
+                        1.0
+                    };
+                    
+                    // Do NOT sync display_time back to the slider.
+                    // The slider is the authoritative source of truth for target time.
+                    // The simulation catches up to it incrementally.
                 }
             }
             
@@ -611,7 +616,7 @@ impl App {
             // Sync genome changes and time slider back to the scene if in Preview mode
             if current_mode == crate::ui::types::SimulationMode::Preview {
                 if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut() {
-                    preview_scene.update_genome(&self.working_genome);
+                    preview_scene.update_genome(&self.working_genome, self.editor_state.time_value);
                     
                     // Sync time slider to simulation (when dragging or changed)
                     preview_scene.sync_time_from_ui(

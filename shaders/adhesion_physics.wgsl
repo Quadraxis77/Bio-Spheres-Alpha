@@ -285,8 +285,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let delta = pos_b - pos_a;
         let dist = length(delta);
         let sum_radii = my_radius + other_radius;
-        let rest_offset = settings.adhesin_length * 50.0;
-        let target_dist = sum_radii + rest_offset;
+        let target_dist = max(sum_radii * (1.0 + settings.adhesin_length), sum_radii * 0.1);
         let error = dist - target_dist;
         let softness = 1.0 - settings.adhesin_stretch * 0.8;
 

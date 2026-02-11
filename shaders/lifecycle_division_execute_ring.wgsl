@@ -522,8 +522,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
             let adh_idx_signed = cell_adhesion_indices[clear_base + i];
             if (adh_idx_signed >= 0 && u32(adh_idx_signed) != sibling_adhesion_slot) {
+                let adh_idx = u32(adh_idx_signed);
+                // Find the neighbor and remove their reference to this adhesion
+                let conn = adhesion_connections[adh_idx];
+                if (conn.is_active != 0u) {
+                    var neighbor_idx: u32 = 0xFFFFFFFFu;
+                    if (conn.cell_a_index == cell_idx) {
+                        neighbor_idx = conn.cell_b_index;
+                    } else if (conn.cell_b_index == cell_idx) {
+                        neighbor_idx = conn.cell_a_index;
+                    }
+                    if (neighbor_idx != 0xFFFFFFFFu) {
+                        let neighbor_base = neighbor_idx * MAX_ADHESIONS_PER_CELL;
+                        for (var j = 0u; j < MAX_ADHESIONS_PER_CELL; j++) {
+                            if (cell_adhesion_indices[neighbor_base + j] == adh_idx_signed) {
+                                cell_adhesion_indices[neighbor_base + j] = -1;
+                                break;
+                            }
+                        }
+                    }
+                }
                 // Deactivate old inherited connection (not the sibling)
-                adhesion_connections[u32(adh_idx_signed)].is_active = 0u;
+                adhesion_connections[adh_idx].is_active = 0u;
                 cell_adhesion_indices[clear_base + i] = -1;
             }
         }
@@ -627,6 +647,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         
         if (!give_to_child_a && !give_to_child_b) {
+            // Remove neighbor's reference to this adhesion before deactivating
+            let deact_conn = adhesion_connections[adh_idx];
+            var deact_neighbor: u32 = 0xFFFFFFFFu;
+            if (deact_conn.cell_a_index == cell_idx) {
+                deact_neighbor = deact_conn.cell_b_index;
+            } else if (deact_conn.cell_b_index == cell_idx) {
+                deact_neighbor = deact_conn.cell_a_index;
+            }
+            if (deact_neighbor != 0xFFFFFFFFu) {
+                let nb = deact_neighbor * MAX_ADHESIONS_PER_CELL;
+                for (var j = 0u; j < MAX_ADHESIONS_PER_CELL; j++) {
+                    if (cell_adhesion_indices[nb + j] == i32(adh_idx)) {
+                        cell_adhesion_indices[nb + j] = -1;
+                        break;
+                    }
+                }
+            }
             adhesion_connections[adh_idx].is_active = 0u;
             continue;
         }

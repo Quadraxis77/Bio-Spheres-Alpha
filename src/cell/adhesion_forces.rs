@@ -52,13 +52,12 @@ pub fn solve_adhesion_pbd(
 
             let settings = &mode_settings[mode_idx];
 
-            let rest_offset = settings.adhesin_length * 50.0;
             let softness = 1.0 - settings.adhesin_stretch * 0.8;
 
             let delta = positions[idx_b] - positions[idx_a];
             let dist = delta.length();
             let sum_radii = radii[idx_a] + radii[idx_b];
-            let target_dist = sum_radii + rest_offset;
+            let target_dist = (sum_radii * (1.0 + settings.adhesin_length)).max(sum_radii * 0.1);
             let error = dist - target_dist;
 
             let normal = if dist < 0.001 {
@@ -321,9 +320,9 @@ pub fn solve_adhesion_pbd(
         let delta = positions[idx_b] - positions[idx_a];
         let dist = delta.length();
         let sum_radii = radii[idx_a] + radii[idx_b];
-        let bond_length_offset = settings.adhesin_length * 50.0;
+        let base_target = (sum_radii * (1.0 + settings.adhesin_length)).max(sum_radii * 0.1);
         let max_stretch_dist =
-            sum_radii * (1.3 + settings.adhesin_stretch * 3.0) + bond_length_offset;
+            base_target * (1.3 + settings.adhesin_stretch * 3.0);
 
         if dist > max_stretch_dist {
             bonds_to_remove.push(i);

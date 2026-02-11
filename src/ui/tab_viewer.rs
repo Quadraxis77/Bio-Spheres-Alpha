@@ -1484,6 +1484,7 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
             // Type dropdown and checkbox on the same line
             ui.horizontal(|ui| {
                 ui.label("Type:");
+                let prev_cell_type = mode.cell_type;
                 let cell_types = crate::cell::types::CellType::names();
                 egui::ComboBox::from_id_salt("cell_type")
                     .selected_text(cell_types[mode.cell_type as usize])
@@ -1492,6 +1493,13 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
                             ui.selectable_value(&mut mode.cell_type, i as i32, *type_name);
                         }
                     });
+
+                // Apply type-specific defaults when cell type changes
+                if mode.cell_type != prev_cell_type {
+                    if let Some(ct) = crate::cell::types::CellType::from_index(mode.cell_type as u32) {
+                        ct.apply_mode_defaults(mode);
+                    }
+                }
 
                 ui.checkbox(&mut mode.parent_make_adhesion, "Make Adhesion");
             });
@@ -1527,8 +1535,8 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                     ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.adhesin_length, 0.0..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.adhesin_length).speed(0.01).range(0.0..=1.0));
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.adhesin_length, -0.5..=0.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.adhesin_length).speed(0.01).range(-0.5..=0.5));
                 });
 
                 ui.label("Adhesin Stretch:");
@@ -1548,8 +1556,8 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                     ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.stiffness, 0.0..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.stiffness).speed(0.01).range(0.0..=1.0));
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.stiffness, 0.0..=0.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.stiffness).speed(0.01).range(0.0..=0.5));
                 });
             });
         });
@@ -2208,6 +2216,24 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
                         .show_value(false)
                 );
                 context.editor_state.time_slider_dragging = slider_response.dragged();
+                
+                // Draw yellow progress fill over the slider track when resimulating
+                let progress = context.editor_state.resim_progress;
+                if is_preview_mode && progress < 1.0 {
+                    let rect = slider_response.rect;
+                    // Inset vertically to match the slim slider rail
+                    let track_height = 4.0;
+                    let center_y = rect.center().y;
+                    let progress_rect = egui::Rect::from_min_max(
+                        egui::pos2(rect.left(), center_y - track_height * 0.5),
+                        egui::pos2(rect.left() + rect.width() * context.editor_state.resim_progress_time_frac, center_y + track_height * 0.5),
+                    );
+                    ui.painter().rect_filled(
+                        progress_rect,
+                        2.0,
+                        egui::Color32::from_rgba_unmultiplied(255, 200, 0, 100),
+                    );
+                }
 
                 // Show actual time value in drag value widget
                 ui.add_enabled(

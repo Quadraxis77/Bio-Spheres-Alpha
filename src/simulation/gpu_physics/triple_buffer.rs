@@ -276,7 +276,7 @@ pub struct GpuTripleBufferSystem {
     /// >= 0 means cell is ready and this is the frame number when it became ready
     pub split_ready_frame: wgpu::Buffer,
     
-    /// Maximum splits allowed (0 = unlimited)
+    /// Maximum splits allowed (999999 = unlimited, 0 = zero splits)
     pub max_splits: wgpu::Buffer,
     
     /// Genome IDs for each cell
@@ -717,7 +717,7 @@ impl GpuTripleBufferSystem {
         queue.write_buffer(&self.split_ready_frame, 0, bytemuck::cast_slice(&split_ready_frame));
         
         // Max splits, nutrient gain rates, max cell sizes, and stiffnesses (from genome modes)
-        // Convert -1 (infinite) to 0 (unlimited in GPU)
+        // Convert -1 (infinite) to 999999 (unlimited in GPU), 0 = zero splits
         let mut max_splits_data: Vec<u32> = Vec::with_capacity(state.cell_count);
         let mut nutrient_gain_rates_data: Vec<f32> = Vec::with_capacity(state.cell_count);
         let mut max_cell_sizes_data: Vec<f32> = Vec::with_capacity(state.cell_count);
@@ -731,7 +731,7 @@ impl GpuTripleBufferSystem {
                 if mode_idx < genome.modes.len() {
                     let mode = &genome.modes[mode_idx];
                     let ms = mode.max_splits;
-                    max_splits_data.push(if ms < 0 { 0 } else { ms as u32 });
+                    max_splits_data.push(if ms < 0 { 999999 } else { ms as u32 });
                     // Only Test cells (cell_type == 0) auto-generate nutrients
                     // All other cells rely on specialized functions or nutrient transport
                     let nutrient_rate = if mode.cell_type == 0 {
@@ -743,13 +743,13 @@ impl GpuTripleBufferSystem {
                     max_cell_sizes_data.push(mode.max_cell_size);
                     stiffnesses_data.push(mode.membrane_stiffness);
                 } else {
-                    max_splits_data.push(0); // Unlimited if mode not found
+                    max_splits_data.push(999999); // Unlimited if mode not found
                     nutrient_gain_rates_data.push(0.3); // Default nutrient gain rate (increased from 0.2)
                     max_cell_sizes_data.push(2.0); // Default max cell size
                     stiffnesses_data.push(50.0); // Default membrane stiffness
                 }
             } else {
-                max_splits_data.push(0); // Unlimited if genome not found
+                max_splits_data.push(999999); // Unlimited if genome not found
                 nutrient_gain_rates_data.push(0.3); // Default nutrient gain rate (increased from 0.2)
                 max_cell_sizes_data.push(2.0); // Default max cell size
                 stiffnesses_data.push(50.0); // Default membrane stiffness
@@ -983,8 +983,8 @@ impl GpuTripleBufferSystem {
                 log::debug!("[SYNC MODE PROPS] genome={} mode={} global={} nutrient_priority={} prioritize_when_low={} cell_type={:?}",
                     genome_idx, mode_idx, global_mode_idx, mode.nutrient_priority, mode.prioritize_when_low, mode.cell_type);
                 global_mode_idx += 1;
-                // Convert max_splits: -1 (infinite) -> 0 (unlimited in GPU)
-                let gpu_max_splits = if mode.max_splits < 0 { 0.0 } else { mode.max_splits as f32 };
+                // Convert max_splits: -1 (infinite) -> 999999 (unlimited in GPU), 0 = zero splits
+                let gpu_max_splits = if mode.max_splits < 0 { 999999.0f32 } else { mode.max_splits as f32 };
                 properties_data.push([
                     mode.nutrient_gain_rate,
                     mode.max_cell_size,
@@ -1044,7 +1044,7 @@ impl GpuTripleBufferSystem {
         let mut properties_data: Vec<[f32; 12]> = Vec::new();
         
         for mode in &genome.modes {
-            let gpu_max_splits = if mode.max_splits < 0 { 0.0 } else { mode.max_splits as f32 };
+            let gpu_max_splits = if mode.max_splits < 0 { 999999.0f32 } else { mode.max_splits as f32 };
             properties_data.push([
                 mode.nutrient_gain_rate,
                 mode.max_cell_size,
@@ -1125,8 +1125,8 @@ impl GpuTripleBufferSystem {
         queue.write_buffer(&self.split_masses, offset, bytemuck::bytes_of(&split_mass));
         queue.write_buffer(&self.split_counts, offset, bytemuck::bytes_of(&0u32));
         
-        // Convert max_splits: -1 (infinite) -> 0 (unlimited in GPU), positive values stay as-is
-        let gpu_max_splits: u32 = if max_splits < 0 { 0 } else { max_splits as u32 };
+        // Convert max_splits: -1 (infinite) -> 999999 (unlimited in GPU), 0 = zero splits
+        let gpu_max_splits: u32 = if max_splits < 0 { 999999 } else { max_splits as u32 };
         queue.write_buffer(&self.max_splits, offset, bytemuck::bytes_of(&gpu_max_splits));
         
         queue.write_buffer(&self.nutrient_gain_rates, offset, bytemuck::bytes_of(&nutrient_gain_rate));
@@ -1641,139 +1641,6 @@ impl GpuTripleBufferSystem {
     }
     
 
-    
-    /// DEBUG: Blocking readback of position/mass data from a specific buffer.
-    /// This is expensive and should only be used for debugging!
-    pub fn debug_read_positions_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue, buffer_index: usize, cell_count: usize) -> Vec<[f32; 4]> {
-        if cell_count == 0 || buffer_index >= 3 {
-            return Vec::new();
-        }
-        
-        let read_size = (cell_count * 16) as u64; // Vec4<f32> = 16 bytes
-        
-        // Create staging buffer for readback
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Debug Position Staging"),
-            size: read_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        
-        // Copy from GPU buffer to staging
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Debug Readback Encoder"),
-        });
-        encoder.copy_buffer_to_buffer(
-            &self.position_and_mass[buffer_index],
-            0,
-            &staging,
-            0,
-            read_size,
-        );
-        queue.submit(std::iter::once(encoder.finish()));
-        
-        // Map and read (blocking)
-        let slice = staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-        let _ = device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
-        
-        if rx.recv().ok().and_then(|r| r.ok()).is_some() {
-            let view = slice.get_mapped_range();
-            let data: Vec<[f32; 4]> = bytemuck::cast_slice(&view).to_vec();
-            drop(view);
-            staging.unmap();
-            data
-        } else {
-            Vec::new()
-        }
-    }
-    
-    /// DEBUG: Blocking readback of cell_count_buffer [total, live].
-    pub fn debug_read_cell_count_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> [u32; 2] {
-        let read_size = 8u64; // 2 x u32
-        
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Debug Cell Count Staging"),
-            size: read_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Debug Cell Count Readback"),
-        });
-        encoder.copy_buffer_to_buffer(&self.cell_count_buffer, 0, &staging, 0, read_size);
-        queue.submit(std::iter::once(encoder.finish()));
-        
-        let slice = staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-        let _ = device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
-        
-        if rx.recv().ok().and_then(|r| r.ok()).is_some() {
-            let view = slice.get_mapped_range();
-            let data: &[u32] = bytemuck::cast_slice(&view);
-            let result = [data[0], data[1]];
-            drop(view);
-            staging.unmap();
-            result
-        } else {
-            [0, 0]
-        }
-    }
-    
-    /// DEBUG: Blocking readback of mode_indices buffer.
-    pub fn debug_read_mode_indices_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue, count: usize) -> Vec<u32> {
-        if count == 0 {
-            return Vec::new();
-        }
-        
-        let read_size = (count * 4) as u64; // u32 = 4 bytes
-        
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Debug Mode Indices Staging"),
-            size: read_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Debug Mode Indices Readback"),
-        });
-        encoder.copy_buffer_to_buffer(&self.mode_indices, 0, &staging, 0, read_size);
-        queue.submit(std::iter::once(encoder.finish()));
-        
-        let slice = staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-        let _ = device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
-        
-        if rx.recv().ok().and_then(|r| r.ok()).is_some() {
-            let view = slice.get_mapped_range();
-            let data: Vec<u32> = bytemuck::cast_slice(&view).to_vec();
-            drop(view);
-            staging.unmap();
-            data
-        } else {
-            Vec::new()
-        }
-    }
 }
 
 #[cfg(test)]

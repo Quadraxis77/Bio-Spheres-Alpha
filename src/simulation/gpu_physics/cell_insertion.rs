@@ -235,14 +235,14 @@ impl GpuCellInsertion {
                         mode.membrane_stiffness,
                         nutrient_rate,
                         mode.max_cell_size,
-                        if mode.max_splits < 0 { 0 } else { mode.max_splits as u32 },
+                        if mode.max_splits < 0 { 999999 } else { mode.max_splits as u32 },
                         mode.cell_type as u32
                     )
                 } else {
-                    (10.0, 2.0, 50.0, 0.2, 2.0, 0, 0) // Default values (Test cell type)
+                    (10.0, 2.0, 50.0, 0.2, 2.0, 999999, 0) // Default values (Test cell type)
                 }
             } else {
-                (10.0, 2.0, 50.0, 0.2, 2.0, 0, 0) // Default values (Test cell type)
+                (10.0, 2.0, 50.0, 0.2, 2.0, 999999, 0) // Default values (Test cell type)
             };
         
         // Calculate radius from mass
@@ -337,14 +337,14 @@ impl GpuCellInsertion {
                         mode.membrane_stiffness,
                         nutrient_rate,
                         mode.max_cell_size,
-                        if mode.max_splits < 0 { 0 } else { mode.max_splits as u32 },
+                        if mode.max_splits < 0 { 999999 } else { mode.max_splits as u32 },
                         mode.cell_type as u32
                     )
                 } else {
-                    (10.0, 2.0, 50.0, 0.2, 2.0, 0, 0) // Default values (Test cell type)
+                    (10.0, 2.0, 50.0, 0.2, 2.0, 999999, 0) // Default values (Test cell type)
                 }
             } else {
-                (10.0, 2.0, 50.0, 0.2, 2.0, 0, 0) // Default values (Test cell type)
+                (10.0, 2.0, 50.0, 0.2, 2.0, 999999, 0) // Default values (Test cell type)
             };
         
         // Calculate radius from mass

@@ -191,12 +191,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Test cells (cell_type 0) have no metabolism - they auto-gain from nutrient_gain_rate
-    // All other cells have base metabolism (Lipocytes at half rate - metabolically efficient storage)
+    // All other cells have base metabolism
     if (cell_type != 0u && mode_idx < arrayLength(&mode_properties)) {
         let mode = mode_properties[mode_idx];
 
         // Base metabolism: consume nutrients to stay alive
-        // Lipocytes are metabolically efficient - half the base rate
+        // Lipocytes are metabolically efficient (half base rate) - they're storage specialists
         let metabolism_rate = select(BASE_METABOLISM_RATE, LIPOCYTE_METABOLISM_RATE, cell_type == LIPOCYTE_TYPE);
         var mass_loss = metabolism_rate * params.delta_time;
 
@@ -258,12 +258,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let mode_a = mode_properties[mode_a_idx];
         let mode_b = mode_properties[mode_b_idx];
         
-        // Get cell types for both cells
-        let type_a = mode_cell_types[mode_a_idx];
-        let type_b = mode_cell_types[mode_b_idx];
-        let is_lipocyte_a = type_a == LIPOCYTE_TYPE;
-        let is_lipocyte_b = type_b == LIPOCYTE_TYPE;
-        
         // Get base priorities
         let base_priority_a = mode_a.nutrient_priority;
         let base_priority_b = mode_b.nutrient_priority;
@@ -287,24 +281,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Calculate mass transfer (positive = A -> B, negative = B -> A)
         let mass_transfer = pressure_diff * TRANSPORT_RATE * params.delta_time;
         
-        // Donor protection floor: when a Lipocyte pulls from a non-Lipocyte neighbor,
-        // the donor can't be drained below its split_mass (healthy operating level).
-        // This prevents Lipocytes from starving their neighbors.
-        // When the neighbor IS a Lipocyte (storage-to-storage), use the normal prioritize_when_low floor.
-        let donor_floor_a = select(
-            select(0.0, 0.1, prioritize_a),  // Normal floor
-            mode_a.split_mass,               // Lipocyte pulling: protect donor at split_mass
-            is_lipocyte_b && !is_lipocyte_a  // B is Lipocyte pulling from A
-        );
-        let donor_floor_b = select(
-            select(0.0, 0.1, prioritize_b),  // Normal floor
-            mode_b.split_mass,               // Lipocyte pulling: protect donor at split_mass
-            is_lipocyte_a && !is_lipocyte_b  // A is Lipocyte pulling from B
-        );
+        // Floor: cells with prioritize_when_low can't be drained below 0.1
+        let floor_a = select(0.0, 0.1, prioritize_a);
+        let floor_b = select(0.0, 0.1, prioritize_b);
         
         let actual_transfer = select(
-            max(mass_transfer, -(mass_b - donor_floor_b)),  // B -> A: limit by B's available mass
-            min(mass_transfer, mass_a - donor_floor_a),     // A -> B: limit by A's available mass
+            max(mass_transfer, -(mass_b - floor_b)),  // B -> A: limit by B's available mass
+            min(mass_transfer, mass_a - floor_a),     // A -> B: limit by A's available mass
             mass_transfer > 0.0
         );
         

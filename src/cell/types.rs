@@ -402,6 +402,19 @@ impl CellType {
         "shaders/cells/cell_unified.wgsl"
     }
 
+    /// Apply type-specific default overrides to a ModeSettings.
+    /// Called when the user changes a mode's cell type in the UI.
+    pub fn apply_mode_defaults(&self, mode: &mut crate::genome::ModeSettings) {
+        match self {
+            CellType::Lipocyte => {
+                mode.nutrient_priority = 2.0;
+                mode.max_cell_size = 2.0;
+                mode.split_mass = 3.1;
+            }
+            _ => {}
+        }
+    }
+
     /// Get GPU behavior flags for this cell type.
     /// These flags control type-specific behavior in shaders.
     pub fn behavior_flags(&self) -> GpuCellTypeBehaviorFlags {
@@ -445,7 +458,7 @@ impl CellType {
             CellType::Lipocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,
                 applies_swim_force: 0,
-                uses_texture_atlas: 0,
+                uses_texture_atlas: 1,
                 has_procedural_tail: 0,
                 gains_mass_from_light: 0,
                 is_storage_cell: 1,

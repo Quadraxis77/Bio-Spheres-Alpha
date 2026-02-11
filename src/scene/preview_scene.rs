@@ -78,7 +78,8 @@ impl PreviewScene {
     }
 
     /// Update genome immediately (no debouncing)
-    pub fn update_genome(&mut self, new_genome: &Genome) {
+    /// `target_time` is the UI slider position — resimulation targets this time.
+    pub fn update_genome(&mut self, new_genome: &Genome, target_time: f32) {
         let new_hash = PreviewState::compute_genome_hash(new_genome);
         
         // Only update if actually changed
@@ -89,7 +90,8 @@ impl PreviewScene {
             self.state.genome_hash = new_hash;
             self.state.clear_checkpoints();
             self.state.update_initial_state(&self.genome, &self.config);
-            self.state.seek_to_time(self.state.current_time);
+            self.state.force_restart();
+            self.state.seek_to_time(target_time);
         }
     }
     
@@ -102,8 +104,9 @@ impl PreviewScene {
         
         // Only update if time value actually changed significantly
         if (ui_time_value - self.last_ui_time_value).abs() > 0.01 {
-            // Only seek if different from current time (avoid redundant resimulations)
-            let needs_update = (self.state.current_time - target_sim_time).abs() > 0.01;
+            // Compare against the effective target (pending target or last completed time)
+            let effective_target = self.state.target_time.unwrap_or(self.state.current_time);
+            let needs_update = (effective_target - target_sim_time).abs() > 0.01;
             
             if needs_update {
                 self.state.seek_to_time(target_sim_time);
@@ -114,13 +117,24 @@ impl PreviewScene {
     }
     
     /// Get current simulation time for syncing back to UI
+    /// Returns display_time so the slider tracks visual progress during catch-up
     pub fn get_time_for_ui(&self) -> f32 {
-        self.state.current_time
+        self.state.display_time
     }
     
     /// Check if currently resimulating (for UI feedback)
     pub fn is_resimulating(&self) -> bool {
         self.state.is_resimulating
+    }
+    
+    /// Get resimulation progress (0.0 to 1.0). Returns 1.0 when idle.
+    pub fn resimulation_progress(&self) -> f32 {
+        self.state.resimulation_progress()
+    }
+    
+    /// Get the sim's current progress time (for positioning progress bar on time axis).
+    pub fn sim_progress_time(&self) -> f32 {
+        self.state.sim_progress_time()
     }
 }
 
@@ -132,9 +146,8 @@ impl Scene for PreviewScene {
         
         // Check if there's a pending time seek (from slider or genome change)
         if self.state.target_time.is_some() {
-            // Run resimulation to target time
-            let genome_changed = false; // Already handled in apply_pending_genome
-            self.state.run_resimulation(&self.genome, &self.config, genome_changed);
+            // Run incremental resimulation (time-budgeted, won't block UI)
+            self.state.run_incremental_resimulation(&self.genome, &self.config);
         }
         
         // No automatic time advancement - time is controlled entirely by the slider
@@ -209,12 +222,12 @@ impl Scene for PreviewScene {
             device,
             queue,
             view,
-            &self.state.canonical_state,
+            &self.state.display_state,
             Some(&self.genome),
             cell_type_visuals,
             self.camera.position(),
             self.camera.rotation,
-            self.state.current_time,  // Use simulation time for animation
+            self.state.display_time,  // Use display time for animation
             lod_scale_factor,
             lod_threshold_low,
             lod_threshold_medium,
@@ -242,7 +255,7 @@ impl Scene for PreviewScene {
                     &tail_instances,
                     self.camera.position(),
                     self.camera.rotation,
-                    self.state.current_time,
+                    self.state.display_time,
                     self.renderer.width,
                     self.renderer.height,
                 );
@@ -286,7 +299,7 @@ impl Scene for PreviewScene {
                     self.adhesion_renderer.render_in_pass(
                         &mut render_pass,
                         queue,
-                        &self.state.canonical_state,
+                        &self.state.display_state,
                         self.camera.position(),
                         self.camera.rotation,
                     );
@@ -297,11 +310,11 @@ impl Scene for PreviewScene {
                 self.split_ring_renderer.begin_frame();
 
                 // Queue gizmos and split rings for ALL cells
-                for i in 0..self.state.canonical_state.cell_count {
-                    let cell_position = self.state.canonical_state.positions[i];
-                    let cell_rotation = self.state.canonical_state.rotations[i];
-                    let cell_radius = self.state.canonical_state.radii[i];
-                    let mode_index = self.state.canonical_state.mode_indices[i];
+                for i in 0..self.state.display_state.cell_count {
+                    let cell_position = self.state.display_state.positions[i];
+                    let cell_rotation = self.state.display_state.rotations[i];
+                    let cell_radius = self.state.display_state.radii[i];
+                    let mode_index = self.state.display_state.mode_indices[i];
 
                     // Queue orientation gizmo for this cell
                     self.gizmo_renderer.queue_gizmo(cell_position, cell_rotation, cell_radius);
@@ -360,11 +373,11 @@ impl Scene for PreviewScene {
     }
 
     fn current_time(&self) -> f32 {
-        self.state.current_time
+        self.state.display_time
     }
 
     fn cell_count(&self) -> usize {
-        self.state.canonical_state.cell_count
+        self.state.display_state.cell_count
     }
 }
 
@@ -396,8 +409,8 @@ impl PreviewScene {
             .copied()
             .unwrap_or_default();
         
-        for i in 0..self.state.canonical_state.cell_count {
-            let mode_index = self.state.canonical_state.mode_indices[i];
+        for i in 0..self.state.display_state.cell_count {
+            let mode_index = self.state.display_state.mode_indices[i];
             
             // Check if this cell is a flagellocyte
             let cell_type_index = if mode_index < self.genome.modes.len() {
@@ -410,9 +423,9 @@ impl PreviewScene {
                 continue;
             }
             
-            let position = self.state.canonical_state.positions[i];
-            let rotation = self.state.canonical_state.rotations[i];
-            let radius = self.state.canonical_state.radii[i];
+            let position = self.state.display_state.positions[i];
+            let rotation = self.state.display_state.rotations[i];
+            let radius = self.state.display_state.radii[i];
             
             // Get color from mode
             let color = if mode_index < self.genome.modes.len() {
@@ -441,7 +454,7 @@ impl PreviewScene {
                 tail_frequency: visuals.tail_frequency,
                 tail_speed,
                 tail_taper: visuals.tail_taper,
-                time: self.state.current_time,
+                time: self.state.display_time,
                 _pad: 0.0,
             });
         }

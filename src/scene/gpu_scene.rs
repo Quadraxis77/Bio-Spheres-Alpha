@@ -14,53 +14,6 @@ use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 use wgpu::util::DeviceExt;
 
-/// DEBUG: Blocking readback of N elements from a GPU buffer.
-/// T must be Pod. Creates its own encoder+submit.
-fn debug_read_buffer_blocking<T: Pod + Zeroable>(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    buffer: &wgpu::Buffer,
-    count: usize,
-) -> Vec<T> {
-    if count == 0 {
-        return Vec::new();
-    }
-    let elem_size = std::mem::size_of::<T>();
-    let read_size = (count * elem_size) as u64;
-    
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Debug Readback Staging"),
-        size: read_size,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("Debug Readback"),
-    });
-    encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, read_size);
-    queue.submit(std::iter::once(encoder.finish()));
-    
-    let slice = staging.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |result| {
-        let _ = tx.send(result);
-    });
-    let _ = device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: None,
-    });
-    
-    if rx.recv().ok().and_then(|r| r.ok()).is_some() {
-        let view = slice.get_mapped_range();
-        let data: Vec<T> = bytemuck::cast_slice(&view).to_vec();
-        drop(view);
-        staging.unmap();
-        data
-    } else {
-        Vec::new()
-    }
-}
 
 /// Camera uniform for voxel rendering
 #[repr(C)]
@@ -3268,73 +3221,6 @@ impl Scene for GpuScene {
                 self.time_accumulator = 0.0;
             }
             
-            // DEBUG: Readback first 2 cells every 10 frames (more frequent to catch division)
-            if self.current_frame % 10 == 0 && self.has_cells {
-                // Submit current encoder so GPU work completes
-                queue.submit(std::iter::once(encoder.finish()));
-                
-                // Read back from BOTH input and output buffers to see what changed
-                let cur_idx = self.gpu_triple_buffers.current_index();
-                let out_idx = self.gpu_triple_buffers.output_buffer_index();
-                let positions_in = self.gpu_triple_buffers.debug_read_positions_blocking(device, queue, cur_idx, 2);
-                let positions_out = self.gpu_triple_buffers.debug_read_positions_blocking(device, queue, out_idx, 2);
-                
-                let vel_in = debug_read_buffer_blocking::<[f32; 4]>(
-                    device, queue, &self.gpu_triple_buffers.velocity[cur_idx], 2,
-                );
-                let vel_out = debug_read_buffer_blocking::<[f32; 4]>(
-                    device, queue, &self.gpu_triple_buffers.velocity[out_idx], 2,
-                );
-                
-                // Read adhesion counts
-                let adh_counts = debug_read_buffer_blocking::<u32>(
-                    device, queue, &self.adhesion_buffers.adhesion_counts, 4,
-                );
-                
-                // Read adhesion settings (first 4 entries, each 16 bytes = 4 floats)
-                let adh_settings = debug_read_buffer_blocking::<[f32; 4]>(
-                    device, queue, &self.adhesion_buffers.adhesion_settings, 4,
-                );
-                
-                // Read first adhesion connection (104 bytes = 26 u32s)
-                let adh_conn_raw = debug_read_buffer_blocking::<u32>(
-                    device, queue, &self.adhesion_buffers.adhesion_connections, 26,
-                );
-                
-                // Read all 3 buffers to check for stale data
-                let third_idx = (out_idx + 1) % 3;
-                let positions_third = self.gpu_triple_buffers.debug_read_positions_blocking(device, queue, third_idx, 2);
-                
-                println!("=== DEBUG FRAME {} (buf in={} out={} third={}) ===", self.current_frame, cur_idx, out_idx, third_idx);
-                println!("  Adhesion counts: total={}, live={}", 
-                    adh_counts.get(0).unwrap_or(&0), adh_counts.get(1).unwrap_or(&0));
-                if let Some(conn) = adh_conn_raw.get(0..4) {
-                    println!("  Conn[0]: cell_a={}, cell_b={}, mode={}, active={}", conn[0], conn[1], conn[2], conn[3]);
-                }
-                for (si, s) in adh_settings.iter().enumerate().take(2) {
-                    // s[0]=can_break(as f32 bits), s[1]=adhesin_length, s[2]=adhesin_stretch, s[3]=stiffness
-                    let can_break_bits = s[0].to_bits() as i32;
-                    println!("  Settings[{}]: can_break={}, adhesin_length={:.4}, adhesin_stretch={:.4}, stiffness={:.4}",
-                        si, can_break_bits, s[1], s[2], s[3]);
-                }
-                for i in 0..2 {
-                    if let (Some(pi), Some(po)) = (positions_in.get(i), positions_out.get(i)) {
-                        let pt = positions_third.get(i);
-                        let pt_z = pt.map(|p| p[2]).unwrap_or(0.0);
-                        println!("  Cell {} pos_in=({:.2}, {:.2}, {:.2}) m={:.2}  pos_out=({:.2}, {:.2}, {:.2}) m={:.2}  buf[{}].z={:.2}", 
-                            i, pi[0], pi[1], pi[2], pi[3], po[0], po[1], po[2], po[3], third_idx, pt_z);
-                    }
-                    if let (Some(vi), Some(vo)) = (vel_in.get(i), vel_out.get(i)) {
-                        println!("  Cell {} vel_in=({:.4}, {:.4}, {:.4})  vel_out=({:.4}, {:.4}, {:.4})", 
-                            i, vi[0], vi[1], vi[2], vo[0], vo[1], vo[2]);
-                    }
-                }
-                
-                // Create a new encoder to continue the frame
-                encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("GPU Scene Encoder (post-debug)"),
-                });
-            }
         }
 
         // Execute any pending position updates (drag tool) AFTER physics

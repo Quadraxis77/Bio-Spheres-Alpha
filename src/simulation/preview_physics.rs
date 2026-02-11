@@ -359,10 +359,6 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         let mass_a = state.masses[cell_a];
         let mass_b = state.masses[cell_b];
         
-        // Identify Lipocytes (storage cells)
-        let is_lipocyte_a = mode_a.cell_type == 4; // Lipocyte
-        let is_lipocyte_b = mode_b.cell_type == 4;
-        
         // Get base priorities
         let base_priority_a = mode_a.nutrient_priority;
         let base_priority_b = mode_b.nutrient_priority;
@@ -389,31 +385,14 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         // Calculate mass transfer (positive = A -> B, negative = B -> A)
         let mass_transfer = pressure_diff * TRANSPORT_RATE * dt;
         
-        // Donor protection floor: when a Lipocyte pulls from a non-Lipocyte neighbor,
-        // the donor can't be drained below its split_mass (healthy operating level).
-        // This prevents Lipocytes from starving their neighbors.
-        // When the neighbor IS a Lipocyte (storage-to-storage), use the normal prioritize_when_low floor.
-        let donor_floor_a = if is_lipocyte_b && !is_lipocyte_a {
-            mode_a.split_mass // Lipocyte B pulling from A: protect A at split_mass
-        } else if mode_a.prioritize_when_low {
-            0.1
-        } else {
-            0.0
-        };
-        let donor_floor_b = if is_lipocyte_a && !is_lipocyte_b {
-            mode_b.split_mass // Lipocyte A pulling from B: protect B at split_mass
-        } else if mode_b.prioritize_when_low {
-            0.1
-        } else {
-            0.0
-        };
+        // Floor: cells with prioritize_when_low can't be drained below 0.1
+        let floor_a = if mode_a.prioritize_when_low { 0.1 } else { 0.0 };
+        let floor_b = if mode_b.prioritize_when_low { 0.1 } else { 0.0 };
         
         let actual_transfer = if mass_transfer > 0.0 {
-            // A -> B: limit by A's available mass above donor floor
-            mass_transfer.min(mass_a - donor_floor_a)
+            mass_transfer.min(mass_a - floor_a)
         } else {
-            // B -> A: limit by B's available mass above donor floor
-            mass_transfer.max(-(mass_b - donor_floor_b))
+            mass_transfer.max(-(mass_b - floor_b))
         };
         
         // Accumulate deltas
@@ -444,32 +423,15 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
 /// 
 /// Flagellocytes (cell_type == 1) consume mass proportional to their swim force.
 /// The consumption rate is fixed (not user-adjustable) - faster swimming costs more nutrients.
-/// 
-/// # Arguments
-/// * `state` - The canonical simulation state containing cell data
-/// * `genome` - The genome containing mode settings with swim_force values
-/// * `dt` - Delta time for this physics step
-/// 
-/// # Returns
-/// A vector of cell indices that died (mass < MIN_CELL_MASS threshold).
-/// These cells should be removed from the simulation.
-/// 
-/// # Physics
-/// - Consumption rate: swim_force * 0.2 * dt (0.2 mass per second at full swim force)
-/// - Death threshold: mass < 0.5
-/// - Radius is updated based on remaining mass (clamped to 0.5-2.0 range)
-/// - Only applies to cells with cell_type == 1 (Flagellocyte) and swim_force > 0.0
+/// Death from starvation is handled by `sweep_starvation_deaths` after all nutrient ops.
 pub fn consume_swim_nutrients(
     state: &mut CanonicalState,
     genome: &Genome,
     dt: f32,
-) -> Vec<usize> {
-    const MIN_CELL_MASS: f32 = 0.5;
+) {
     // Fixed consumption rate - NOT adjustable by user
     // This creates a direct tradeoff: faster swimming = higher nutrient cost
     const CONSUMPTION_RATE: f32 = 0.1; // mass per second at full swim force (reduced from 0.2 for 2x longevity)
-    
-    let mut cells_to_remove = Vec::new();
     
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
@@ -478,18 +440,11 @@ pub fn consume_swim_nutrients(
             if mode.cell_type == 1 && mode.swim_force > 0.0 {
                 // Consume mass proportional to swim force (automatic, not adjustable)
                 let mass_loss = mode.swim_force * CONSUMPTION_RATE * dt;
-                state.masses[i] -= mass_loss;
-                
-                // Check if cell has died (below minimum mass threshold)
-                if state.masses[i] < MIN_CELL_MASS {
-                    cells_to_remove.push(i);
-                    continue;
-                }
+                state.masses[i] = (state.masses[i] - mass_loss).max(0.0);
                 
                 // Update radius based on new mass
                 let max_size = mode.max_cell_size;
-                let target_radius = state.masses[i].min(max_size);
-                let new_radius = target_radius.clamp(0.5, 2.0);
+                let new_radius = state.masses[i].min(max_size).clamp(0.5, 2.0);
                 if new_radius != state.radii[i] {
                     state.radii[i] = new_radius;
                     state.masses_changed = true;
@@ -497,8 +452,50 @@ pub fn consume_swim_nutrients(
             }
         }
     }
-    
-    cells_to_remove
+}
+
+/// Apply base metabolism consumption for all non-Test cells.
+/// Lipocytes (cell_type == 4) are metabolically efficient and consume at half the base rate.
+/// This matches the GPU nutrient_transport.wgsl shader logic.
+///
+pub fn apply_base_metabolism(state: &mut CanonicalState, genome: &Genome, dt: f32) {
+    const BASE_METABOLISM_RATE: f32 = 0.025;
+    const LIPOCYTE_METABOLISM_RATE: f32 = 0.0125;
+
+    for i in 0..state.cell_count {
+        let mode_index = state.mode_indices[i];
+        if let Some(mode) = genome.modes.get(mode_index) {
+            // Test cells (cell_type 0) have no metabolism
+            if mode.cell_type == 0 {
+                continue;
+            }
+
+            let metabolism_rate = if mode.cell_type == 4 {
+                LIPOCYTE_METABOLISM_RATE
+            } else {
+                BASE_METABOLISM_RATE
+            };
+
+            let mass_loss = metabolism_rate * dt;
+            state.masses[i] = (state.masses[i] - mass_loss).max(0.0);
+
+            let max_size = mode.max_cell_size;
+            let new_radius = state.masses[i].min(max_size).clamp(0.5, 2.0);
+            if new_radius != state.radii[i] {
+                state.radii[i] = new_radius;
+                state.masses_changed = true;
+            }
+        }
+    }
+}
+
+/// Sweep all cells and collect indices of any that have starved (mass < 0.5).
+/// This runs after all nutrient operations so every source of mass loss is accounted for.
+pub fn sweep_starvation_deaths(state: &CanonicalState) -> Vec<usize> {
+    const MIN_CELL_MASS: f32 = 0.5;
+    (0..state.cell_count)
+        .filter(|&i| state.masses[i] < MIN_CELL_MASS)
+        .collect()
 }
 
 /// Physics step with genome support
@@ -577,15 +574,18 @@ pub fn physics_step_with_genome(
 
     update_nutrient_growth(state, genome, dt);
     
+    // Base metabolism: all non-Test cells consume mass to stay alive
+    apply_base_metabolism(state, genome, dt);
+    
     // Transport nutrients between adhesion-connected cells
     // This allows Flagellocytes to receive nutrients from connected cells
     transport_nutrients_through_adhesions(state, genome, dt);
     
     // Consume nutrients for Flagellocyte cells swimming
-    // This must happen after nutrient growth so cells can potentially recover
-    let dead_cells = consume_swim_nutrients(state, genome, dt);
+    consume_swim_nutrients(state, genome, dt);
     
-    // Remove dead cells (those that ran out of nutrients while swimming)
+    // Remove all starved cells (mass < 0.5) regardless of cause
+    let dead_cells = sweep_starvation_deaths(state);
     if !dead_cells.is_empty() {
         state.remove_cells(&dead_cells);
     }

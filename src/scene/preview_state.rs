@@ -108,11 +108,25 @@ impl InitialState {
 }
 
 /// Preview simulation state with checkpoint support.
+///
+/// Uses a decoupled display/simulation architecture:
+/// - `display_state` + `display_time`: snapshot used for rendering (never blocks UI)
+/// - `sim_state`: working copy used during incremental resimulation
+/// - Each frame, a time-budgeted batch of physics steps runs, then display is updated
 pub struct PreviewState {
-    /// Canonical state for preview simulation
-    pub canonical_state: CanonicalState,
+    /// Display state snapshot for rendering (decoupled from simulation)
+    pub display_state: CanonicalState,
+    
+    /// Display time corresponding to display_state
+    pub display_time: f32,
 
-    /// Current preview time
+    /// Simulation working state (advanced incrementally toward target)
+    sim_state: CanonicalState,
+    
+    /// Current simulation time of sim_state
+    sim_time: f32,
+
+    /// Current preview time (the last completed target)
     pub current_time: f32,
 
     /// Checkpoints for fast backward scrubbing (time, state)
@@ -132,22 +146,50 @@ pub struct PreviewState {
     
     /// Whether currently resimulating
     pub is_resimulating: bool,
+    
+    /// Incremental resimulation tracking: current step index
+    sim_current_step: u32,
+    
+    /// Incremental resimulation tracking: end step index
+    sim_end_step: u32,
+    
+    /// Incremental resimulation tracking: start step index (for time calculation)
+    sim_start_step: u32,
+    
+    /// Last checkpoint index created during current resimulation
+    sim_last_checkpoint_index: usize,
+    
+    /// Whether the current resimulation was triggered by a genome change
+    sim_genome_changed: bool,
+    
+    /// Time budget per frame for incremental resimulation (in seconds)
+    pub frame_time_budget: std::time::Duration,
 }
 
 impl PreviewState {
     pub fn new(capacity: usize, physics_config: &crate::simulation::physics_config::PhysicsConfig) -> Self {
         let genome = Genome::default();
         let initial_state = InitialState::from_genome(&genome, capacity, physics_config);
+        let canonical = initial_state.to_canonical_state();
         
         Self {
-            canonical_state: initial_state.to_canonical_state(),
+            display_state: canonical.clone(),
+            display_time: 0.0,
+            sim_state: canonical.clone(),
+            sim_time: 0.0,
             current_time: 0.0,
             checkpoints: Vec::new(),
-            checkpoint_interval: 1.0, // Checkpoint every 1 second for responsive scrubbing
+            checkpoint_interval: 1.0,
             genome_hash: 0,
             initial_state,
             target_time: None,
             is_resimulating: false,
+            sim_current_step: 0,
+            sim_end_step: 0,
+            sim_start_step: 0,
+            sim_last_checkpoint_index: 0,
+            sim_genome_changed: false,
+            frame_time_budget: std::time::Duration::from_millis(8),
         }
     }
 
@@ -242,103 +284,145 @@ impl PreviewState {
         }
     }
     
-    /// Request seeking to a specific time
+    /// Get resimulation progress as a fraction (0.0 to 1.0).
+    /// Returns 1.0 when not resimulating.
+    pub fn resimulation_progress(&self) -> f32 {
+        if !self.is_resimulating || self.sim_end_step <= self.sim_start_step {
+            return 1.0;
+        }
+        let total = (self.sim_end_step - self.sim_start_step) as f32;
+        let done = (self.sim_current_step - self.sim_start_step) as f32;
+        (done / total).clamp(0.0, 1.0)
+    }
+    
+    /// Get the current sim time as a fraction of the target time (for progress bar positioning).
+    /// Returns the sim_time directly so the UI can position the bar on the time axis.
+    pub fn sim_progress_time(&self) -> f32 {
+        if !self.is_resimulating {
+            return self.display_time;
+        }
+        self.sim_time
+    }
+    
+    /// Request seeking to a specific time.
+    /// Just sets the target — run_incremental_resimulation handles the rest.
     pub fn seek_to_time(&mut self, target_time: f32) {
         self.target_time = Some(target_time);
     }
     
-    /// Update initial state when genome changes
-    pub fn update_initial_state(&mut self, genome: &Genome, physics_config: &crate::simulation::physics_config::PhysicsConfig) {
-        self.initial_state = InitialState::from_genome(genome, self.canonical_state.capacity, physics_config);
+    /// Force a full restart on the next resimulation (e.g. after genome change).
+    pub fn force_restart(&mut self) {
+        self.is_resimulating = false;
+        self.sim_genome_changed = true;
     }
     
-    /// Run resimulation to target time
-    /// Returns true if resimulation is complete
-    pub fn run_resimulation(
+    /// Update initial state when genome changes
+    pub fn update_initial_state(&mut self, genome: &Genome, physics_config: &crate::simulation::physics_config::PhysicsConfig) {
+        self.initial_state = InitialState::from_genome(genome, self.display_state.capacity, physics_config);
+    }
+    
+    /// Begin or continue incremental resimulation toward the target time.
+    ///
+    /// Runs physics steps for up to `frame_time_budget` wall-clock time per call,
+    /// then returns. The display_state is updated each call so the renderer always
+    /// has something fresh to show.
+    ///
+    /// Returns `true` when the target has been fully reached.
+    pub fn run_incremental_resimulation(
         &mut self,
         genome: &Genome,
         config: &PhysicsConfig,
-        genome_changed: bool,
     ) -> bool {
         let Some(target_time) = self.target_time else {
             self.is_resimulating = false;
             return true;
         };
         
-        self.is_resimulating = true;
-        
-        // Moving forward: simulate directly from current state (no clone needed)
-        if target_time > self.current_time && !genome_changed {
-            let start_step = (self.current_time / config.fixed_timestep).ceil() as u32;
+        if self.is_resimulating {
+            // Already in progress — just update the end step in case target moved forward
             let end_step = (target_time / config.fixed_timestep).ceil() as u32;
-            let steps = end_step.saturating_sub(start_step);
+            self.sim_end_step = end_step;
+        } else {
+            // --- Need to start a new resimulation ---
+            self.is_resimulating = true;
             
-            let mut last_checkpoint_index = (self.current_time / self.checkpoint_interval).floor() as usize;
+            // Can we continue forward from sim_state?
+            let can_continue = target_time >= self.sim_time && !self.sim_genome_changed;
             
-            // Run physics steps directly on current state
-            for step in 0..steps {
-                let current_time = (start_step + step) as f32 * config.fixed_timestep;
+            if can_continue {
+                // sim_state already holds the state at sim_time — just set up steps
+                let start_step = (self.sim_time / config.fixed_timestep).ceil() as u32;
+                let end_step = (target_time / config.fixed_timestep).ceil() as u32;
+                self.sim_start_step = start_step;
+                self.sim_end_step = end_step;
+                self.sim_current_step = start_step;
+                self.sim_last_checkpoint_index = (self.sim_time / self.checkpoint_interval).floor() as usize;
+            } else {
+                // Backward seek or genome changed — restart from best checkpoint
+                let (start_time, checkpoint_state) = if self.sim_genome_changed {
+                    // Genome changed: checkpoints were cleared, start from initial
+                    (0.0, self.initial_state.to_canonical_state())
+                } else if let Some((cp_time, cp_state)) = self.find_best_checkpoint(target_time) {
+                    (cp_time, cp_state)
+                } else {
+                    (0.0, self.initial_state.to_canonical_state())
+                };
                 
-                let _ = crate::simulation::preview_physics::physics_step_with_genome(
-                    &mut self.canonical_state,
-                    genome,
-                    config,
-                    current_time,
-                );
+                self.sim_state = checkpoint_state;
+                self.sim_time = start_time;
+                self.sim_genome_changed = false;
                 
-                // Check if we should create a checkpoint
-                let current_checkpoint_index = (current_time / self.checkpoint_interval).floor() as usize;
-                if current_checkpoint_index > last_checkpoint_index {
-                    self.checkpoints.push((current_time, self.canonical_state.clone()));
-                    last_checkpoint_index = current_checkpoint_index;
-                }
+                let start_step = (start_time / config.fixed_timestep).ceil() as u32;
+                let end_step = (target_time / config.fixed_timestep).ceil() as u32;
+                self.sim_start_step = start_step;
+                self.sim_end_step = end_step;
+                self.sim_current_step = start_step;
+                self.sim_last_checkpoint_index = (start_time / self.checkpoint_interval).floor() as usize;
+            }
+        }
+        
+        // --- Run a time-budgeted batch of steps ---
+        let deadline = std::time::Instant::now() + self.frame_time_budget;
+        let mut steps_done = 0u32;
+        
+        while self.sim_current_step < self.sim_end_step {
+            let step_time = self.sim_current_step as f32 * config.fixed_timestep;
+            
+            let _ = crate::simulation::preview_physics::physics_step_with_genome(
+                &mut self.sim_state,
+                genome,
+                config,
+                step_time,
+            );
+            
+            self.sim_current_step += 1;
+            self.sim_time = self.sim_current_step as f32 * config.fixed_timestep;
+            steps_done += 1;
+            
+            // Create checkpoint if we crossed an interval boundary
+            let current_checkpoint_index = (step_time / self.checkpoint_interval).floor() as usize;
+            if current_checkpoint_index > self.sim_last_checkpoint_index {
+                self.checkpoints.push((step_time, self.sim_state.clone()));
+                self.sim_last_checkpoint_index = current_checkpoint_index;
             }
             
+            // Check time budget every 4 steps to amortize Instant::now() cost
+            if steps_done % 4 == 0 && std::time::Instant::now() >= deadline {
+                break;
+            }
+        }
+        
+        // --- Only update display when resimulation is fully complete ---
+        if self.sim_current_step >= self.sim_end_step {
+            self.display_state = self.sim_state.clone();
+            self.display_time = self.sim_time;
             self.current_time = target_time;
             self.target_time = None;
             self.is_resimulating = false;
             return true;
         }
         
-        // Moving backward or genome changed: need to resimulate from checkpoint
-        let (start_time, mut canonical_state) = if let Some((checkpoint_time, checkpoint_state)) = self.find_best_checkpoint(target_time) {
-            (checkpoint_time, checkpoint_state)
-        } else {
-            // No suitable checkpoint: start from initial state
-            (0.0, self.initial_state.to_canonical_state())
-        };
-        
-        let start_step = (start_time / config.fixed_timestep).ceil() as u32;
-        let end_step = (target_time / config.fixed_timestep).ceil() as u32;
-        let steps = end_step.saturating_sub(start_step);
-        
-        let mut last_checkpoint_index = (start_time / self.checkpoint_interval).floor() as usize;
-        
-        // Run physics steps
-        for step in 0..steps {
-            let current_time = (start_step + step) as f32 * config.fixed_timestep;
-            
-            let _ = crate::simulation::preview_physics::physics_step_with_genome(
-                &mut canonical_state,
-                genome,
-                config,
-                current_time,
-            );
-            
-            // Check if we should create a checkpoint
-            let current_checkpoint_index = (current_time / self.checkpoint_interval).floor() as usize;
-            if current_checkpoint_index > last_checkpoint_index {
-                self.checkpoints.push((current_time, canonical_state.clone()));
-                last_checkpoint_index = current_checkpoint_index;
-            }
-        }
-        
-        // Apply results
-        self.canonical_state = canonical_state;
-        self.current_time = target_time;
-        self.target_time = None;
-        self.is_resimulating = false;
-        
-        true
+        // Still in progress — keep showing the previous display_state
+        false
     }
 }
