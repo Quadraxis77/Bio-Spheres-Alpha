@@ -85,6 +85,10 @@ pub fn division_step(
             let can_split_by_adhesions = true;
             
             // Check mass threshold - cells must have enough mass to split (using per-cell split_mass)
+            // split_mass > 3.0 means "never split" (matches GPU lifecycle_unified.wgsl)
+            if state.split_masses[i] > 3.0 {
+                continue;
+            }
             let can_split_by_mass = state.masses[i] >= state.split_masses[i];
             
             // Check time threshold - cells must be old enough to split

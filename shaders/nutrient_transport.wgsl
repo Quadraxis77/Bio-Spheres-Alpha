@@ -134,13 +134,23 @@ const DANGER_THRESHOLD: f32 = 0.6;
 const PRIORITY_BOOST: f32 = 10.0;
 const TRANSPORT_RATE: f32 = 2.0;
 const BASE_METABOLISM_RATE: f32 = 0.025;  // Base metabolic cost per second for all cells (reduced from 0.05 for 2x longevity)
-const LIPOCYTE_METABOLISM_RATE: f32 = 0.0125;  // Lipocytes are metabolically efficient (half base rate)
+const LIPOCYTE_METABOLISM_RATE: f32 = 0.01667;  // Tuned so a fresh lipocyte (mass 1.0) starves in ~30s (0.5 / 0.01667 ≈ 30s)
+const PHAGOCYTE_METABOLISM_RATE: f32 = 0.0579;  // Proportional rate: mass_loss = rate * mass * dt (exponential decay)
+                                                  // Children (mass 0.75 from split at 1.5) survive ~7s
+                                                  // From mass 2.0 (never split) → 0.5 in ~24s
 const SWIM_CONSUMPTION_RATE: f32 = 0.1;  // Additional 0.1 mass per second at full swim force (reduced from 0.2 for 2x longevity)
 const DEFER_FRAMES: i32 = 32;  // 0.5 seconds at 64 FPS = 32 frames
 const LIPOCYTE_TYPE: u32 = 4u;  // Cell type ID for Lipocyte (storage cell)
+const PHAGOCYTE_TYPE: u32 = 2u;  // Cell type ID for Phagocyte
+const PHOTOCYTE_TYPE: u32 = 3u;  // Cell type ID for Photocyte
 
-// Fixed-point conversion for atomic operations (matching other shaders)
-const FIXED_POINT_SCALE: f32 = 1000.0;
+// Fixed-point conversion for atomic operations
+// Scale must be high enough that per-step metabolism survives i32 truncation.
+// At 64Hz: base metabolism = 0.025/64 = 0.000390625 per step.
+// With scale 1000: 0.000390625 * 1000 = 0.39 → truncates to 0 (BUG).
+// With scale 100000: 0.000390625 * 100000 = 39 → works correctly.
+// Max safe mass with i32 + scale 100000: ~21,474 — well within range.
+const FIXED_POINT_SCALE: f32 = 100000.0;
 
 fn float_to_fixed(value: f32) -> i32 {
     return i32(value * FIXED_POINT_SCALE);
@@ -197,11 +207,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Base metabolism: consume nutrients to stay alive
         // Lipocytes are metabolically efficient (half base rate) - they're storage specialists
-        let metabolism_rate = select(BASE_METABOLISM_RATE, LIPOCYTE_METABOLISM_RATE, cell_type == LIPOCYTE_TYPE);
-        var mass_loss = metabolism_rate * params.delta_time;
+        var mass_loss: f32;
+        if (cell_type == LIPOCYTE_TYPE) {
+            mass_loss = LIPOCYTE_METABOLISM_RATE * params.delta_time;
+        } else if (cell_type == PHAGOCYTE_TYPE || cell_type == PHOTOCYTE_TYPE) {
+            // Proportional metabolism: heavier cells drain faster
+            // m(t) = m0 * e^(-rate*t); children (0.75) survive ~7s
+            mass_loss = PHAGOCYTE_METABOLISM_RATE * current_mass * params.delta_time;
+        } else {
+            mass_loss = BASE_METABOLISM_RATE * params.delta_time;
+        }
 
-        // Additional consumption from swim force (Flagellocytes only)
-        if (mode.swim_force > 0.0) {
+        // Additional consumption from swim force (Flagellocytes only, cell_type 5)
+        if (cell_type == 5u && mode.swim_force > 0.0) {
             mass_loss += mode.swim_force * SWIM_CONSUMPTION_RATE * params.delta_time;
         }
 

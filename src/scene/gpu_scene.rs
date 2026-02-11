@@ -1136,10 +1136,15 @@ impl GpuScene {
         // Set initial mass based on cell type and split mass
         // Phagocytes need enough mass to split once and have offspring survive briefly
         let mode = &genome.modes[mode_idx];
-        let initial_mass = if mode.cell_type == 2 {
-            // Phagocyte: Start with enough mass to split once
-            // Use split_mass * 1.2 to ensure split happens and offspring have buffer
-            (mode.split_mass * 1.2).max(2.0)
+        let initial_mass = if mode.cell_type == 2 || mode.cell_type == 3 {
+            // Phagocyte/Photocyte: Has a fixed 5s split interval during which proportional
+            // metabolism (rate 0.0579) drains mass. Compensate so cell still has split_mass after 5s.
+            // m(5) = m0 * e^(-0.0579*5), so m0 = split_mass * e^(0.0579*5) = split_mass * 1.336
+            if mode.split_mass > 3.0 {
+                2.0_f32 // "Never split" — just start at 2.0
+            } else {
+                (mode.split_mass * 1.336).max(2.0)
+            }
         } else {
             1.0_f32
         };

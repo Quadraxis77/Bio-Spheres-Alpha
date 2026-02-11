@@ -456,11 +456,13 @@ pub fn consume_swim_nutrients(
 
 /// Apply base metabolism consumption for all non-Test cells.
 /// Lipocytes (cell_type == 4) are metabolically efficient and consume at half the base rate.
+/// Phagocytes (cell_type == 2) consume at a higher rate.
 /// This matches the GPU nutrient_transport.wgsl shader logic.
 ///
 pub fn apply_base_metabolism(state: &mut CanonicalState, genome: &Genome, dt: f32) {
     const BASE_METABOLISM_RATE: f32 = 0.025;
-    const LIPOCYTE_METABOLISM_RATE: f32 = 0.0125;
+    const LIPOCYTE_METABOLISM_RATE: f32 = 0.01667;
+    const PHAGOCYTE_METABOLISM_RATE: f32 = 0.0579; // Proportional: mass_loss = rate * mass * dt
 
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
@@ -470,13 +472,16 @@ pub fn apply_base_metabolism(state: &mut CanonicalState, genome: &Genome, dt: f3
                 continue;
             }
 
-            let metabolism_rate = if mode.cell_type == 4 {
-                LIPOCYTE_METABOLISM_RATE
+            // Phagocytes and Photocytes use proportional metabolism (exponential decay):
+            // from mass 2.0 → 0.5 in ~20s, from mass 1.0 → 0.5 in ~10s
+            let mass_loss = if mode.cell_type == 4 {
+                LIPOCYTE_METABOLISM_RATE * dt
+            } else if mode.cell_type == 2 || mode.cell_type == 3 {
+                PHAGOCYTE_METABOLISM_RATE * state.masses[i] * dt
             } else {
-                BASE_METABOLISM_RATE
+                BASE_METABOLISM_RATE * dt
             };
 
-            let mass_loss = metabolism_rate * dt;
             state.masses[i] = (state.masses[i] - mass_loss).max(0.0);
 
             let max_size = mode.max_cell_size;
