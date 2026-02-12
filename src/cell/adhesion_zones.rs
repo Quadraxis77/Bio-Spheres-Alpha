@@ -19,32 +19,43 @@ pub const EQUATORIAL_THRESHOLD_DEGREES: f32 = 2.0;
 
 /// Classify adhesion bond direction relative to split direction
 /// 
-/// This matches the reference implementation (Biospheres-Master) EXACTLY:
-/// - Uses dot product threshold: sin(2°) ≈ 0.0349
-/// - Zone C: abs(dot) <= threshold (almost perpendicular to split direction)
-/// - Zone B: dot > 0 (pointing same direction as split) → inherit to child A
-/// - Zone A: dot < 0 (pointing opposite to split) → inherit to child B
+/// Uses dot product threshold: sin(2°) ≈ 0.0349, scaled by split ratio symmetry.
+/// - Zone C: abs(shifted_dot) <= threshold (equatorial band)
+/// - Zone B: shifted_dot > 0 (pointing same direction as split) → inherit to child A
+/// - Zone A: shifted_dot < 0 (pointing opposite to split) → inherit to child B
+/// 
+/// When `split_ratio` != 0.5, the split plane shifts so the larger daughter
+/// inherits more bonds, and the equatorial band narrows at extreme ratios.
 /// 
 /// # Arguments
 /// * `bond_direction` - Direction of the adhesion bond (normalized)
 /// * `split_direction` - Direction of cell division (normalized)
+/// * `split_ratio` - Fraction of mass going to child A (0.0 to 1.0, 0.5 = symmetric)
 /// 
 /// # Returns
 /// The zone classification for this adhesion
-pub fn classify_bond_direction(bond_direction: Vec3, split_direction: Vec3) -> AdhesionZone {
+pub fn classify_bond_direction(bond_direction: Vec3, split_direction: Vec3, split_ratio: f32) -> AdhesionZone {
     let dot_product = bond_direction.normalize().dot(split_direction.normalize());
     
-    // Reference uses: sin(radians(2.0)) as threshold
-    // sin(2°) ≈ 0.0349
-    let equatorial_threshold = EQUATORIAL_THRESHOLD_DEGREES.to_radians().sin();
+    // Shift the split plane based on split_ratio so the larger daughter inherits more bonds
+    // At 0.5 (symmetric): ratio_shift = 0.0 (no shift)
+    // At 0.7: ratio_shift = 0.4 (plane shifts toward child B side)
+    let ratio_shift = 2.0 * split_ratio - 1.0;
+    let shifted_dot = dot_product - ratio_shift;
     
-    // Zone classification based on dot product (matches reference exactly)
-    if dot_product.abs() <= equatorial_threshold {
-        AdhesionZone::ZoneC // Equatorial - almost perpendicular to split direction
-    } else if dot_product > 0.0 {
-        AdhesionZone::ZoneB // Positive dot product (same direction as split)
+    // Scale equatorial threshold by ratio symmetry — narrows at extreme ratios
+    // At 0.5: ratio_symmetry = 1.0 (full width)
+    // At 0.9: ratio_symmetry = 0.2 (very narrow)
+    let ratio_symmetry = 2.0 * split_ratio.min(1.0 - split_ratio);
+    let base_threshold = EQUATORIAL_THRESHOLD_DEGREES.to_radians().sin();
+    let equatorial_threshold = base_threshold * ratio_symmetry;
+    
+    if shifted_dot.abs() <= equatorial_threshold {
+        AdhesionZone::ZoneC // Equatorial - near the (shifted) split plane
+    } else if shifted_dot > 0.0 {
+        AdhesionZone::ZoneB // Same direction as split → inherit to child A
     } else {
-        AdhesionZone::ZoneA // Negative dot product (opposite to split)
+        AdhesionZone::ZoneA // Opposite to split → inherit to child B
     }
 }
 
@@ -63,35 +74,55 @@ mod tests {
     use super::*;
     
     #[test]
-    fn test_zone_classification() {
+    fn test_zone_classification_symmetric() {
         let split_dir = Vec3::Y; // Split along Y axis
+        let ratio = 0.5; // Symmetric split
         
         // Test Zone A (opposite to split direction)
         let bond_a = Vec3::new(0.0, -1.0, 0.0).normalize();
-        assert_eq!(classify_bond_direction(bond_a, split_dir), AdhesionZone::ZoneA);
+        assert_eq!(classify_bond_direction(bond_a, split_dir, ratio), AdhesionZone::ZoneA);
         
         // Test Zone B (same as split direction)
         let bond_b = Vec3::new(0.0, 1.0, 0.0).normalize();
-        assert_eq!(classify_bond_direction(bond_b, split_dir), AdhesionZone::ZoneB);
+        assert_eq!(classify_bond_direction(bond_b, split_dir, ratio), AdhesionZone::ZoneB);
         
         // Test Zone C (equatorial - perpendicular to split)
         // sin(2°) ≈ 0.0349, so dot product must be <= 0.0349 for Zone C
         let bond_c = Vec3::new(1.0, 0.0, 0.0).normalize();
-        assert_eq!(classify_bond_direction(bond_c, split_dir), AdhesionZone::ZoneC);
+        assert_eq!(classify_bond_direction(bond_c, split_dir, ratio), AdhesionZone::ZoneC);
         
         // Test Zone C (equatorial - another perpendicular direction)
         let bond_c2 = Vec3::new(0.0, 0.0, 1.0).normalize();
-        assert_eq!(classify_bond_direction(bond_c2, split_dir), AdhesionZone::ZoneC);
+        assert_eq!(classify_bond_direction(bond_c2, split_dir, ratio), AdhesionZone::ZoneC);
         
         // Test near-equatorial (should be Zone C with 2° threshold)
         // dot = sin(2°) ≈ 0.0349, so y component of 0.034 at x=1 gives dot ≈ 0.034
         let bond_near_eq = Vec3::new(1.0, 0.034, 0.0).normalize();
-        assert_eq!(classify_bond_direction(bond_near_eq, split_dir), AdhesionZone::ZoneC);
+        assert_eq!(classify_bond_direction(bond_near_eq, split_dir, ratio), AdhesionZone::ZoneC);
         
         // Test just outside equatorial (should be Zone B with 2° threshold)
         // y component of 0.05 at x=1 gives dot ≈ 0.05 which is > sin(2°) ≈ 0.0349
         let bond_outside_eq = Vec3::new(1.0, 0.05, 0.0).normalize();
-        assert_eq!(classify_bond_direction(bond_outside_eq, split_dir), AdhesionZone::ZoneB);
+        assert_eq!(classify_bond_direction(bond_outside_eq, split_dir, ratio), AdhesionZone::ZoneB);
+    }
+    
+    #[test]
+    fn test_zone_classification_asymmetric() {
+        let split_dir = Vec3::Y;
+        
+        // With ratio 0.7, ratio_shift = 0.4, so the split plane shifts toward child B.
+        // A bond at dot=0.0 (perpendicular) gets shifted_dot = 0.0 - 0.4 = -0.4 → Zone A
+        // This means more bonds go to child A (the larger daughter).
+        let bond_perp = Vec3::new(1.0, 0.0, 0.0).normalize();
+        assert_eq!(classify_bond_direction(bond_perp, split_dir, 0.7), AdhesionZone::ZoneA);
+        
+        // A bond pointing slightly toward split dir (dot ≈ 0.3) gets shifted_dot = 0.3 - 0.4 = -0.1 → Zone A
+        let bond_slight = Vec3::new(1.0, 0.3, 0.0).normalize();
+        assert_eq!(classify_bond_direction(bond_slight, split_dir, 0.7), AdhesionZone::ZoneA);
+        
+        // A bond pointing strongly toward split dir (dot ≈ 0.9) gets shifted_dot = 0.9 - 0.4 = 0.5 → Zone B
+        let bond_strong = Vec3::new(0.0, 1.0, 0.0).normalize();
+        assert_eq!(classify_bond_direction(bond_strong, split_dir, 0.7), AdhesionZone::ZoneB);
     }
     
     #[test]

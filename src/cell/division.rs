@@ -149,6 +149,7 @@ pub fn division_step(
             child_a_split_count: i32,
             child_b_split_count: i32,
             split_direction_local: Vec3,
+            split_ratio: f32,
         }
         
         let mut division_data_list = Vec::new();
@@ -284,15 +285,21 @@ pub fn division_step(
                     1.5
                 };
                 
+                // The split direction rotation is applied to BOTH children before their
+                // individual orientation deltas, matching the reference:
+                //   child_dir = parent + split_angle + child_angle
+                // In 3D: child = parent * split_rotation * child.orientation
+                let split_rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+                
                 // Use parent's GENOME orientation for child genome orientations
                 // This ensures genome orientations stay fixed and don't inherit physics rotation
-                let child_a_genome_orientation = parent_genome_orientation * mode.child_a.orientation;
-                let child_b_genome_orientation = parent_genome_orientation * mode.child_b.orientation;
+                let child_a_genome_orientation = parent_genome_orientation * split_rotation * mode.child_a.orientation;
+                let child_b_genome_orientation = parent_genome_orientation * split_rotation * mode.child_b.orientation;
                 
-                // Physics rotations inherit from parent's physics rotation + child orientation delta
+                // Physics rotations inherit from parent's physics rotation + split + child orientation delta
                 // This preserves the parent's spin while applying the genome-specified orientation change
-                let child_a_orientation = parent_rotation * mode.child_a.orientation;
-                let child_b_orientation = parent_rotation * mode.child_b.orientation;
+                let child_a_orientation = parent_rotation * split_rotation * mode.child_a.orientation;
+                let child_b_orientation = parent_rotation * split_rotation * mode.child_b.orientation;
                 
                 division_data_list.push(DivisionData {
                     parent_idx,
@@ -323,6 +330,7 @@ pub fn division_step(
                     child_a_split_count,
                     child_b_split_count,
                     split_direction_local: Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z,
+                    split_ratio,
                 });
             }
         }
@@ -408,6 +416,7 @@ pub fn division_step(
                 data.child_a_slot,
                 data.child_b_slot,
                 data.parent_genome_orientation,
+                data.split_ratio,
             );
             
             // Create adhesion between children if parent_make_adhesion is enabled
@@ -605,6 +614,7 @@ pub fn division_step_multi(
             child_a_split_count: i32,
             child_b_split_count: i32,
             split_direction_local: Vec3,
+            split_ratio: f32,
         }
         
         let mut division_data_list = Vec::new();
@@ -708,10 +718,14 @@ pub fn division_step_multi(
                 m.get_split_mass(parent_cell_id + 1, tick, rng_seed)
             } else { 1.5 };
             
-            let child_a_genome_orientation = parent_genome_orientation * mode.child_a.orientation;
-            let child_b_genome_orientation = parent_genome_orientation * mode.child_b.orientation;
-            let child_a_orientation = parent_rotation * mode.child_a.orientation;
-            let child_b_orientation = parent_rotation * mode.child_b.orientation;
+            // Apply split direction rotation to BOTH children before their individual
+            // orientation deltas: child = parent * split_rotation * child.orientation
+            let split_rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+            
+            let child_a_genome_orientation = parent_genome_orientation * split_rotation * mode.child_a.orientation;
+            let child_b_genome_orientation = parent_genome_orientation * split_rotation * mode.child_b.orientation;
+            let child_a_orientation = parent_rotation * split_rotation * mode.child_a.orientation;
+            let child_b_orientation = parent_rotation * split_rotation * mode.child_b.orientation;
             
             division_data_list.push(DivisionData {
                 parent_idx,
@@ -742,6 +756,7 @@ pub fn division_step_multi(
                 child_a_split_count,
                 child_b_split_count,
                 split_direction_local: Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z,
+                split_ratio,
             });
         }
         
@@ -816,6 +831,7 @@ pub fn division_step_multi(
                 data.child_a_slot,
                 data.child_b_slot,
                 data.parent_genome_orientation,
+                data.split_ratio,
             );
             
             // Create adhesion between children if parent_make_adhesion is enabled

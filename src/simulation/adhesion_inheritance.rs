@@ -22,6 +22,7 @@ pub fn inherit_adhesions_on_division(
     child_a_idx: usize,
     child_b_idx: usize,
     parent_genome_orientation: Quat,
+    split_ratio: f32,
 ) {
     // Get parent mode settings
     let parent_mode = match genome.modes.get(parent_mode_idx) {
@@ -108,7 +109,7 @@ pub fn inherit_adhesions_on_division(
             )
         };
         
-        let zone = classify_bond_direction(parent_anchor_direction, split_direction_local);
+        let zone = classify_bond_direction(parent_anchor_direction, split_direction_local, split_ratio);
         
         log::debug!(
             "  Connection {}: neighbor={}, zone={:?}, parent_anchor={:?}, split_dir={:?}",

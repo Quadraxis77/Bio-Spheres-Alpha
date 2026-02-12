@@ -137,8 +137,9 @@ impl AdhesionConnectionManager {
         connections.is_active[connection_index] = 1;
         
         // Classify zones using anchor directions and each cell's split direction
-        let zone_a = classify_bond_direction(anchor_direction_a, split_direction_a);
-        let zone_b = classify_bond_direction(anchor_direction_b, split_direction_b);
+        // Uses 0.5 (symmetric) since this is zone tagging at creation, not inheritance
+        let zone_a = classify_bond_direction(anchor_direction_a, split_direction_a, 0.5);
+        let zone_b = classify_bond_direction(anchor_direction_b, split_direction_b, 0.5);
         
         connections.zone_a[connection_index] = zone_a as u8;
         connections.zone_b[connection_index] = zone_b as u8;
