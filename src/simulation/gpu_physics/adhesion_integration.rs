@@ -70,28 +70,17 @@ impl AdhesionCreationRequest {
         parent_rotation: glam::Quat,
         child_a_orientation: glam::Quat,
         child_b_orientation: glam::Quat,
-        split_direction: glam::Vec3,
+        _split_direction: glam::Vec3,
     ) -> Self {
-        // Calculate anchor directions in each child's local space
-        // Child A points toward Child B (negative split direction in parent frame)
-        // Child B points toward Child A (positive split direction in parent frame)
-        
-        let split_dir_normalized = if split_direction.length() > 0.0001 {
-            split_direction.normalize()
-        } else {
-            glam::Vec3::Z
-        };
-        
-        // Direction from A to B in parent's local frame
-        let dir_a_to_b_parent = -split_dir_normalized;
-        let dir_b_to_a_parent = split_dir_normalized;
-        
-        // Transform to each child's local space
-        let inv_child_a_orient = child_a_orientation.inverse();
-        let inv_child_b_orient = child_b_orientation.inverse();
-        
-        let anchor_a = (inv_child_a_orient * dir_a_to_b_parent).normalize();
-        let anchor_b = (inv_child_b_orient * dir_b_to_a_parent).normalize();
+        // Anchor directions in child local space.
+        // The child's world orientation = parent * split_rotation * child.orientation
+        // The split direction in world = parent * split_rotation * Vec3::Z
+        // So in the child's local frame, the split axis is just:
+        //   child.orientation.inverse() * Vec3::Z
+        // Child A is at +split, points toward B (at -split): use -Z
+        // Child B is at -split, points toward A (at +split): use +Z
+        let anchor_a = (child_a_orientation.inverse() * -glam::Vec3::Z).normalize();
+        let anchor_b = (child_b_orientation.inverse() * glam::Vec3::Z).normalize();
         
         // Calculate child rotations for twist reference
         let child_a_rotation = parent_rotation * child_a_orientation;

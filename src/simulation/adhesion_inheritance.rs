@@ -58,10 +58,11 @@ pub fn inherit_adhesions_on_division(
     // Get parent properties
     let parent_radius = state.radii[child_a_idx];
     
-    // Calculate split direction from parent mode (in local space)
+    // Calculate split direction and split rotation from parent mode (in local space)
     let pitch = parent_mode.parent_split_direction.x.to_radians();
     let yaw = parent_mode.parent_split_direction.y.to_radians();
-    let split_direction_local = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z;
+    let split_rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+    let split_direction_local = split_rotation * Vec3::Z;
     
     // Extract split direction and offset for geometric calculations (matching C++)
     let split_magnitude = split_direction_local.length();
@@ -131,7 +132,7 @@ pub fn inherit_adhesions_on_division(
                     neighbor_anchor_direction,
                     parent_radius,
                     state.radii[neighbor_idx],
-                    parent_mode.child_b.orientation,
+                    split_rotation * parent_mode.child_b.orientation,
                     split_offset_magnitude,
                     split_dir_parent,
                     false,
@@ -151,7 +152,7 @@ pub fn inherit_adhesions_on_division(
                     neighbor_anchor_direction,
                     parent_radius,
                     state.radii[neighbor_idx],
-                    parent_mode.child_a.orientation,
+                    split_rotation * parent_mode.child_a.orientation,
                     split_offset_magnitude,
                     split_dir_parent,
                     true,
@@ -173,7 +174,7 @@ pub fn inherit_adhesions_on_division(
                         neighbor_anchor_direction,
                         parent_radius,
                         state.radii[neighbor_idx],
-                        parent_mode.child_b.orientation,
+                        split_rotation * parent_mode.child_b.orientation,
                         split_offset_magnitude,
                         split_dir_parent,
                         false,
@@ -193,7 +194,7 @@ pub fn inherit_adhesions_on_division(
                         neighbor_anchor_direction,
                         parent_radius,
                         state.radii[neighbor_idx],
-                        parent_mode.child_a.orientation,
+                        split_rotation * parent_mode.child_a.orientation,
                         split_offset_magnitude,
                         split_dir_parent,
                         true,

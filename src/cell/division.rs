@@ -148,6 +148,7 @@ pub fn division_step(
             child_b_split_mass_threshold: f32,
             child_a_split_count: i32,
             child_b_split_count: i32,
+            #[allow(dead_code)]
             split_direction_local: Vec3,
             split_ratio: f32,
         }
@@ -430,17 +431,15 @@ pub fn division_step(
                         // This ensures anchors stay aligned with the genome's intended split direction
                         // even if physics has moved the cells slightly
                         
-                        // CRITICAL: Match C++ implementation exactly
-                        // Direction vectors in parent's local frame:
-                        // Child A is at +offset, child B is at -offset
-                        // Child A points toward B (at -offset): -splitDirLocal
-                        // Child B points toward A (at +offset): +splitDirLocal
-                        // Transform to each child's local space using genome-derived orientation deltas
-                        let direction_a_to_b_parent_local = -data.split_direction_local;
-                        let direction_b_to_a_parent_local = data.split_direction_local;
-                        
-                        let anchor_direction_a = (mode.child_a.orientation.inverse() * direction_a_to_b_parent_local).normalize();
-                        let anchor_direction_b = (mode.child_b.orientation.inverse() * direction_b_to_a_parent_local).normalize();
+                        // Anchor directions in child local space.
+                        // The child's world orientation = parent * split_rotation * child.orientation
+                        // The split direction in world = parent * split_rotation * Vec3::Z
+                        // So in the child's local frame, the split axis is just:
+                        //   child.orientation.inverse() * Vec3::Z
+                        // Child A is at +split, points toward B (at -split): use -Z
+                        // Child B is at -split, points toward A (at +split): use +Z
+                        let anchor_direction_a = (mode.child_a.orientation.inverse() * -Vec3::Z).normalize();
+                        let anchor_direction_b = (mode.child_b.orientation.inverse() * Vec3::Z).normalize();
                         
                         // Get split directions for zone classification
                         let child_a_mode = genome.modes.get(data.child_a_mode_idx);
@@ -613,6 +612,7 @@ pub fn division_step_multi(
             child_b_split_mass_threshold: f32,
             child_a_split_count: i32,
             child_b_split_count: i32,
+            #[allow(dead_code)]
             split_direction_local: Vec3,
             split_ratio: f32,
         }
@@ -839,11 +839,15 @@ pub fn division_step_multi(
             
             if let Some(mode) = parent_mode {
                 if mode.parent_make_adhesion {
-                    let direction_a_to_b_parent_local = -data.split_direction_local;
-                    let direction_b_to_a_parent_local = data.split_direction_local;
-                    
-                    let anchor_direction_a = (mode.child_a.orientation.inverse() * direction_a_to_b_parent_local).normalize();
-                    let anchor_direction_b = (mode.child_b.orientation.inverse() * direction_b_to_a_parent_local).normalize();
+                    // Anchor directions in child local space.
+                    // The child's world orientation = parent * split_rotation * child.orientation
+                    // The split direction in world = parent * split_rotation * Vec3::Z
+                    // So in the child's local frame, the split axis is just:
+                    //   child.orientation.inverse() * Vec3::Z
+                    // Child A is at +split, points toward B (at -split): use -Z
+                    // Child B is at -split, points toward A (at +split): use +Z
+                    let anchor_direction_a = (mode.child_a.orientation.inverse() * -Vec3::Z).normalize();
+                    let anchor_direction_b = (mode.child_b.orientation.inverse() * Vec3::Z).normalize();
                     
                     let child_a_mode = genome.modes.get(data.child_a_mode_idx);
                     let child_b_mode = genome.modes.get(data.child_b_mode_idx);
