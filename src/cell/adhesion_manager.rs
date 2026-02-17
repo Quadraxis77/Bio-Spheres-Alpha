@@ -89,6 +89,8 @@ impl AdhesionConnectionManager {
     /// * `split_direction_b` - Split direction for cell B (for zone classification)
     /// * `genome_orientation_a` - Genome orientation for cell A (for twist reference)
     /// * `genome_orientation_b` - Genome orientation for cell B (for twist reference)
+    /// * `split_ratio_a` - Split ratio for cell A (for dynamic equatorial zone)
+    /// * `split_ratio_b` - Split ratio for cell B (for dynamic equatorial zone)
     #[allow(clippy::too_many_arguments)]
     pub fn add_adhesion_with_directions(
         &mut self,
@@ -102,6 +104,8 @@ impl AdhesionConnectionManager {
         split_direction_b: Vec3,
         genome_orientation_a: Quat,
         genome_orientation_b: Quat,
+        split_ratio_a: f32,
+        split_ratio_b: f32,
     ) -> Option<usize> {
         // Check if cells are the same
         if cell_a == cell_b {
@@ -136,9 +140,9 @@ impl AdhesionConnectionManager {
         connections.mode_index[connection_index] = mode_index;
         connections.is_active[connection_index] = 1;
         
-        // Classify zones using anchor directions and each cell's split direction
-        let zone_a = classify_bond_direction(anchor_direction_a, split_direction_a);
-        let zone_b = classify_bond_direction(anchor_direction_b, split_direction_b);
+        // Classify zones using anchor directions, split direction, and split ratio
+        let zone_a = classify_bond_direction(anchor_direction_a, split_direction_a, split_ratio_a);
+        let zone_b = classify_bond_direction(anchor_direction_b, split_direction_b, split_ratio_b);
         
         connections.zone_a[connection_index] = zone_a as u8;
         connections.zone_b[connection_index] = zone_b as u8;

@@ -25,7 +25,11 @@ pub use adhesion_zones::{
     AdhesionZone, 
     classify_bond_direction, 
     get_zone_color, 
+    compute_equatorial_degrees,
+    compute_ratio_shift,
     EQUATORIAL_THRESHOLD_DEGREES,
+    EQUATORIAL_THRESHOLD_DEGREES_MIN,
+    EQUATORIAL_THRESHOLD_DEGREES_MAX,
 };
 
 // Re-export cell type registry

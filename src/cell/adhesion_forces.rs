@@ -182,8 +182,9 @@ fn compute_adhesion_force_pair(
     let adhesion_dir = delta_pos / dist;
     let rest_length = settings.rest_length;
     
-    // Linear spring force
-    let force_mag = settings.linear_spring_stiffness * (dist - rest_length);
+    // Linear spring force with softness factor (emulates Python softness = 1.0 - bond_stretch * 0.8)
+    let softness = 0.3; // Reduced softness to allow more flexibility for spiral patterns
+    let force_mag = settings.linear_spring_stiffness * (dist - rest_length) * softness;
     let spring_force = adhesion_dir * force_mag;
     
     // Damping - matches reference implementation exactly

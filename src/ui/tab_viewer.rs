@@ -1923,7 +1923,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
     use crate::ui::widgets::circular_slider_float;
     
-    ui.checkbox(&mut context.editor_state.enable_snapping, "Enable Snapping (11.25°)");
+    ui.checkbox(&mut context.editor_state.enable_snapping, "Enable Snapping (15°)");
     ui.add_space(4.0); // Reduced spacing
     
     // Ensure we have at least one mode
@@ -1977,7 +1977,7 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-        ui.checkbox(&mut context.editor_state.qball_snapping, "Enable Snapping (11.25°)");
+        ui.checkbox(&mut context.editor_state.qball_snapping, "Enable Snapping (15°)");
         ui.add_space(4.0); // Reduced spacing
 
         // Get selected mode for keep_adhesion checkboxes
@@ -2823,7 +2823,7 @@ fn render_preview_help(ui: &mut Ui, _context: &mut PanelContext) {
             help_section(ui, &[
                 ("Drag Center", "Pitch/Yaw rotation"),
                 ("Drag Edge", "Roll rotation"),
-                ("Grid Snapping", "Enable for 11.25° increments"),
+                ("Grid Snapping", "Enable for 15° increments"),
                 ("Axis Lock", "Automatic based on drag start"),
                 ("Red Line", "X-axis direction"),
                 ("Green Line", "Y-axis direction"),

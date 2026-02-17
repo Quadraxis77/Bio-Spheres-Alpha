@@ -238,23 +238,47 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
     return clamp(mass, 0.5, 2.0);
 }
 
-// Zone classification constants (matching CPU: sin(2°) ≈ 0.0349)
-const EQUATORIAL_THRESHOLD: f32 = 0.0349;
+// Zone classification constants
 const ZONE_A: u32 = 0u;  // Negative dot (opposite to split)
 const ZONE_B: u32 = 1u;  // Positive dot (same as split)
 const ZONE_C: u32 = 2u;  // Equatorial (perpendicular to split)
 
-// Classify adhesion bond direction relative to split direction
-// Matches CPU classify_bond_direction() exactly
-fn classify_zone(anchor_direction: vec3<f32>, split_direction: vec3<f32>) -> u32 {
+// Dynamic equatorial zone: 3° at split_ratio=0.5, 22° at split_ratio=0.3 or 0.7
+const EQUATORIAL_DEG_MIN: f32 = 3.0;
+const EQUATORIAL_DEG_MAX: f32 = 22.0;
+
+// Compute dynamic equatorial zone width in degrees based on split_ratio
+fn compute_equatorial_degrees(split_ratio: f32) -> f32 {
+    let deviation = abs(split_ratio - 0.5);
+    let t = min(deviation / 0.2, 1.0);
+    return EQUATORIAL_DEG_MIN + (EQUATORIAL_DEG_MAX - EQUATORIAL_DEG_MIN) * t;
+}
+
+// Compute ratio shift: 0 at 0.5, +0.4 at 0.7, -0.4 at 0.3
+fn compute_ratio_shift(split_ratio: f32) -> f32 {
+    return 2.0 * split_ratio - 1.0;
+}
+
+// Classify adhesion bond direction relative to split direction with dynamic equatorial zone.
+// Matches CPU classify_bond_direction() exactly.
+fn classify_zone(anchor_direction: vec3<f32>, split_direction: vec3<f32>, split_ratio: f32) -> u32 {
     let dot_product = dot(normalize(anchor_direction), normalize(split_direction));
     
-    if (abs(dot_product) <= EQUATORIAL_THRESHOLD) {
-        return ZONE_C;  // Equatorial
-    } else if (dot_product > 0.0) {
-        return ZONE_B;  // Same direction as split
+    // Shift the split plane based on split_ratio
+    let ratio_shift = compute_ratio_shift(split_ratio);
+    let shifted_dot = dot_product - ratio_shift;
+    
+    // Dynamic equatorial threshold based on split_ratio
+    let equatorial_degrees = compute_equatorial_degrees(split_ratio);
+    let equatorial_threshold = sin(equatorial_degrees * PI / 180.0);
+    
+    // Zone classification using shifted dot product
+    if (abs(shifted_dot) <= equatorial_threshold) {
+        return ZONE_C;  // Equatorial band
+    } else if (shifted_dot > 0.0) {
+        return ZONE_B;  // Positive shifted dot -> Child A
     } else {
-        return ZONE_A;  // Opposite to split
+        return ZONE_A;  // Negative shifted dot -> Child B
     }
 }
 
@@ -316,6 +340,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Get parent's mode index for looking up child orientations and split direction
     let parent_mode_idx = mode_indices[cell_idx];
+    
+    // Read parent's split_ratio from mode_properties (third vec4, .y component)
+    let parent_split_ratio = mode_properties[parent_mode_idx * 3u + 2u].y;
     
     // Read child orientations and split direction from genome mode data
     let child_a_orientation = genome_mode_data[parent_mode_idx * 3u];
@@ -464,9 +491,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
             
             // Classify zones based on anchor direction vs split direction (matching CPU)
-            // Each cell's zone is classified using its own anchor and split direction
-            let zone_a = classify_zone(anchor_a_local, split_dir_normalized);
-            let zone_b = classify_zone(anchor_b_local, split_dir_normalized);
+            // Each cell's zone uses its own split_ratio for dynamic equatorial zone
+            let child_a_split_ratio = child_a_props_2.y;
+            let child_b_split_ratio = child_b_props_2.y;
+            let zone_a = classify_zone(anchor_a_local, split_dir_normalized, child_a_split_ratio);
+            let zone_b = classify_zone(anchor_b_local, split_dir_normalized, child_b_split_ratio);
             
             var connection: AdhesionConnection;
             connection.cell_a_index = cell_idx;
@@ -611,7 +640,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         
         // Classify zone based on LOCAL anchor direction vs LOCAL split direction
-        let zone = classify_zone(parent_anchor_dir_local, split_dir_local);
+        // Use parent's split_ratio for inheritance classification
+        let zone = classify_zone(parent_anchor_dir_local, split_dir_local, parent_split_ratio);
         
         // Determine which child(ren) inherit
         var give_to_child_a = false;
@@ -655,12 +685,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_anchor, 0.0);
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(neighbor_anchor, 0.0);
                 adhesion_connections[adh_idx].twist_reference_a = child_a_rotation;
-                adhesion_connections[adh_idx].zone_a = classify_zone(child_anchor, split_dir_local);
+                adhesion_connections[adh_idx].zone_a = classify_zone(child_anchor, split_dir_local, child_a_props_2.y);
             } else {
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_anchor, 0.0);
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(neighbor_anchor, 0.0);
                 adhesion_connections[adh_idx].twist_reference_b = child_a_rotation;
-                adhesion_connections[adh_idx].zone_b = classify_zone(child_anchor, split_dir_local);
+                adhesion_connections[adh_idx].zone_b = classify_zone(child_anchor, split_dir_local, child_a_props_2.y);
             }
             
             if (child_a_adhesion_count < MAX_ADHESIONS_PER_CELL) {
@@ -684,13 +714,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_anchor, 0.0);
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(neighbor_anchor, 0.0);
                 adhesion_connections[adh_idx].twist_reference_a = child_b_rotation;
-                adhesion_connections[adh_idx].zone_a = classify_zone(child_anchor, split_dir_local);
+                adhesion_connections[adh_idx].zone_a = classify_zone(child_anchor, split_dir_local, child_b_props_2.y);
             } else {
                 adhesion_connections[adh_idx].cell_b_index = child_b_slot;
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_anchor, 0.0);
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(neighbor_anchor, 0.0);
                 adhesion_connections[adh_idx].twist_reference_b = child_b_rotation;
-                adhesion_connections[adh_idx].zone_b = classify_zone(child_anchor, split_dir_local);
+                adhesion_connections[adh_idx].zone_b = classify_zone(child_anchor, split_dir_local, child_b_props_2.y);
             }
             
             if (child_b_adhesion_count < MAX_ADHESIONS_PER_CELL) {
@@ -714,12 +744,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_a_anchor, 0.0);
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(neighbor_anchor_to_a, 0.0);
                 adhesion_connections[adh_idx].twist_reference_a = child_a_rotation;
-                adhesion_connections[adh_idx].zone_a = classify_zone(child_a_anchor, split_dir_local);
+                adhesion_connections[adh_idx].zone_a = classify_zone(child_a_anchor, split_dir_local, child_a_props_2.y);
             } else {
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_a_anchor, 0.0);
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(neighbor_anchor_to_a, 0.0);
                 adhesion_connections[adh_idx].twist_reference_b = child_a_rotation;
-                adhesion_connections[adh_idx].zone_b = classify_zone(child_a_anchor, split_dir_local);
+                adhesion_connections[adh_idx].zone_b = classify_zone(child_a_anchor, split_dir_local, child_a_props_2.y);
             }
             
             if (child_a_adhesion_count < MAX_ADHESIONS_PER_CELL) {
@@ -745,6 +775,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 dup_conn._align_pad = vec2<u32>(0u, 0u);
                 dup_conn._padding = vec2<u32>(0u, 0u);
                 
+                // Get neighbor's split_ratio for zone classification on their side
+                let neighbor_mode_idx = mode_indices[neighbor_idx];
+                let neighbor_split_ratio = mode_properties[neighbor_mode_idx * 3u + 2u].y;
+                
                 if (is_parent_cell_a) {
                     dup_conn.cell_a_index = child_b_slot;
                     dup_conn.cell_b_index = neighbor_idx;
@@ -752,8 +786,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     dup_conn.anchor_direction_b = vec4<f32>(neighbor_anchor_to_b, 0.0);
                     dup_conn.twist_reference_a = child_b_rotation;
                     dup_conn.twist_reference_b = neighbor_rotation;
-                    dup_conn.zone_a = classify_zone(child_b_anchor, split_dir_local);
-                    dup_conn.zone_b = classify_zone(neighbor_anchor_to_b, split_dir_local);
+                    dup_conn.zone_a = classify_zone(child_b_anchor, split_dir_local, child_b_props_2.y);
+                    dup_conn.zone_b = classify_zone(neighbor_anchor_to_b, split_dir_local, neighbor_split_ratio);
                 } else {
                     dup_conn.cell_a_index = neighbor_idx;
                     dup_conn.cell_b_index = child_b_slot;
@@ -761,8 +795,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     dup_conn.anchor_direction_b = vec4<f32>(child_b_anchor, 0.0);
                     dup_conn.twist_reference_a = neighbor_rotation;
                     dup_conn.twist_reference_b = child_b_rotation;
-                    dup_conn.zone_a = classify_zone(neighbor_anchor_to_b, split_dir_local);
-                    dup_conn.zone_b = classify_zone(child_b_anchor, split_dir_local);
+                    dup_conn.zone_a = classify_zone(neighbor_anchor_to_b, split_dir_local, neighbor_split_ratio);
+                    dup_conn.zone_b = classify_zone(child_b_anchor, split_dir_local, child_b_props_2.y);
                 }
                 
                 adhesion_connections[dup_slot] = dup_conn;

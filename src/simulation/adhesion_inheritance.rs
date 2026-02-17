@@ -108,7 +108,8 @@ pub fn inherit_adhesions_on_division(
             )
         };
         
-        let zone = classify_bond_direction(parent_anchor_direction, split_direction_local);
+        let parent_split_ratio = parent_mode.split_ratio;
+        let zone = classify_bond_direction(parent_anchor_direction, split_direction_local, parent_split_ratio);
         
         log::debug!(
             "  Connection {}: neighbor={}, zone={:?}, parent_anchor={:?}, split_dir={:?}",
@@ -291,6 +292,10 @@ fn create_inherited_adhesion(
     let neighbor_genome_orientation_for_twist = state.genome_orientations[neighbor_idx];
     
     // Preserve original side assignment: if neighbor was originally cellA, keep them as cellA
+    // Get split ratios for zone classification
+    let child_split_ratio = child_mode.map(|m| m.split_ratio).unwrap_or(0.5);
+    let neighbor_split_ratio = neighbor_mode.map(|m| m.split_ratio).unwrap_or(0.5);
+    
     // Use child's mode index for the new adhesion (not parent's)
     let result = if parent_was_a {
         // Parent was cellA, neighbor was cellB, so neighbor becomes cellB
@@ -305,6 +310,8 @@ fn create_inherited_adhesion(
             neighbor_split_dir,
             child_genome_orientation,
             neighbor_genome_orientation_for_twist,
+            child_split_ratio,
+            neighbor_split_ratio,
         )
     } else {
         // Parent was cellB, neighbor was cellA, so neighbor becomes cellA
@@ -319,6 +326,8 @@ fn create_inherited_adhesion(
             child_split_dir,
             neighbor_genome_orientation_for_twist,
             child_genome_orientation,
+            neighbor_split_ratio,
+            child_split_ratio,
         )
     };
     

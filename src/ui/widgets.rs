@@ -220,9 +220,9 @@ pub mod response_utils {
 pub mod grid_utils {
     use super::*;
 
-    /// Snap angle to grid increments (11.25 degrees = π/16 radians)
+    /// Snap angle to grid increments (15 degrees = π/12 radians)
     pub fn snap_angle_to_grid(angle: f32) -> f32 {
-        let grid_increment = PI / 16.0; // 11.25 degrees
+        let grid_increment = PI / 12.0; // 15 degrees
         (angle / grid_increment).round() * grid_increment
     }
 
@@ -286,7 +286,7 @@ pub fn circular_slider_float(
                     
                     // Apply grid snapping to degrees if enabled
                     if enable_snapping {
-                        degrees = (degrees / 11.25).round() * 11.25;
+                        degrees = (degrees / 15.0).round() * 15.0;
                     }
                     
                     // Clamp to range and set new value
@@ -432,7 +432,7 @@ pub fn quaternion_ball(
     // Draw grid lines (only if snapping is enabled) - match reference implementation
     if enable_snapping {
         let col_grid = Color32::from_rgba_unmultiplied(100, 100, 120, 120);
-        let grid_divisions = 16;
+        let grid_divisions = 12; // 360° / 30° = 12 divisions
         let angle_step = 360.0f32 / grid_divisions as f32;
         
         // Draw longitude lines
@@ -709,7 +709,7 @@ pub fn quaternion_ball(
             let identity_z = glam::Vec3::Z;
             
             // Snap quaternion to grid
-            *orientation = snap_quaternion_to_grid(*orientation, 11.25);
+            *orientation = snap_quaternion_to_grid(*orientation, 15.0);
             
             // Recalculate relative coordinates after snapping
             let rotation_matrix = glam::Mat3::from_quat(*orientation);
@@ -1381,7 +1381,7 @@ mod tests {
         
         // Test grid snapping
         if _enable_snapping {
-            let grid_increment = PI / 16.0; // 11.25 degrees
+            let grid_increment = PI / 12.0; // 15 degrees
             let snapped_angle = (angle / grid_increment).round() * grid_increment;
             assert!(snapped_angle.is_finite());
         }
