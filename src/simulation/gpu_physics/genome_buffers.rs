@@ -171,7 +171,7 @@ impl GenomeBufferGroup {
                 mode.nutrient_priority,
                 mode.swim_force,
                 if mode.prioritize_when_low { 1.0 } else { 0.0 },
-                mode.max_splits as f32,
+                if mode.max_splits < 0 { -1.0 } else { mode.max_splits as f32 },
                 mode.split_ratio, // split_ratio for dynamic equatorial zone
                 0.0, // padding
                 0.0, // padding

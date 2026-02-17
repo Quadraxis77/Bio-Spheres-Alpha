@@ -282,6 +282,48 @@ fn classify_zone(anchor_direction: vec3<f32>, split_direction: vec3<f32>, split_
     }
 }
 
+// Deterministic pseudo-random rotation for cell division
+// Matches CPU u32 arithmetic exactly for visual variety
+const RNG_SEED: u32 = 12345u;
+
+fn pseudo_random_rotation(cell_id: u32) -> vec4<f32> {
+    let hash1 = (cell_id * 2654435761u + RNG_SEED) % 1000000u;
+    let hash2 = (cell_id * 1597334677u + RNG_SEED * 3u) % 1000000u;
+    
+    // Generate angle in range [0.001, 0.1] radians
+    let angle = f32(hash1) / 1000000.0 * 0.099 + 0.001;
+    
+    // Generate random axis
+    let x = f32(hash2) / 1000000.0 * 2.0 - 1.0;
+    let y = f32((hash2 * 7u) % 1000000u) / 1000000.0 * 2.0 - 1.0;
+    let z = f32((hash2 * 13u) % 1000000u) / 1000000.0 * 2.0 - 1.0;
+    
+    var axis = vec3<f32>(x, y, z);
+    let len_sq = dot(axis, axis);
+    if (len_sq > 0.001) {
+        axis = normalize(axis);
+    } else {
+        axis = vec3<f32>(1.0, 0.0, 0.0);
+    }
+    
+    // Quaternion from axis-angle: (axis * sin(angle/2), cos(angle/2))
+    let half_angle = angle * 0.5;
+    let s = sin(half_angle);
+    let c = cos(half_angle);
+    return vec4<f32>(axis * s, c);
+}
+
+fn quat_from_z_to_dir(dir: vec3<f32>) -> vec4<f32> {
+    // q = (cross(Z, dir), dot(Z, dir) + 1) normalized
+    // cross((0,0,1), dir) = (-dir.y, dir.x, 0)
+    let w_scalar = dir.z + 1.0;
+    if (w_scalar < 0.0001) {
+        // Nearly opposite: 180° rotation around Y axis
+        return vec4<f32>(0.0, 1.0, 0.0, 0.0);
+    }
+    return normalize(vec4<f32>(-dir.y, dir.x, 0.0, w_scalar));
+}
+
 fn quat_multiply(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(
         a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
@@ -349,9 +391,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_b_orientation = genome_mode_data[parent_mode_idx * 3u + 1u];
     let split_direction_local = genome_mode_data[parent_mode_idx * 3u + 2u].xyz;
     
-    // Calculate child rotations
-    let child_a_rotation = quat_multiply(parent_rotation, child_a_orientation);
-    let child_b_rotation = quat_multiply(parent_rotation, child_b_orientation);
+    // Compute split rotation quaternion from split direction vector
+    // split_direction_local = split_rotation * Z, so reconstruct the quaternion
+    var split_dir_local = split_direction_local;
+    if (length(split_dir_local) < 0.0001) {
+        split_dir_local = vec3<f32>(0.0, 0.0, 1.0);
+    }
+    let split_rotation_quat = quat_from_z_to_dir(normalize(split_dir_local));
+    
+    // Calculate child rotations: parent * split_rotation * child_orientation
+    // This compounds the split angle each generation (matching CPU)
+    let child_a_rotation = quat_multiply(parent_rotation, quat_multiply(split_rotation_quat, child_a_orientation));
+    let child_b_rotation = quat_multiply(parent_rotation, quat_multiply(split_rotation_quat, child_b_orientation));
     
     // Calculate parent radius for offset calculation
     let parent_radius = calculate_radius_from_mass(parent_mass);
@@ -360,10 +411,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_mass = parent_mass * 0.5;
     
     // Transform split direction from local to world space
-    var split_dir_local = split_direction_local;
-    if (length(split_dir_local) < 0.0001) {
-        split_dir_local = vec3<f32>(0.0, 0.0, 1.0);
-    }
     let split_dir = normalize(rotate_vector_by_quat(split_dir_local, parent_rotation));
     
     // 75% overlap: offset_distance = parent_radius * 0.25
@@ -379,11 +426,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // === Create Child A (overwrites parent slot) ===
     positions_out[cell_idx] = vec4<f32>(child_a_pos, child_mass);
     velocities_out[cell_idx] = vec4<f32>(parent_vel, 0.0);
-    rotations_out[cell_idx] = child_a_rotation;
     
-    birth_times[cell_idx] = params.current_time;
+    // Assign cell ID first so we can use it for pseudo-random rotation
     let child_a_id = atomicAdd(&next_cell_id[0], 1u);
     cell_ids[cell_idx] = child_a_id;
+    
+    // Apply pseudo-random rotation perturbation (matching CPU)
+    let random_rotation_a = pseudo_random_rotation(child_a_id);
+    rotations_out[cell_idx] = quat_multiply(child_a_rotation, random_rotation_a);
+    
+    birth_times[cell_idx] = params.current_time;
     mode_indices[cell_idx] = child_a_mode_idx;
     
     // Split count: reset if mode changes, otherwise increment
@@ -408,12 +460,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     stiffnesses[cell_idx] = child_a_props_0.z;
     split_intervals[cell_idx] = child_a_props_0.w;
     split_masses[cell_idx] = child_a_props_1.x;
-    max_splits[cell_idx] = u32(child_a_props_2.x);
+    max_splits[cell_idx] = select(u32(child_a_props_2.x), 0xFFFFFFFFu, child_a_props_2.x < 0.0);
     
     // === Create Child B (in assigned slot) ===
     positions_out[child_b_slot] = vec4<f32>(child_b_pos, child_mass);
     velocities_out[child_b_slot] = vec4<f32>(parent_vel, 0.0);
-    rotations_out[child_b_slot] = child_b_rotation;
+    
+    // Assign cell ID first so we can use it for pseudo-random rotation
+    let child_b_id = atomicAdd(&next_cell_id[0], 1u);
+    cell_ids[child_b_slot] = child_b_id;
+    
+    // Apply pseudo-random rotation perturbation (matching CPU)
+    let random_rotation_b = pseudo_random_rotation(child_b_id);
+    rotations_out[child_b_slot] = quat_multiply(child_b_rotation, random_rotation_b);
     
     let child_b_props_0 = mode_properties[child_b_mode_idx * 3u];
     let child_b_props_1 = mode_properties[child_b_mode_idx * 3u + 1u];
@@ -429,7 +488,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         split_counts[child_b_slot] = parent_split_count + 1u;
     }
     
-    max_splits[child_b_slot] = u32(child_b_props_2.x);
+    max_splits[child_b_slot] = select(u32(child_b_props_2.x), 0xFFFFFFFFu, child_b_props_2.x < 0.0);
     genome_ids[child_b_slot] = genome_ids[cell_idx];
     mode_indices[child_b_slot] = child_b_mode_idx;
     
@@ -440,9 +499,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     cell_types[child_b_slot] = child_b_cell_type;
     max_cell_sizes[child_b_slot] = child_b_props_0.y;
     stiffnesses[child_b_slot] = child_b_props_0.z;
-    
-    let child_b_id = atomicAdd(&next_cell_id[0], 1u);
-    cell_ids[child_b_slot] = child_b_id;
     
     // Clear death flag for the new slot
     death_flags[child_b_slot] = 0u;
@@ -461,41 +517,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (make_adhesion == 1u) {
         let adhesion_id = allocate_adhesion_slot();
         if (adhesion_id != 0xFFFFFFFFu) {
-            // Calculate anchor directions in each child's LOCAL space
-            // Normalize split direction first (matching CPU implementation)
-            let split_dir_normalized = normalize(split_dir_local);
-            
-            // Direction from A to B in parent's local frame (A points toward B)
-            let dir_a_to_b_parent = -split_dir_normalized;  // Child A anchor points toward Child B
-            let dir_b_to_a_parent = split_dir_normalized;   // Child B anchor points toward Child A
-            
-            // Transform to each child's local space using inverse of child orientation
-            // Check if child orientations are identity (or near-identity) to avoid numerical issues
-            var anchor_a_local: vec3<f32>;
-            var anchor_b_local: vec3<f32>;
-            
-            // Child orientation is identity if w ≈ 1 and xyz ≈ 0
-            let child_a_is_identity = abs(child_a_orientation.w - 1.0) < 0.01 && length(child_a_orientation.xyz) < 0.01;
-            let child_b_is_identity = abs(child_b_orientation.w - 1.0) < 0.01 && length(child_b_orientation.xyz) < 0.01;
-            
-            if (child_a_is_identity) {
-                anchor_a_local = dir_a_to_b_parent;
-            } else {
-                anchor_a_local = normalize(rotate_vector_by_quat_inverse(dir_a_to_b_parent, child_a_orientation));
-            }
-            
-            if (child_b_is_identity) {
-                anchor_b_local = dir_b_to_a_parent;
-            } else {
-                anchor_b_local = normalize(rotate_vector_by_quat_inverse(dir_b_to_a_parent, child_b_orientation));
-            }
+            // Anchor directions in each child's LOCAL space (XPBD approach)
+            // Since split_rotation is baked into child rotation, the split axis
+            // in the child's local frame is just child.orientation.inverse() * Z
+            // Child A is at +split, points toward B: use -Z
+            // Child B is at -split, points toward A: use +Z
+            let anchor_a_local = normalize(rotate_vector_by_quat_inverse(vec3<f32>(0.0, 0.0, -1.0), child_a_orientation));
+            let anchor_b_local = normalize(rotate_vector_by_quat_inverse(vec3<f32>(0.0, 0.0, 1.0), child_b_orientation));
             
             // Classify zones based on anchor direction vs split direction (matching CPU)
             // Each cell's zone uses its own split_ratio for dynamic equatorial zone
             let child_a_split_ratio = child_a_props_2.y;
             let child_b_split_ratio = child_b_props_2.y;
-            let zone_a = classify_zone(anchor_a_local, split_dir_normalized, child_a_split_ratio);
-            let zone_b = classify_zone(anchor_b_local, split_dir_normalized, child_b_split_ratio);
+            let sibling_split_dir = normalize(split_dir_local);
+            let zone_a = classify_zone(anchor_a_local, sibling_split_dir, child_a_split_ratio);
+            let zone_b = classify_zone(anchor_b_local, sibling_split_dir, child_b_split_ratio);
             
             var connection: AdhesionConnection;
             connection.cell_a_index = cell_idx;
@@ -670,12 +706,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let neighbor_rotation = rotations_in[neighbor_idx];
         let relative_rotation = quat_multiply(quat_conjugate(neighbor_rotation), parent_rotation);
         
+        // Pre-compute orientation deltas including split_rotation (matching CPU)
+        let child_a_orientation_delta = quat_multiply(split_rotation_quat, child_a_orientation);
+        let child_b_orientation_delta = quat_multiply(split_rotation_quat, child_b_orientation);
+        
         if (give_to_child_a && !give_to_child_b) {
             // Only Child A inherits
             let child_anchor = calculate_child_anchor_direction(
                 child_a_pos_parent_frame,
                 neighbor_pos_parent_frame,
-                child_a_orientation
+                child_a_orientation_delta
             );
             
             let dir_to_child_parent_frame = normalize(child_a_pos_parent_frame - neighbor_pos_parent_frame);
@@ -703,7 +743,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let child_anchor = calculate_child_anchor_direction(
                 child_b_pos_parent_frame,
                 neighbor_pos_parent_frame,
-                child_b_orientation
+                child_b_orientation_delta
             );
             
             let dir_to_child_parent_frame = normalize(child_b_pos_parent_frame - neighbor_pos_parent_frame);
@@ -733,7 +773,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let child_a_anchor = calculate_child_anchor_direction(
                 child_a_pos_parent_frame,
                 neighbor_pos_parent_frame,
-                child_a_orientation
+                child_a_orientation_delta
             );
             
             let dir_to_child_a_parent_frame = normalize(child_a_pos_parent_frame - neighbor_pos_parent_frame);
@@ -763,7 +803,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let child_b_anchor = calculate_child_anchor_direction(
                     child_b_pos_parent_frame,
                     neighbor_pos_parent_frame,
-                    child_b_orientation
+                    child_b_orientation_delta
                 );
                 
                 let dir_to_child_b_parent_frame = normalize(child_b_pos_parent_frame - neighbor_pos_parent_frame);

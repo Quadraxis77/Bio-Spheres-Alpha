@@ -58,8 +58,8 @@
             nucleus_scale: 0.6,
         ),
         (
-            specular_strength: 0.52,
-            specular_power: 32.0,
+            specular_strength: 0.17,
+            specular_power: 128.0,
             fresnel_strength: 0.2,
             membrane_noise_scale: 0.0,
             membrane_noise_strength: 0.0,

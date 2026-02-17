@@ -7,10 +7,11 @@ use crate::genome::Genome;
 
 /// Deterministic pseudo-random rotation for cell division
 /// Generates small rotation perturbations for visual variety
+/// Uses u32 arithmetic to match the GPU shader implementation exactly
 fn pseudo_random_rotation(cell_id: u32, rng_seed: u64) -> Quat {
-    // Better deterministic hash for more variety
-    let hash1 = ((cell_id as u64).wrapping_mul(2654435761).wrapping_add(rng_seed)) % 1000000;
-    let hash2 = ((cell_id as u64).wrapping_mul(1597334677).wrapping_add(rng_seed.wrapping_mul(3))) % 1000000;
+    let seed = rng_seed as u32;
+    let hash1 = cell_id.wrapping_mul(2654435761u32).wrapping_add(seed) % 1000000;
+    let hash2 = cell_id.wrapping_mul(1597334677u32).wrapping_add(seed.wrapping_mul(3)) % 1000000;
     
     // Generate angle in range [0.001, 0.1] radians for more visible variety
     let angle = (hash1 as f32 / 1000000.0) * 0.099 + 0.001;
@@ -85,7 +86,8 @@ pub fn division_step(
             let can_split_by_adhesions = true;
             
             // Check mass threshold - cells must have enough mass to split (using per-cell split_mass)
-            let can_split_by_mass = state.masses[i] >= state.split_masses[i];
+            // Values > 3.0 mean "never split" (UI sentinel)
+            let can_split_by_mass = state.split_masses[i] <= 3.0 && state.masses[i] >= state.split_masses[i];
             
             // Check time threshold - cells must be old enough to split
             // Flagellocytes (cell_type == 1) split based on mass only, ignore split_interval
@@ -564,7 +566,8 @@ pub fn division_step_multi(
             };
             
             let can_split_by_adhesions = true;
-            let can_split_by_mass = state.masses[i] >= state.split_masses[i];
+            // Values > 3.0 mean "never split" (UI sentinel)
+            let can_split_by_mass = state.split_masses[i] <= 3.0 && state.masses[i] >= state.split_masses[i];
             
             // Flagellocytes (cell_type == 1) split based on mass only, ignore split_interval
             let is_flagellocyte = mode.map(|m| m.cell_type == 1).unwrap_or(false);

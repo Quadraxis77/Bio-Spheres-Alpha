@@ -699,7 +699,7 @@ impl GpuTripleBufferSystem {
                 if mode_idx < genome.modes.len() {
                     let mode = &genome.modes[mode_idx];
                     let ms = mode.max_splits;
-                    max_splits_data.push(if ms < 0 { 0 } else { ms as u32 });
+                    max_splits_data.push(if ms < 0 { u32::MAX } else { ms as u32 });
                     // Only Test cells (cell_type == 0) auto-generate nutrients
                     // All other cells rely on specialized functions or nutrient transport
                     let nutrient_rate = if mode.cell_type == 0 {
@@ -711,13 +711,13 @@ impl GpuTripleBufferSystem {
                     max_cell_sizes_data.push(mode.max_cell_size);
                     stiffnesses_data.push(mode.membrane_stiffness);
                 } else {
-                    max_splits_data.push(0); // Unlimited if mode not found
+                    max_splits_data.push(u32::MAX); // Unlimited if mode not found
                     nutrient_gain_rates_data.push(0.3); // Default nutrient gain rate (increased from 0.2)
                     max_cell_sizes_data.push(2.0); // Default max cell size
                     stiffnesses_data.push(50.0); // Default membrane stiffness
                 }
             } else {
-                max_splits_data.push(0); // Unlimited if genome not found
+                max_splits_data.push(u32::MAX); // Unlimited if genome not found
                 nutrient_gain_rates_data.push(0.3); // Default nutrient gain rate (increased from 0.2)
                 max_cell_sizes_data.push(2.0); // Default max cell size
                 stiffnesses_data.push(50.0); // Default membrane stiffness
@@ -951,8 +951,8 @@ impl GpuTripleBufferSystem {
                 log::debug!("[SYNC MODE PROPS] genome={} mode={} global={} nutrient_priority={} prioritize_when_low={} cell_type={:?}",
                     genome_idx, mode_idx, global_mode_idx, mode.nutrient_priority, mode.prioritize_when_low, mode.cell_type);
                 global_mode_idx += 1;
-                // Convert max_splits: -1 (infinite) -> 0 (unlimited in GPU)
-                let gpu_max_splits = if mode.max_splits < 0 { 0.0 } else { mode.max_splits as f32 };
+                // Convert max_splits: -1 (infinite) -> -1.0 (shader detects negative = unlimited)
+                let gpu_max_splits = if mode.max_splits < 0 { -1.0 } else { mode.max_splits as f32 };
                 properties_data.push([
                     mode.nutrient_gain_rate,
                     mode.max_cell_size,
@@ -1012,7 +1012,7 @@ impl GpuTripleBufferSystem {
         let mut properties_data: Vec<[f32; 12]> = Vec::new();
         
         for mode in &genome.modes {
-            let gpu_max_splits = if mode.max_splits < 0 { 0.0 } else { mode.max_splits as f32 };
+            let gpu_max_splits = if mode.max_splits < 0 { -1.0 } else { mode.max_splits as f32 };
             properties_data.push([
                 mode.nutrient_gain_rate,
                 mode.max_cell_size,
@@ -1093,8 +1093,8 @@ impl GpuTripleBufferSystem {
         queue.write_buffer(&self.split_masses, offset, bytemuck::bytes_of(&split_mass));
         queue.write_buffer(&self.split_counts, offset, bytemuck::bytes_of(&0u32));
         
-        // Convert max_splits: -1 (infinite) -> 0 (unlimited in GPU), positive values stay as-is
-        let gpu_max_splits: u32 = if max_splits < 0 { 0 } else { max_splits as u32 };
+        // Convert max_splits: -1 (infinite) -> 0xFFFFFFFF (unlimited in GPU), 0+ stay as-is
+        let gpu_max_splits: u32 = if max_splits < 0 { u32::MAX } else { max_splits as u32 };
         queue.write_buffer(&self.max_splits, offset, bytemuck::bytes_of(&gpu_max_splits));
         
         queue.write_buffer(&self.nutrient_gain_rates, offset, bytemuck::bytes_of(&nutrient_gain_rate));
