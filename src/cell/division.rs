@@ -146,7 +146,6 @@ pub fn division_step(
             child_b_split_mass_threshold: f32,
             child_a_split_count: i32,
             child_b_split_count: i32,
-            split_direction_local: Vec3,
         }
         
         let mut division_data_list = Vec::new();
@@ -326,7 +325,6 @@ pub fn division_step(
                     child_b_split_mass_threshold,
                     child_a_split_count,
                     child_b_split_count,
-                    split_direction_local: Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z,
                 });
             }
         }

@@ -2242,12 +2242,15 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
     });
 }
 
-/// Render the TimeSlider panel (placeholder).
+/// Render the TimeSlider panel with yellow progress bar.
+///
+/// The slider is purely UI-driven (never written by simulation).
+/// A yellow bar fills behind the slider track to show how far the
+/// simulation has actually reached (resim_display_time).
 fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            // Show status text with fixed height to prevent layout shifting
             let is_preview_mode = context.current_mode == SimulationMode::Preview;
 
             // Always allocate space for status text to prevent shifting
@@ -2257,7 +2260,6 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
                     "Time scrubbing only available in Preview mode"
                 );
             } else {
-                // Reserve space even when no status message to prevent layout shift
                 ui.label("");
             }
 
@@ -2268,14 +2270,40 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
                 let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                 ui.style_mut().spacing.slider_width = slider_width;
 
-                // Track dragging state
                 // Slider range is 0 to max_preview_duration (in seconds)
+                // The slider is purely user-driven — simulation never writes to time_value
                 let slider_response = ui.add_enabled(
                     is_preview_mode,
                     egui::Slider::new(&mut context.editor_state.time_value, 0.0..=context.editor_state.max_preview_duration)
                         .show_value(false)
                 );
                 context.editor_state.time_slider_dragging = slider_response.dragged();
+
+                // Paint yellow progress bar behind the slider track
+                if is_preview_mode {
+                    let max_dur = context.editor_state.max_preview_duration;
+                    let progress_frac = if max_dur > 0.0 {
+                        (context.editor_state.resim_display_time / max_dur).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+
+                    // Use the slider's rect for positioning the progress bar
+                    let slider_rect = slider_response.rect;
+                    // Inset vertically to sit inside the slider rail
+                    let rail_height = 6.0;
+                    let rail_center_y = slider_rect.center().y;
+                    let bar_rect = egui::Rect::from_min_max(
+                        egui::pos2(slider_rect.left(), rail_center_y - rail_height * 0.5),
+                        egui::pos2(
+                            slider_rect.left() + slider_rect.width() * progress_frac,
+                            rail_center_y + rail_height * 0.5,
+                        ),
+                    );
+                    // Paint below the slider widget (background layer)
+                    let yellow = egui::Color32::from_rgba_unmultiplied(255, 200, 0, 160);
+                    ui.painter().rect_filled(bar_rect, 2.0, yellow);
+                }
 
                 // Show actual time value in drag value widget
                 ui.add_enabled(

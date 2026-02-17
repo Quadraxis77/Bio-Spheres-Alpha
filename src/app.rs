@@ -575,14 +575,9 @@ impl App {
                     // Copy the genome data for editing
                     self.working_genome = preview_scene.genome.clone();
                     
-                    // Sync simulation time to UI slider (when not dragging)
-                    if !self.editor_state.time_slider_dragging {
-                        let sim_time = preview_scene.get_time_for_ui();
-                        // Only update if significantly different (avoid jitter)
-                        if (self.editor_state.time_value - sim_time).abs() > 0.1 {
-                            self.editor_state.time_value = sim_time.clamp(0.0, self.editor_state.max_preview_duration);
-                        }
-                    }
+                    // One-way sync: read simulation's actual time for progress bar display only
+                    // Never write back to time_value — the slider is purely user-driven
+                    self.editor_state.resim_display_time = preview_scene.get_time_for_ui();
                 }
             }
             

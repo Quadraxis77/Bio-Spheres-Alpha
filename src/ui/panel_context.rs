@@ -126,12 +126,14 @@ pub struct GenomeEditorState {
     pub enable_snapping: bool,
 
     // Time slider state
-    /// Current time value for preview (0-60 seconds)
+    /// Current time value for preview (0-60 seconds) — purely UI-driven, never written by simulation
     pub time_value: f32,
     /// Maximum preview duration (60 seconds)
     pub max_preview_duration: f32,
     /// Whether the time slider is being dragged
     pub time_slider_dragging: bool,
+    /// Actual simulation time reached (read-only from sim, used for progress bar display)
+    pub resim_display_time: f32,
     
     // Cave system parameters
     pub cave_density: f32,
@@ -340,6 +342,7 @@ impl GenomeEditorState {
             time_value: 0.0,
             max_preview_duration: 60.0,
             time_slider_dragging: false,
+            resim_display_time: 0.0,
             cave_density,
             cave_scale,
             cave_octaves,
