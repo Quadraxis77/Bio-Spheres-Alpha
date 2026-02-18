@@ -141,6 +141,7 @@ pub mod volumetric_fog;
 pub mod water_particles;
 pub mod gpu_surface_nets;
 pub mod voxel_renderer;
+pub mod sun_renderer;
 pub mod world_sphere;
 
 pub use adhesion_lines::AdhesionLineRenderer;
@@ -158,4 +159,5 @@ pub use water_particles::WaterParticleRenderer;
 pub use gpu_surface_nets::{GpuSurfaceNets, GpuVertex, DensityMeshParams, generate_test_density_sphere, generate_test_density_metaballs, generate_test_density_noise};
 pub use volumetric_fog::VolumetricFogRenderer;
 pub use voxel_renderer::{VoxelRenderer, VoxelInstance};
+pub use sun_renderer::SunRenderer;
 pub use world_sphere::{WorldSphereRenderer, WorldSphereParams};

@@ -990,6 +990,40 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
     
     let mut changed = false;
     
+    // === Procedural Sun ===
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("Procedural Sun");
+    ui.add_space(4.0);
+    
+    let mut sun_changed = false;
+    
+    sun_changed |= ui.checkbox(&mut context.editor_state.show_sun, "Enable Sun").changed();
+    
+    if context.editor_state.show_sun {
+        ui.add_space(4.0);
+        
+        // Sun color
+        let mut sc = context.editor_state.sun_color;
+        ui.label("Sun Color R:");
+        sun_changed |= ui.add(egui::Slider::new(&mut sc[0], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+        ui.label("Sun Color G:");
+        sun_changed |= ui.add(egui::Slider::new(&mut sc[1], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+        ui.label("Sun Color B:");
+        sun_changed |= ui.add(egui::Slider::new(&mut sc[2], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+        context.editor_state.sun_color = sc;
+        
+        ui.add_space(4.0);
+        ui.label("Sun Size:");
+        sun_changed |= ui.add(egui::Slider::new(&mut context.editor_state.sun_angular_radius, 0.005..=0.2)
+            .step_by(0.005).fixed_decimals(3)).changed();
+        
+        ui.add_space(4.0);
+        ui.label("Sun Brightness:");
+        sun_changed |= ui.add(egui::Slider::new(&mut context.editor_state.sun_intensity, 0.0..=50.0)
+            .step_by(0.5).fixed_decimals(1)).changed();
+    }
+    
     // === Light Direction ===
     ui.heading("Light Direction");
     ui.add_space(4.0);
@@ -1019,25 +1053,6 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
             changed = true;
         }
     });
-    
-    // === Light Color ===
-    ui.add_space(8.0);
-    ui.separator();
-    ui.heading("Light Color");
-    ui.add_space(4.0);
-    
-    let mut color = context.editor_state.light_color;
-    ui.label("R:");
-    changed |= ui.add(egui::Slider::new(&mut color[0], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
-    ui.label("G:");
-    changed |= ui.add(egui::Slider::new(&mut color[1], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
-    ui.label("B:");
-    changed |= ui.add(egui::Slider::new(&mut color[2], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
-    context.editor_state.light_color = color;
-    
-    ui.label("Intensity:");
-    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_intensity, 0.1..=10.0)
-        .step_by(0.1).fixed_decimals(1)).changed();
     
     // === Light Field Settings ===
     ui.add_space(8.0);
@@ -1115,6 +1130,19 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
         ui.label("Height Fog Falloff:");
         changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_height_falloff, 0.001..=0.1)
             .step_by(0.001).fixed_decimals(3)).changed();
+    }
+    
+    // Apply sun settings to GPU
+    if sun_changed {
+        changed = true;
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            gpu_scene.show_sun = context.editor_state.show_sun;
+            if let Some(ref mut sun) = gpu_scene.sun_renderer {
+                sun.sun_color = context.editor_state.sun_color;
+                sun.sun_angular_radius = context.editor_state.sun_angular_radius;
+            }
+        }
+        context.editor_state.save_sun_settings();
     }
     
     // Mark dirty and save if any parameter changed

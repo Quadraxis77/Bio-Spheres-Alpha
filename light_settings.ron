@@ -1,10 +1,10 @@
 (
-    light_dir: (0.0, 1.0, 0.0),
+    light_dir: (0.0, 1.0, 0.07),
     show_volumetric_fog: true,
     fog_density: 0.15,
     fog_steps: 20,
     light_color: (1.0, 0.95, 0.95),
-    light_intensity: 2.0,
+    light_intensity: 2.6,
     fog_color: (0.4, 0.5, 0.6),
     fog_scattering_anisotropy: 0.5,
     fog_absorption: 0.13,

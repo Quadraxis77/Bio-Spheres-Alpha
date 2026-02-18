@@ -90,6 +90,9 @@ pub struct CellRenderer {
     /// Lighting uniform buffer
     lighting_buffer: wgpu::Buffer,
     
+    /// Light color RGB
+    light_color: [f32; 3],
+    
     /// Bind group for camera and lighting uniforms
     bind_group: wgpu::BindGroup,
     
@@ -199,6 +202,7 @@ impl CellRenderer {
             depth_pipeline,
             camera_buffer,
             lighting_buffer,
+            light_color: [1.0, 0.98, 0.95], // Default warm white
             bind_group,
             instance_buffer,
             instance_capacity: capacity,
@@ -499,12 +503,17 @@ impl CellRenderer {
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
     }
     
+    /// Set the light color.
+    pub fn set_light_color(&mut self, color: [f32; 3]) {
+        self.light_color = color;
+    }
+    
     /// Update lighting uniform buffer.
     fn update_lighting(&self, queue: &wgpu::Queue, outline_width: f32) {
         let lighting_uniform = LightingUniform {
             light_dir: [-0.5, -0.7, -0.5], // Normalized in shader
             ambient: 0.15,
-            light_color: [1.0, 0.98, 0.95],
+            light_color: self.light_color,
             outline_width,
         };
         

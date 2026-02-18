@@ -263,6 +263,16 @@ pub struct GenomeEditorState {
     /// Flag to indicate light params need GPU update
     pub light_params_dirty: bool,
     
+    // Sun renderer settings
+    /// Whether the procedural sun is visible
+    pub show_sun: bool,
+    /// Sun color (RGB)
+    pub sun_color: [f32; 3],
+    /// Sun angular radius (visual size)
+    pub sun_angular_radius: f32,
+    /// Sun intensity
+    pub sun_intensity: f32,
+    
     // Orientation gizmo state
     /// Whether the orientation gizmo is visible
     pub gizmo_visible: bool,
@@ -310,7 +320,7 @@ impl GenomeEditorState {
         
         let (cell_type_visuals, cell_outline_width) = crate::cell::types::CellTypeVisualsStore::load();
         
-        Self {
+        let mut state = Self {
             renaming_mode: None,
             rename_buffer: String::new(),
             selected_mode_index: 0,
@@ -413,6 +423,10 @@ impl GenomeEditorState {
             photocyte_mass_per_second: 0.3,
             photocyte_min_light_threshold: 0.05,
             light_params_dirty: true,
+            show_sun: true,
+            sun_color: [1.0, 1.0, 0.85],
+            sun_angular_radius: 0.025,
+            sun_intensity: 10.0,
             gizmo_visible: true,
             split_rings_visible: true,
             radial_menu: crate::ui::radial_menu::RadialMenuState::new(),
@@ -423,7 +437,9 @@ impl GenomeEditorState {
             mode_graph_state: crate::genome::node_graph::ModeGraphState::new(),
             toggle_mode_graph_panel: false,
             mode_graph_panel_location: None,
-        }
+        };
+        state.load_sun_settings();
+        state
     }
 
     /// Save cell type visuals to disk.
@@ -829,6 +845,82 @@ impl GenomeEditorState {
         
         // Return defaults
         (9.8, false, true, false, 0.05, 10, [1.0, 0.8, 0.6, 0.9], false, 1, 0.1, 0.1, 0.2)
+    }
+    
+    /// Save sun settings to disk.
+    pub fn save_sun_settings(&self) {
+        #[derive(serde::Serialize)]
+        struct SunSettings {
+            show_sun: bool,
+            sun_color: [f32; 3],
+            sun_angular_radius: f32,
+            sun_intensity: f32,
+        }
+        
+        let settings = SunSettings {
+            show_sun: self.show_sun,
+            sun_color: self.sun_color,
+            sun_angular_radius: self.sun_angular_radius,
+            sun_intensity: self.sun_intensity,
+        };
+        
+        let path = PathBuf::from("sun_settings.ron");
+        match ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default()) {
+            Ok(contents) => {
+                if let Err(e) = std::fs::write(path, contents) {
+                    log::warn!("Failed to save sun settings: {}", e);
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to serialize sun settings: {}", e);
+            }
+        }
+    }
+    
+    /// Load sun settings from disk. Returns defaults if file doesn't exist.
+    pub fn load_sun_settings(&mut self) {
+        #[derive(serde::Deserialize)]
+        #[serde(default)]
+        struct SunSettings {
+            show_sun: bool,
+            sun_color: [f32; 3],
+            sun_angular_radius: f32,
+            sun_intensity: f32,
+        }
+        impl Default for SunSettings {
+            fn default() -> Self {
+                Self {
+                    show_sun: true,
+                    sun_color: [1.0, 1.0, 0.85],
+                    sun_angular_radius: 0.025,
+                    sun_intensity: 10.0,
+                }
+            }
+        }
+        
+        let path = PathBuf::from("sun_settings.ron");
+        if !path.exists() {
+            return; // Use defaults already set in new()
+        }
+        
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => {
+                match ron::from_str::<SunSettings>(&contents) {
+                    Ok(s) => {
+                        self.show_sun = s.show_sun;
+                        self.sun_color = s.sun_color;
+                        self.sun_angular_radius = s.sun_angular_radius;
+                        self.sun_intensity = s.sun_intensity;
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to parse sun settings: {}. Using defaults.", e);
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to read sun settings: {}. Using defaults.", e);
+            }
+        }
     }
 }
 

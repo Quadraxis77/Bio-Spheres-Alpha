@@ -19,9 +19,9 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "SceneManager",
                 "RightPanel",
                 "Viewport",
+                "SceneManager",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -42,16 +42,16 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "SceneManager",
-                "TimeSlider",
+                "LeftPanel",
                 "RightPanel",
                 "Modes",
-                "Viewport",
-                "BottomPanel",
-                "LeftPanel",
-                "NameTypeEditor",
                 "QuaternionBall",
+                "SceneManager",
+                "NameTypeEditor",
+                "TimeSlider",
+                "Viewport",
                 "CircleSliders",
+                "BottomPanel",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -76,9 +76,9 @@
     lod_debug_colors: false,
     world_settings: (
         cell_capacity: 50000,
-        gravity: 0.0,
-        gravity_x: false,
-        gravity_y: true,
+        gravity: -50.0,
+        gravity_x: true,
+        gravity_y: false,
         gravity_z: false,
     ),
 )

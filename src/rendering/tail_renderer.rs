@@ -76,6 +76,7 @@ pub struct TailRenderer {
     instance_buffer: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
     lighting_buffer: wgpu::Buffer,
+    light_color: [f32; 3],
     bind_group: wgpu::BindGroup,
     // Indexed indirect buffer for GPU rendering (persistent, updated via copy)
     indexed_indirect_buffer: wgpu::Buffer,
@@ -476,6 +477,7 @@ impl TailRenderer {
             instance_buffer,
             camera_buffer,
             lighting_buffer,
+            light_color: [1.0, 0.98, 0.95], // Default warm white
             bind_group,
             indexed_indirect_buffer,
             lod_info,
@@ -557,12 +559,17 @@ impl TailRenderer {
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
     
+    /// Set the light color.
+    pub fn set_light_color(&mut self, color: [f32; 3]) {
+        self.light_color = color;
+    }
+    
     /// Update lighting uniform
     fn update_lighting(&self, queue: &wgpu::Queue) {
         let uniform = TailLightingUniform {
             light_dir: [-0.5, -0.7, -0.5],
             ambient: 0.15,
-            light_color: [1.0, 0.98, 0.95],
+            light_color: self.light_color,
             _padding: 0.0,
         };
         

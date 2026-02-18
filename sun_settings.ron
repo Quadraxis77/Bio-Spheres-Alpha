@@ -1,0 +1,6 @@
+(
+    show_sun: true,
+    sun_color: (1.0, 0.18, 0.0),
+    sun_angular_radius: 0.08,
+    sun_intensity: 50.0,
+)

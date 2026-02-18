@@ -256,7 +256,7 @@ impl VolumetricFogRenderer {
             height_fog_density: 0.0,
             height_fog_falloff: 0.01,
             ray_start: 1.0,
-            ray_end: 500.0,
+            ray_end: 1500.0,
             enabled: false,
         }
     }

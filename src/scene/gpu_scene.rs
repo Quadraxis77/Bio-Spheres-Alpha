@@ -4,7 +4,7 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, NutrientParticleRenderer, SteamParticleRenderer, TailRenderer, VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
+use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, NutrientParticleRenderer, SteamParticleRenderer, SunRenderer, TailRenderer, VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
@@ -220,6 +220,12 @@ pub struct GpuScene {
     pub volumetric_fog_renderer: Option<VolumetricFogRenderer>,
     /// Whether to show volumetric fog
     pub show_volumetric_fog: bool,
+    /// Procedural sun renderer
+    pub sun_renderer: Option<SunRenderer>,
+    /// Whether to show the procedural sun
+    pub show_sun: bool,
+    /// Sun intensity
+    pub sun_intensity: f32,
     /// Index of cell currently being dragged (u32::MAX = none)
     pub dragged_cell_index: u32,
 }
@@ -388,6 +394,9 @@ impl GpuScene {
             light_field_system: None,
             volumetric_fog_renderer: None,
             show_volumetric_fog: false,
+            sun_renderer: None,
+            show_sun: true,
+            sun_intensity: 10.0,
             dragged_cell_index: u32::MAX,
         }
     }
@@ -1998,6 +2007,10 @@ impl GpuScene {
         let volumetric_fog_renderer = VolumetricFogRenderer::new(device, surface_format);
         self.volumetric_fog_renderer = Some(volumetric_fog_renderer);
         
+        // Create procedural sun renderer
+        let sun_renderer = SunRenderer::new(device, surface_format);
+        self.sun_renderer = Some(sun_renderer);
+        
         true
     }
     
@@ -2901,13 +2914,24 @@ impl GpuScene {
             fog_renderer.enabled = editor_state.show_volumetric_fog;
             fog_renderer.fog_density = editor_state.fog_density;
             fog_renderer.fog_steps = editor_state.fog_steps;
-            fog_renderer.light_color = editor_state.light_color;
-            fog_renderer.light_intensity = editor_state.light_intensity;
+            fog_renderer.light_color = editor_state.sun_color;
+            fog_renderer.light_intensity = editor_state.sun_intensity * 0.1; // Scale down fog effect
             fog_renderer.fog_color = editor_state.fog_color;
             fog_renderer.scattering_anisotropy = editor_state.fog_scattering_anisotropy;
             fog_renderer.absorption = editor_state.fog_absorption;
             fog_renderer.height_fog_density = editor_state.fog_height_density;
             fog_renderer.height_fog_falloff = editor_state.fog_height_falloff;
+        }
+        
+        // Update tail renderer light color
+        self.tail_renderer.set_light_color(editor_state.sun_color);
+        
+        // Update sun renderer parameters
+        self.show_sun = editor_state.show_sun;
+        self.sun_intensity = editor_state.sun_intensity;
+        if let Some(ref mut sun) = self.sun_renderer {
+            sun.sun_color = editor_state.sun_color;
+            sun.sun_angular_radius = editor_state.sun_angular_radius;
         }
     }
     
@@ -3449,12 +3473,9 @@ impl Scene for GpuScene {
             self.instance_builder.capacity(),
         );
 
-        // Render world boundary sphere if enabled
-        if self.show_world_sphere {
-            // Update world sphere radius to match current world diameter
-            self.world_sphere_renderer.set_radius(queue, world_diameter * 0.5);
-            
-            self.world_sphere_renderer.render(
+        // Render cave system if initialized (before sun so caves occlude it)
+        if let Some(ref mut cave_renderer) = self.cave_renderer {
+            cave_renderer.render(
                 &mut encoder,
                 queue,
                 view,
@@ -3464,9 +3485,38 @@ impl Scene for GpuScene {
             );
         }
         
-        // Render cave system if initialized
-        if let Some(ref mut cave_renderer) = self.cave_renderer {
-            cave_renderer.render(
+        // Render procedural sun if enabled (after caves but before world sphere,
+        // so caves occlude the sun but the translucent world sphere doesn't)
+        if self.show_sun {
+            if let Some(ref sun_renderer) = self.sun_renderer {
+                // Get light direction from light field system, or use default
+                let light_dir = if let Some(ref light_field) = self.light_field_system {
+                    light_field.light_dir()
+                } else {
+                    [0.5, 0.8, 0.3]
+                };
+
+                sun_renderer.render(
+                    &mut encoder,
+                    queue,
+                    view,
+                    &self.renderer.depth_view,
+                    device,
+                    view_proj,
+                    self.camera.position(),
+                    self.current_time,
+                    light_dir,
+                    self.sun_intensity,
+                );
+            }
+        }
+        
+        // Render world boundary sphere if enabled (after sun so sun shows through)
+        if self.show_world_sphere {
+            // Update world sphere radius to match current world diameter
+            self.world_sphere_renderer.set_radius(queue, world_diameter * 0.5);
+            
+            self.world_sphere_renderer.render(
                 &mut encoder,
                 queue,
                 view,
@@ -3800,6 +3850,11 @@ impl Scene for GpuScene {
         // Resize steam particle renderer if initialized
         if let Some(ref mut steam_particle_renderer) = self.steam_particle_renderer {
             steam_particle_renderer.resize(width, height);
+        }
+        
+        // Resize sun renderer if initialized
+        if let Some(ref mut sun_renderer) = self.sun_renderer {
+            sun_renderer.resize(width, height);
         }
     }
 
