@@ -273,6 +273,14 @@ pub struct GenomeEditorState {
     /// Sun intensity
     pub sun_intensity: f32,
     
+    // Shadow settings
+    /// Whether surface shadows are enabled
+    pub shadow_enabled: bool,
+    /// Shadow strength (0.0 = no shadows, 1.0 = full shadows)
+    pub shadow_strength: f32,
+    /// Shadow quality (0.0 = low, 1.0 = high - affects sample offset distance)
+    pub shadow_quality: f32,
+    
     // Orientation gizmo state
     /// Whether the orientation gizmo is visible
     pub gizmo_visible: bool,
@@ -316,7 +324,8 @@ impl GenomeEditorState {
         let (light_dir, show_volumetric_fog, fog_density, fog_steps, light_color, light_intensity,
              fog_color, fog_scattering_anisotropy, fog_absorption, fog_height_density, fog_height_falloff,
              light_field_max_steps, light_field_step_size, light_field_absorption_solid,
-             light_field_absorption_cell, light_field_ambient_floor, show_sun, sun_color, sun_angular_radius, sun_intensity) = Self::load_light_settings();
+             light_field_absorption_cell, light_field_ambient_floor, show_sun, sun_color, sun_angular_radius, sun_intensity,
+             shadow_enabled, shadow_strength, shadow_quality) = Self::load_light_settings();
         
         let (cell_type_visuals, cell_outline_width) = crate::cell::types::CellTypeVisualsStore::load();
         
@@ -427,6 +436,9 @@ impl GenomeEditorState {
             sun_color,
             sun_angular_radius,
             sun_intensity,
+            shadow_enabled,
+            shadow_strength,
+            shadow_quality,
             gizmo_visible: true,
             split_rings_visible: true,
             radial_menu: crate::ui::radial_menu::RadialMenuState::new(),
@@ -648,6 +660,10 @@ impl GenomeEditorState {
             self.sun_color,
             self.sun_angular_radius,
             self.sun_intensity,
+            // Shadow settings
+            self.shadow_enabled,
+            self.shadow_strength,
+            self.shadow_quality,
         ) {
             log::warn!("Failed to save light settings: {}", e);
         }
@@ -675,6 +691,10 @@ impl GenomeEditorState {
         sun_color: [f32; 3],
         sun_angular_radius: f32,
         sun_intensity: f32,
+        // Shadow settings
+        shadow_enabled: bool,
+        shadow_strength: f32,
+        shadow_quality: f32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct LightSettings {
@@ -699,6 +719,10 @@ impl GenomeEditorState {
             sun_color: [f32; 3],
             sun_angular_radius: f32,
             sun_intensity: f32,
+            // Shadow settings
+            shadow_enabled: bool,
+            shadow_strength: f32,
+            shadow_quality: f32,
         }
         
         let settings = LightSettings {
@@ -723,6 +747,10 @@ impl GenomeEditorState {
             sun_color,
             sun_angular_radius,
             sun_intensity,
+            // Shadow settings
+            shadow_enabled,
+            shadow_strength,
+            shadow_quality,
         };
         
         let path = PathBuf::from("light_settings.ron");
@@ -732,7 +760,7 @@ impl GenomeEditorState {
     }
     
     /// Load light settings from disk, or return defaults if file doesn't exist.
-    pub fn load_light_settings() -> ([f32; 3], bool, f32, u32, [f32; 3], f32, [f32; 3], f32, f32, f32, f32, u32, f32, f32, f32, f32, bool, [f32; 3], f32, f32) {
+    pub fn load_light_settings() -> ([f32; 3], bool, f32, u32, [f32; 3], f32, [f32; 3], f32, f32, f32, f32, u32, f32, f32, f32, f32, bool, [f32; 3], f32, f32, bool, f32, f32) {
         #[derive(serde::Deserialize)]
         struct LightSettings {
             light_dir: [f32; 3],
@@ -760,7 +788,17 @@ impl GenomeEditorState {
             sun_angular_radius: f32,
             #[serde(default)]
             sun_intensity: f32,
+            // Shadow settings
+            #[serde(default = "default_shadow_enabled")]
+            shadow_enabled: bool,
+            #[serde(default = "default_shadow_strength")]
+            shadow_strength: f32,
+            #[serde(default = "default_shadow_quality")]
+            shadow_quality: f32,
         }
+        fn default_shadow_enabled() -> bool { true }
+        fn default_shadow_strength() -> f32 { 0.7 }
+        fn default_shadow_quality() -> f32 { 0.8 }
         
         let path = PathBuf::from("light_settings.ron");
         
@@ -791,6 +829,10 @@ impl GenomeEditorState {
                                 s.sun_color,
                                 s.sun_angular_radius,
                                 s.sun_intensity,
+                                // Shadow settings
+                                s.shadow_enabled,
+                                s.shadow_strength,
+                                s.shadow_quality,
                             );
                         }
                         Err(e) => {
@@ -806,27 +848,31 @@ impl GenomeEditorState {
         
         // Return defaults
         (
-            [-0.5, 0.7, 0.5],  // light_dir
+            [0.0, 1.0, 0.0],    // light_dir
             true,               // show_volumetric_fog
             0.15,               // fog_density
             20,                 // fog_steps
-            [1.0, 0.95, 0.85], // light_color
-            2.0,                // light_intensity
+            [1.0, 0.95, 0.95], // light_color
+            2.6,                // light_intensity
             [0.4, 0.5, 0.6],   // fog_color
-            0.6,                // fog_scattering_anisotropy
+            0.5,                // fog_scattering_anisotropy
             0.13,               // fog_absorption
             1.35,               // fog_height_density
             0.002,              // fog_height_falloff
-            128,                // light_field_max_steps
-            2.0,                // light_field_step_size
-            8.0,                // light_field_absorption_solid
+            90,                 // light_field_max_steps
+            1.5,                // light_field_step_size
+            20.0,               // light_field_absorption_solid
             5.0,                // light_field_absorption_cell
             0.02,               // light_field_ambient_floor
             // Sun settings
             true,               // show_sun
-            [1.0, 1.0, 0.85],   // sun_color
-            0.025,              // sun_angular_radius
-            10.0,               // sun_intensity
+            [0.6, 0.4, 0.2],   // sun_color
+            0.05,               // sun_angular_radius
+            15.0,               // sun_intensity
+            // Shadow settings
+            true,               // shadow_enabled
+            0.7,                // shadow_strength
+            0.8,                // shadow_quality
         )
     }
     

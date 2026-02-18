@@ -2008,7 +2008,8 @@ impl GpuScene {
         self.volumetric_fog_renderer = Some(volumetric_fog_renderer);
         
         // Create procedural sun renderer
-        let sun_renderer = SunRenderer::new(device, surface_format);
+        let mut sun_renderer = SunRenderer::new(device, surface_format);
+        sun_renderer.resize(self.renderer.width, self.renderer.height);
         self.sun_renderer = Some(sun_renderer);
         
         true
@@ -2907,6 +2908,9 @@ impl GpuScene {
             light_field.set_ambient_floor(editor_state.light_field_ambient_floor);
             light_field.set_mass_per_second(editor_state.photocyte_mass_per_second);
             light_field.set_min_light_threshold(editor_state.photocyte_min_light_threshold);
+            light_field.set_shadow_enabled(editor_state.shadow_enabled);
+            light_field.set_shadow_strength(editor_state.shadow_strength);
+            light_field.set_shadow_quality(editor_state.shadow_quality);
         }
         
         // Update volumetric fog renderer parameters
@@ -3437,6 +3441,11 @@ impl Scene for GpuScene {
 
         // Render cells using GPU-culled instance buffer
         let visible_count = self.instance_builder.visible_count();
+        // Update shadow bind group for cell renderer
+        if let Some(ref light_field) = self.light_field_system {
+            let shadow_bg = light_field.create_shadow_bind_group(device);
+            self.renderer.set_shadow_bind_group(shadow_bg);
+        }
         self.renderer.render_with_encoder(
             &mut encoder,
             queue,
@@ -3475,6 +3484,12 @@ impl Scene for GpuScene {
 
         // Render cave system if initialized (before sun so caves occlude it)
         if let Some(ref mut cave_renderer) = self.cave_renderer {
+            // Update shadow bind group from light field system
+            if let Some(ref light_field) = self.light_field_system {
+                light_field.update_shadow_params(queue);
+                let shadow_bg = light_field.create_shadow_bind_group(device);
+                cave_renderer.set_shadow_bind_group(shadow_bg);
+            }
             cave_renderer.render(
                 &mut encoder,
                 queue,

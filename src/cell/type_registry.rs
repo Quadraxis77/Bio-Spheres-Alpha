@@ -136,6 +136,9 @@ pub struct CellTypeRegistry {
     /// Bind group layout shared by all cell type pipelines.
     /// Contains camera uniforms and lighting data.
     pub bind_group_layout: wgpu::BindGroupLayout,
+    
+    /// Shadow field bind group layout (group 1) for surface shadows.
+    pub shadow_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl CellTypeRegistry {
@@ -154,6 +157,9 @@ impl CellTypeRegistry {
         // Create shared bind group layout for camera and lighting
         let bind_group_layout = Self::create_bind_group_layout(device);
         
+        // Create shadow field bind group layout (always included for pipeline compatibility)
+        let shadow_bind_group_layout = Self::create_shadow_bind_group_layout(device);
+        
         // Create pipelines for all registered cell types
         let mut pipelines = Vec::with_capacity(CellType::COUNT);
         
@@ -164,6 +170,7 @@ impl CellTypeRegistry {
                 depth_format,
                 &bind_group_layout,
                 cell_type,
+                &shadow_bind_group_layout,
             );
             pipelines.push(pipeline);
         }
@@ -171,6 +178,7 @@ impl CellTypeRegistry {
         Self {
             pipelines,
             bind_group_layout,
+            shadow_bind_group_layout,
         }
     }
     
@@ -240,6 +248,37 @@ impl CellTypeRegistry {
         })
     }
     
+    /// Create the shadow field bind group layout (group 1).
+    fn create_shadow_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cell Shadow Field Bind Group Layout"),
+            entries: &[
+                // Binding 0: ShadowFieldParams (uniform)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: light_field (read-only storage)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
     /// Create a render pipeline for a specific cell type.
     fn create_pipeline(
         device: &wgpu::Device,
@@ -247,6 +286,7 @@ impl CellTypeRegistry {
         depth_format: wgpu::TextureFormat,
         bind_group_layout: &wgpu::BindGroupLayout,
         cell_type: CellType,
+        shadow_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> wgpu::RenderPipeline {
         // Load the shader for this cell type
         let shader_source = Self::load_shader_source(cell_type);
@@ -255,10 +295,10 @@ impl CellTypeRegistry {
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
         
-        // Create pipeline layout
+        // Create pipeline layout (always includes shadow bind group layout)
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&format!("{:?} Cell Pipeline Layout", cell_type)),
-            bind_group_layouts: &[bind_group_layout],
+            bind_group_layouts: &[bind_group_layout, shadow_bind_group_layout],
             push_constant_ranges: &[],
         });
         

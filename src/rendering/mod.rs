@@ -133,6 +133,7 @@ pub mod hiz_generator;
 pub mod instance_builder;
 pub mod nutrient_particles;
 pub mod orientation_gizmo;
+pub mod shadow_renderer;
 pub mod skybox;
 pub mod split_rings;
 pub mod steam_particles;

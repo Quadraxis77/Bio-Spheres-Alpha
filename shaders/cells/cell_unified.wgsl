@@ -31,6 +31,73 @@ struct Lighting {
 @group(0) @binding(2) var hex_bake_texture: texture_2d<f32>;
 @group(0) @binding(3) var hex_bake_sampler: sampler;
 
+// Shadow field data (from light field system)
+struct ShadowFieldParams {
+    grid_resolution: u32,
+    cell_size: f32,
+    grid_origin_x: f32,
+    grid_origin_y: f32,
+    grid_origin_z: f32,
+    shadow_strength: f32,
+    shadow_enabled: u32,
+    shadow_quality: f32,
+}
+
+@group(1) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
+@group(1) @binding(1) var<storage, read> light_field: array<f32>;
+
+// Sample light field at world position with trilinear interpolation
+fn sample_light_field(world_pos: vec3<f32>) -> f32 {
+    if (shadow_params.shadow_enabled == 0u) {
+        return 1.0;
+    }
+    let res = shadow_params.grid_resolution;
+    let fres = f32(res);
+    
+    let gx = (world_pos.x - shadow_params.grid_origin_x) / shadow_params.cell_size - 0.5;
+    let gy = (world_pos.y - shadow_params.grid_origin_y) / shadow_params.cell_size - 0.5;
+    let gz = (world_pos.z - shadow_params.grid_origin_z) / shadow_params.cell_size - 0.5;
+    
+    if (gx < -0.5 || gx >= fres - 0.5 ||
+        gy < -0.5 || gy >= fres - 0.5 ||
+        gz < -0.5 || gz >= fres - 0.5) {
+        return 1.0;
+    }
+    
+    let ix = i32(floor(gx));
+    let iy = i32(floor(gy));
+    let iz = i32(floor(gz));
+    let fx = gx - floor(gx);
+    let fy = gy - floor(gy);
+    let fz = gz - floor(gz);
+    
+    let ires = i32(res);
+    let x0 = u32(clamp(ix, 0, ires - 1));
+    let x1 = u32(clamp(ix + 1, 0, ires - 1));
+    let y0 = u32(clamp(iy, 0, ires - 1));
+    let y1 = u32(clamp(iy + 1, 0, ires - 1));
+    let z0 = u32(clamp(iz, 0, ires - 1));
+    let z1 = u32(clamp(iz + 1, 0, ires - 1));
+    
+    let c000 = light_field[x0 + y0 * res + z0 * res * res];
+    let c100 = light_field[x1 + y0 * res + z0 * res * res];
+    let c010 = light_field[x0 + y1 * res + z0 * res * res];
+    let c110 = light_field[x1 + y1 * res + z0 * res * res];
+    let c001 = light_field[x0 + y0 * res + z1 * res * res];
+    let c101 = light_field[x1 + y0 * res + z1 * res * res];
+    let c011 = light_field[x0 + y1 * res + z1 * res * res];
+    let c111 = light_field[x1 + y1 * res + z1 * res * res];
+    
+    let c00 = mix(c000, c100, fx);
+    let c10 = mix(c010, c110, fx);
+    let c01 = mix(c001, c101, fx);
+    let c11 = mix(c011, c111, fx);
+    let c0 = mix(c00, c10, fy);
+    let c1 = mix(c01, c11, fy);
+    
+    return mix(c0, c1, fz);
+}
+
 struct InstanceInput {
     @location(0) position: vec3<f32>,
     @location(1) radius: f32,
@@ -646,8 +713,18 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // ====================================================================
     // Membrane surface lighting (specular + fresnel on front shell only)
     // ====================================================================
+    // Sample shadow from light field, offset toward light to avoid self-occlusion
+    // lighting.light_dir points FROM light, so negate to go TOWARD light
+    let offset_distance = mix(3.0, 6.0, shadow_params.shadow_quality) * shadow_params.cell_size;
+    let shadow_sample_pos = in.center - normalize(lighting.light_dir) * offset_distance;
+    // Clamp sample position to stay within valid light field grid bounds
+    let grid_size = shadow_params.cell_size * f32(shadow_params.grid_resolution);
+    let grid_min = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
+    let grid_max = grid_min + vec3<f32>(grid_size, grid_size, grid_size);
+    let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
+    let shadow = mix(1.0, sample_light_field(clamped_pos), shadow_params.shadow_strength);
     let front_ndotl = max(dot(perturbed_normal, -light_dir), 0.0);
-    let front_diffuse = front_ndotl * lighting.light_color;
+    let front_diffuse = front_ndotl * lighting.light_color * shadow;
 
     // Apply diffuse to the composited result
     composited = composited * (0.3 + 0.7 * (lighting.ambient + front_diffuse));
@@ -655,7 +732,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // Specular highlight on membrane surface (uses perturbed normal for ridge highlights)
     let half_vec = normalize(-light_dir + view_dir);
     let spec = pow(max(dot(perturbed_normal, half_vec), 0.0), in.visual_params.y);
-    let specular = spec * in.visual_params.x * lighting.light_color;
+    let specular = spec * in.visual_params.x * lighting.light_color * shadow;
 
     // Fresnel rim (membrane reflection)
     let fresnel = pow(1.0 - max(dot(perturbed_normal, view_dir), 0.0), 3.0);

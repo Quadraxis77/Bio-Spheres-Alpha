@@ -1024,6 +1024,35 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
             .step_by(0.5).fixed_decimals(1)).changed();
     }
     
+    // === Surface Shadows ===
+    ui.heading("Surface Shadows");
+    ui.add_space(4.0);
+    
+    let mut shadow_changed = false;
+    shadow_changed |= ui.checkbox(&mut context.editor_state.shadow_enabled, "Enable Surface Shadows").changed();
+    
+    ui.add_space(4.0);
+    ui.label("Shadow Strength:");
+    shadow_changed |= ui.add(egui::Slider::new(&mut context.editor_state.shadow_strength, 0.0..=1.0)
+        .step_by(0.01).fixed_decimals(2)).changed();
+    
+    ui.add_space(4.0);
+    ui.label("Shadow Quality:");
+    shadow_changed |= ui.add(egui::Slider::new(&mut context.editor_state.shadow_quality, 0.0..=1.0)
+        .step_by(0.01).fixed_decimals(2)).changed();
+    
+    if shadow_changed {
+        changed = true;
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            if let Some(ref mut light_field) = gpu_scene.light_field_system {
+                light_field.set_shadow_enabled(context.editor_state.shadow_enabled);
+                light_field.set_shadow_strength(context.editor_state.shadow_strength);
+                light_field.set_shadow_quality(context.editor_state.shadow_quality);
+            }
+        }
+        context.editor_state.save_light_settings();
+    }
+    
     // === Light Direction ===
     ui.heading("Light Direction");
     ui.add_space(4.0);

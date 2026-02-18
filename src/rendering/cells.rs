@@ -104,6 +104,9 @@ pub struct CellRenderer {
     
     /// Behavior handlers indexed by CellType
     behaviors: Vec<Box<dyn CellBehavior>>,
+    
+    /// Shadow field bind group (set each frame from light field system)
+    shadow_bind_group: Option<wgpu::BindGroup>,
 }
 
 impl CellRenderer {
@@ -193,6 +196,39 @@ impl CellRenderer {
             behaviors.push(create_behavior(cell_type));
         }
         
+        // Create a default dummy shadow bind group (shadow disabled, empty light field)
+        // This ensures the pipeline always has a valid group(1) even without a light field system.
+        let dummy_shadow_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Shadow Params Buffer"),
+            size: 32, // ShadowFieldParams is 32 bytes (8 x f32)
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // Write shadow_enabled = 0 so shadows are disabled by default
+        queue.write_buffer(&dummy_shadow_params_buffer, 0, &[0u8; 32]);
+        
+        let dummy_light_field_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Light Field Buffer"),
+            size: 4, // Minimum size for storage buffer
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        
+        let dummy_shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Dummy Shadow Bind Group"),
+            layout: &type_registry.shadow_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: dummy_shadow_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: dummy_light_field_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        
         Self {
             width,
             height,
@@ -207,11 +243,18 @@ impl CellRenderer {
             instance_buffer,
             instance_capacity: capacity,
             behaviors,
+            shadow_bind_group: Some(dummy_shadow_bind_group),
         }
     }
     
     /// Bake the Goldberg hex triplet pattern into an equirectangular texture via compute shader.
     /// Returns (texture_view, sampler). Run once at init — the texture is static.
+    
+    /// Set the shadow bind group (called each frame from gpu_scene)
+    pub fn set_shadow_bind_group(&mut self, bind_group: wgpu::BindGroup) {
+        self.shadow_bind_group = Some(bind_group);
+    }
+    
     fn bake_hex_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::TextureView, wgpu::Sampler) {
         let tex_width = 512u32;
         let tex_height = 256u32;
@@ -788,6 +831,9 @@ impl CellRenderer {
             });
             
             color_pass.set_bind_group(0, &self.bind_group, &[]);
+            if let Some(ref shadow_bg) = self.shadow_bind_group {
+                color_pass.set_bind_group(1, shadow_bg, &[]);
+            }
             color_pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
             
             // Render each cell type group with its specific pipeline
@@ -865,6 +911,9 @@ impl CellRenderer {
             });
             
             color_pass.set_bind_group(0, &self.bind_group, &[]);
+            if let Some(ref shadow_bg) = self.shadow_bind_group {
+                color_pass.set_bind_group(1, shadow_bg, &[]);
+            }
 
             // Render all cells with a single draw call
             // Instance buffer is dynamically allocated (not partitioned by type)

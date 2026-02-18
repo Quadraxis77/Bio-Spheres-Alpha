@@ -137,6 +137,9 @@ pub struct CaveSystemRenderer {
     collision_bind_group: wgpu::BindGroup,
     collision_pipeline: wgpu::ComputePipeline,
     collision_layout: Arc<wgpu::BindGroupLayout>,
+    
+    // Shadow field bind group (set each frame from light field system)
+    shadow_bind_group: Option<wgpu::BindGroup>,
 }
 
 impl CaveSystemRenderer {
@@ -236,10 +239,37 @@ impl CaveSystemRenderer {
             source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cave_system.wgsl").into()),
         });
         
-        // Create pipeline layout
+        // Create shadow field bind group layout (group 2)
+        let shadow_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cave Shadow Field Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        
+        // Create pipeline layout (always includes shadow bind group layout)
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Cave Pipeline Layout"),
-            bind_group_layouts: &[&camera_bind_group_layout, &params_bind_group_layout],
+            bind_group_layouts: &[&camera_bind_group_layout, &params_bind_group_layout, &shadow_bind_group_layout],
             push_constant_ranges: &[],
         });
         
@@ -421,6 +451,7 @@ impl CaveSystemRenderer {
             collision_bind_group,
             collision_pipeline,
             collision_layout,
+            shadow_bind_group: None,
         }
     }
     
@@ -539,9 +570,17 @@ impl CaveSystemRenderer {
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
         render_pass.set_bind_group(1, &self.params_bind_group, &[]);
+        if let Some(ref shadow_bg) = self.shadow_bind_group {
+            render_pass.set_bind_group(2, shadow_bg, &[]);
+        }
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.draw_indexed(0..self.index_count, 0, 0..1);
+    }
+    
+    /// Set the shadow bind group (called each frame from gpu_scene)
+    pub fn set_shadow_bind_group(&mut self, bind_group: wgpu::BindGroup) {
+        self.shadow_bind_group = Some(bind_group);
     }
     
     pub fn params(&self) -> &CaveParams {

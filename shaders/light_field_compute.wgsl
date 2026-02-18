@@ -108,6 +108,20 @@ fn is_inside_sphere(gx: f32, gy: f32, gz: f32) -> bool {
     return (dx * dx + dy * dy + dz * dz) <= (half * half);
 }
 
+// Check if a grid-space position is near the sphere boundary (outer shell)
+// Solids in this zone are the world boundary, not interior cave walls
+fn is_near_sphere_boundary(gx: f32, gy: f32, gz: f32) -> bool {
+    let fres = f32(params.grid_resolution);
+    let half = fres * 0.5;
+    let dx = gx - half;
+    let dy = gy - half;
+    let dz = gz - half;
+    let dist_sq = dx * dx + dy * dy + dz * dz;
+    // Within outer 8% of sphere radius = world boundary shell
+    let inner_radius = half * 0.92;
+    return dist_sq > (inner_radius * inner_radius);
+}
+
 // Ray march from voxel toward light source, accumulating occlusion
 fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> f32 {
     let light_dir = normalize(vec3<f32>(params.light_dir_x, params.light_dir_y, params.light_dir_z));
@@ -117,6 +131,7 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> f32 {
     let step = light_dir * params.step_size;
     
     var transmittance = 1.0;
+    var consecutive_solid = 0u;
     
     for (var i = 0u; i < params.max_steps; i++) {
         pos += step;
@@ -132,26 +147,27 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> f32 {
         }
         
         // If we've exited the world sphere, we've reached open sky - stop
-        // (solid_mask marks outside-sphere voxels as solid for fluid,
-        //  but they shouldn't cast light shadows)
         if (!is_inside_sphere(pos.x, pos.y, pos.z)) {
             break;
         }
         
-        // Check solid (cave walls) - these fully block light
-        if (is_solid(ix, iy, iz)) {
-            transmittance *= exp(-params.absorption_solid);
+        // Check solid (cave walls) - require consecutive solid hits to filter
+        // out scattered noise voxels. Real cave walls are many voxels thick.
+        let solid_here = is_solid(ix, iy, iz) && !is_near_sphere_boundary(pos.x, pos.y, pos.z);
+        if (solid_here) {
+            consecutive_solid += 1u;
+            // Only apply absorption after 2+ consecutive solid voxels (actual wall)
+            if (consecutive_solid >= 2u) {
+                transmittance *= exp(-params.absorption_solid);
+            }
+        } else {
+            consecutive_solid = 0u;
         }
         
-        // Check cell occupancy - cells fully block light
+        // Check cell occupancy - cells block light
         let cells = cell_count_at(ix, iy, iz);
         if (cells > 0u) {
             transmittance *= exp(-params.absorption_cell * f32(cells));
-            // Any cell presence is a heavy occluder
-            if (transmittance < 0.01) {
-                transmittance = 0.0;
-                break;
-            }
         }
         
         // Early exit if light is effectively blocked
@@ -184,10 +200,26 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Solid voxels inside the sphere get zero light (they are inside cave walls)
+    // Solid voxels inside the sphere: only set to zero if they're part of an
+    // actual wall (have solid neighbors). Isolated noise voxels get normal light
+    // so they don't poison trilinear interpolation for nearby cells.
     if (solid_mask[idx] != 0u) {
-        light_field[idx] = 0.0;
-        return;
+        let gx = i32(grid_pos.x);
+        let gy = i32(grid_pos.y);
+        let gz = i32(grid_pos.z);
+        var solid_neighbors = 0u;
+        if (is_solid(gx + 1, gy, gz)) { solid_neighbors += 1u; }
+        if (is_solid(gx - 1, gy, gz)) { solid_neighbors += 1u; }
+        if (is_solid(gx, gy + 1, gz)) { solid_neighbors += 1u; }
+        if (is_solid(gx, gy - 1, gz)) { solid_neighbors += 1u; }
+        if (is_solid(gx, gy, gz + 1)) { solid_neighbors += 1u; }
+        if (is_solid(gx, gy, gz - 1)) { solid_neighbors += 1u; }
+        // 3+ solid neighbors = actual wall, set to zero
+        if (solid_neighbors >= 3u) {
+            light_field[idx] = 0.0;
+            return;
+        }
+        // Otherwise: isolated noise voxel, compute light normally
     }
     
     // Ray march toward light to compute intensity

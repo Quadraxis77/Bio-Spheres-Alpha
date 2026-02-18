@@ -62,6 +62,20 @@ pub struct PhotocyteParams {
     pub _pad0: f32,
 }
 
+/// Parameters for surface shadow sampling (used by cave and cell shaders)
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct ShadowFieldParams {
+    pub grid_resolution: u32,
+    pub cell_size: f32,
+    pub grid_origin_x: f32,
+    pub grid_origin_y: f32,
+    pub grid_origin_z: f32,
+    pub shadow_strength: f32,
+    pub shadow_enabled: u32,
+    pub shadow_quality: f32,
+}
+
 /// GPU Light Field System
 ///
 /// Manages the voxel-based light field computation and photocyte consumption.
@@ -77,6 +91,7 @@ pub struct LightFieldSystem {
     light_field_params_buffer: wgpu::Buffer,
     occupancy_params_buffer: wgpu::Buffer,
     photocyte_params_buffer: wgpu::Buffer,
+    shadow_field_params_buffer: wgpu::Buffer,
 
     // Compute pipelines
     clear_occupancy_pipeline: wgpu::ComputePipeline,
@@ -89,6 +104,7 @@ pub struct LightFieldSystem {
     occupancy_layout: wgpu::BindGroupLayout,
     photocyte_physics_layout: wgpu::BindGroupLayout,
     photocyte_system_layout: wgpu::BindGroupLayout,
+    shadow_bind_group_layout: wgpu::BindGroupLayout,
 
     // Configurable parameters
     light_dir: [f32; 3],
@@ -100,6 +116,9 @@ pub struct LightFieldSystem {
     scattering_coefficient: f32,
     mass_per_second_full_light: f32,
     min_light_threshold: f32,
+    shadow_strength: f32,
+    shadow_enabled: bool,
+    shadow_quality: f32,
 
     // Grid params (cached)
     world_radius: f32,
@@ -431,12 +450,50 @@ impl LightFieldSystem {
                 cache: None,
             });
 
+        // === Shadow field bind group layout (for cave/cell surface shadows) ===
+        let shadow_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Shadow Field Bind Group Layout"),
+                entries: &[
+                    // Binding 0: ShadowFieldParams (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 1: light_field (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        let shadow_field_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Shadow Field Params Buffer"),
+            size: std::mem::size_of::<ShadowFieldParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             light_field_buffer,
             cell_occupancy_buffer,
             light_field_params_buffer,
             occupancy_params_buffer,
             photocyte_params_buffer,
+            shadow_field_params_buffer,
             clear_occupancy_pipeline,
             build_occupancy_pipeline,
             compute_light_pipeline,
@@ -445,6 +502,7 @@ impl LightFieldSystem {
             occupancy_layout,
             photocyte_physics_layout,
             photocyte_system_layout,
+            shadow_bind_group_layout,
             light_dir,
             max_steps: 128,
             step_size: 2.0,
@@ -454,6 +512,9 @@ impl LightFieldSystem {
             scattering_coefficient: 0.3,
             mass_per_second_full_light: 0.3,
             min_light_threshold: 0.05,
+            shadow_strength: 0.7,
+            shadow_enabled: true,
+            shadow_quality: 0.8,
             world_radius,
             cell_size,
             grid_origin,
@@ -516,6 +577,59 @@ impl LightFieldSystem {
     /// Set minimum light threshold for photocyte gain
     pub fn set_min_light_threshold(&mut self, threshold: f32) {
         self.min_light_threshold = threshold;
+    }
+
+    /// Set shadow strength (0.0 = no shadows, 1.0 = full shadows)
+    pub fn set_shadow_strength(&mut self, strength: f32) {
+        self.shadow_strength = strength;
+    }
+
+    /// Set shadow quality (0.0 = low, 1.0 = high - affects sample offset distance)
+    pub fn set_shadow_quality(&mut self, quality: f32) {
+        self.shadow_quality = quality;
+    }
+
+    /// Enable or disable surface shadows
+    pub fn set_shadow_enabled(&mut self, enabled: bool) {
+        self.shadow_enabled = enabled;
+    }
+
+    /// Get the shadow bind group layout (for use by cave/cell renderers)
+    pub fn shadow_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.shadow_bind_group_layout
+    }
+
+    /// Create the shadow bind group for surface shadow rendering
+    pub fn create_shadow_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Shadow Field Bind Group"),
+            layout: &self.shadow_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.shadow_field_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.light_field_buffer.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    /// Update shadow field params on the GPU
+    pub fn update_shadow_params(&self, queue: &wgpu::Queue) {
+        let params = ShadowFieldParams {
+            grid_resolution: GRID_RESOLUTION,
+            cell_size: self.cell_size,
+            grid_origin_x: self.grid_origin[0],
+            grid_origin_y: self.grid_origin[1],
+            grid_origin_z: self.grid_origin[2],
+            shadow_strength: self.shadow_strength,
+            shadow_enabled: if self.shadow_enabled { 1 } else { 0 },
+            shadow_quality: self.shadow_quality,
+        };
+        queue.write_buffer(&self.shadow_field_params_buffer, 0, bytemuck::bytes_of(&params));
     }
 
     /// Get grid origin
