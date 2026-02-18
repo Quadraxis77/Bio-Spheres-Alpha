@@ -751,10 +751,14 @@ impl GenomeEditorState {
             light_field_absorption_solid: f32,
             light_field_absorption_cell: f32,
             light_field_ambient_floor: f32,
-            // Sun settings
+            // Sun settings - add #[serde(default)] for backward compatibility
+            #[serde(default)]
             show_sun: bool,
+            #[serde(default)]
             sun_color: [f32; 3],
+            #[serde(default)]
             sun_angular_radius: f32,
+            #[serde(default)]
             sun_intensity: f32,
         }
         
