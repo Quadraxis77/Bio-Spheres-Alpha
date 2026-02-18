@@ -316,7 +316,7 @@ impl GenomeEditorState {
         let (light_dir, show_volumetric_fog, fog_density, fog_steps, light_color, light_intensity,
              fog_color, fog_scattering_anisotropy, fog_absorption, fog_height_density, fog_height_falloff,
              light_field_max_steps, light_field_step_size, light_field_absorption_solid,
-             light_field_absorption_cell, light_field_ambient_floor) = Self::load_light_settings();
+             light_field_absorption_cell, light_field_ambient_floor, show_sun, sun_color, sun_angular_radius, sun_intensity) = Self::load_light_settings();
         
         let (cell_type_visuals, cell_outline_width) = crate::cell::types::CellTypeVisualsStore::load();
         
@@ -423,10 +423,10 @@ impl GenomeEditorState {
             photocyte_mass_per_second: 0.3,
             photocyte_min_light_threshold: 0.05,
             light_params_dirty: true,
-            show_sun: true,
-            sun_color: [1.0, 1.0, 0.85],
-            sun_angular_radius: 0.025,
-            sun_intensity: 10.0,
+            show_sun,
+            sun_color,
+            sun_angular_radius,
+            sun_intensity,
             gizmo_visible: true,
             split_rings_visible: true,
             radial_menu: crate::ui::radial_menu::RadialMenuState::new(),
@@ -438,7 +438,6 @@ impl GenomeEditorState {
             toggle_mode_graph_panel: false,
             mode_graph_panel_location: None,
         };
-        state.load_sun_settings();
         state
     }
 
@@ -644,6 +643,11 @@ impl GenomeEditorState {
             self.light_field_absorption_solid,
             self.light_field_absorption_cell,
             self.light_field_ambient_floor,
+            // Sun settings
+            self.show_sun,
+            self.sun_color,
+            self.sun_angular_radius,
+            self.sun_intensity,
         ) {
             log::warn!("Failed to save light settings: {}", e);
         }
@@ -666,6 +670,11 @@ impl GenomeEditorState {
         light_field_absorption_solid: f32,
         light_field_absorption_cell: f32,
         light_field_ambient_floor: f32,
+        // Sun settings
+        show_sun: bool,
+        sun_color: [f32; 3],
+        sun_angular_radius: f32,
+        sun_intensity: f32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct LightSettings {
@@ -685,6 +694,11 @@ impl GenomeEditorState {
             light_field_absorption_solid: f32,
             light_field_absorption_cell: f32,
             light_field_ambient_floor: f32,
+            // Sun settings
+            show_sun: bool,
+            sun_color: [f32; 3],
+            sun_angular_radius: f32,
+            sun_intensity: f32,
         }
         
         let settings = LightSettings {
@@ -704,6 +718,11 @@ impl GenomeEditorState {
             light_field_absorption_solid,
             light_field_absorption_cell,
             light_field_ambient_floor,
+            // Sun settings
+            show_sun,
+            sun_color,
+            sun_angular_radius,
+            sun_intensity,
         };
         
         let path = PathBuf::from("light_settings.ron");
@@ -713,7 +732,7 @@ impl GenomeEditorState {
     }
     
     /// Load light settings from disk, or return defaults if file doesn't exist.
-    pub fn load_light_settings() -> ([f32; 3], bool, f32, u32, [f32; 3], f32, [f32; 3], f32, f32, f32, f32, u32, f32, f32, f32, f32) {
+    pub fn load_light_settings() -> ([f32; 3], bool, f32, u32, [f32; 3], f32, [f32; 3], f32, f32, f32, f32, u32, f32, f32, f32, f32, bool, [f32; 3], f32, f32) {
         #[derive(serde::Deserialize)]
         struct LightSettings {
             light_dir: [f32; 3],
@@ -732,6 +751,11 @@ impl GenomeEditorState {
             light_field_absorption_solid: f32,
             light_field_absorption_cell: f32,
             light_field_ambient_floor: f32,
+            // Sun settings
+            show_sun: bool,
+            sun_color: [f32; 3],
+            sun_angular_radius: f32,
+            sun_intensity: f32,
         }
         
         let path = PathBuf::from("light_settings.ron");
@@ -758,6 +782,11 @@ impl GenomeEditorState {
                                 s.light_field_absorption_solid,
                                 s.light_field_absorption_cell,
                                 s.light_field_ambient_floor,
+                                // Sun settings
+                                s.show_sun,
+                                s.sun_color,
+                                s.sun_angular_radius,
+                                s.sun_intensity,
                             );
                         }
                         Err(e) => {
@@ -789,6 +818,11 @@ impl GenomeEditorState {
             8.0,                // light_field_absorption_solid
             5.0,                // light_field_absorption_cell
             0.02,               // light_field_ambient_floor
+            // Sun settings
+            true,               // show_sun
+            [1.0, 1.0, 0.85],   // sun_color
+            0.025,              // sun_angular_radius
+            10.0,               // sun_intensity
         )
     }
     

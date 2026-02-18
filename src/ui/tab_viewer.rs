@@ -1137,12 +1137,13 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
         changed = true;
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
             gpu_scene.show_sun = context.editor_state.show_sun;
+            gpu_scene.sun_intensity = context.editor_state.sun_intensity;
             if let Some(ref mut sun) = gpu_scene.sun_renderer {
                 sun.sun_color = context.editor_state.sun_color;
                 sun.sun_angular_radius = context.editor_state.sun_angular_radius;
             }
         }
-        context.editor_state.save_sun_settings();
+        context.editor_state.save_light_settings();
     }
     
     // Mark dirty and save if any parameter changed

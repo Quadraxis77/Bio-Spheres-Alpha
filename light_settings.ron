@@ -1,5 +1,5 @@
 (
-    light_dir: (0.0, 1.0, 0.07),
+    light_dir: (0.0, 1.0, 0.1),
     show_volumetric_fog: true,
     fog_density: 0.15,
     fog_steps: 20,
