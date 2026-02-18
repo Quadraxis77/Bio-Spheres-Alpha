@@ -363,6 +363,24 @@ impl SceneManager {
         }
     }
 
+    /// Mark a cell as being dragged so physics skips it (GPU scene only).
+    pub fn set_dragged_cell(&mut self, cell_index: u32) {
+        if self.current_mode == crate::ui::SimulationMode::Gpu {
+            if let Some(gpu_scene) = self.gpu_scene.as_mut() {
+                gpu_scene.set_dragged_cell(cell_index);
+            }
+        }
+    }
+    
+    /// Clear the dragged cell so physics resumes for all cells (GPU scene only).
+    pub fn clear_dragged_cell(&mut self) {
+        if self.current_mode == crate::ui::SimulationMode::Gpu {
+            if let Some(gpu_scene) = self.gpu_scene.as_mut() {
+                gpu_scene.clear_dragged_cell();
+            }
+        }
+    }
+    
     /// Update cell position using GPU operations (GPU scene only).
     /// 
     /// This method provides access to GPU-specific position updates that operate

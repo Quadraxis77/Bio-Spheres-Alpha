@@ -234,6 +234,7 @@ impl App {
                         && self.editor_state.radial_menu.dragging_cell.is_some()
                     {
                         log::info!("Stopped dragging cell {:?}", self.editor_state.radial_menu.dragging_cell);
+                        self.scene_manager.clear_dragged_cell();
                         self.editor_state.radial_menu.stop_dragging();
                         self.window.request_redraw();
                         return true;
@@ -321,6 +322,7 @@ impl App {
                             let menu = &mut self.editor_state.radial_menu;
                             if menu.dragging_cell.is_some() {
                                 log::info!("Drag cancelled by Escape key");
+                                self.scene_manager.clear_dragged_cell();
                                 menu.dragging_cell = None;
                                 self.window.request_redraw();
                                 return true;
@@ -352,6 +354,7 @@ impl App {
                 // Clear drag state when window loses focus
                 if !focused && self.editor_state.radial_menu.dragging_cell.is_some() {
                     log::info!("Clearing drag state due to window focus loss");
+                    self.scene_manager.clear_dragged_cell();
                     self.editor_state.radial_menu.clear_drag_state();
                     self.window.request_redraw();
                 }
@@ -754,6 +757,7 @@ impl App {
                 // Clear any active drag state when switching modes
                 if self.editor_state.radial_menu.dragging_cell.is_some() {
                     log::info!("Clearing drag state due to mode switch");
+                    self.scene_manager.clear_dragged_cell();
                     self.editor_state.radial_menu.clear_drag_state();
                 }
                 self.window.set_cursor_visible(true);

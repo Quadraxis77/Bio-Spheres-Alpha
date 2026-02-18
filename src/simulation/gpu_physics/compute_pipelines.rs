@@ -227,6 +227,8 @@ pub struct CachedBindGroups {
     pub nutrient_system: wgpu::BindGroup,
     /// Nutrient transport bind group (same for all frames, includes mode properties)
     pub nutrient_transport: wgpu::BindGroup,
+    /// Nutrient apply bind group (same for all frames) - applies accumulated mass deltas
+    pub nutrient_apply: wgpu::BindGroup,
     /// Swim force force accumulation bind groups for each buffer index [0, 1, 2]
     pub swim_force_force_accum: [wgpu::BindGroup; 3],
     /// Swim force cell data bind group (same for all frames)
@@ -262,8 +264,9 @@ pub struct GpuPhysicsPipelines {
     // Cell boost pipeline
     pub cell_boost: wgpu::ComputePipeline,
     
-    // Nutrient system pipeline
+    // Nutrient system pipelines
     pub nutrient_transport: wgpu::ComputePipeline,
+    pub nutrient_apply: wgpu::ComputePipeline,
     
     // Adhesion physics pipeline
     pub adhesion_physics: wgpu::ComputePipeline,
@@ -338,6 +341,7 @@ pub struct GpuPhysicsPipelines {
     // Nutrient transport bind group layouts
     pub nutrient_system_layout: wgpu::BindGroupLayout,
     pub nutrient_transport_layout: wgpu::BindGroupLayout,
+    pub nutrient_apply_layout: wgpu::BindGroupLayout,
     
     // Swim force bind group layouts
     pub swim_force_force_accum_layout: wgpu::BindGroupLayout,
@@ -376,6 +380,7 @@ impl GpuPhysicsPipelines {
         // Create nutrient transport bind group layouts
         let nutrient_system_layout = Self::create_nutrient_system_bind_group_layout(device);
         let nutrient_transport_layout = Self::create_nutrient_transport_bind_group_layout(device);
+        let nutrient_apply_layout = Self::create_nutrient_apply_bind_group_layout(device);
         
         // Create swim force bind group layouts
         let swim_force_force_accum_layout = Self::create_swim_force_force_accum_bind_group_layout(device);
@@ -527,13 +532,22 @@ impl GpuPhysicsPipelines {
             "Cell Boost",
         );
         
-        // Create nutrient transport pipeline
+        // Create nutrient transport pipeline (accumulate phase only)
         let nutrient_transport = Self::create_compute_pipeline(
             device,
             include_str!("../../../shaders/nutrient_transport.wgsl"),
             "main",
             &[&physics_layout, &nutrient_system_layout, &adhesion_layout, &nutrient_transport_layout],
             "Nutrient Transport",
+        );
+        
+        // Create nutrient apply pipeline (apply accumulated mass deltas - separate dispatch)
+        let nutrient_apply = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/nutrient_apply.wgsl"),
+            "main",
+            &[&physics_layout, &nutrient_apply_layout],
+            "Nutrient Apply",
         );
         
         // Create adhesion physics pipeline (per-cell processing, accumulates to force buffers)
@@ -607,6 +621,7 @@ impl GpuPhysicsPipelines {
             cell_removal,
             cell_boost,
             nutrient_transport,
+            nutrient_apply,
             adhesion_physics,
             lifecycle_death_scan,
             lifecycle_division_scan,
@@ -644,6 +659,7 @@ impl GpuPhysicsPipelines {
             velocity_update_angular_layout,
             nutrient_system_layout,
             nutrient_transport_layout,
+            nutrient_apply_layout,
             swim_force_force_accum_layout,
             swim_force_cell_data_layout,
         }
@@ -1090,6 +1106,7 @@ impl GpuPhysicsPipelines {
         // Nutrient transport bind groups (same for all frames)
         let nutrient_system = self.create_nutrient_system_bind_group(device, buffers);
         let nutrient_transport = self.create_nutrient_transport_bind_group(device, buffers);
+        let nutrient_apply = self.create_nutrient_apply_bind_group(device, buffers);
         
         // Swim force bind groups
         let swim_force_force_accum = [
@@ -1124,6 +1141,7 @@ impl GpuPhysicsPipelines {
             velocity_update_angular,
             nutrient_system,
             nutrient_transport,
+            nutrient_apply,
             swim_force_force_accum,
             swim_force_cell_data,
         }
@@ -3167,6 +3185,59 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: buffers.mode_cell_types.as_entire_binding(),
+                },
+            ],
+        })
+    }
+    
+    /// Create nutrient apply bind group layout (Group 1 in nutrient_apply shader)
+    fn create_nutrient_apply_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Nutrient Apply Bind Group Layout"),
+            entries: &[
+                // Binding 0: Mass deltas (read-write, atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Death flags (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create nutrient apply bind group (Group 1 in nutrient_apply shader)
+    fn create_nutrient_apply_bind_group(
+        &self,
+        device: &wgpu::Device,
+        buffers: &GpuTripleBufferSystem,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Nutrient Apply Bind Group"),
+            layout: &self.nutrient_apply_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.mass_deltas_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.death_flags.as_entire_binding(),
                 },
             ],
         })

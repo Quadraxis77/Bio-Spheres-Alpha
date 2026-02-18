@@ -239,13 +239,173 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(1, mass_accum_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 9: Nutrient transport (256 threads) - consumption, transport, death detection
+        // Stage 9a: Nutrient transport (256 threads) - consumption + transport accumulation only
+        // This dispatch accumulates mass deltas via atomics but does NOT apply them.
         compute_pass.set_pipeline(&pipelines.nutrient_transport);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, &cached_bind_groups.nutrient_system, &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.adhesion, &[]);
         compute_pass.set_bind_group(3, &cached_bind_groups.nutrient_transport, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+    }
+    
+    // Stage 9b: Nutrient apply (separate compute pass)
+    // CRITICAL: Must be a separate pass so all nutrient_transport workgroups finish
+    // their atomic writes to mass_deltas before any thread reads the accumulated result.
+    // Without this separation, cell_b's workgroup could read its mass_delta before
+    // cell_a's workgroup writes the transport to it, causing asymmetric nutrient flow.
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Nutrient Apply"),
+            timestamp_writes: None,
+        });
+        
+        compute_pass.set_pipeline(&pipelines.nutrient_apply);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.nutrient_apply, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+    }
+}
+
+/// Execute a mechanics-only physics step (no nutrient transport, no mass accumulation).
+///
+/// Runs stages 1–7 of the physics pipeline (spatial grid, clear forces, collision,
+/// adhesion, swim force, position integration, angular velocity integration) but
+/// **skips** mass accumulation (stage 8), nutrient transport (stage 9), and the
+/// lifecycle pipeline entirely.
+///
+/// Used when the simulation is paused but a cell is being dragged so that
+/// adhesion-connected cells can follow via spring forces without affecting
+/// nutrient transport or cell split timing.
+pub fn execute_gpu_mechanics_step(
+    _device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    queue: &wgpu::Queue,
+    pipelines: &GpuPhysicsPipelines,
+    triple_buffers: &mut GpuTripleBufferSystem,
+    cached_bind_groups: &CachedBindGroups,
+    delta_time: f32,
+    current_time: f32,
+    current_frame: i32,
+    world_diameter: f32,
+    gravity: f32,
+    gravity_dir: [bool; 3],
+    cave_renderer: Option<&crate::rendering::CaveSystemRenderer>,
+    cave_physics_bind_groups: Option<&[wgpu::BindGroup; 3]>,
+) {
+    // Rotate to next buffer set
+    let current_index = triple_buffers.rotate_buffers();
+
+    let world_size = world_diameter;
+    let params = PhysicsParams {
+        delta_time,
+        current_time,
+        current_frame,
+        cell_count: 0,
+        world_size,
+        boundary_stiffness: 500.0,
+        gravity,
+        acceleration_damping: 0.98,
+        grid_resolution: GRID_RESOLUTION as i32,
+        grid_cell_size: world_size / GRID_RESOLUTION as f32,
+        max_cells_per_grid: 16,
+        enable_thrust_force: 1,
+        cell_capacity: triple_buffers.capacity,
+        gravity_dir: [
+            if gravity_dir[0] { 1.0 } else { 0.0 },
+            if gravity_dir[1] { 1.0 } else { 0.0 },
+            if gravity_dir[2] { 1.0 } else { 0.0 },
+        ],
+        _padding: [0.0; 48],
+    };
+    queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
+
+    let physics_bind_group = &cached_bind_groups.physics[current_index];
+    let spatial_grid_bind_group = &cached_bind_groups.spatial_grid;
+    let adhesion_rotations_bind_group = &cached_bind_groups.rotations[current_index];
+    let position_update_rotations_bind_group = &cached_bind_groups.position_update_rotations[current_index];
+
+    let total_grid_cells = GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION;
+    let grid_workgroups = (total_grid_cells + WORKGROUP_SIZE_GRID - 1) / WORKGROUP_SIZE_GRID;
+    let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("GPU Mechanics-Only Pipeline (Drag)"),
+            timestamp_writes: None,
+        });
+
+        // Stage 1: Clear spatial grid
+        compute_pass.set_pipeline(&pipelines.spatial_grid_clear);
+        compute_pass.set_bind_group(0, spatial_grid_bind_group, &[]);
+        compute_pass.dispatch_workgroups(grid_workgroups, 1, 1);
+
+        // Stage 2: Assign cells to grid
+        compute_pass.set_pipeline(&pipelines.spatial_grid_assign);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        // Stage 3: Insert cells into grid
+        compute_pass.set_pipeline(&pipelines.spatial_grid_insert);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        // Stage 3.5: Clear force accumulators
+        compute_pass.set_pipeline(&pipelines.clear_forces);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.clear_forces, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        // Stage 4: Collision detection
+        compute_pass.set_pipeline(&pipelines.collision_detection);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.collision_force_accum[current_index], &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        // Stage 5: Adhesion physics
+        compute_pass.set_pipeline(&pipelines.adhesion_physics);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
+        compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
+        compute_pass.set_bind_group(3, &cached_bind_groups.force_accum, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        // Stage 5.5: Swim force
+        compute_pass.set_pipeline(&pipelines.swim_force);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.swim_force_force_accum[current_index], &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        // Stage 6: Position integration
+        compute_pass.set_pipeline(&pipelines.position_update);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, position_update_rotations_bind_group, &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.position_update_force_accum, &[]);
+        compute_pass.set_bind_group(3, &cached_bind_groups.position_update_spatial_grid, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        // Stage 6.5: Cave collision (if enabled)
+        if let (Some(cave_renderer), Some(cave_bind_groups)) = (cave_renderer, cave_physics_bind_groups) {
+            if cave_renderer.params().collision_enabled != 0 {
+                compute_pass.set_pipeline(cave_renderer.collision_pipeline());
+                compute_pass.set_bind_group(0, &cave_bind_groups[current_index], &[]);
+                compute_pass.set_bind_group(1, cave_renderer.collision_bind_group(), &[]);
+                compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+            }
+        }
+
+        // Stage 7: Angular velocity integration
+        compute_pass.set_pipeline(&pipelines.velocity_update);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.velocity_update_angular, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        // SKIP Stage 8: Mass accumulation (nutrient growth)
+        // SKIP Stage 9: Nutrient transport (consumption, transport, death detection)
     }
 }
 

@@ -230,12 +230,16 @@ impl GenomeBufferGroup {
         let genome_mode_data: Vec<[f32; 12]> = genome.modes.iter().map(|mode| {
             let child_a_orientation = mode.child_a.orientation;
             let child_b_orientation = mode.child_b.orientation;
-            let split_direction = mode.parent_split_direction;
+            
+            // Calculate split direction from pitch/yaw (same as preview scene and triple_buffer.rs)
+            let pitch = mode.parent_split_direction.x.to_radians();
+            let yaw = mode.parent_split_direction.y.to_radians();
+            let split_dir = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z;
             
             [
                 child_a_orientation.x, child_a_orientation.y, child_a_orientation.z, child_a_orientation.w,
                 child_b_orientation.x, child_b_orientation.y, child_b_orientation.z, child_b_orientation.w,
-                split_direction.x, split_direction.y, 0.0, 0.0, // Vec2 -> Vec4 with padding
+                split_dir.x, split_dir.y, split_dir.z, 0.0, // Vec3 -> Vec4 with padding
             ]
         }).collect();
         

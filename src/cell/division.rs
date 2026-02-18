@@ -487,6 +487,26 @@ pub fn division_step(
         let new_cell_count = state.cell_count + division_data_list.len();
         state.cell_count = new_cell_count;
         
+        // Kill children born under minimum mass (0.5) due to extreme split ratios
+        const MIN_CELL_MASS: f32 = 0.5;
+        let mut dead_on_arrival = Vec::new();
+        for data in &division_data_list {
+            if data.child_b_mass < MIN_CELL_MASS && data.child_b_slot < state.cell_count {
+                dead_on_arrival.push(data.child_b_slot);
+            }
+            if data.child_a_mass < MIN_CELL_MASS && data.child_a_slot < state.cell_count {
+                dead_on_arrival.push(data.child_a_slot);
+            }
+        }
+        if !dead_on_arrival.is_empty() {
+            // Sort descending so swap-with-last removal doesn't invalidate earlier indices
+            dead_on_arrival.sort_unstable_by(|a, b| b.cmp(a));
+            dead_on_arrival.dedup();
+            for idx in &dead_on_arrival {
+                state.remove_cell(*idx);
+            }
+        }
+        
         // Add this pass's events to the pre-allocated buffer
         state.division_events_buffer.extend(pass_division_events);
         

@@ -1268,7 +1268,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     cell_type: 2, // Default to Phagocyte
                     parent_make_adhesion: false, // Default to no adhesion
                     split_mass: 1.5,
-                    split_interval: 5.0,
+                    split_interval: 1.0,
                     nutrient_gain_rate: 0.3,
                     max_cell_size: 2.0,
                     split_ratio: 0.5,

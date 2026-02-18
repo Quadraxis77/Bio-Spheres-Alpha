@@ -407,8 +407,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Calculate parent radius for offset calculation
     let parent_radius = calculate_radius_from_mass(parent_mass);
     
-    // Split mass 50/50
-    let child_mass = parent_mass * 0.5;
+    // Split mass using split_ratio from mode (matching CPU)
+    let split_ratio = clamp(parent_split_ratio, 0.0, 1.0);
+    let child_a_mass = parent_mass * split_ratio;
+    let child_b_mass = parent_mass * (1.0 - split_ratio);
     
     // Transform split direction from local to world space
     let split_dir = normalize(rotate_vector_by_quat(split_dir_local, parent_rotation));
@@ -424,7 +426,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_b_mode_idx = u32(max(child_modes.y, 0));
     
     // === Create Child A (overwrites parent slot) ===
-    positions_out[cell_idx] = vec4<f32>(child_a_pos, child_mass);
+    positions_out[cell_idx] = vec4<f32>(child_a_pos, child_a_mass);
     velocities_out[cell_idx] = vec4<f32>(parent_vel, 0.0);
     
     // Assign cell ID first so we can use it for pseudo-random rotation
@@ -463,7 +465,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     max_splits[cell_idx] = select(u32(child_a_props_2.x), 0xFFFFFFFFu, child_a_props_2.x < 0.0);
     
     // === Create Child B (in assigned slot) ===
-    positions_out[child_b_slot] = vec4<f32>(child_b_pos, child_mass);
+    positions_out[child_b_slot] = vec4<f32>(child_b_pos, child_b_mass);
     velocities_out[child_b_slot] = vec4<f32>(parent_vel, 0.0);
     
     // Assign cell ID first so we can use it for pseudo-random rotation
@@ -502,6 +504,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Clear death flag for the new slot
     death_flags[child_b_slot] = 0u;
+    
+    // Pause nutrient transfer for both children (~0.1s)
+    // This prevents the deferred neighbor (which hasn't split yet) from losing
+    // mass to these small newborn children via pressure-based transport.
+    split_ready_frame[cell_idx] = params.current_frame;
+    split_ready_frame[child_b_slot] = params.current_frame;
     
     // Increment live cell count (one parent became two children)
     atomicAdd(&cell_count_buffer[1], 1u);

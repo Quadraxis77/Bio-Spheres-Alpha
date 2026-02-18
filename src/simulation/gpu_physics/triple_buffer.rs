@@ -461,9 +461,10 @@ impl GpuTripleBufferSystem {
         let max_cell_sizes = Self::create_storage_buffer(device, f32_per_cell, "Max Cell Sizes");
         let stiffnesses = Self::create_storage_buffer(device, f32_per_cell, "Stiffnesses");
         
-        // GPU-side cell count: [0] = total cells, [1] = live cells
+        // GPU-side cell count: [0] = total cells, [1] = live cells, [2] = dragged cell index (0xFFFFFFFF = none)
         // Must be zero-initialized so shaders start with 0 cells
-        let cell_count_buffer = Self::create_zero_initialized_storage_buffer(device, 8, "Cell Count Buffer");
+        // Slot [2] is written each frame by GpuScene::render() with the current dragged_cell_index
+        let cell_count_buffer = Self::create_zero_initialized_storage_buffer(device, 16, "Cell Count Buffer");
         
         // Cell count readback buffer for async GPU-to-CPU transfer
         let cell_count_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {

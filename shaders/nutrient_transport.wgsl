@@ -135,7 +135,7 @@ const PRIORITY_BOOST: f32 = 10.0;
 const TRANSPORT_RATE: f32 = 2.0;
 const BASE_METABOLISM_RATE: f32 = 0.025;  // Base metabolic cost per second for all cells (reduced from 0.05 for 2x longevity)
 const SWIM_CONSUMPTION_RATE: f32 = 0.1;  // Additional 0.1 mass per second at full swim force (reduced from 0.2 for 2x longevity)
-const DEFER_FRAMES: i32 = 32;  // 0.5 seconds at 64 FPS = 32 frames
+const DEFER_FRAMES: i32 = 6;  // ~0.1 seconds at 64 FPS = 6 frames
 
 // Fixed-point conversion for atomic operations (matching other shaders)
 const FIXED_POINT_SCALE: f32 = 1000.0;
@@ -295,15 +295,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         atomicAdd(&mass_deltas[cell_b_idx], transfer_fixed);
     }
     
-    // Step 4: Apply consumption and transport results
-    // Read final accumulated mass delta from atomic buffer
-    let final_mass_delta = fixed_to_float(atomicLoad(&mass_deltas[cell_idx]));
-    let final_mass = current_mass + final_mass_delta;
-    
-    // NOTE: Do NOT set death_flags here - lifecycle death_scan checks mass and handles it
-    // This ensures proper ring buffer slot recycling
-    
-    // Update mass in positions buffer
-    let pos = positions_out[cell_idx].xyz;
-    positions_out[cell_idx] = vec4<f32>(pos, max(final_mass, 0.0));
+    // NOTE: Mass deltas are applied by the separate nutrient_apply shader dispatch.
+    // This ensures all atomic accumulations complete across ALL workgroups before
+    // any thread reads the final delta. Without this separation, cell_b's workgroup
+    // could apply its delta before cell_a's workgroup writes the transport to it,
+    // causing asymmetric nutrient flow and uneven cell splitting.
 }

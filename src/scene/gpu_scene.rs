@@ -8,7 +8,7 @@ use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesio
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
-use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem};
+use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem};
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
@@ -220,6 +220,8 @@ pub struct GpuScene {
     pub volumetric_fog_renderer: Option<VolumetricFogRenderer>,
     /// Whether to show volumetric fog
     pub show_volumetric_fog: bool,
+    /// Index of cell currently being dragged (u32::MAX = none)
+    pub dragged_cell_index: u32,
 }
 
 impl GpuScene {
@@ -386,6 +388,7 @@ impl GpuScene {
             light_field_system: None,
             volumetric_fog_renderer: None,
             show_volumetric_fog: false,
+            dragged_cell_index: u32::MAX,
         }
     }
 
@@ -412,6 +415,7 @@ impl GpuScene {
         self.current_frame = 0;
         self.paused = false;
         self.first_frame = true;
+        self.dragged_cell_index = u32::MAX;
         
         // Reset adhesion buffers
         self.adhesion_buffers.reset(queue);
@@ -609,6 +613,30 @@ impl GpuScene {
             &self.gpu_physics_pipelines,
             &self.gpu_triple_buffers,
             &self.cached_bind_groups,
+        );
+        
+        // Copy GPU physics output to instance builder's buffers
+        self.copy_buffers_to_instance_builder(encoder);
+    }
+    
+    /// Run mechanics-only physics step (no nutrient transport, no mass accumulation, no lifecycle).
+    /// Used when paused and dragging so connected cells follow via spring forces.
+    fn run_mechanics_only(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, delta_time: f32, world_diameter: f32) {
+        execute_gpu_mechanics_step(
+            device,
+            encoder,
+            queue,
+            &self.gpu_physics_pipelines,
+            &mut self.gpu_triple_buffers,
+            &self.cached_bind_groups,
+            delta_time,
+            self.current_time,
+            self.current_frame,
+            world_diameter,
+            self.gravity,
+            self.gravity_dir,
+            self.cave_renderer.as_ref(),
+            self.cave_physics_bind_groups.as_ref(),
         );
         
         // Copy GPU physics output to instance builder's buffers
@@ -908,6 +936,9 @@ impl GpuScene {
                 || ma.child_a.mode_number != mb.child_a.mode_number
                 || ma.child_b.mode_number != mb.child_b.mode_number
                 || ma.parent_split_direction != mb.parent_split_direction
+                || ma.split_ratio != mb.split_ratio
+                || ma.nutrient_priority != mb.nutrient_priority
+                || ma.prioritize_when_low != mb.prioritize_when_low
             {
                 return false;
             }
@@ -1196,6 +1227,17 @@ impl GpuScene {
         }
     }
     
+    /// Mark a cell as being dragged so physics skips it.
+    /// The dragged cell's position will be controlled by the user via update_position shader.
+    pub fn set_dragged_cell(&mut self, cell_index: u32) {
+        self.dragged_cell_index = cell_index;
+    }
+    
+    /// Clear the dragged cell so physics resumes for all cells.
+    pub fn clear_dragged_cell(&mut self) {
+        self.dragged_cell_index = u32::MAX;
+    }
+    
     /// Update a cell's position using GPU operations
     /// 
     /// This method queues a position update to be executed during the next render phase.
@@ -1384,6 +1426,8 @@ impl GpuScene {
         if let Some((cell_idx, distance)) = self.pending_drag_result.take() {
             radial_menu.start_dragging(cell_idx);
             *drag_distance = distance;
+            // Mark cell as dragged so physics skips it
+            self.dragged_cell_index = cell_idx as u32;
             log::info!("Started dragging cell {} at distance {}", cell_idx, distance);
         }
     }
@@ -3229,6 +3273,26 @@ impl Scene for GpuScene {
             self.run_light_field(device, &mut encoder, queue);
         }
 
+        // Write dragged cell index to cell_count_buffer[2] so position_update shader can skip it
+        queue.write_buffer(
+            &self.gpu_triple_buffers.cell_count_buffer,
+            8, // byte offset for slot [2]
+            bytemuck::cast_slice(&[self.dragged_cell_index]),
+        );
+
+        let is_dragging = self.dragged_cell_index != u32::MAX;
+
+        // Execute drag position update BEFORE physics so adhesion springs see the
+        // correct dragged cell position and can pull connected cells toward it.
+        // update_position.wgsl writes to ALL THREE triple buffers, and
+        // position_update.wgsl preserves the dragged cell's position (copies in→out),
+        // so one dispatch before physics is sufficient.
+        let position_updated = if is_dragging {
+            self.execute_pending_position_updates(device, &mut encoder, queue)
+        } else {
+            false
+        };
+
         // Execute GPU physics pipeline if not paused and has cells
         // Use fixed timestep accumulator for consistent physics behavior
         if !self.paused {
@@ -3249,12 +3313,16 @@ impl Scene for GpuScene {
             if steps >= max_steps {
                 self.time_accumulator = 0.0;
             }
+        } else if is_dragging {
+            // Paused but dragging: run mechanics-only physics step so adhesion-connected
+            // cells follow via spring forces. Skips nutrient transport, mass accumulation,
+            // and lifecycle to preserve cell split timing and nutrient state.
+            let fixed_dt = self.config.fixed_timestep;
+            self.run_mechanics_only(device, &mut encoder, queue, fixed_dt, world_diameter);
         }
 
-        // Execute any pending position updates (drag tool) AFTER physics
-        // This ensures the dragged cell's position is set after physics has run,
-        // so physics doesn't overwrite the user's drag position
-        let position_updated = self.execute_pending_position_updates(device, &mut encoder, queue);
+        // Execute non-drag pending position updates (e.g. from other tools)
+        let position_updated = position_updated || self.execute_pending_position_updates(device, &mut encoder, queue);
 
         // Execute any pending cell removals (remove tool) AFTER physics
         // This marks cells for death by setting their mass to 0

@@ -138,6 +138,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
+    // Skip dragged cell - its position is controlled by the user via update_position shader
+    // cell_count_buffer[2] holds the dragged cell index (0xFFFFFFFF = none)
+    let dragged_cell = cell_count_buffer[2];
+    if (cell_idx == dragged_cell) {
+        positions_out[cell_idx] = positions_in[cell_idx];
+        velocities_out[cell_idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        prev_accelerations[cell_idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        rotations_out[cell_idx] = rotations_in[cell_idx];
+        return;
+    }
+    
     let pos = positions_in[cell_idx].xyz;
     let mass = positions_in[cell_idx].w;
     let vel = velocities_in[cell_idx].xyz;
