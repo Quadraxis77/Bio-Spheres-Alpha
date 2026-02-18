@@ -74,6 +74,11 @@ pub struct ShadowFieldParams {
     pub shadow_strength: f32,
     pub shadow_enabled: u32,
     pub shadow_quality: f32,
+    // Caustic parameters
+    pub caustic_intensity: f32,
+    pub caustic_scale: f32,
+    pub caustic_speed: f32,
+    pub time: f32,
 }
 
 /// GPU Light Field System
@@ -92,6 +97,8 @@ pub struct LightFieldSystem {
     occupancy_params_buffer: wgpu::Buffer,
     photocyte_params_buffer: wgpu::Buffer,
     shadow_field_params_buffer: wgpu::Buffer,
+    /// Dummy water bitfield buffer (all zeros) for when fluid sim isn't available
+    dummy_water_bitfield: wgpu::Buffer,
 
     // Compute pipelines
     clear_occupancy_pipeline: wgpu::ComputePipeline,
@@ -119,6 +126,14 @@ pub struct LightFieldSystem {
     shadow_strength: f32,
     shadow_enabled: bool,
     shadow_quality: f32,
+    // Caustic parameters
+    caustic_intensity: f32,
+    caustic_scale: f32,
+    caustic_speed: f32,
+    time: f32,
+
+    // Cave-specific shadow bind group layout (includes water bitfield)
+    cave_shadow_bind_group_layout: wgpu::BindGroupLayout,
 
     // Grid params (cached)
     world_radius: f32,
@@ -487,6 +502,57 @@ impl LightFieldSystem {
             mapped_at_creation: false,
         });
 
+        // Dummy water bitfield buffer (all zeros = no water anywhere)
+        // Used when fluid simulator isn't available
+        let bitfield_size = (TOTAL_VOXELS / 32) * std::mem::size_of::<u32>();
+        let dummy_water_bitfield = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Water Bitfield Buffer"),
+            size: bitfield_size as u64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
+        // === Cave-specific shadow bind group layout (includes water bitfield) ===
+        let cave_shadow_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Cave Shadow Field Bind Group Layout"),
+                entries: &[
+                    // Binding 0: ShadowFieldParams (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 1: light_field (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 2: water_bitfield (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
         Self {
             light_field_buffer,
             cell_occupancy_buffer,
@@ -494,6 +560,7 @@ impl LightFieldSystem {
             occupancy_params_buffer,
             photocyte_params_buffer,
             shadow_field_params_buffer,
+            dummy_water_bitfield,
             clear_occupancy_pipeline,
             build_occupancy_pipeline,
             compute_light_pipeline,
@@ -515,6 +582,11 @@ impl LightFieldSystem {
             shadow_strength: 0.7,
             shadow_enabled: true,
             shadow_quality: 0.8,
+            caustic_intensity: 0.5,
+            caustic_scale: 8.0,
+            caustic_speed: 1.0,
+            time: 0.0,
+            cave_shadow_bind_group_layout,
             world_radius,
             cell_size,
             grid_origin,
@@ -594,12 +666,37 @@ impl LightFieldSystem {
         self.shadow_enabled = enabled;
     }
 
-    /// Get the shadow bind group layout (for use by cave/cell renderers)
+    /// Set caustic intensity (0.0 = off, 1.0 = full)
+    pub fn set_caustic_intensity(&mut self, intensity: f32) {
+        self.caustic_intensity = intensity;
+    }
+
+    /// Set caustic scale (controls pattern size)
+    pub fn set_caustic_scale(&mut self, scale: f32) {
+        self.caustic_scale = scale;
+    }
+
+    /// Set caustic animation speed
+    pub fn set_caustic_speed(&mut self, speed: f32) {
+        self.caustic_speed = speed;
+    }
+
+    /// Set current time for caustic animation
+    pub fn set_time(&mut self, time: f32) {
+        self.time = time;
+    }
+
+    /// Get the shadow bind group layout (for use by cell renderers)
     pub fn shadow_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.shadow_bind_group_layout
     }
 
-    /// Create the shadow bind group for surface shadow rendering
+    /// Get the cave shadow bind group layout (includes water bitfield, for use by cave renderer)
+    pub fn cave_shadow_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.cave_shadow_bind_group_layout
+    }
+
+    /// Create the shadow bind group for surface shadow rendering (cells)
     pub fn create_shadow_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Shadow Field Bind Group"),
@@ -617,6 +714,28 @@ impl LightFieldSystem {
         })
     }
 
+    /// Create the cave shadow bind group (includes water bitfield for caustics)
+    pub fn create_cave_shadow_bind_group(&self, device: &wgpu::Device, water_bitfield_buffer: &wgpu::Buffer) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cave Shadow Field Bind Group"),
+            layout: &self.cave_shadow_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.shadow_field_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.light_field_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: water_bitfield_buffer.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
     /// Update shadow field params on the GPU
     pub fn update_shadow_params(&self, queue: &wgpu::Queue) {
         let params = ShadowFieldParams {
@@ -628,8 +747,17 @@ impl LightFieldSystem {
             shadow_strength: self.shadow_strength,
             shadow_enabled: if self.shadow_enabled { 1 } else { 0 },
             shadow_quality: self.shadow_quality,
+            caustic_intensity: self.caustic_intensity,
+            caustic_scale: self.caustic_scale,
+            caustic_speed: self.caustic_speed,
+            time: self.time,
         };
         queue.write_buffer(&self.shadow_field_params_buffer, 0, bytemuck::bytes_of(&params));
+    }
+
+    /// Get the dummy water bitfield buffer (all zeros, for when fluid sim isn't available)
+    pub fn dummy_water_bitfield(&self) -> &wgpu::Buffer {
+        &self.dummy_water_bitfield
     }
 
     /// Get grid origin

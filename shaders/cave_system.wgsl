@@ -99,10 +99,15 @@ struct ShadowFieldParams {
     shadow_strength: f32,
     shadow_enabled: u32,
     shadow_quality: f32,
+    caustic_intensity: f32,
+    caustic_scale: f32,
+    caustic_speed: f32,
+    time: f32,
 }
 
 @group(2) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
 @group(2) @binding(1) var<storage, read> light_field: array<f32>;
+@group(2) @binding(2) var<storage, read> water_bitfield: array<u32>;
 
 // Sample light field at world position with trilinear interpolation
 fn sample_light_field(world_pos: vec3<f32>) -> f32 {
@@ -166,6 +171,90 @@ fn vs_main(vertex: VertexInput) -> VertexOutput {
     out.clip_position = camera.view_proj * vec4<f32>(vertex.position, 1.0);
     
     return out;
+}
+
+// ============================================================
+// Water detection using bitfield
+// ============================================================
+fn is_underwater(world_pos: vec3<f32>) -> bool {
+    let res = shadow_params.grid_resolution;
+    let fres = f32(res);
+    let grid_origin = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
+    
+    let gx = (world_pos.x - grid_origin.x) / shadow_params.cell_size;
+    let gy = (world_pos.y - grid_origin.y) / shadow_params.cell_size;
+    let gz = (world_pos.z - grid_origin.z) / shadow_params.cell_size;
+    
+    let ix = i32(floor(gx));
+    let iy = i32(floor(gy));
+    let iz = i32(floor(gz));
+    let ires = i32(res);
+    
+    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
+        return false;
+    }
+    
+    let voxel_idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
+    let word_idx = voxel_idx / 32u;
+    let bit_idx = voxel_idx % 32u;
+    return (water_bitfield[word_idx] & (1u << bit_idx)) != 0u;
+}
+
+// ============================================================
+// Procedural caustics (iterative coordinate distortion)
+// Based on the well-known Shadertoy water caustic technique.
+// Bright lines form where sin/cos approach zero through
+// iterative warping, producing realistic caustic networks.
+// ============================================================
+
+fn caustic_single(uv: vec2<f32>, time: f32) -> f32 {
+    // Use continuous UV directly (no fract/tiling).
+    // Offset into a range where the formula behaves well.
+    var p = uv * 6.28318 - vec2<f32>(250.0, 250.0);
+    var i = p;
+    var c = 1.0;
+    let inten = 0.005;
+
+    for (var n = 0; n < 5; n++) {
+        let t = time * (1.0 - 3.5 / f32(n + 1));
+        i = p + vec2<f32>(
+            cos(t - i.x) + sin(t + i.y),
+            sin(t - i.y) + cos(t + i.x)
+        );
+        c += 1.0 / length(vec2<f32>(
+            p.x / (sin(i.x + t) / inten),
+            p.y / (cos(i.y + t) / inten)
+        ));
+    }
+
+    c = c / 5.0;
+    c = 1.17 - pow(c, 1.4);
+    return pow(abs(c), 8.0);
+}
+
+fn caustic_pattern(world_pos: vec3<f32>, normal: vec3<f32>, time: f32) -> f32 {
+    let scale = shadow_params.caustic_scale;
+    let speed = shadow_params.caustic_speed;
+    let t = time * speed;
+
+    // Triplanar projection to avoid stretching
+    let abs_n = abs(normal);
+    var uv: vec2<f32>;
+    if (abs_n.y > abs_n.x && abs_n.y > abs_n.z) {
+        uv = world_pos.xz;
+    } else if (abs_n.x > abs_n.z) {
+        uv = world_pos.yz;
+    } else {
+        uv = world_pos.xy;
+    }
+
+    let p = uv * scale * 0.05;
+
+    // Two layers at slightly different scales/times for richer look
+    let c1 = caustic_single(p, t);
+    let c2 = caustic_single(p * 0.8 + vec2<f32>(1.7, 3.2), t * 0.7 + 5.0);
+
+    return min((c1 + c2) * 0.5, 1.0);
 }
 
 // Simple hash function for procedural texture
@@ -285,7 +374,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
     let shadow = mix(1.0, sample_light_field(clamped_pos), shadow_params.shadow_strength);
     let ambient = vec3<f32>(0.1) * ao;
-    let final_color = final_base_color * (ambient + diffuse * 0.7 * shadow) + vec3<f32>(specular * 0.3 * shadow);
+    var final_color = final_base_color * (ambient + diffuse * 0.7 * shadow) + vec3<f32>(specular * 0.3 * shadow);
+    
+    // Apply underwater caustics on lit surfaces
+    // Check slightly inside the cave interior (along normal) since the wall surface
+    // sits at the solid/empty boundary - water occupies the voxels in front of the wall
+    let water_check_pos = in.world_position + N * shadow_params.cell_size * 1.5;
+    if (shadow_params.caustic_intensity > 0.0 && shadow > 0.3) {
+        if (is_underwater(water_check_pos)) {
+            let caustic = caustic_pattern(in.world_position, N, shadow_params.time);
+            // Caustics add light to underwater surfaces, modulated by shadow (only on lit areas)
+            let caustic_color = vec3<f32>(0.4, 0.7, 1.0); // Bluish-white light
+            final_color += caustic_color * caustic * shadow_params.caustic_intensity * shadow * 0.5;
+        }
+    }
     
     // Completely opaque walls
     let alpha = 1.0;

@@ -968,6 +968,38 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
             context.editor_state.save_fluid_settings();
         }
     
+    // === Caustics ===
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("Caustics");
+    ui.add_space(4.0);
+    let mut caustic_changed = false;
+    
+    ui.label("Intensity:");
+    caustic_changed |= ui.add(egui::Slider::new(&mut context.editor_state.caustic_intensity, 0.0..=2.0)
+        .step_by(0.01).fixed_decimals(2)).changed();
+    
+    ui.add_space(4.0);
+    ui.label("Scale:");
+    caustic_changed |= ui.add(egui::Slider::new(&mut context.editor_state.caustic_scale, 0.1..=30.0)
+        .step_by(0.1).fixed_decimals(1)).changed();
+    
+    ui.add_space(4.0);
+    ui.label("Speed:");
+    caustic_changed |= ui.add(egui::Slider::new(&mut context.editor_state.caustic_speed, 0.0..=5.0)
+        .step_by(0.1).fixed_decimals(1)).changed();
+    
+    if caustic_changed {
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            if let Some(ref mut light_field) = gpu_scene.light_field_system {
+                light_field.set_caustic_intensity(context.editor_state.caustic_intensity);
+                light_field.set_caustic_scale(context.editor_state.caustic_scale);
+                light_field.set_caustic_speed(context.editor_state.caustic_speed);
+            }
+        }
+        context.editor_state.save_light_settings();
+    }
+    
     ui.add_space(10.0);
 }
 /// Render the Light & Fog settings panel for light field, photocyte, and volumetric fog controls.

@@ -2911,6 +2911,9 @@ impl GpuScene {
             light_field.set_shadow_enabled(editor_state.shadow_enabled);
             light_field.set_shadow_strength(editor_state.shadow_strength);
             light_field.set_shadow_quality(editor_state.shadow_quality);
+            light_field.set_caustic_intensity(editor_state.caustic_intensity);
+            light_field.set_caustic_scale(editor_state.caustic_scale);
+            light_field.set_caustic_speed(editor_state.caustic_speed);
         }
         
         // Update volumetric fog renderer parameters
@@ -3482,12 +3485,21 @@ impl Scene for GpuScene {
             self.instance_builder.capacity(),
         );
 
+        // Update light field time for caustic animation
+        if let Some(ref mut light_field) = self.light_field_system {
+            light_field.set_time(self.current_time);
+        }
+
         // Render cave system if initialized (before sun so caves occlude it)
         if let Some(ref mut cave_renderer) = self.cave_renderer {
-            // Update shadow bind group from light field system
+            // Update shadow bind group from light field system (with water bitfield for caustics)
             if let Some(ref light_field) = self.light_field_system {
                 light_field.update_shadow_params(queue);
-                let shadow_bg = light_field.create_shadow_bind_group(device);
+                // Use water bitfield from fluid simulator if available, otherwise dummy
+                let water_buf = self.fluid_simulator.as_ref()
+                    .map(|fs| fs.water_bitfield_buffer())
+                    .unwrap_or(light_field.dummy_water_bitfield());
+                let shadow_bg = light_field.create_cave_shadow_bind_group(device, water_buf);
                 cave_renderer.set_shadow_bind_group(shadow_bg);
             }
             cave_renderer.render(

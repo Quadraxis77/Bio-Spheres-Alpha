@@ -1,5 +1,5 @@
 (
-    light_dir: (0.0, 1.0, 0.0),
+    light_dir: (0.0, 1.0, -0.63),
     show_volumetric_fog: true,
     fog_density: 0.15,
     fog_steps: 20,
@@ -22,4 +22,7 @@
     shadow_enabled: true,
     shadow_strength: 1.0,
     shadow_quality: 0.0,
+    caustic_intensity: 2.0,
+    caustic_scale: 0.1,
+    caustic_speed: 1.0,
 )

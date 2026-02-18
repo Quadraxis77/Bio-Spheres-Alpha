@@ -41,6 +41,10 @@ struct ShadowFieldParams {
     shadow_strength: f32,
     shadow_enabled: u32,
     shadow_quality: f32,
+    caustic_intensity: f32,
+    caustic_scale: f32,
+    caustic_speed: f32,
+    time: f32,
 }
 
 @group(1) @binding(0) var<uniform> shadow_params: ShadowFieldParams;

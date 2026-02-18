@@ -239,7 +239,7 @@ impl CaveSystemRenderer {
             source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cave_system.wgsl").into()),
         });
         
-        // Create shadow field bind group layout (group 2)
+        // Create shadow field bind group layout (group 2) - includes water bitfield for caustics
         let shadow_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Cave Shadow Field Bind Group Layout"),
             entries: &[
@@ -255,6 +255,16 @@ impl CaveSystemRenderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },

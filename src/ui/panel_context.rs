@@ -280,6 +280,13 @@ pub struct GenomeEditorState {
     pub shadow_strength: f32,
     /// Shadow quality (0.0 = low, 1.0 = high - affects sample offset distance)
     pub shadow_quality: f32,
+    // Caustic settings
+    /// Caustic intensity (0.0 = off, 1.0 = full)
+    pub caustic_intensity: f32,
+    /// Caustic pattern scale
+    pub caustic_scale: f32,
+    /// Caustic animation speed
+    pub caustic_speed: f32,
     
     // Orientation gizmo state
     /// Whether the orientation gizmo is visible
@@ -325,7 +332,8 @@ impl GenomeEditorState {
              fog_color, fog_scattering_anisotropy, fog_absorption, fog_height_density, fog_height_falloff,
              light_field_max_steps, light_field_step_size, light_field_absorption_solid,
              light_field_absorption_cell, light_field_ambient_floor, show_sun, sun_color, sun_angular_radius, sun_intensity,
-             shadow_enabled, shadow_strength, shadow_quality) = Self::load_light_settings();
+             shadow_enabled, shadow_strength, shadow_quality,
+             caustic_intensity, caustic_scale, caustic_speed) = Self::load_light_settings();
         
         let (cell_type_visuals, cell_outline_width) = crate::cell::types::CellTypeVisualsStore::load();
         
@@ -439,6 +447,9 @@ impl GenomeEditorState {
             shadow_enabled,
             shadow_strength,
             shadow_quality,
+            caustic_intensity,
+            caustic_scale,
+            caustic_speed,
             gizmo_visible: true,
             split_rings_visible: true,
             radial_menu: crate::ui::radial_menu::RadialMenuState::new(),
@@ -664,6 +675,10 @@ impl GenomeEditorState {
             self.shadow_enabled,
             self.shadow_strength,
             self.shadow_quality,
+            // Caustic settings
+            self.caustic_intensity,
+            self.caustic_scale,
+            self.caustic_speed,
         ) {
             log::warn!("Failed to save light settings: {}", e);
         }
@@ -695,6 +710,10 @@ impl GenomeEditorState {
         shadow_enabled: bool,
         shadow_strength: f32,
         shadow_quality: f32,
+        // Caustic settings
+        caustic_intensity: f32,
+        caustic_scale: f32,
+        caustic_speed: f32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct LightSettings {
@@ -723,6 +742,9 @@ impl GenomeEditorState {
             shadow_enabled: bool,
             shadow_strength: f32,
             shadow_quality: f32,
+            caustic_intensity: f32,
+            caustic_scale: f32,
+            caustic_speed: f32,
         }
         
         let settings = LightSettings {
@@ -751,6 +773,10 @@ impl GenomeEditorState {
             shadow_enabled,
             shadow_strength,
             shadow_quality,
+            // Caustic settings
+            caustic_intensity,
+            caustic_scale,
+            caustic_speed,
         };
         
         let path = PathBuf::from("light_settings.ron");
@@ -760,7 +786,7 @@ impl GenomeEditorState {
     }
     
     /// Load light settings from disk, or return defaults if file doesn't exist.
-    pub fn load_light_settings() -> ([f32; 3], bool, f32, u32, [f32; 3], f32, [f32; 3], f32, f32, f32, f32, u32, f32, f32, f32, f32, bool, [f32; 3], f32, f32, bool, f32, f32) {
+    pub fn load_light_settings() -> ([f32; 3], bool, f32, u32, [f32; 3], f32, [f32; 3], f32, f32, f32, f32, u32, f32, f32, f32, f32, bool, [f32; 3], f32, f32, bool, f32, f32, f32, f32, f32) {
         #[derive(serde::Deserialize)]
         struct LightSettings {
             light_dir: [f32; 3],
@@ -795,10 +821,19 @@ impl GenomeEditorState {
             shadow_strength: f32,
             #[serde(default = "default_shadow_quality")]
             shadow_quality: f32,
+            #[serde(default = "default_caustic_intensity")]
+            caustic_intensity: f32,
+            #[serde(default = "default_caustic_scale")]
+            caustic_scale: f32,
+            #[serde(default = "default_caustic_speed")]
+            caustic_speed: f32,
         }
         fn default_shadow_enabled() -> bool { true }
         fn default_shadow_strength() -> f32 { 0.7 }
         fn default_shadow_quality() -> f32 { 0.8 }
+        fn default_caustic_intensity() -> f32 { 0.5 }
+        fn default_caustic_scale() -> f32 { 8.0 }
+        fn default_caustic_speed() -> f32 { 1.0 }
         
         let path = PathBuf::from("light_settings.ron");
         
@@ -833,6 +868,10 @@ impl GenomeEditorState {
                                 s.shadow_enabled,
                                 s.shadow_strength,
                                 s.shadow_quality,
+                                // Caustic settings
+                                s.caustic_intensity,
+                                s.caustic_scale,
+                                s.caustic_speed,
                             );
                         }
                         Err(e) => {
@@ -873,6 +912,10 @@ impl GenomeEditorState {
             true,               // shadow_enabled
             0.7,                // shadow_strength
             0.8,                // shadow_quality
+            // Caustic settings
+            0.5,                // caustic_intensity
+            8.0,                // caustic_scale
+            1.0,                // caustic_speed
         )
     }
     
