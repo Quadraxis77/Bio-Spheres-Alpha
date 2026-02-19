@@ -1825,6 +1825,17 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::DragValue::new(&mut mode.swim_force).speed(0.01).range(0.0..=3.0));
                     });
                 });
+            } else if mode.cell_type == 5 { // Buoyocyte (cell_type == 5)
+                group_container(ui, "Buoyocyte Functions", egui::Color32::from_rgb(140, 200, 180), |ui| {
+                    ui.label("Buoyancy Force:");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.buoyancy_force, 0.0..=3.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.buoyancy_force).speed(0.01).range(0.0..=3.0));
+                    });
+                });
             }
 
             // Division Settings Group (Yellow)
@@ -2042,26 +2053,6 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 }
             });
 
-            // Appearance Settings Group (Purple)
-            group_container(ui, "Appearance", egui::Color32::from_rgb(160, 120, 200), |ui| {
-                ui.label("Opacity:");
-                ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.opacity, 0.0..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.opacity).speed(0.01).range(0.0..=1.0));
-                });
-
-                ui.label("Emissive Glow:");
-                ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.emissive, 0.0..=2.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.emissive).speed(0.01).range(0.0..=2.0));
-                });
-            });
         });
 }
 

@@ -140,6 +140,7 @@ struct VertexOutput {
     @location(10) @interpolate(flat) rotation: vec4<f32>,
     @location(11) @interpolate(flat) type_data_0: vec4<f32>,
     @location(12) @interpolate(flat) type_data_1: vec4<f32>,
+    @location(13) @interpolate(flat) instance_index: u32,
 }
 
 const QUAD_POSITIONS: array<vec2<f32>, 4> = array<vec2<f32>, 4>(
@@ -175,6 +176,7 @@ fn quat_rotate_inverse(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
 fn vs_main(
     instance: InstanceInput,
     @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
 ) -> VertexOutput {
     var out: VertexOutput;
 
@@ -222,6 +224,7 @@ fn vs_main(
     out.rotation = instance.rotation;
     out.type_data_0 = instance.type_data_0;
     out.type_data_1 = instance.type_data_1;
+    out.instance_index = instance_index;
 
     return out;
 }
@@ -487,56 +490,98 @@ fn internals_lipocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
-// Type 5: Buoyocyte — Hollow interior with gas bladder organelle.
-// Features a thick-walled hollow cell with a biconvex (contact lens-shaped)
-// gas organelle that provides buoyancy. The organelle appears as a translucent
-// bubble with highlights and refraction effects.
-fn internals_buoyocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
-    // Hollow cell: empty center region
-    let hollow_radius = 0.25;  // Inner hollow cavity
-    let hollow = smoothstep(hollow_radius - 0.05, hollow_radius + 0.05, r);
+// Type 5: Buoyocyte — Gas bubbles scattered inside a hollow cell.
+// 7 bubbles of varying sizes. Since p is in rotation-aware cell-local space,
+// the bubbles rotate with the cell automatically.
+fn gas_bubble_sdf(p: vec3<f32>, center: vec3<f32>, radius: f32) -> f32 {
+    // Perfect sphere - no noise to avoid breathing effect
+    return length(p - center) - radius;
+}
+
+fn internals_buoyocyte(p: vec3<f32>, r: f32, time: f32, cell_index: u32) -> vec3<f32> {
+    // Pseudo-random seed from cell index
+    let seed = fract(f32(cell_index) * 12.9898);
+    let seed2 = fract(f32(cell_index) * 78.233);
     
-    // Contact lens-shaped gas organelle (biconvex lens)
-    // The organelle sits in the upper hemisphere and has a distinctive lens shape
-    let organelle_center = vec3<f32>(0.0, 0.15, 0.0);  // Positioned in upper half
+    // Randomized rotation speed and phase per cell
+    let rotation_speed = 0.3 + seed * 0.4;  // 0.3 to 0.7 radians per second
+    let phase_offset = seed2 * 6.283;  // 0 to 2π
+    let angle = time * rotation_speed + phase_offset;
+    let cos_a = cos(angle);
+    let sin_a = sin(angle);
     
-    // Transform to organelle-local space
-    let op = p - organelle_center;
-    let or = length(op);
+    // Randomized bubble positions (offsets from base positions)
+    let offset0 = vec3<f32>(seed * 0.1, seed2 * 0.1, (seed + seed2) * 0.1);
+    let offset1 = vec3<f32>(seed2 * 0.15, (seed + 0.5) * 0.1, seed * 0.12);
+    let offset2 = vec3<f32>((seed + 0.3) * 0.12, seed2 * 0.08, (seed2 + 0.7) * 0.15);
+    let offset3 = vec3<f32>((seed2 + 0.2) * 0.1, seed * 0.13, (seed + 0.4) * 0.11);
+    let offset4 = vec3<f32>(seed * 0.14, (seed2 + 0.6) * 0.09, (seed + 0.8) * 0.1);
+    let offset5 = vec3<f32>((seed + 0.1) * 0.11, seed2 * 0.12, seed * 0.08);
+    let offset6 = vec3<f32>((seed2 + 0.4) * 0.09, (seed + 0.2) * 0.11, seed2 * 0.13);
     
-    // Biconvex lens shape: thicker in center, thinner at edges
-    // Using two spherical surfaces to create the lens profile
-    let lens_radius = 0.35;  // Overall lens radius
-    let lens_thickness = 0.12;  // Maximum thickness at center
+    // Base positions + random offsets, then rotate
+    let base0 = vec3<f32>( 0.00,  0.25,  0.00) + offset0;
+    let base1 = vec3<f32>(-0.28,  0.05,  0.15) + offset1;
+    let base2 = vec3<f32>( 0.22, -0.10, -0.20) + offset2;
+    let base3 = vec3<f32>( 0.05, -0.25,  0.22) + offset3;
+    let base4 = vec3<f32>(-0.18, -0.22, -0.12) + offset4;
+    let base5 = vec3<f32>( 0.30,  0.18, -0.05) + offset5;
+    let base6 = vec3<f32>(-0.10,  0.10, -0.30) + offset6;
     
-    // Distance from lens center along Y axis determines thickness
-    let y_dist = abs(op.y);
-    let xz_dist = sqrt(op.x * op.x + op.z * op.z);
+    // Inline rotation: rotate randomized positions around Y axis
+    let rot0 = vec3<f32>(base0.x * cos_a - base0.z * sin_a, base0.y, base0.x * sin_a + base0.z * cos_a);
+    let rot1 = vec3<f32>(base1.x * cos_a - base1.z * sin_a, base1.y, base1.x * sin_a + base1.z * cos_a);
+    let rot2 = vec3<f32>(base2.x * cos_a - base2.z * sin_a, base2.y, base2.x * sin_a + base2.z * cos_a);
+    let rot3 = vec3<f32>(base3.x * cos_a - base3.z * sin_a, base3.y, base3.x * sin_a + base3.z * cos_a);
+    let rot4 = vec3<f32>(base4.x * cos_a - base4.z * sin_a, base4.y, base4.x * sin_a + base4.z * cos_a);
+    let rot5 = vec3<f32>(base5.x * cos_a - base5.z * sin_a, base5.y, base5.x * sin_a + base5.z * cos_a);
+    let rot6 = vec3<f32>(base6.x * cos_a - base6.z * sin_a, base6.y, base6.x * sin_a + base6.z * cos_a);
     
-    // Lens equation: thicker at center, curved edges
-    let lens_profile = lens_thickness * (1.0 - (y_dist / lens_radius) * (y_dist / lens_radius));
-    let lens_edge = smoothstep(lens_radius - 0.05, lens_radius + 0.05, xz_dist);
-    
-    // Combine radial and vertical constraints for lens shape
-    let lens_shape = (1.0 - lens_edge) * (1.0 - smoothstep(0.0, lens_thickness, lens_profile));
-    
-    // Gas bubble effect: translucent with bright highlights
-    let gas_bubble = lens_shape;
-    
-    // Add refraction-like highlights on the gas surface
-    let highlight_angle = dot(normalize(op), normalize(vec3<f32>(0.3, 0.7, 0.2)));
-    let highlight = pow(max(0.0, highlight_angle), 8.0) * gas_bubble;
-    
-    // Combine effects
-    // 1. Hollow region (empty/dark)
-    // 2. Gas organelle (bright, translucent)
-    // 3. Cytoplasm (medium brightness)
-    let cytoplasm = 1.0 - hollow - gas_bubble * 0.7;
-    let pattern = max(cytoplasm * 0.3, gas_bubble * 0.8 + highlight);
-    
-    // Color shifts: gas appears lighter/brighter, hollow appears darker
-    let color_shift = gas_bubble * 0.6 - hollow * 0.4 + highlight * 0.3;
-    
+    // 7 gas bubbles at rotating positions with varying sizes
+    let d0 = gas_bubble_sdf(p, rot0, 0.30);  // large, top center
+    let d1 = gas_bubble_sdf(p, rot1, 0.22);  // medium, left
+    let d2 = gas_bubble_sdf(p, rot2, 0.20);  // medium, right-low
+    let d3 = gas_bubble_sdf(p, rot3, 0.18);  // small, bottom-front
+    let d4 = gas_bubble_sdf(p, rot4, 0.16);  // small, bottom-left-back
+    let d5 = gas_bubble_sdf(p, rot5, 0.14);  // tiny, upper-right
+    let d6 = gas_bubble_sdf(p, rot6, 0.12);  // tiny, back
+
+    // Soft masks (negative SDF = inside) - wider soft edges for better visibility
+    let b0 = 1.0 - smoothstep(-0.04, 0.02, d0);
+    let b1 = 1.0 - smoothstep(-0.04, 0.02, d1);
+    let b2 = 1.0 - smoothstep(-0.04, 0.02, d2);
+    let b3 = 1.0 - smoothstep(-0.04, 0.02, d3);
+    let b4 = 1.0 - smoothstep(-0.04, 0.02, d4);
+    let b5 = 1.0 - smoothstep(-0.04, 0.02, d5);
+    let b6 = 1.0 - smoothstep(-0.04, 0.02, d6);
+
+    // Union of all bubbles
+    let gas = max(b0, max(b1, max(b2, max(b3, max(b4, max(b5, b6))))));
+
+    // Membrane walls (bright ring at each bubble surface)
+    let w0 = exp(-200.0 * d0 * d0) * step(-0.1, -d0);
+    let w1 = exp(-200.0 * d1 * d1) * step(-0.1, -d1);
+    let w2 = exp(-200.0 * d2 * d2) * step(-0.1, -d2);
+    let w3 = exp(-200.0 * d3 * d3) * step(-0.1, -d3);
+    let w4 = exp(-200.0 * d4 * d4) * step(-0.1, -d4);
+    let w5 = exp(-200.0 * d5 * d5) * step(-0.1, -d5);
+    let w6 = exp(-200.0 * d6 * d6) * step(-0.1, -d6);
+    let walls = max(w0, max(w1, max(w2, max(w3, max(w4, max(w5, w6))))));
+
+    // Specular highlight
+    let light_dir = normalize(vec3<f32>(0.3, 0.8, 0.2));
+    let spec = pow(max(0.0, dot(normalize(p), light_dir)), 10.0) * gas;
+
+    // Compose
+    let pattern = (1.0 - gas) * 0.08   // cytoplasm between bubbles
+               + gas * 0.90            // gas interior (very bright)
+               + walls * 0.80          // bubble membranes (bright)
+               + spec * 0.3;           // specular
+
+    let color_shift = gas * 0.60
+                    + walls * 0.40
+                    + spec * 0.2;
+
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
@@ -544,14 +589,14 @@ fn internals_buoyocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
 // Pattern Dispatcher
 // ============================================================================
 
-fn get_internals(cell_type: u32, p: vec3<f32>, r: f32) -> vec3<f32> {
+fn get_internals(cell_type: u32, p: vec3<f32>, r: f32, cell_index: u32) -> vec3<f32> {
     switch (cell_type) {
         case 0u: { return internals_test(p, r); }
         case 1u: { return internals_flagellocyte(p, r); }
         case 2u: { return internals_phagocyte(p, r); }
         case 3u: { return internals_photocyte(p, r); }
         case 4u: { return internals_lipocyte(p, r); }
-        case 5u: { return internals_buoyocyte(p, r); }
+        case 5u: { return internals_buoyocyte(p, r, camera.time, cell_index); }
         default: { return internals_test(p, r); }
     }
 }
@@ -694,7 +739,9 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     var interior_result = base_color * 0.75;
 
     if (lod >= 1u) {
-        let internals = get_internals(cell_type, interior_pos, r);
+        // Get cell index from instance data (assuming it's packed in w component)
+        let cell_index = u32(in.instance_index);
+        let internals = get_internals(cell_type, interior_pos, r, cell_index);
         let pattern_value = internals.x;
         let color_shift = internals.y;
 

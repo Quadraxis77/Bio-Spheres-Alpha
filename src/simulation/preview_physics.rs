@@ -254,6 +254,18 @@ pub fn integrate_angular_velocities(
 /// - Forward direction is derived from the cell's rotation quaternion (local +Z axis)
 /// - Thrust force = forward * swim_force * 120.0 (scaled for physics simulation)
 /// - Only applies to cells with cell_type == 1 (Flagellocyte) and swim_force > 0.0
+pub fn apply_buoyancy_forces(state: &mut CanonicalState, genome: &Genome) {
+    for i in 0..state.cell_count {
+        let mode_index = state.mode_indices[i];
+        if let Some(mode) = genome.modes.get(mode_index) {
+            if mode.cell_type == 5 && mode.buoyancy_force > 0.0 {
+                let upward_force = Vec3::Y * mode.buoyancy_force * 120.0;
+                state.forces[i] += upward_force;
+            }
+        }
+    }
+}
+
 pub fn apply_swim_forces(state: &mut CanonicalState, genome: &Genome) {
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
@@ -283,7 +295,7 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
             // - Test cells (0): Always auto-gain
             // - Phagocytes (2): Simulate eating nutrient particles
             // - Photocytes (3): Simulate photosynthesis from light
-            // All other cells (Flagellocytes, Lipocytes) must rely on nutrient transport
+            // All other cells (Flagellocytes, Lipocytes, Buoyocytes) must rely on nutrient transport
             let can_auto_gain = mode.cell_type == 0  // Test
                              || mode.cell_type == 2  // Phagocyte
                              || mode.cell_type == 3; // Photocyte
@@ -528,6 +540,9 @@ pub fn physics_step_with_genome(
 
     // Skip swim forces in preview mode - flagellocyte thrust is GPU-only
     // apply_swim_forces(state, genome);
+
+    // Skip buoyancy forces in preview mode - buoyocyte lift is GPU-only
+    // apply_buoyancy_forces(state, genome);
 
     apply_boundary_forces(state, config);
 
