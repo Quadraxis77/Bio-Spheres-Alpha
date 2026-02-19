@@ -2657,6 +2657,60 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 });
             }
 
+            // Slime pattern section (only for Glueocyte cell type)
+            if cell_types.get(selected_idx) == Some(&CellType::Glueocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Slime Pattern").strong());
+                ui.add_space(4.0);
+
+                ui.label("Cell Scale:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_scale, 1.0..=12.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_scale).speed(0.1).range(1.0..=12.0));
+                });
+
+                ui.label("Border Width:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.01..=0.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_width).speed(0.005).range(0.01..=0.5));
+                });
+
+                ui.label("Meander:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_meander).speed(0.01).range(0.0..=1.0));
+                });
+
+                ui.label("Border Darkness:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.0..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_strength).speed(0.01).range(0.0..=1.0));
+                });
+
+                ui.label("Anim Speed:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.membrane_noise_speed, 0.0..=5.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.membrane_noise_speed).speed(0.05).range(0.0..=5.0));
+                });
+            }
+
             // Goldberg ridge section (only for Photocyte cell type)
             if cell_types.get(selected_idx) == Some(&CellType::Photocyte) {
                 ui.add_space(12.0);

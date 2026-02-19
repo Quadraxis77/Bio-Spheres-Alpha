@@ -490,6 +490,61 @@ fn internals_lipocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
+// Type 6: Glueocyte — Domain-warped Voronoi slime pattern.
+// voro_scale: cell density (higher = more cells)
+// border_width: thickness of the dark border between cells (0..1)
+// meander: domain warp strength — how much borders wiggle
+// border_dark: darkness of the border groove (0..1)
+fn internals_glueocyte(surf: vec3<f32>, voro_scale: f32, border_width: f32, meander: f32, border_dark: f32, t: f32, cell_seed: f32, anim_speed: f32) -> vec3<f32> {
+    // Per-cell random phase and speed offsets so each cell animates differently
+    let phase  = cell_seed * 6.2831853;                        // 0..2pi offset
+    let speed  = anim_speed * (1.0 + cell_seed * 0.4);        // ±20% variation per cell
+    let anim   = t * speed + phase;
+
+    // Domain warp: distort the lookup position with noise so borders meander organically.
+    // Animate the warp offset over time for a slow flowing/breathing motion.
+    let warp_freq = voro_scale * 1.3;
+    let wx = value_noise_3d(surf * warp_freq + vec3<f32>(1.7 + sin(anim * 0.7), 9.2, 3.4));
+    let wy = value_noise_3d(surf * warp_freq + vec3<f32>(8.3, 2.8 + cos(anim * 0.5), 5.1));
+    let wz = value_noise_3d(surf * warp_freq + vec3<f32>(4.1, 6.7, 1.9 + sin(anim * 0.6 + 1.1)));
+    let warped = surf + vec3<f32>(wx - 0.5, wy - 0.5, wz - 0.5) * meander * 2.0;
+
+    // Voronoi: find nearest and second-nearest feature points
+    let sp = warped * voro_scale;
+    let ip = floor(sp);
+    var d1 = 1e9;
+    var d2 = 1e9;
+    for (var dz = -1; dz <= 1; dz++) {
+        for (var dy = -1; dy <= 1; dy++) {
+            for (var dx = -1; dx <= 1; dx++) {
+                let cell = ip + vec3<f32>(f32(dx), f32(dy), f32(dz));
+                let h1 = fract(sin(dot(cell, vec3<f32>(127.1, 311.7,  74.7))) * 43758.5453);
+                let h2 = fract(sin(dot(cell, vec3<f32>(269.5, 183.3, 246.1))) * 43758.5453);
+                let h3 = fract(sin(dot(cell, vec3<f32>(113.5, 271.9, 124.6))) * 43758.5453);
+                let pt = cell + vec3<f32>(h1, h2, h3);
+                let d = distance(sp, pt);
+                if (d < d1) { d2 = d1; d1 = d; }
+                else if (d < d2) { d2 = d; }
+            }
+        }
+    }
+
+    // Border = distance to the edge between two cells (0 at border, positive inside)
+    let edge = d2 - d1;
+
+    // Dark border groove
+    let groove = 1.0 - smoothstep(0.0, border_width, edge);
+    // Cell interior: slightly raised/bright toward center
+    let interior = smoothstep(border_width * 0.5, border_width * 2.0, edge);
+    // Wet gloss pooling at cell centers
+    let gloss = pow(interior, 3.0) * 0.6;
+
+    let pattern = groove * border_dark + interior * 0.4 + gloss * 0.35;
+    let color_shift = gloss * 0.45 - groove * border_dark * 0.5;
+
+    return vec3<f32>(pattern, color_shift, 0.0);
+}
+
 // Type 5: Buoyocyte — Gas bubbles scattered inside a hollow cell.
 // 7 bubbles of varying sizes. Since p is in rotation-aware cell-local space,
 // the bubbles rotate with the cell automatically.
@@ -597,6 +652,7 @@ fn get_internals(cell_type: u32, p: vec3<f32>, r: f32, cell_index: u32) -> vec3<
         case 3u: { return internals_photocyte(p, r); }
         case 4u: { return internals_lipocyte(p, r); }
         case 5u: { return internals_buoyocyte(p, r, camera.time, cell_index); }
+        case 6u: { return vec3<f32>(0.0); } // handled inline in fs_main using surface dir
         default: { return internals_test(p, r); }
     }
 }
@@ -650,6 +706,12 @@ fn get_membrane_params(cell_type: u32) -> MembraneParams {
             m.opacity = 0.4;
             m.rim_power = 3.0;
             m.color_darken = 0.3;
+        }
+        case 6u: { // Glueocyte — sticky cell, thin membrane
+            m.thickness = 0.05;
+            m.opacity = 0.45;
+            m.rim_power = 2.5;
+            m.color_darken = 0.2;
         }
         default: {
             m.thickness = 0.06;
@@ -750,6 +812,29 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
         // Composite organelles over base cytoplasm
         interior_result = mix(interior_result, organelle_color, pattern_value);
+    }
+
+    // ====================================================================
+    // Glueocyte (type 6): Domain-warped Voronoi slime (LOD >= 1)
+    // type_data_0: x=voro_scale, y=border_width, z=meander, w=border_dark
+    // ====================================================================
+    if (cell_type == 6u && lod >= 1u) {
+        let surf_local = normalize(quat_rotate_inverse(in.rotation,
+            in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
+        let cell_seed = fract(f32(in.instance_index) * 0.6180339887); // golden ratio hash
+        let anim_speed = in.type_data_1.y; // membrane_noise_speed -> animation speed multiplier
+        let slime = internals_glueocyte(
+            surf_local,
+            in.type_data_0.x,  // voro_scale   (goldberg_scale)
+            in.type_data_0.y,  // border_width  (goldberg_ridge_width)
+            in.type_data_0.z,  // meander       (goldberg_meander)
+            in.type_data_0.w,  // border_dark   (goldberg_ridge_strength)
+            camera.time,
+            cell_seed,
+            anim_speed,
+        );
+        let slime_color = base_color * (0.75 + slime.y);
+        interior_result = mix(interior_result, slime_color, slime.x);
     }
 
     // ====================================================================

@@ -9,8 +9,9 @@ const ANGLE_EPSILON: f32 = 0.001;
 const QUATERNION_EPSILON: f32 = 0.0001;
 const TWIST_CLAMP_LIMIT: f32 = 1.57; // ±90 degrees
 
-/// Compute adhesion forces for all active connections
-/// Direct port of C++ CPUAdhesionForceCalculator::computeAdhesionForces
+/// Compute adhesion forces for all active connections.
+/// Returns a list of connection indices whose spring force exceeded break_force
+/// (only when `can_break` is true). Caller is responsible for removing them.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_adhesion_forces(
     connections: &AdhesionConnections,
@@ -22,7 +23,9 @@ pub fn compute_adhesion_forces(
     mode_settings: &[AdhesionSettings],
     forces: &mut [Vec3],
     torques: &mut [Vec3],
-) {
+) -> Vec<usize> {
+    let mut bonds_to_break = Vec::new();
+
     // Process each active adhesion connection
     for i in 0..connections.active_count {
         if connections.is_active[i] == 0 {
@@ -45,7 +48,7 @@ pub fn compute_adhesion_forces(
         let settings = &mode_settings[mode_idx];
         
         // Calculate forces and torques
-        let (force_a, torque_a, force_b, torque_b) = compute_adhesion_force_pair(
+        let (force_a, torque_a, force_b, torque_b, spring_force_mag) = compute_adhesion_force_pair(
             positions[cell_a_idx],
             velocities[cell_a_idx],
             rotations[cell_a_idx],
@@ -63,19 +66,26 @@ pub fn compute_adhesion_forces(
             settings,
         );
         
+        // Check break condition before applying forces
+        if settings.can_break && spring_force_mag > settings.break_force {
+            bonds_to_break.push(i);
+            continue;
+        }
+
         // Apply forces
         forces[cell_a_idx] += force_a;
         forces[cell_b_idx] += force_b;
         torques[cell_a_idx] += torque_a;
         torques[cell_b_idx] += torque_b;
     }
+
+    bonds_to_break
 }
 
 
-/// Compute adhesion forces for all active connections - Parallel version
-/// 
-/// Uses parallel iteration with deterministic accumulation for improved performance.
-/// Results are identical to single-threaded version due to sorted accumulation.
+/// Compute adhesion forces for all active connections - Parallel version.
+/// Returns a list of connection indices whose spring force exceeded break_force
+/// (only when `can_break` is true). Caller is responsible for removing them.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_adhesion_forces_parallel(
     connections: &AdhesionConnections,
@@ -87,12 +97,13 @@ pub fn compute_adhesion_forces_parallel(
     mode_settings: &[AdhesionSettings],
     forces: &mut [Vec3],
     torques: &mut [Vec3],
-) {
+) -> Vec<usize> {
     use rayon::prelude::*;
     
-    // Compute force contributions in parallel
-    // Store as (cell_index, force, torque) for deterministic accumulation
-    let contributions: Vec<(usize, Vec3, Vec3)> = (0..connections.active_count)
+    // Compute force contributions in parallel.
+    // Each entry is either a force contribution or a break signal (empty forces).
+    // Tag: (connection_idx_if_break: Option<usize>, cell_idx, force, torque)
+    let results: Vec<(Option<usize>, usize, Vec3, Vec3)> = (0..connections.active_count)
         .into_par_iter()
         .filter(|&i| connections.is_active[i] != 0)
         .flat_map(|i| {
@@ -100,19 +111,16 @@ pub fn compute_adhesion_forces_parallel(
             let cell_b_idx = connections.cell_b_index[i];
             let mode_idx = connections.mode_index[i];
             
-            // Validate indices
             if cell_a_idx >= positions.len() || cell_b_idx >= positions.len() {
                 return vec![];
             }
-            
             if mode_idx >= mode_settings.len() {
                 return vec![];
             }
             
             let settings = &mode_settings[mode_idx];
             
-            // Calculate forces and torques
-            let (force_a, torque_a, force_b, torque_b) = compute_adhesion_force_pair(
+            let (force_a, torque_a, force_b, torque_b, spring_force_mag) = compute_adhesion_force_pair(
                 positions[cell_a_idx],
                 velocities[cell_a_idx],
                 rotations[cell_a_idx],
@@ -129,20 +137,29 @@ pub fn compute_adhesion_forces_parallel(
                 connections.twist_reference_b[i],
                 settings,
             );
+
+            // Bond breaks: signal with Some(i), zero forces
+            if settings.can_break && spring_force_mag > settings.break_force {
+                return vec![(Some(i), 0, Vec3::ZERO, Vec3::ZERO)];
+            }
             
-            // Return contributions for both cells
             vec![
-                (cell_a_idx, force_a, torque_a),
-                (cell_b_idx, force_b, torque_b),
+                (None, cell_a_idx, force_a, torque_a),
+                (None, cell_b_idx, force_b, torque_b),
             ]
         })
         .collect();
     
-    // Accumulate forces and torques sequentially for determinism
-    for (idx, force, torque) in contributions {
-        forces[idx] += force;
-        torques[idx] += torque;
+    let mut bonds_to_break = Vec::new();
+    for (break_idx, idx, force, torque) in results {
+        if let Some(conn_idx) = break_idx {
+            bonds_to_break.push(conn_idx);
+        } else {
+            forces[idx] += force;
+            torques[idx] += torque;
+        }
     }
+    bonds_to_break
 }
 
 /// Compute adhesion forces for a single connection pair
@@ -166,7 +183,7 @@ fn compute_adhesion_force_pair(
     twist_ref_a: Quat,
     twist_ref_b: Quat,
     settings: &AdhesionSettings,
-) -> (Vec3, Vec3, Vec3, Vec3) {
+) -> (Vec3, Vec3, Vec3, Vec3, f32) {
     let mut force_a = Vec3::ZERO;
     let mut torque_a = Vec3::ZERO;
     let mut force_b = Vec3::ZERO;
@@ -176,7 +193,7 @@ fn compute_adhesion_force_pair(
     let delta_pos = pos_b - pos_a;
     let dist = delta_pos.length();
     if dist < QUATERNION_EPSILON {
-        return (force_a, torque_a, force_b, torque_b);
+        return (force_a, torque_a, force_b, torque_b, 0.0);
     }
     
     let adhesion_dir = delta_pos / dist;
@@ -185,6 +202,7 @@ fn compute_adhesion_force_pair(
     // Linear spring force with softness factor (emulates Python softness = 1.0 - bond_stretch * 0.8)
     let softness = 0.3; // Reduced softness to allow more flexibility for spiral patterns
     let force_mag = settings.linear_spring_stiffness * (dist - rest_length) * softness;
+    let spring_force_mag = force_mag.abs();
     let spring_force = adhesion_dir * force_mag;
     
     // Damping - matches reference implementation exactly
@@ -322,7 +340,7 @@ fn compute_adhesion_force_pair(
         force_b -= tangential_force;
     }
     
-    (force_a, torque_a, force_b, torque_b)
+    (force_a, torque_a, force_b, torque_b, spring_force_mag)
 }
 
 /// Rotate vector by quaternion (GPU algorithm port)
@@ -440,7 +458,7 @@ pub fn compute_adhesion_forces_batched(
             let settings = &mode_settings[mode_idx];
             
             // Calculate forces and torques
-            let (force_a, torque_a, force_b, torque_b) = compute_adhesion_force_pair(
+            let (force_a, torque_a, force_b, torque_b, spring_force_mag) = compute_adhesion_force_pair(
                 positions[cell_a_idx],
                 velocities[cell_a_idx],
                 rotations[cell_a_idx],
@@ -458,6 +476,11 @@ pub fn compute_adhesion_forces_batched(
                 settings,
             );
             
+            // Skip bond if it exceeds break force
+            if settings.can_break && spring_force_mag > settings.break_force {
+                continue;
+            }
+
             // Apply forces
             forces[cell_a_idx] += force_a;
             forces[cell_b_idx] += force_b;

@@ -2067,12 +2067,12 @@ impl GpuPhysicsPipelines {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Adhesion Bind Group Layout"),
             entries: &[
-                // Binding 0: Adhesion connections (read-only for per-cell processing)
+                // Binding 0: Adhesion connections (read_write so physics shader can mark bonds inactive)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },

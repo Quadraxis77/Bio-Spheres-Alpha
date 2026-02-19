@@ -68,7 +68,7 @@ var<storage, read> genome_ids: array<u32>;
 // Adhesion system bind group (group 2)
 // Matches adhesion_layout: binding 0 = connections, 1 = settings, 2 = counts, 3 = cell_adhesion_indices
 @group(2) @binding(0)
-var<storage, read> adhesion_connections: array<AdhesionConnection>;
+var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
 
 @group(2) @binding(1)
 var<storage, read> adhesion_settings: array<vec4<f32>>;  // Not used but must match layout

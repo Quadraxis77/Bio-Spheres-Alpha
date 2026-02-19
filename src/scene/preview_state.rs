@@ -45,21 +45,14 @@ impl InitialState {
         let mode = genome.modes.get(initial_mode_index)
             .or_else(|| genome.modes.first());
         
-        let (split_interval, split_mass, membrane_stiffness, cell_type) = if let Some(m) = mode {
-            (m.split_interval, m.split_mass, m.membrane_stiffness, m.cell_type)
+        let (split_interval, split_mass, membrane_stiffness) = if let Some(m) = mode {
+            (m.split_interval, m.split_mass, m.membrane_stiffness)
         } else {
-            (5.0, 1.5, physics_config.default_stiffness, 0)
+            (5.0, 1.5, physics_config.default_stiffness)
         };
 
-        // Set initial mass based on cell type
-        // Phagocytes get extra mass to demonstrate splitting behavior before needing nutrient transport
-        let initial_mass = if cell_type == 2 {
-            // Phagocyte: In preview scene they auto-gain mass like test cells,
-            // but start with extra to show splitting behavior sooner
-            (split_mass * 1.2).max(2.0)
-        } else {
-            1.0
-        };
+        // All cells start with the same mass as Phagocyte
+        let initial_mass = (split_mass * 1.2_f32).max(2.0);
 
         Self {
             initial_cells: vec![InitialCell {

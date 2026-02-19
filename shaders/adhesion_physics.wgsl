@@ -75,7 +75,7 @@ var<storage, read_write> cell_count_buffer: array<u32>;
 
 // Adhesion bind group (group 1)
 @group(1) @binding(0)
-var<storage, read> adhesion_connections: array<AdhesionConnection>;
+var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
 
 @group(1) @binding(1)
 var<storage, read> adhesion_settings: array<AdhesionSettings>;
@@ -208,6 +208,7 @@ fn compute_adhesion_forces_for_cell(
     connection: AdhesionConnection,
     settings: AdhesionSettings,
     is_cell_a: bool,
+    spring_force_mag_out: ptr<function, f32>,
 ) -> array<vec3<f32>, 2> {
     var force = vec3<f32>(0.0);
     var torque = vec3<f32>(0.0);
@@ -216,6 +217,7 @@ fn compute_adhesion_forces_for_cell(
     let delta_pos = pos_b - pos_a;
     let dist = length(delta_pos);
     if (dist < 0.0001) {
+        *spring_force_mag_out = 0.0;
         return array<vec3<f32>, 2>(force, torque);
     }
     
@@ -224,6 +226,7 @@ fn compute_adhesion_forces_for_cell(
     
     // Linear spring force (matching reference exactly)
     let force_mag = settings.linear_spring_stiffness * (dist - rest_length);
+    *spring_force_mag_out = abs(force_mag);
     let spring_force = adhesion_dir * force_mag;
     
     // Linear damping (matching reference exactly)
@@ -458,6 +461,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             ang_vel_b = my_ang_vel;
         }
         
+        var spring_force_mag: f32 = 0.0;
         let result = compute_adhesion_forces_for_cell(
             cell_idx,
             pos_a, pos_b,
@@ -465,9 +469,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             rot_a, rot_b,
             ang_vel_a, ang_vel_b,
             connection, settings,
-            is_cell_a
+            is_cell_a,
+            &spring_force_mag
         );
-        
+
+        // Break bond if force exceeds threshold - only cell_a thread writes to avoid races
+        if (settings.can_break != 0 && spring_force_mag > settings.break_force && is_cell_a) {
+            adhesion_connections[adhesion_idx].is_active = 0u;
+            continue;
+        }
+
         total_force += result[0];
         total_torque += result[1];
     }

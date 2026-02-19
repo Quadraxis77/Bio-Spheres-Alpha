@@ -300,24 +300,36 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
                              || mode.cell_type == 2  // Phagocyte
                              || mode.cell_type == 3; // Photocyte
 
-            if !can_auto_gain {
-                continue;
-            }
-
             let current_mass = state.masses[i];
-            let max_mass = mode.split_mass * 2.0;
 
-            if current_mass < max_mass {
-                let mass_gain = mode.nutrient_gain_rate * dt;
-                if mass_gain > 0.0 {
-                    let new_mass = (current_mass + mass_gain).min(max_mass);
-                    if new_mass != current_mass {
-                        state.masses[i] = new_mass;
-                        let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
-                        if new_radius != state.radii[i] {
-                            state.radii[i] = new_radius;
-                            state.masses_changed = true;
+            if can_auto_gain {
+                let max_mass = mode.split_mass * 2.0;
+                if current_mass < max_mass {
+                    let mass_gain = mode.nutrient_gain_rate * dt;
+                    if mass_gain > 0.0 {
+                        let new_mass = (current_mass + mass_gain).min(max_mass);
+                        if new_mass != current_mass {
+                            state.masses[i] = new_mass;
+                            let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
+                            if new_radius != state.radii[i] {
+                                state.radii[i] = new_radius;
+                                state.masses_changed = true;
+                            }
                         }
+                    }
+                }
+            } else {
+                // Non-auto-gain cells lose mass at the GPU's fixed base metabolism rate.
+                // Matches nutrient_transport.wgsl BASE_METABOLISM_RATE = 0.025 mass/sec.
+                const BASE_METABOLISM_RATE: f32 = 0.025;
+                let mass_loss = BASE_METABOLISM_RATE * dt;
+                let new_mass = (current_mass - mass_loss).max(0.0);
+                if new_mass != current_mass {
+                    state.masses[i] = new_mass;
+                    let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
+                    if new_radius != state.radii[i] {
+                        state.radii[i] = new_radius;
+                        state.masses_changed = true;
                     }
                 }
             }
@@ -490,8 +502,81 @@ pub fn consume_swim_nutrients(
             }
         }
     }
-    
     cells_to_remove
+}
+
+/// Form adhesion bonds for Glueocyte cells on contact with other cells.
+///
+/// Any Glueocyte (cell_type == 6) that is currently overlapping another cell
+/// will attempt to form an adhesion bond using its configured adhesion_settings,
+/// subject to the cell's max_adhesions limit and the global adhesion capacity.
+pub fn form_glueocyte_contact_bonds(state: &mut CanonicalState, genome: &Genome) {
+    let collision_pairs = detect_collisions(state);
+
+    for pair in collision_pairs {
+        let idx_a = pair.index_a;
+        let idx_b = pair.index_b;
+
+        if state.adhesion_manager.are_cells_connected(&state.adhesion_connections, idx_a, idx_b) {
+            continue;
+        }
+
+        let mode_a = state.mode_indices[idx_a];
+        let mode_b = state.mode_indices[idx_b];
+
+        let is_glue_a = genome.modes.get(mode_a).map(|m| m.cell_type == 6).unwrap_or(false);
+        let is_glue_b = genome.modes.get(mode_b).map(|m| m.cell_type == 6).unwrap_or(false);
+
+        if !is_glue_a && !is_glue_b {
+            continue;
+        }
+
+        let adhesions_a = state.adhesion_manager.count_active_adhesions(idx_a);
+        let adhesions_b = state.adhesion_manager.count_active_adhesions(idx_b);
+
+        let max_a = genome.modes.get(mode_a).map(|m| m.max_adhesions as usize).unwrap_or(10);
+        let max_b = genome.modes.get(mode_b).map(|m| m.max_adhesions as usize).unwrap_or(10);
+
+        if adhesions_a >= max_a || adhesions_b >= max_b {
+            continue;
+        }
+
+        let dir_a_to_b = (state.positions[idx_b] - state.positions[idx_a]).normalize_or(glam::Vec3::X);
+        let dir_b_to_a = -dir_a_to_b;
+
+        let anchor_a = state.genome_orientations[idx_a].inverse() * dir_a_to_b;
+        let anchor_b = state.genome_orientations[idx_b].inverse() * dir_b_to_a;
+
+        let split_dir_a = genome.modes.get(mode_a).map(|m| {
+            let pitch = m.parent_split_direction.x.to_radians();
+            let yaw = m.parent_split_direction.y.to_radians();
+            glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z
+        }).unwrap_or(glam::Vec3::Z);
+
+        let split_dir_b = genome.modes.get(mode_b).map(|m| {
+            let pitch = m.parent_split_direction.x.to_radians();
+            let yaw = m.parent_split_direction.y.to_radians();
+            glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z
+        }).unwrap_or(glam::Vec3::Z);
+
+        let split_ratio_a = genome.modes.get(mode_a).map(|m| m.split_ratio).unwrap_or(0.5);
+        let split_ratio_b = genome.modes.get(mode_b).map(|m| m.split_ratio).unwrap_or(0.5);
+
+        let _ = state.adhesion_manager.add_adhesion_with_directions(
+            &mut state.adhesion_connections,
+            idx_a,
+            idx_b,
+            mode_a,
+            anchor_a,
+            anchor_b,
+            split_dir_a,
+            split_dir_b,
+            state.genome_orientations[idx_a],
+            state.genome_orientations[idx_b],
+            split_ratio_a,
+            split_ratio_b,
+        );
+    }
 }
 
 /// Physics step with genome support
@@ -523,9 +608,9 @@ pub fn physics_step_with_genome(
 
     state.update_adhesion_settings_cache(genome);
     state.update_membrane_stiffness_from_genome(genome);
-    
+
     if state.adhesion_connections.active_count > 0 && !state.cached_adhesion_settings.is_empty() {
-        crate::cell::compute_adhesion_forces_parallel(
+        let bonds_to_break = crate::cell::compute_adhesion_forces_parallel(
             &state.adhesion_connections,
             &state.positions[..state.cell_count],
             &state.velocities[..state.cell_count],
@@ -536,6 +621,9 @@ pub fn physics_step_with_genome(
             &mut state.forces[..state.cell_count],
             &mut state.torques[..state.cell_count],
         );
+        for conn_idx in bonds_to_break {
+            state.adhesion_manager.remove_adhesion(&mut state.adhesion_connections, conn_idx);
+        }
     }
 
     // Skip swim forces in preview mode - flagellocyte thrust is GPU-only
@@ -566,19 +654,33 @@ pub fn physics_step_with_genome(
     );
 
     update_nutrient_growth(state, genome, dt);
-    
+
     // Transport nutrients between adhesion-connected cells
     // This allows Flagellocytes to receive nutrients from connected cells
     transport_nutrients_through_adhesions(state, genome, dt);
-    
+
     // Consume nutrients for Flagellocyte cells swimming
     // This must happen after nutrient growth so cells can potentially recover
     let dead_cells = consume_swim_nutrients(state, genome, dt);
-    
+
     // Remove dead cells (those that ran out of nutrients while swimming)
     if !dead_cells.is_empty() {
         state.remove_cells(&dead_cells);
     }
+
+    // Remove any cells that starved (mass < 0.5), matching GPU death threshold.
+    // This catches non-auto-gain cells (Buoyocyte, Glueocyte, Lipocyte, Flagellocyte)
+    // that lost mass via passive drain and weren't rescued by nutrient transport.
+    const DEATH_MASS_THRESHOLD: f32 = 0.5;
+    let starved: Vec<usize> = (0..state.cell_count)
+        .filter(|&i| state.masses[i] < DEATH_MASS_THRESHOLD)
+        .collect();
+    if !starved.is_empty() {
+        state.remove_cells(&starved);
+    }
+
+    // Form contact adhesion bonds for Glueocyte cells
+    form_glueocyte_contact_bonds(state, genome);
 
     let max_cells = state.capacity;
     let rng_seed = 12345;

@@ -701,6 +701,7 @@ impl CellRenderer {
             
             // Ensure cell_type is stored in data[7] for hybrid shader branching
             data.data[4] = visuals.nucleus_scale;
+            data.data[5] = visuals.membrane_noise_speed; // animation speed (Glueocyte slime)
             data.data[7] = cell_type_index as f32;
             
             // Pack Goldberg ridge params into type_data[0..3] for non-tail cells
