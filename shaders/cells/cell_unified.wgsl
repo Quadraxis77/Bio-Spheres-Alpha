@@ -487,6 +487,59 @@ fn internals_lipocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
+// Type 5: Buoyocyte — Hollow interior with gas bladder organelle.
+// Features a thick-walled hollow cell with a biconvex (contact lens-shaped)
+// gas organelle that provides buoyancy. The organelle appears as a translucent
+// bubble with highlights and refraction effects.
+fn internals_buoyocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
+    // Hollow cell: empty center region
+    let hollow_radius = 0.25;  // Inner hollow cavity
+    let hollow = smoothstep(hollow_radius - 0.05, hollow_radius + 0.05, r);
+    
+    // Contact lens-shaped gas organelle (biconvex lens)
+    // The organelle sits in the upper hemisphere and has a distinctive lens shape
+    let organelle_center = vec3<f32>(0.0, 0.15, 0.0);  // Positioned in upper half
+    
+    // Transform to organelle-local space
+    let op = p - organelle_center;
+    let or = length(op);
+    
+    // Biconvex lens shape: thicker in center, thinner at edges
+    // Using two spherical surfaces to create the lens profile
+    let lens_radius = 0.35;  // Overall lens radius
+    let lens_thickness = 0.12;  // Maximum thickness at center
+    
+    // Distance from lens center along Y axis determines thickness
+    let y_dist = abs(op.y);
+    let xz_dist = sqrt(op.x * op.x + op.z * op.z);
+    
+    // Lens equation: thicker at center, curved edges
+    let lens_profile = lens_thickness * (1.0 - (y_dist / lens_radius) * (y_dist / lens_radius));
+    let lens_edge = smoothstep(lens_radius - 0.05, lens_radius + 0.05, xz_dist);
+    
+    // Combine radial and vertical constraints for lens shape
+    let lens_shape = (1.0 - lens_edge) * (1.0 - smoothstep(0.0, lens_thickness, lens_profile));
+    
+    // Gas bubble effect: translucent with bright highlights
+    let gas_bubble = lens_shape;
+    
+    // Add refraction-like highlights on the gas surface
+    let highlight_angle = dot(normalize(op), normalize(vec3<f32>(0.3, 0.7, 0.2)));
+    let highlight = pow(max(0.0, highlight_angle), 8.0) * gas_bubble;
+    
+    // Combine effects
+    // 1. Hollow region (empty/dark)
+    // 2. Gas organelle (bright, translucent)
+    // 3. Cytoplasm (medium brightness)
+    let cytoplasm = 1.0 - hollow - gas_bubble * 0.7;
+    let pattern = max(cytoplasm * 0.3, gas_bubble * 0.8 + highlight);
+    
+    // Color shifts: gas appears lighter/brighter, hollow appears darker
+    let color_shift = gas_bubble * 0.6 - hollow * 0.4 + highlight * 0.3;
+    
+    return vec3<f32>(pattern, color_shift, 0.0);
+}
+
 // ============================================================================
 // Pattern Dispatcher
 // ============================================================================
@@ -498,6 +551,7 @@ fn get_internals(cell_type: u32, p: vec3<f32>, r: f32) -> vec3<f32> {
         case 2u: { return internals_phagocyte(p, r); }
         case 3u: { return internals_photocyte(p, r); }
         case 4u: { return internals_lipocyte(p, r); }
+        case 5u: { return internals_buoyocyte(p, r); }
         default: { return internals_test(p, r); }
     }
 }
@@ -545,6 +599,12 @@ fn get_membrane_params(cell_type: u32) -> MembraneParams {
             m.opacity = 0.3;
             m.rim_power = 2.0;
             m.color_darken = 0.15;
+        }
+        case 5u: { // Buoyocyte — thick membrane for gas bladder
+            m.thickness = 0.08;
+            m.opacity = 0.4;
+            m.rim_power = 3.0;
+            m.color_darken = 0.3;
         }
         default: {
             m.thickness = 0.06;
