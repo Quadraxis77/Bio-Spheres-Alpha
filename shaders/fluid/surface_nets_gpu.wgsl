@@ -4,13 +4,18 @@
 // Pass 2: Generate quads connecting adjacent surface cells
 
 struct SurfaceNetsParams {
-    grid_resolution: u32,
+    grid_resolution: u32,   // Padded processing grid (130 = 128 + 2)
     iso_level: f32,
     cell_size: f32,
     max_vertices: u32,
     
     grid_origin: vec3<f32>,
     max_indices: u32,
+    
+    density_resolution: u32, // Actual density data size (128)
+    _pad_a: u32,
+    _pad_b: u32,
+    _pad_c: u32,
 }
 
 struct Vertex {
@@ -53,35 +58,56 @@ fn grid_to_world(x: f32, y: f32, z: f32) -> vec3<f32> {
     return params.grid_origin + vec3<f32>(x, y, z) * params.cell_size;
 }
 
+// Map from padded grid coords to density buffer index.
+// Padded grid [0..129] maps to density [−1..128]; valid density range is [0..127].
+fn density_index(dx: u32, dy: u32, dz: u32) -> u32 {
+    let dres = params.density_resolution; // 128
+    return dx + dy * dres + dz * dres * dres;
+}
+
+// Check if padded-grid coordinate maps to a valid density cell
+fn is_in_density_bounds(x: i32, y: i32, z: i32) -> bool {
+    let dres = i32(params.density_resolution);
+    let dx = x - 1;
+    let dy = y - 1;
+    let dz = z - 1;
+    return dx >= 0 && dx < dres && dy >= 0 && dy < dres && dz >= 0 && dz < dres;
+}
+
 fn sample_density_clamped(x: i32, y: i32, z: i32) -> f32 {
-    let res = i32(params.grid_resolution);
-    // Return 0 (empty) for out-of-bounds to create density transitions at grid edges,
-    // ensuring surface nets generates cap faces at sphere poles
-    if x < 0 || x >= res || y < 0 || y >= res || z < 0 || z >= res {
+    // Offset by -1: padded cell 1 corresponds to density cell 0
+    let dres = i32(params.density_resolution);
+    let dx = x - 1;
+    let dy = y - 1;
+    let dz = z - 1;
+    if dx < 0 || dx >= dres || dy < 0 || dy >= dres || dz < 0 || dz >= dres {
         return 0.0;
     }
-    return density[grid_index(u32(x), u32(y), u32(z))];
+    return density[density_index(u32(dx), u32(dy), u32(dz))];
 }
 
 // Check if a position is solid (from solid mask)
 fn is_solid(x: u32, y: u32, z: u32) -> bool {
-    let idx = grid_index(x, y, z);
-    return solid_mask[idx] == 1u;
+    let dres = i32(params.density_resolution);
+    let dx = i32(x) - 1;
+    let dy = i32(y) - 1;
+    let dz = i32(z) - 1;
+    if dx < 0 || dx >= dres || dy < 0 || dy >= dres || dz < 0 || dz >= dres {
+        return false;
+    }
+    return solid_mask[density_index(u32(dx), u32(dy), u32(dz))] == 1u;
 }
 
-// Check if a position is at world boundary
+// Check if a position is at world boundary (outside density data)
 fn is_at_boundary(x: i32, y: i32, z: i32) -> bool {
-    let res = i32(params.grid_resolution);
-    return x < 0 || x >= res || y < 0 || y >= res || z < 0 || z >= res;
+    return !is_in_density_bounds(x, y, z);
 }
 
 // Sample density with aggressive smoothing to eliminate fine details
 fn sample_density_height_filtered(x: i32, y: i32, z: i32) -> f32 {
-    let res = i32(params.grid_resolution);
-    // OOB center = outside the world; return 0 to create clean boundary transitions
-    // Without this, the 3x3x3 kernel bleeds density across the boundary,
-    // making OOB corners appear above iso and preventing cap generation
-    if x < 0 || x >= res || y < 0 || y >= res || z < 0 || z >= res {
+    // If center maps to outside the density data, return 0 immediately.
+    // This prevents the 3x3x3 kernel from bleeding density across the boundary.
+    if !is_in_density_bounds(x, y, z) {
         return 0.0;
     }
     // Use a 3x3x3 kernel for strong averaging

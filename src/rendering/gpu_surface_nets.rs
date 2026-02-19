@@ -12,6 +12,10 @@ use wgpu::util::DeviceExt;
 pub const GRID_RESOLUTION: u32 = 128;
 pub const TOTAL_VOXELS: usize = (GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION) as usize;
 
+/// Padded resolution for surface nets processing (+1 cell padding on each side)
+const PADDED_RESOLUTION: u32 = GRID_RESOLUTION + 2; // 130
+const PADDED_VOXELS: usize = (PADDED_RESOLUTION * PADDED_RESOLUTION * PADDED_RESOLUTION) as usize;
+
 /// GPU vertex format (must match shader)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -26,13 +30,18 @@ pub struct GpuVertex {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct SurfaceNetsGpuParams {
-    pub grid_resolution: u32,
+    pub grid_resolution: u32,    // Padded processing grid (130)
     pub iso_level: f32,
     pub cell_size: f32,
     pub max_vertices: u32,
     
     pub grid_origin: [f32; 3],
     pub max_indices: u32,
+    
+    pub density_resolution: u32, // Actual density data size (128)
+    pub _pad_a: u32,
+    pub _pad_b: u32,
+    pub _pad_c: u32,
 }
 
 /// Counter struct for reading back (must match shader)
@@ -238,7 +247,7 @@ impl GpuSurfaceNets {
         
         let vertex_map_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Vertex Map Buffer"),
-            size: (TOTAL_VOXELS * std::mem::size_of::<u32>()) as u64,
+            size: (PADDED_VOXELS * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
@@ -265,13 +274,21 @@ impl GpuSurfaceNets {
             mapped_at_creation: false,
         });
         
+        // Shift grid origin back by 1 cell so the 128³ density data sits
+        // at padded cells [1..128], with 1 cell of empty padding on each side
+        let padded_origin = grid_origin - Vec3::splat(cell_size);
+        
         let params = SurfaceNetsGpuParams {
-            grid_resolution: GRID_RESOLUTION,
+            grid_resolution: PADDED_RESOLUTION,
             iso_level: 0.5,
             cell_size,
             max_vertices,
-            grid_origin: grid_origin.to_array(),
+            grid_origin: padded_origin.to_array(),
             max_indices,
+            density_resolution: GRID_RESOLUTION,
+            _pad_a: 0,
+            _pad_b: 0,
+            _pad_c: 0,
         };
         
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -858,14 +875,20 @@ impl GpuSurfaceNets {
         let world_diameter = self.world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
+        // Shift origin back by 1 cell for padding
+        let padded_origin = grid_origin - Vec3::splat(cell_size);
         
         let params = SurfaceNetsGpuParams {
-            grid_resolution: GRID_RESOLUTION,
+            grid_resolution: PADDED_RESOLUTION,
             iso_level: self.iso_level,
             cell_size,
             max_vertices: self.max_vertices,
-            grid_origin: grid_origin.to_array(),
+            grid_origin: padded_origin.to_array(),
             max_indices: self.max_indices,
+            density_resolution: GRID_RESOLUTION,
+            _pad_a: 0,
+            _pad_b: 0,
+            _pad_c: 0,
         };
         
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
@@ -873,7 +896,7 @@ impl GpuSurfaceNets {
     
     /// Run surface nets extraction on GPU
     pub fn extract_mesh(&self, encoder: &mut wgpu::CommandEncoder) {
-        let workgroup_count = (GRID_RESOLUTION + 3) / 4;
+        let workgroup_count = (PADDED_RESOLUTION + 3) / 4;
         
         // Pass 0: Reset counters
         {
