@@ -1427,6 +1427,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     mode_a_after_splits: -1,
                     mode_b_after_splits: -1,
                     swim_force: 0.5,
+                    buoyancy_force: 0.5, // Default buoyancy force for buoyocytes
                     membrane_stiffness: 50.0, // Default: moderate membrane stiffness
                     child_a: crate::genome::ChildSettings {
                         mode_number: selected_index as i32,

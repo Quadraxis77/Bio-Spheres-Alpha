@@ -86,6 +86,7 @@ pub mod test_cell;
 pub mod phagocyte;
 pub mod photocyte;
 pub mod lipocyte;
+pub mod buoyocyte;
 
 use crate::genome::ModeSettings;
 
@@ -194,6 +195,18 @@ impl TypeSpecificInstanceData {
                 cell_type,             // data[7] - cell_type for unified shader
             ],
         }
+    }
+
+    /// Create type-specific data for a Buoyocyte cell.
+    ///
+    /// # Arguments
+    ///
+    /// * `buoyancy_force` - Upward buoyancy force (0.0 to 1.0)
+    pub fn buoyocyte(buoyancy_force: f32) -> Self {
+        let mut data = [0.0f32; 8];
+        data[0] = buoyancy_force;  // data[0] = buoyancy force
+        data[7] = 5.0;             // data[7] = cell_type (Buoyocyte = 5)
+        Self { data }
     }
 
     /// Create type-specific data for a Neurocyte cell.
@@ -324,5 +337,6 @@ pub fn create_behavior(cell_type: crate::cell::CellType) -> Box<dyn CellBehavior
         crate::cell::CellType::Phagocyte => Box::new(phagocyte::PhagocyteBehavior),
         crate::cell::CellType::Photocyte => Box::new(photocyte::PhotocyteBehavior),
         crate::cell::CellType::Lipocyte => Box::new(lipocyte::LipocyteBehavior),
+        crate::cell::CellType::Buoyocyte => Box::new(buoyocyte::BuoyocyteBehavior),
     }
 }
