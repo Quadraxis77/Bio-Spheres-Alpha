@@ -25,29 +25,31 @@ impl SolidMaskGenerator {
 
     /// Generate solid mask data using cave generation logic
     /// Returns a vector of u32 values where 1 = solid, 0 = empty
+    /// Grid uses resolution³ to match all shader indexing (128-stride)
     pub fn generate_solid_mask(&self, cave_params: &CaveParams) -> Vec<u32> {
         let resolution = self.grid_resolution as usize;
-        let total_voxels = resolution * resolution * resolution;
+        let grid_size = resolution;
+        let total_voxels = grid_size * grid_size * grid_size;
         let mut solid_mask = vec![0u32; total_voxels];
 
-        // Calculate cell size
+        // Calculate cell size (distance between grid points)
         let world_diameter = self.world_radius * 2.0;
         let cell_size = world_diameter / self.grid_resolution as f32;
         
         // Grid origin (bottom-back-left corner)
         let grid_origin = self.world_center - Vec3::splat(self.world_radius);
 
-        // Generate solid mask for each voxel
-        for x in 0..resolution {
-            for y in 0..resolution {
-                for z in 0..resolution {
-                    let voxel_index = x + y * resolution + z * resolution * resolution;
+        // Generate solid mask for each grid point
+        for x in 0..grid_size {
+            for y in 0..grid_size {
+                for z in 0..grid_size {
+                    let voxel_index = x + y * grid_size + z * grid_size * grid_size;
                     
-                    // Calculate world position of voxel center
+                    // Calculate world position of grid point
                     let world_pos = grid_origin + Vec3::new(
-                        (x as f32 + 0.5) * cell_size,
-                        (y as f32 + 0.5) * cell_size,
-                        (z as f32 + 0.5) * cell_size,
+                        x as f32 * cell_size,
+                        y as f32 * cell_size,
+                        z as f32 * cell_size,
                     );
 
                     // Use cave generation logic to determine if this is solid
@@ -72,8 +74,9 @@ impl SolidMaskGenerator {
         let cave_generation_radius = params.world_radius + 3.0;
         let sphere_sdf = dist_from_center - cave_generation_radius;
 
-        // Outside extended sphere = solid
-        if sphere_sdf > 0.0 {
+        // Outside or exactly at extended sphere boundary = solid
+        // Use >= instead of > to ensure boundary points are solid, creating flat caps at poles
+        if sphere_sdf >= 0.0 {
             return true;
         }
 

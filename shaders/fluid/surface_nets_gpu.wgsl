@@ -55,10 +55,12 @@ fn grid_to_world(x: f32, y: f32, z: f32) -> vec3<f32> {
 
 fn sample_density_clamped(x: i32, y: i32, z: i32) -> f32 {
     let res = i32(params.grid_resolution);
-    let cx = clamp(x, 0, res - 1);
-    let cy = clamp(y, 0, res - 1);
-    let cz = clamp(z, 0, res - 1);
-    return density[grid_index(u32(cx), u32(cy), u32(cz))];
+    // Return 0 (empty) for out-of-bounds to create density transitions at grid edges,
+    // ensuring surface nets generates cap faces at sphere poles
+    if x < 0 || x >= res || y < 0 || y >= res || z < 0 || z >= res {
+        return 0.0;
+    }
+    return density[grid_index(u32(x), u32(y), u32(z))];
 }
 
 // Check if a position is solid (from solid mask)
@@ -75,23 +77,30 @@ fn is_at_boundary(x: i32, y: i32, z: i32) -> bool {
 
 // Sample density with aggressive smoothing to eliminate fine details
 fn sample_density_height_filtered(x: i32, y: i32, z: i32) -> f32 {
+    let res = i32(params.grid_resolution);
+    // OOB center = outside the world; return 0 to create clean boundary transitions
+    // Without this, the 3x3x3 kernel bleeds density across the boundary,
+    // making OOB corners appear above iso and preventing cap generation
+    if x < 0 || x >= res || y < 0 || y >= res || z < 0 || z >= res {
+        return 0.0;
+    }
     // Use a 3x3x3 kernel for strong averaging
     var sum = 0.0;
     var weight_sum = 0.0;
-    let res = i32(params.grid_resolution);
     
     // Sample surrounding voxels in a 3x3x3 kernel
     for (var dx = -1; dx <= 1; dx++) {
         for (var dy = -1; dy <= 1; dy++) {
             for (var dz = -1; dz <= 1; dz++) {
-                let nx = clamp(x + dx, 0, res - 1);
-                let ny = clamp(y + dy, 0, res - 1);
-                let nz = clamp(z + dz, 0, res - 1);
+                let nx = x + dx;
+                let ny = y + dy;
+                let nz = z + dz;
                 
                 // Strong Gaussian weighting for aggressive smoothing
                 let dist_sq = f32(dx * dx + dy * dy + dz * dz);
                 let weight = exp(-dist_sq * 0.8); // Strong falloff for more smoothing
                 
+                // sample_density_clamped returns 0.0 for out-of-bounds
                 sum += sample_density_clamped(nx, ny, nz) * weight;
                 weight_sum += weight;
             }
@@ -118,7 +127,9 @@ const EDGE_PAIRS: array<vec2<u32>, 12> = array<vec2<u32>, 12>(
 @compute @workgroup_size(4, 4, 4)
 fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = params.grid_resolution;
-    if gid.x >= res - 1u || gid.y >= res - 1u || gid.z >= res - 1u {
+    // Process all cells including edges - don't skip the last layer
+    // This ensures we generate mesh at sphere boundaries/poles
+    if gid.x >= res || gid.y >= res || gid.z >= res {
         return;
     }
     
@@ -217,7 +228,8 @@ fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(4, 4, 4)
 fn generate_indices(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = params.grid_resolution;
-    if gid.x >= res - 1u || gid.y >= res - 1u || gid.z >= res - 1u {
+    // Process all cells including edges
+    if gid.x >= res || gid.y >= res || gid.z >= res {
         return;
     }
     
@@ -239,10 +251,22 @@ fn generate_indices(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Check X edge (0-1)
     let corner1 = sample_density_height_filtered(ix + 1, iy, iz);
     if (corner0 >= iso) != (corner1 >= iso) {
-        if gid.y > 0u && gid.z > 0u {
-            let v1_idx = atomicLoad(&vertex_map[grid_index(gid.x, gid.y - 1u, gid.z)]);
-            let v2_idx = atomicLoad(&vertex_map[grid_index(gid.x, gid.y - 1u, gid.z - 1u)]);
-            let v3_idx = atomicLoad(&vertex_map[grid_index(gid.x, gid.y, gid.z - 1u)]);
+        // Allow quads at boundaries - check if neighbors exist but don't require y>0 and z>0
+        if gid.y < res && gid.z < res {
+            // Get neighbor indices, handling boundaries
+            var v1_idx = 0u;
+            var v2_idx = 0u;
+            var v3_idx = 0u;
+            
+            if gid.y > 0u {
+                v1_idx = atomicLoad(&vertex_map[grid_index(gid.x, gid.y - 1u, gid.z)]);
+            }
+            if gid.y > 0u && gid.z > 0u {
+                v2_idx = atomicLoad(&vertex_map[grid_index(gid.x, gid.y - 1u, gid.z - 1u)]);
+            }
+            if gid.z > 0u {
+                v3_idx = atomicLoad(&vertex_map[grid_index(gid.x, gid.y, gid.z - 1u)]);
+            }
             
             if v1_idx != 0u && v2_idx != 0u && v3_idx != 0u {
                 let idx_base = atomicAdd(&counters.index_count, 6u);
@@ -275,10 +299,20 @@ fn generate_indices(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Check Y edge (0-2)
     let corner2 = sample_density_height_filtered(ix, iy + 1, iz);
     if (corner0 >= iso) != (corner2 >= iso) {
-        if gid.x > 0u && gid.z > 0u {
-            let v1_idx = atomicLoad(&vertex_map[grid_index(gid.x, gid.y, gid.z - 1u)]);
-            let v2_idx = atomicLoad(&vertex_map[grid_index(gid.x - 1u, gid.y, gid.z - 1u)]);
-            let v3_idx = atomicLoad(&vertex_map[grid_index(gid.x - 1u, gid.y, gid.z)]);
+        if gid.x < res && gid.z < res {
+            var v1_idx = 0u;
+            var v2_idx = 0u;
+            var v3_idx = 0u;
+            
+            if gid.z > 0u {
+                v1_idx = atomicLoad(&vertex_map[grid_index(gid.x, gid.y, gid.z - 1u)]);
+            }
+            if gid.x > 0u && gid.z > 0u {
+                v2_idx = atomicLoad(&vertex_map[grid_index(gid.x - 1u, gid.y, gid.z - 1u)]);
+            }
+            if gid.x > 0u {
+                v3_idx = atomicLoad(&vertex_map[grid_index(gid.x - 1u, gid.y, gid.z)]);
+            }
             
             if v1_idx != 0u && v2_idx != 0u && v3_idx != 0u {
                 let idx_base = atomicAdd(&counters.index_count, 6u);
@@ -311,10 +345,20 @@ fn generate_indices(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Check Z edge (0-4)
     let corner4 = sample_density_height_filtered(ix, iy, iz + 1);
     if (corner0 >= iso) != (corner4 >= iso) {
-        if gid.x > 0u && gid.y > 0u {
-            let v1_idx = atomicLoad(&vertex_map[grid_index(gid.x - 1u, gid.y, gid.z)]);
-            let v2_idx = atomicLoad(&vertex_map[grid_index(gid.x - 1u, gid.y - 1u, gid.z)]);
-            let v3_idx = atomicLoad(&vertex_map[grid_index(gid.x, gid.y - 1u, gid.z)]);
+        if gid.x < res && gid.y < res {
+            var v1_idx = 0u;
+            var v2_idx = 0u;
+            var v3_idx = 0u;
+            
+            if gid.x > 0u {
+                v1_idx = atomicLoad(&vertex_map[grid_index(gid.x - 1u, gid.y, gid.z)]);
+            }
+            if gid.x > 0u && gid.y > 0u {
+                v2_idx = atomicLoad(&vertex_map[grid_index(gid.x - 1u, gid.y - 1u, gid.z)]);
+            }
+            if gid.y > 0u {
+                v3_idx = atomicLoad(&vertex_map[grid_index(gid.x, gid.y - 1u, gid.z)]);
+            }
             
             if v1_idx != 0u && v2_idx != 0u && v3_idx != 0u {
                 let idx_base = atomicAdd(&counters.index_count, 6u);

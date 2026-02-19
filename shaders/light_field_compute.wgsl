@@ -158,7 +158,9 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> f32 {
             consecutive_solid += 1u;
             // Only apply absorption after 2+ consecutive solid voxels (actual wall)
             if (consecutive_solid >= 2u) {
-                transmittance *= exp(-params.absorption_solid);
+                // Fast exp approximation: exp(-x) ≈ 1 / (1 + x + x²/2)
+                let x = params.absorption_solid;
+                transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
             }
         } else {
             consecutive_solid = 0u;
@@ -167,11 +169,13 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> f32 {
         // Check cell occupancy - cells block light
         let cells = cell_count_at(ix, iy, iz);
         if (cells > 0u) {
-            transmittance *= exp(-params.absorption_cell * f32(cells));
+            // Fast exp approximation for multiple cells
+            let x = params.absorption_cell * f32(cells);
+            transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
         }
         
         // Early exit if light is effectively blocked
-        if (transmittance < 0.01) {
+        if (transmittance < 0.05) {
             transmittance = 0.0;
             break;
         }
@@ -200,26 +204,31 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Solid voxels inside the sphere: only set to zero if they're part of an
-    // actual wall (have solid neighbors). Isolated noise voxels get normal light
-    // so they don't poison trilinear interpolation for nearby cells.
+    // Solid voxels inside the sphere: check if part of actual wall
     if (solid_mask[idx] != 0u) {
-        let gx = i32(grid_pos.x);
-        let gy = i32(grid_pos.y);
-        let gz = i32(grid_pos.z);
-        var solid_neighbors = 0u;
-        if (is_solid(gx + 1, gy, gz)) { solid_neighbors += 1u; }
-        if (is_solid(gx - 1, gy, gz)) { solid_neighbors += 1u; }
-        if (is_solid(gx, gy + 1, gz)) { solid_neighbors += 1u; }
-        if (is_solid(gx, gy - 1, gz)) { solid_neighbors += 1u; }
-        if (is_solid(gx, gy, gz + 1)) { solid_neighbors += 1u; }
-        if (is_solid(gx, gy, gz - 1)) { solid_neighbors += 1u; }
-        // 3+ solid neighbors = actual wall, set to zero
-        if (solid_neighbors >= 3u) {
+        // Quick check: only do expensive neighbor check near sphere boundary
+        // Deep interior solids are cave walls and should be dark
+        if (is_near_sphere_boundary(grid_pos_f.x, grid_pos_f.y, grid_pos_f.z)) {
+            // Near boundary: check if isolated noise voxel
+            let gx = i32(grid_pos.x);
+            let gy = i32(grid_pos.y);
+            let gz = i32(grid_pos.z);
+            var solid_neighbors = 0u;
+            if (is_solid(gx + 1, gy, gz)) { solid_neighbors += 1u; }
+            if (is_solid(gx - 1, gy, gz)) { solid_neighbors += 1u; }
+            if (is_solid(gx, gy + 1, gz)) { solid_neighbors += 1u; }
+            if (is_solid(gx, gy - 1, gz)) { solid_neighbors += 1u; }
+            if (is_solid(gx, gy, gz + 1)) { solid_neighbors += 1u; }
+            if (is_solid(gx, gy, gz - 1)) { solid_neighbors += 1u; }
+            if (solid_neighbors >= 3u) {
+                light_field[idx] = 0.0;
+                return;
+            }
+        } else {
+            // Deep interior solid = actual wall, skip expensive neighbor check
             light_field[idx] = 0.0;
             return;
         }
-        // Otherwise: isolated noise voxel, compute light normally
     }
     
     // Ray march toward light to compute intensity

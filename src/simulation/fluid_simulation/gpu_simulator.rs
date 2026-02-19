@@ -343,10 +343,16 @@ impl GpuFluidSimulator {
             push_constant_ranges: &[],
         });
 
+        // Create separate shader module for extraction
+        let extract_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Fluid Extract Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/fluid/fluid_extract.wgsl").into()),
+        });
+
         let extract_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Fluid Extract Density Pipeline"),
             layout: Some(&extract_pipeline_layout),
-            module: &shader,
+            module: &extract_shader,
             entry_point: Some("extract_density"),
             compilation_options: Default::default(),
             cache: None,

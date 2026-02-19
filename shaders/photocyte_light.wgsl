@@ -85,52 +85,29 @@ fn world_to_voxel_index(world_pos: vec3<f32>) -> u32 {
     return gx + gy * res + gz * res * res;
 }
 
-// Sample light intensity at a world position with trilinear interpolation
+// Sample light intensity at a world position with nearest neighbor (much faster)
 fn sample_light(world_pos: vec3<f32>) -> f32 {
     let res = photocyte_params.grid_resolution;
     
-    // Convert to grid-space (continuous coordinates)
-    let gx = (world_pos.x - photocyte_params.grid_origin_x) / photocyte_params.cell_size - 0.5;
-    let gy = (world_pos.y - photocyte_params.grid_origin_y) / photocyte_params.cell_size - 0.5;
-    let gz = (world_pos.z - photocyte_params.grid_origin_z) / photocyte_params.cell_size - 0.5;
+    // Convert to grid-space coordinates
+    let gx = (world_pos.x - photocyte_params.grid_origin_x) / photocyte_params.cell_size;
+    let gy = (world_pos.y - photocyte_params.grid_origin_y) / photocyte_params.cell_size;
+    let gz = (world_pos.z - photocyte_params.grid_origin_z) / photocyte_params.cell_size;
     
-    // Integer and fractional parts
-    let ix = i32(floor(gx));
-    let iy = i32(floor(gy));
-    let iz = i32(floor(gz));
-    let fx = gx - floor(gx);
-    let fy = gy - floor(gy);
-    let fz = gz - floor(gz);
+    // Round to nearest voxel
+    let ix = i32(round(gx));
+    let iy = i32(round(gy));
+    let iz = i32(round(gz));
     
     let ires = i32(res);
     
-    // Sample 8 corners with bounds clamping
-    let x0 = u32(clamp(ix, 0, ires - 1));
-    let x1 = u32(clamp(ix + 1, 0, ires - 1));
-    let y0 = u32(clamp(iy, 0, ires - 1));
-    let y1 = u32(clamp(iy + 1, 0, ires - 1));
-    let z0 = u32(clamp(iz, 0, ires - 1));
-    let z1 = u32(clamp(iz + 1, 0, ires - 1));
+    // Bounds check and sample single voxel
+    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
+        return 1.0; // Out of bounds = full light
+    }
     
-    let c000 = light_field[x0 + y0 * res + z0 * res * res];
-    let c100 = light_field[x1 + y0 * res + z0 * res * res];
-    let c010 = light_field[x0 + y1 * res + z0 * res * res];
-    let c110 = light_field[x1 + y1 * res + z0 * res * res];
-    let c001 = light_field[x0 + y0 * res + z1 * res * res];
-    let c101 = light_field[x1 + y0 * res + z1 * res * res];
-    let c011 = light_field[x0 + y1 * res + z1 * res * res];
-    let c111 = light_field[x1 + y1 * res + z1 * res * res];
-    
-    // Trilinear interpolation
-    let c00 = mix(c000, c100, fx);
-    let c10 = mix(c010, c110, fx);
-    let c01 = mix(c001, c101, fx);
-    let c11 = mix(c011, c111, fx);
-    
-    let c0 = mix(c00, c10, fy);
-    let c1 = mix(c01, c11, fy);
-    
-    return mix(c0, c1, fz);
+    let idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
+    return light_field[idx];
 }
 
 @compute @workgroup_size(256)

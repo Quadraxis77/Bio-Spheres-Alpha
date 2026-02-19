@@ -787,8 +787,9 @@ impl CaveSystemRenderer {
         let cave_generation_radius = params.world_radius + 3.0;
         let sphere_sdf = dist_from_center - cave_generation_radius;
 
-        // Outside extended sphere = solid (high density)
-        if sphere_sdf > 0.0 {
+        // Outside or exactly at extended sphere boundary = solid (high density)
+        // Use >= instead of > to ensure boundary points are solid, creating flat caps at poles
+        if sphere_sdf >= 0.0 {
             return 1.0;
         }
 

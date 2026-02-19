@@ -1,5 +1,5 @@
 (
-    light_dir: (0.0, 1.0, -0.55),
+    light_dir: (-0.7, 0.3, 0.5),
     show_volumetric_fog: true,
     fog_density: 0.15,
     fog_steps: 20,
@@ -16,7 +16,7 @@
     light_field_absorption_cell: 5.0,
     light_field_ambient_floor: 0.02,
     show_sun: true,
-    sun_color: (1.0, 1.0, 1.0),
+    sun_color: (1.0, 0.86, 0.33),
     sun_angular_radius: 0.05,
     sun_intensity: 3.0,
     shadow_enabled: true,

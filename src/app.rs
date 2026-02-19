@@ -56,8 +56,6 @@ use winit::{
 
 pub struct App {
     window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     scene_manager: SceneManager,
@@ -76,6 +74,8 @@ pub struct App {
     performance: PerformanceMetrics,
     /// Next frame time for 60fps limiting
     next_frame_time: std::time::Instant,
+    device: wgpu::Device,
+    surface: wgpu::Surface<'static>,
 }
 
 impl App {
@@ -91,8 +91,6 @@ impl App {
     ) -> Self {
         Self {
             window,
-            surface,
-            device,
             queue,
             config,
             scene_manager,
@@ -106,6 +104,8 @@ impl App {
             working_genome: crate::genome::Genome::default(),
             performance: PerformanceMetrics::new(),
             next_frame_time: std::time::Instant::now(),
+            device,
+            surface,
         }
     }
     
@@ -130,6 +130,15 @@ impl App {
                 self.editor_state.save_fluid_settings();
                 self.editor_state.save_fluid_render_settings();
                 self.editor_state.save_light_settings();
+                
+                // Wait for GPU to finish all work before surface cleanup
+                // This prevents SurfaceAcquireSemaphores panic on exit
+                log::info!("Waiting for GPU to finish before exit...");
+                let _ = self.device.poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                });
+                
                 return false;
             }
             WindowEvent::Resized(physical_size) => {
@@ -381,6 +390,7 @@ impl App {
         let now = std::time::Instant::now();
         
         // Skip render if we haven't reached the next frame time (60fps limiter)
+        // IMPORTANT: This must be BEFORE acquiring surface texture to avoid cleanup issues
         if now < self.next_frame_time {
             return;
         }
@@ -472,16 +482,18 @@ impl App {
         // Auto-save dock layouts periodically
         self.dock_manager.auto_save();
         
-        let output = match self.surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Outdated) => {
-                // Surface is outdated, reconfigure it
-                self.surface.configure(&self.device, &self.config);
-                self.surface.get_current_texture().unwrap()
-            }
-            Err(e) => {
-                log::error!("Failed to get surface texture: {:?}", e);
-                return;
+        let output = loop {
+            match self.surface.get_current_texture() {
+                Ok(output) => break output,
+                Err(wgpu::SurfaceError::Outdated) => {
+                    // Surface is outdated, reconfigure it and retry
+                    self.surface.configure(&self.device, &self.config);
+                    continue;
+                }
+                Err(e) => {
+                    log::error!("Failed to get surface texture: {:?}", e);
+                    return;
+                }
             }
         };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());

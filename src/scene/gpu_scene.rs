@@ -4,7 +4,7 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, HizGenerator, InstanceBuilder, NutrientParticleRenderer, SteamParticleRenderer, SunRenderer, TailRenderer, VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
+use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, InstanceBuilder, NutrientParticleRenderer, SteamParticleRenderer, SunRenderer, TailRenderer, VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
@@ -62,8 +62,6 @@ pub struct GpuScene {
     pub world_sphere_renderer: WorldSphereRenderer,
     /// GPU instance builder with frustum and occlusion culling
     pub instance_builder: InstanceBuilder,
-    /// Hi-Z generator for occlusion culling
-    pub hiz_generator: HizGenerator,
     /// GPU physics pipelines (6 compute shaders)
     pub gpu_physics_pipelines: GpuPhysicsPipelines,
     /// Triple buffer system for GPU physics
@@ -260,10 +258,6 @@ impl GpuScene {
         // Create instance builder - culling mode will be set per-frame in render()
         let instance_builder = InstanceBuilder::new(device, capacity as usize);
         
-        // Create Hi-Z generator for occlusion culling
-        let mut hiz_generator = HizGenerator::new(device);
-        hiz_generator.resize(device, surface_config.width, surface_config.height);
-
         // Create GPU physics components
         let gpu_physics_pipelines = GpuPhysicsPipelines::new(device);
         let gpu_triple_buffers = GpuTripleBufferSystem::new(device, capacity);
@@ -315,7 +309,6 @@ impl GpuScene {
             adhesion_renderer,
             world_sphere_renderer,
             instance_builder,
-            hiz_generator,
             gpu_physics_pipelines,
             gpu_triple_buffers,
             adhesion_buffers,
@@ -3257,17 +3250,10 @@ impl Scene for GpuScene {
         // For now, we skip the instance builder update since we don't have canonical state
         // The instance builder will be updated to read directly from GPU buffers
 
-        // Set up Hi-Z texture for occlusion culling AFTER update_from_state
-        // (so the bind group is created with the correct Hi-Z texture)
-        // On first frame, disable culling since we don't have Hi-Z data yet
+        // On first frame, disable culling since we don't have depth data yet
         if self.first_frame {
             self.instance_builder.set_culling_mode(CullingMode::Disabled);
-        } else if let Some(hiz_view) = self.hiz_generator.hiz_view() {
-            // Pass Hi-Z texture to instance builder for occlusion culling
-            // Note: culling mode is set by app.rs based on UI settings, we just provide the texture
-            self.instance_builder.set_hiz_texture(device, hiz_view, self.hiz_generator.mip_count(), &self.gpu_triple_buffers.cell_count_buffer);
         }
-        // Don't override culling mode here - it's set by app.rs based on UI settings
 
         // Create single command encoder for all GPU work to avoid multiple queue.submit() calls
         // (each submit is a sync point that kills performance)
@@ -3834,16 +3820,6 @@ impl Scene for GpuScene {
             }
         }
 
-        // Generate Hi-Z from depth buffer for next frame's occlusion culling
-        // Skip if no cells (nothing to cull) or culling is disabled
-        if self.current_cell_count > 0 && self.instance_builder.culling_mode() != CullingMode::Disabled {
-            self.hiz_generator.generate(
-                device,
-                queue,
-                &mut encoder,
-                &self.renderer.depth_view,
-            );
-        }
         
         // Start async cell count readback (copy to readback buffer)
         // Only start if no readback is pending
@@ -3889,9 +3865,7 @@ impl Scene for GpuScene {
         self.adhesion_renderer.resize(width, height);
         self.world_sphere_renderer.resize(width, height);
         self.tail_renderer.resize(width, height);
-        self.hiz_generator.resize(device, width, height);
-        self.instance_builder.reset_hiz(); // Reset Hi-Z config so bind group is recreated with new texture
-        self.first_frame = true; // Need to regenerate Hi-Z
+        self.first_frame = true;
         
         // Resize cave renderer if initialized
         if let Some(ref mut cave_renderer) = self.cave_renderer {

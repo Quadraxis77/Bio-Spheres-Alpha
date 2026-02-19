@@ -172,6 +172,7 @@ impl FluidBuffers {
         
         // Calculate buffer sizes
         let voxel_state_size = (TOTAL_VOXELS * std::mem::size_of::<VoxelState>()) as u64;
+        // Solid mask uses GRID_RESOLUTION³ to match all shader indexing (128-stride)
         let solid_mask_size = (TOTAL_VOXELS * std::mem::size_of::<u32>()) as u64;
         let stats_size = std::mem::size_of::<GridStats>() as u64;
         let params_size = std::mem::size_of::<FluidParams>() as u64;

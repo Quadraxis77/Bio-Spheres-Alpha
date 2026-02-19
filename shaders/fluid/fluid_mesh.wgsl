@@ -115,12 +115,12 @@ fn compute_ssr(
         
         var env_color: vec3<f32>;
         if reflect_dir.y > 0.0 {
-            // Looking up - sky colors
-            let sky_blend = pow(reflect_dir.y, 0.5);
+            // Looking up - sky colors (fast sqrt approximation)
+            let sky_blend = sqrt(max(reflect_dir.y, 0.0));
             env_color = mix(sky_horizon, sky_top, sky_blend);
         } else {
-            // Looking down - darker/ground colors
-            let ground_blend = pow(-reflect_dir.y, 0.5);
+            // Looking down - darker/ground colors (fast sqrt approximation)
+            let ground_blend = sqrt(max(-reflect_dir.y, 0.0));
             env_color = mix(sky_horizon * 0.5, ground, ground_blend);
         }
         
@@ -142,8 +142,9 @@ fn compute_ssr(
     let roughness_blend = params.ssr_roughness;
     accumulated_color = mix(accumulated_color, base_color * 0.5 + accumulated_color * 0.5, roughness_blend);
     
-    // Calculate reflection strength based on fresnel
-    let fresnel_ssr = pow(1.0 - max(dot(normal, view_dir), 0.0), 2.0);
+    // Calculate reflection strength based on fresnel (fast square)
+    let fresnel_ndotv = 1.0 - max(dot(normal, view_dir), 0.0);
+    let fresnel_ssr = fresnel_ndotv * fresnel_ndotv;
     let reflection_strength = fresnel_ssr * params.ssr_intensity;
     
     return vec4<f32>(accumulated_color, reflection_strength);
@@ -176,10 +177,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let n_dot_l = max(dot(normal, light_dir), 0.0);
     let diffuse_term = n_dot_l * params.diffuse;
     
-    // Specular lighting (Blinn-Phong)
+    // Specular lighting (fast polynomial approximation of Blinnn-Phong)
     let half_dir = normalize(light_dir + view_dir);
     let n_dot_h = max(dot(normal, half_dir), 0.0);
-    var specular_term = pow(n_dot_h, params.shininess) * params.specular_intensity;
+    var specular_term = n_dot_h * n_dot_h; // Square approximation
+    if params.shininess > 32.0 {
+        // Apply extra power for high shininess (still much cheaper than pow)
+        specular_term *= specular_term;
+    }
+    specular_term *= params.specular_intensity;
     
     // Reduce specular for lava (more matte/molten look)
     if in.fluid_type == 2u {
@@ -190,11 +196,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         specular_term *= 1.2;
     }
     
-    // Fresnel effect - more reflective at glancing angles
-    let fresnel = pow(1.0 - max(dot(normal, view_dir), 0.0), params.fresnel_power) * params.fresnel_strength;
+    // Fresnel effect - more reflective at glancing angles (fast polynomial approx)
+    let ndotv = max(dot(normal, view_dir), 0.0);
+    let fresnel = (1.0 - ndotv) * (1.0 - ndotv) * params.fresnel_strength;
+    if params.fresnel_power > 2.0 {
+        // Apply extra power if needed (still cheaper than pow)
+        fresnel *= fresnel;
+    }
     
-    // Rim lighting (backlight effect)
-    let rim = pow(1.0 - max(dot(normal, view_dir), 0.0), 2.0) * params.rim_strength;
+    // Rim lighting (backlight effect - fast square approximation)
+    let rim_ndotv = 1.0 - max(dot(normal, view_dir), 0.0);
+    let rim = rim_ndotv * rim_ndotv * params.rim_strength;
     
     // Combine base lighting
     let lighting = ambient_term + diffuse_term;

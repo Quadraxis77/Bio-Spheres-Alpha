@@ -94,64 +94,39 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return out;
 }
 
-// Henyey-Greenstein phase function
+// Henyey-Greenstein phase function (fast approximation)
 // Models forward/backward scattering of light in participating media
 fn henyey_greenstein(cos_theta: f32, g: f32) -> f32 {
     let g2 = g * g;
     let denom = 1.0 + g2 - 2.0 * g * cos_theta;
-    return (1.0 - g2) / (4.0 * 3.14159265 * pow(denom, 1.5));
+    // Fast approximation: pow(x, 1.5) ≈ x * sqrt(x)
+    let denom_sqrt = sqrt(max(denom, 0.001));
+    return (1.0 - g2) / (4.0 * 3.14159265 * denom * denom_sqrt);
 }
 
-// Sample light field at world position with trilinear interpolation
+// Sample light field at world position with nearest neighbor (fast, 1 read)
 fn sample_light_field(world_pos: vec3<f32>) -> f32 {
     let res = fog_params.grid_resolution;
     let fres = f32(res);
     
     // Convert to grid-space
-    let gx = (world_pos.x - fog_params.grid_origin_x) / fog_params.cell_size - 0.5;
-    let gy = (world_pos.y - fog_params.grid_origin_y) / fog_params.cell_size - 0.5;
-    let gz = (world_pos.z - fog_params.grid_origin_z) / fog_params.cell_size - 0.5;
+    let gx = (world_pos.x - fog_params.grid_origin_x) / fog_params.cell_size;
+    let gy = (world_pos.y - fog_params.grid_origin_y) / fog_params.cell_size;
+    let gz = (world_pos.z - fog_params.grid_origin_z) / fog_params.cell_size;
     
-    // Bounds check - outside grid = open sky, fully lit (no occlusion)
-    if (gx < -0.5 || gx >= fres - 0.5 ||
-        gy < -0.5 || gy >= fres - 0.5 ||
-        gz < -0.5 || gz >= fres - 0.5) {
+    // Round to nearest voxel
+    let ix = i32(round(gx));
+    let iy = i32(round(gy));
+    let iz = i32(round(gz));
+    let ires = i32(res);
+    
+    // Bounds check - outside grid = fully lit
+    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
         return 1.0;
     }
     
-    let ix = i32(floor(gx));
-    let iy = i32(floor(gy));
-    let iz = i32(floor(gz));
-    let fx = gx - floor(gx);
-    let fy = gy - floor(gy);
-    let fz = gz - floor(gz);
-    
-    let ires = i32(res);
-    
-    let x0 = u32(clamp(ix, 0, ires - 1));
-    let x1 = u32(clamp(ix + 1, 0, ires - 1));
-    let y0 = u32(clamp(iy, 0, ires - 1));
-    let y1 = u32(clamp(iy + 1, 0, ires - 1));
-    let z0 = u32(clamp(iz, 0, ires - 1));
-    let z1 = u32(clamp(iz + 1, 0, ires - 1));
-    
-    let c000 = light_field[x0 + y0 * res + z0 * res * res];
-    let c100 = light_field[x1 + y0 * res + z0 * res * res];
-    let c010 = light_field[x0 + y1 * res + z0 * res * res];
-    let c110 = light_field[x1 + y1 * res + z0 * res * res];
-    let c001 = light_field[x0 + y0 * res + z1 * res * res];
-    let c101 = light_field[x1 + y0 * res + z1 * res * res];
-    let c011 = light_field[x0 + y1 * res + z1 * res * res];
-    let c111 = light_field[x1 + y1 * res + z1 * res * res];
-    
-    let c00 = mix(c000, c100, fx);
-    let c10 = mix(c010, c110, fx);
-    let c01 = mix(c001, c101, fx);
-    let c11 = mix(c011, c111, fx);
-    let c0 = mix(c00, c10, fy);
-    let c1 = mix(c01, c11, fy);
-    
-    return mix(c0, c1, fz);
+    let idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
+    return light_field[idx];
 }
 
 // Check if a world position is inside a solid voxel
@@ -216,10 +191,11 @@ fn fog_density_at(world_pos: vec3<f32>) -> f32 {
         density *= fade;
     }
     
-    // Height-based fog: denser at lower elevations
+    // Height-based fog: denser at lower elevations (fast exp approximation)
     if (fog_params.height_fog_density > 0.0) {
         let height = world_pos.y - fog_params.grid_origin_y;
-        let height_factor = exp(-height * fog_params.height_fog_falloff);
+        let x = height * fog_params.height_fog_falloff;
+        let height_factor = 1.0 / (1.0 + x + x * x * 0.5);
         density += fog_params.height_fog_density * height_factor;
     }
     
@@ -273,8 +249,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // scattering_anisotropy controls the blend: 0 = perfectly even, 1 = full god rays
     let phase = mix(isotropic_phase, directed_phase, fog_params.scattering_anisotropy);
     
-    // Ray march through fog
-    let step_count = fog_params.fog_steps;
+    // Ray march through fog with adaptive step count
+    // Reduce steps for longer rays to maintain consistent per-pixel cost
+    let max_efficient_dist = fog_params.world_radius * 0.5;
+    let step_reduction = min(march_dist / max_efficient_dist, 2.0);
+    let step_count = max(fog_params.fog_steps / u32(1.0 + step_reduction * 0.5), 4u);
     let step_size = march_dist / f32(step_count);
     
     var accumulated_color = vec3<f32>(0.0);
@@ -307,9 +286,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Total light contribution at this sample
         let sample_color = in_scattered + ambient;
         
-        // Beer-Lambert absorption
+        // Beer-Lambert absorption (fast exp approximation)
         let sample_extinction = density * (fog_params.absorption + fog_params.fog_density) * step_size * 0.01;
-        let sample_transmittance = exp(-sample_extinction);
+        let sample_transmittance = 1.0 / (1.0 + sample_extinction + sample_extinction * sample_extinction * 0.5);
         
         // Accumulate (energy-conserving integration)
         let integrand = sample_color * density * step_size * 0.01;

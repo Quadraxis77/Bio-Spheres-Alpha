@@ -96,7 +96,6 @@
 //! - [`skybox`] - Environment background rendering
 //! - [`volumetric_fog`] - Atmospheric effects
 //! - [`instance_builder`] - CPU-side culling and instance data preparation
-//! - [`hiz_generator`] - Hierarchical Z-buffer for occlusion culling
 //! - [`debug`] - Debug visualization tools
 //! 
 //! ## Usage Example
@@ -129,7 +128,6 @@ pub mod cave_system;
 pub mod cells;
 pub mod debug;
 pub mod gpu_adhesion_lines;
-pub mod hiz_generator;
 pub mod instance_builder;
 pub mod nutrient_particles;
 pub mod orientation_gizmo;
@@ -149,7 +147,6 @@ pub use adhesion_lines::AdhesionLineRenderer;
 pub use cave_system::{CaveSystemRenderer, CaveParams};
 pub use cells::CellRenderer;
 pub use gpu_adhesion_lines::GpuAdhesionLineRenderer;
-pub use hiz_generator::HizGenerator;
 pub use instance_builder::{CellInstance, CullingMode, CullingStats, InstanceBuilder};
 pub use nutrient_particles::NutrientParticleRenderer;
 pub use orientation_gizmo::OrientationGizmoRenderer;

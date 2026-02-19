@@ -82,10 +82,10 @@ fn calculate_shadow_pcf(world_pos: vec3<f32>) -> f32 {
     let texel_size = 1.0 / f32(shadow_camera.shadow_map_size);
     var shadow = 0.0;
     
-    // 2x2 PCF
-    for (let x = -1; x <= 1; x++) {
-        for (let y = -1; y <= 1; y++) {
-            let offset = vec2<f32>(f32(x), f32(y)) * texel_size;
+    // 2x2 PCF (4 samples instead of 9 for better performance)
+    for (let x = 0; x <= 1; x++) {
+        for (let y = 0; y <= 1; y++) {
+            let offset = vec2<f32>(f32(x) - 0.5, f32(y) - 0.5) * texel_size;
             let depth = textureSampleCompare(
                 shadow_map, 
                 shadow_sampler, 
@@ -96,5 +96,5 @@ fn calculate_shadow_pcf(world_pos: vec3<f32>) -> f32 {
         }
     }
     
-    return shadow / 9.0; // Average of 9 samples
+    return shadow * 0.25; // Average of 4 samples
 }
