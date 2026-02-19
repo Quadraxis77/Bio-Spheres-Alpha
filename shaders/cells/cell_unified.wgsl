@@ -45,6 +45,12 @@ struct ShadowFieldParams {
     caustic_scale: f32,
     caustic_speed: f32,
     time: f32,
+    sun_color_r: f32,
+    sun_color_g: f32,
+    sun_color_b: f32,
+    light_dir_x: f32,
+    light_dir_y: f32,
+    light_dir_z: f32,
 }
 
 @group(1) @binding(0) var<uniform> shadow_params: ShadowFieldParams;

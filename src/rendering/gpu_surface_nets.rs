@@ -69,6 +69,14 @@ pub struct GpuSurfaceNets {
     camera_buffer: wgpu::Buffer,
     render_params_buffer: wgpu::Buffer,
     
+    // Smoothing
+    smoothed_density_buffer: wgpu::Buffer,
+    smooth_temp_buffer: wgpu::Buffer,
+    smooth_params_buffer: wgpu::Buffer,
+    smooth_pipeline: wgpu::ComputePipeline,
+    smooth_bind_group: wgpu::BindGroup,
+    smooth_blend_factor: f32,
+    
     // Bind groups
     compute_bind_group: wgpu::BindGroup,
     render_bind_group: wgpu::BindGroup,
@@ -87,6 +95,16 @@ pub struct GpuSurfaceNets {
     // Screen dimensions
     pub width: u32,
     pub height: u32,
+}
+
+/// Smooth density params (must match shader)
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+struct SmoothDensityParams {
+    grid_resolution: u32,
+    blend_factor: f32,
+    _pad0: f32,
+    _pad1: f32,
 }
 
 /// Camera uniform for rendering
@@ -112,6 +130,14 @@ pub struct DensityMeshParams {
     pub rim: f32,
     pub reflection: f32,
     pub alpha: f32,
+    pub time: f32,
+    pub wave_height: f32,
+    pub wave_speed: f32,
+    pub noise_scale: f32,
+    pub noise_octaves: f32,
+    pub noise_lacunarity: f32,
+    pub noise_persistence: f32,
+    pub _pad: f32,
 }
 
 impl Default for DensityMeshParams {
@@ -127,6 +153,14 @@ impl Default for DensityMeshParams {
             rim: 0.3,
             reflection: 0.3,
             alpha: 0.85,
+            time: 0.0,
+            wave_height: 0.8,
+            wave_speed: 1.0,
+            noise_scale: 0.5,
+            noise_octaves: 3.0,
+            noise_lacunarity: 2.0,
+            noise_persistence: 0.5,
+            _pad: 0.0,
         }
     }
 }
@@ -166,10 +200,11 @@ impl GpuSurfaceNets {
         });
         
         // Create buffers
+        let density_buf_size = (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64;
         let density_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Density Buffer"),
-            size: (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            size: density_buf_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         
@@ -437,7 +472,7 @@ impl GpuSurfaceNets {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -546,6 +581,112 @@ impl GpuSurfaceNets {
             cache: None,
         });
         
+        // === Density smoothing infrastructure ===
+        let smooth_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Smooth Density Compute Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/fluid/smooth_density.wgsl").into()
+            ),
+        });
+        
+        let smoothed_density_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Smoothed Density Buffer"),
+            size: density_buf_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        
+        let smooth_temp_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Smooth Temp Buffer"),
+            size: density_buf_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        
+        let smooth_params = SmoothDensityParams {
+            grid_resolution: GRID_RESOLUTION,
+            blend_factor: 0.15,
+            _pad0: 0.0,
+            _pad1: 0.0,
+        };
+        let smooth_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Smooth Density Params Buffer"),
+            contents: bytemuck::cast_slice(&[smooth_params]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        
+        let smooth_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Smooth Density Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        
+        let smooth_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Smooth Density Bind Group"),
+            layout: &smooth_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: smooth_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: density_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: smoothed_density_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: smooth_temp_buffer.as_entire_binding() },
+            ],
+        });
+        
+        let smooth_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Smooth Density Pipeline Layout"),
+            bind_group_layouts: &[&smooth_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        
+        let smooth_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Smooth Density Pipeline"),
+            layout: Some(&smooth_pipeline_layout),
+            module: &smooth_shader,
+            entry_point: Some("smooth_density"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         Self {
             reset_pipeline,
             vertex_pipeline,
@@ -564,6 +705,12 @@ impl GpuSurfaceNets {
             params_buffer,
             camera_buffer,
             render_params_buffer,
+            smoothed_density_buffer,
+            smooth_temp_buffer,
+            smooth_params_buffer,
+            smooth_pipeline,
+            smooth_bind_group,
+            smooth_blend_factor: 0.15,
             compute_bind_group,
             render_bind_group,
             max_vertices,
@@ -601,9 +748,52 @@ impl GpuSurfaceNets {
         &self.density_buffer
     }
 
+    /// Get smoothed density buffer (for cave shader caustics etc.)
+    pub fn smoothed_density_buffer(&self) -> &wgpu::Buffer {
+        &self.smoothed_density_buffer
+    }
+
     /// Get fluid type buffer for GPU writes
     pub fn fluid_type_buffer(&self) -> &wgpu::Buffer {
         &self.fluid_type_buffer
+    }
+    
+    /// Set the temporal blend factor for density smoothing
+    /// Lower = more stable/slow (0.05), higher = more responsive (0.5)
+    pub fn set_smooth_blend_factor(&mut self, queue: &wgpu::Queue, factor: f32) {
+        self.smooth_blend_factor = factor;
+        let params = SmoothDensityParams {
+            grid_resolution: GRID_RESOLUTION,
+            blend_factor: factor,
+            _pad0: 0.0,
+            _pad1: 0.0,
+        };
+        queue.write_buffer(&self.smooth_params_buffer, 0, bytemuck::cast_slice(&[params]));
+    }
+    
+    /// Run density smoothing: spatial blur + temporal blend
+    /// Call after extract_to_surface_nets and before extract_mesh.
+    /// Smoothed result is copied back to density_buffer so surface nets reads it.
+    pub fn smooth_density(&self, encoder: &mut wgpu::CommandEncoder) {
+        let workgroup_count = (GRID_RESOLUTION + 3) / 4;
+        let buf_size = (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64;
+        
+        // Compute: read raw density + prev smoothed → write to temp
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Smooth Density Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.smooth_pipeline);
+            pass.set_bind_group(0, &self.smooth_bind_group, &[]);
+            pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+        }
+        
+        // Copy temp → smoothed (update temporal state for next frame)
+        encoder.copy_buffer_to_buffer(&self.smooth_temp_buffer, 0, &self.smoothed_density_buffer, 0, buf_size);
+        
+        // Copy smoothed → density_buffer (so surface nets extraction reads smoothed data)
+        encoder.copy_buffer_to_buffer(&self.smoothed_density_buffer, 0, &self.density_buffer, 0, buf_size);
     }
 
     /// Update iso level
@@ -651,6 +841,14 @@ impl GpuSurfaceNets {
             rim: editor_state.fluid_rim,
             reflection: editor_state.fluid_reflection,
             alpha: editor_state.fluid_alpha,
+            time: 0.0,
+            wave_height: editor_state.fluid_wave_height,
+            wave_speed: editor_state.fluid_wave_speed,
+            noise_scale: editor_state.fluid_noise_scale,
+            noise_octaves: editor_state.fluid_noise_octaves as f32,
+            noise_lacunarity: editor_state.fluid_noise_lacunarity,
+            noise_persistence: editor_state.fluid_noise_persistence,
+            _pad: 0.0,
         };
         self.update_render_params(queue, &params);
     }

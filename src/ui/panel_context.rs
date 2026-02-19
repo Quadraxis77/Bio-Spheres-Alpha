@@ -217,6 +217,18 @@ pub struct GenomeEditorState {
     pub fluid_alpha: f32,
     /// Rim light strength
     pub fluid_rim: f32,
+    /// Wave height (displacement amplitude along normal)
+    pub fluid_wave_height: f32,
+    /// Wave animation speed
+    pub fluid_wave_speed: f32,
+    /// Perlin noise spatial scale (lower = larger waves spanning more voxels)
+    pub fluid_noise_scale: f32,
+    /// Number of fractal noise octaves
+    pub fluid_noise_octaves: f32,
+    /// Frequency multiplier per octave
+    pub fluid_noise_lacunarity: f32,
+    /// Amplitude multiplier per octave
+    pub fluid_noise_persistence: f32,
     
     /// Flag to indicate mesh params need update
     pub fluid_mesh_params_dirty: bool,
@@ -333,11 +345,17 @@ impl GenomeEditorState {
              light_field_max_steps, light_field_step_size, light_field_absorption_solid,
              light_field_absorption_cell, light_field_ambient_floor, show_sun, sun_color, sun_angular_radius, sun_intensity,
              shadow_enabled, shadow_strength, shadow_quality,
-             caustic_intensity, caustic_scale, caustic_speed) = Self::load_light_settings();
+             caustic_intensity, caustic_scale, caustic_speed,
+             photocyte_mass_per_second, photocyte_min_light_threshold) = Self::load_light_settings();
+        
+        let (fluid_iso_level, fluid_ambient, fluid_diffuse, fluid_specular, fluid_shininess,
+             fluid_fresnel, fluid_fresnel_power, fluid_reflection, fluid_alpha, fluid_rim,
+             fluid_wave_height, fluid_wave_speed, fluid_noise_scale, fluid_noise_octaves,
+             fluid_noise_lacunarity, fluid_noise_persistence) = Self::load_fluid_render_settings();
         
         let (cell_type_visuals, cell_outline_width) = crate::cell::types::CellTypeVisualsStore::load();
         
-        let mut state = Self {
+        let state = Self {
             renaming_mode: None,
             rename_buffer: String::new(),
             selected_mode_index: 0,
@@ -409,17 +427,23 @@ impl GenomeEditorState {
             fluid_show_test_voxels: false,
             fluid_show_mesh: true,
             fluid_continuous_spawn: false,  // Always start disabled by default
-            fluid_iso_level: 0.15,
-            fluid_ambient: 0.15,
-            fluid_diffuse: 0.6,
-            fluid_specular: 0.8,
-            fluid_shininess: 64.0,
-            fluid_fresnel: 0.5,
-            fluid_fresnel_power: 3.0,
-            fluid_reflection: 0.3,
-            fluid_alpha: 0.25,
-            fluid_rim: 0.5,
-            fluid_mesh_params_dirty: false,
+            fluid_iso_level,
+            fluid_ambient,
+            fluid_diffuse,
+            fluid_specular,
+            fluid_shininess,
+            fluid_fresnel,
+            fluid_fresnel_power,
+            fluid_reflection,
+            fluid_alpha,
+            fluid_rim,
+            fluid_wave_height,
+            fluid_wave_speed,
+            fluid_noise_scale,
+            fluid_noise_octaves,
+            fluid_noise_lacunarity,
+            fluid_noise_persistence,
+            fluid_mesh_params_dirty: true,  // Trigger GPU upload on first frame
             fluid_mesh_needs_regen: false,
             light_dir,
             show_volumetric_fog,
@@ -437,8 +461,8 @@ impl GenomeEditorState {
             light_field_absorption_solid,
             light_field_absorption_cell,
             light_field_ambient_floor,
-            photocyte_mass_per_second: 0.3,
-            photocyte_min_light_threshold: 0.05,
+            photocyte_mass_per_second,
+            photocyte_min_light_threshold,
             light_params_dirty: true,
             show_sun,
             sun_color,
@@ -679,6 +703,9 @@ impl GenomeEditorState {
             self.caustic_intensity,
             self.caustic_scale,
             self.caustic_speed,
+            // Photocyte settings
+            self.photocyte_mass_per_second,
+            self.photocyte_min_light_threshold,
         ) {
             log::warn!("Failed to save light settings: {}", e);
         }
@@ -714,6 +741,9 @@ impl GenomeEditorState {
         caustic_intensity: f32,
         caustic_scale: f32,
         caustic_speed: f32,
+        // Photocyte settings
+        photocyte_mass_per_second: f32,
+        photocyte_min_light_threshold: f32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct LightSettings {
@@ -745,6 +775,9 @@ impl GenomeEditorState {
             caustic_intensity: f32,
             caustic_scale: f32,
             caustic_speed: f32,
+            // Photocyte settings
+            photocyte_mass_per_second: f32,
+            photocyte_min_light_threshold: f32,
         }
         
         let settings = LightSettings {
@@ -777,6 +810,9 @@ impl GenomeEditorState {
             caustic_intensity,
             caustic_scale,
             caustic_speed,
+            // Photocyte settings
+            photocyte_mass_per_second,
+            photocyte_min_light_threshold,
         };
         
         let path = PathBuf::from("light_settings.ron");
@@ -786,7 +822,7 @@ impl GenomeEditorState {
     }
     
     /// Load light settings from disk, or return defaults if file doesn't exist.
-    pub fn load_light_settings() -> ([f32; 3], bool, f32, u32, [f32; 3], f32, [f32; 3], f32, f32, f32, f32, u32, f32, f32, f32, f32, bool, [f32; 3], f32, f32, bool, f32, f32, f32, f32, f32) {
+    pub fn load_light_settings() -> ([f32; 3], bool, f32, u32, [f32; 3], f32, [f32; 3], f32, f32, f32, f32, u32, f32, f32, f32, f32, bool, [f32; 3], f32, f32, bool, f32, f32, f32, f32, f32, f32, f32) {
         #[derive(serde::Deserialize)]
         struct LightSettings {
             light_dir: [f32; 3],
@@ -827,6 +863,10 @@ impl GenomeEditorState {
             caustic_scale: f32,
             #[serde(default = "default_caustic_speed")]
             caustic_speed: f32,
+            #[serde(default = "default_photocyte_mass")]
+            photocyte_mass_per_second: f32,
+            #[serde(default = "default_photocyte_threshold")]
+            photocyte_min_light_threshold: f32,
         }
         fn default_shadow_enabled() -> bool { true }
         fn default_shadow_strength() -> f32 { 0.7 }
@@ -834,6 +874,8 @@ impl GenomeEditorState {
         fn default_caustic_intensity() -> f32 { 0.5 }
         fn default_caustic_scale() -> f32 { 8.0 }
         fn default_caustic_speed() -> f32 { 1.0 }
+        fn default_photocyte_mass() -> f32 { 0.3 }
+        fn default_photocyte_threshold() -> f32 { 0.05 }
         
         let path = PathBuf::from("light_settings.ron");
         
@@ -872,6 +914,9 @@ impl GenomeEditorState {
                                 s.caustic_intensity,
                                 s.caustic_scale,
                                 s.caustic_speed,
+                                // Photocyte settings
+                                s.photocyte_mass_per_second,
+                                s.photocyte_min_light_threshold,
                             );
                         }
                         Err(e) => {
@@ -916,6 +961,9 @@ impl GenomeEditorState {
             0.5,                // caustic_intensity
             8.0,                // caustic_scale
             1.0,                // caustic_speed
+            // Photocyte settings
+            0.3,                // photocyte_mass_per_second
+            0.05,               // photocyte_min_light_threshold
         )
     }
     
@@ -1002,6 +1050,137 @@ impl GenomeEditorState {
                 log::warn!("Failed to serialize sun settings: {}", e);
             }
         }
+    }
+    
+    /// Save fluid render settings to disk.
+    pub fn save_fluid_render_settings(&self) {
+        #[derive(serde::Serialize)]
+        struct FluidRenderSettings {
+            iso_level: f32,
+            ambient: f32,
+            diffuse: f32,
+            specular: f32,
+            shininess: f32,
+            fresnel: f32,
+            fresnel_power: f32,
+            reflection: f32,
+            alpha: f32,
+            rim: f32,
+            wave_height: f32,
+            wave_speed: f32,
+            noise_scale: f32,
+            noise_octaves: f32,
+            noise_lacunarity: f32,
+            noise_persistence: f32,
+        }
+        
+        let settings = FluidRenderSettings {
+            iso_level: self.fluid_iso_level,
+            ambient: self.fluid_ambient,
+            diffuse: self.fluid_diffuse,
+            specular: self.fluid_specular,
+            shininess: self.fluid_shininess,
+            fresnel: self.fluid_fresnel,
+            fresnel_power: self.fluid_fresnel_power,
+            reflection: self.fluid_reflection,
+            alpha: self.fluid_alpha,
+            rim: self.fluid_rim,
+            wave_height: self.fluid_wave_height,
+            wave_speed: self.fluid_wave_speed,
+            noise_scale: self.fluid_noise_scale,
+            noise_octaves: self.fluid_noise_octaves,
+            noise_lacunarity: self.fluid_noise_lacunarity,
+            noise_persistence: self.fluid_noise_persistence,
+        };
+        
+        let path = PathBuf::from("fluid_render_settings.ron");
+        match ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default()) {
+            Ok(contents) => {
+                if let Err(e) = std::fs::write(path, contents) {
+                    log::warn!("Failed to save fluid render settings: {}", e);
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to serialize fluid render settings: {}", e);
+            }
+        }
+    }
+    
+    /// Load fluid render settings from disk, or return defaults if file doesn't exist.
+    pub fn load_fluid_render_settings() -> (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
+        #[derive(serde::Deserialize)]
+        #[serde(default)]
+        struct FluidRenderSettings {
+            iso_level: f32,
+            ambient: f32,
+            diffuse: f32,
+            specular: f32,
+            shininess: f32,
+            fresnel: f32,
+            fresnel_power: f32,
+            reflection: f32,
+            alpha: f32,
+            rim: f32,
+            wave_height: f32,
+            wave_speed: f32,
+            noise_scale: f32,
+            noise_octaves: f32,
+            noise_lacunarity: f32,
+            noise_persistence: f32,
+        }
+        impl Default for FluidRenderSettings {
+            fn default() -> Self {
+                Self {
+                    iso_level: 0.05,
+                    ambient: 0.15,
+                    diffuse: 0.6,
+                    specular: 0.8,
+                    shininess: 64.0,
+                    fresnel: 0.5,
+                    fresnel_power: 3.0,
+                    reflection: 0.3,
+                    alpha: 0.25,
+                    rim: 0.5,
+                    wave_height: 0.8,
+                    wave_speed: 1.0,
+                    noise_scale: 0.5,
+                    noise_octaves: 3.0,
+                    noise_lacunarity: 2.0,
+                    noise_persistence: 0.5,
+                }
+            }
+        }
+        
+        let path = PathBuf::from("fluid_render_settings.ron");
+        
+        if path.exists() {
+            match std::fs::read_to_string(&path) {
+                Ok(contents) => {
+                    match ron::from_str::<FluidRenderSettings>(&contents) {
+                        Ok(s) => {
+                            return (
+                                s.iso_level, s.ambient, s.diffuse, s.specular, s.shininess,
+                                s.fresnel, s.fresnel_power, s.reflection, s.alpha, s.rim,
+                                s.wave_height, s.wave_speed, s.noise_scale, s.noise_octaves,
+                                s.noise_lacunarity, s.noise_persistence,
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to parse fluid render settings: {}. Using defaults.", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to read fluid render settings: {}. Using defaults.", e);
+                }
+            }
+        }
+        
+        let d = FluidRenderSettings::default();
+        (d.iso_level, d.ambient, d.diffuse, d.specular, d.shininess,
+         d.fresnel, d.fresnel_power, d.reflection, d.alpha, d.rim,
+         d.wave_height, d.wave_speed, d.noise_scale, d.noise_octaves,
+         d.noise_lacunarity, d.noise_persistence)
     }
     
     /// Load sun settings from disk. Returns defaults if file doesn't exist.

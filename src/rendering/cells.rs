@@ -93,6 +93,9 @@ pub struct CellRenderer {
     /// Light color RGB
     light_color: [f32; 3],
     
+    /// Light direction
+    light_dir: [f32; 3],
+    
     /// Bind group for camera and lighting uniforms
     bind_group: wgpu::BindGroup,
     
@@ -200,12 +203,12 @@ impl CellRenderer {
         // This ensures the pipeline always has a valid group(1) even without a light field system.
         let dummy_shadow_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy Shadow Params Buffer"),
-            size: 48, // ShadowFieldParams is 48 bytes (12 x f32)
+            size: 72, // ShadowFieldParams is 72 bytes (18 x f32)
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         // Write shadow_enabled = 0 so shadows are disabled by default
-        queue.write_buffer(&dummy_shadow_params_buffer, 0, &[0u8; 48]);
+        queue.write_buffer(&dummy_shadow_params_buffer, 0, &[0u8; 72]);
         
         let dummy_light_field_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy Light Field Buffer"),
@@ -239,6 +242,7 @@ impl CellRenderer {
             camera_buffer,
             lighting_buffer,
             light_color: [1.0, 0.98, 0.95], // Default warm white
+            light_dir: [-0.5, -0.7, -0.5], // Default light direction
             bind_group,
             instance_buffer,
             instance_capacity: capacity,
@@ -551,10 +555,15 @@ impl CellRenderer {
         self.light_color = color;
     }
     
+    /// Set the light direction.
+    pub fn set_light_dir(&mut self, dir: [f32; 3]) {
+        self.light_dir = dir;
+    }
+    
     /// Update lighting uniform buffer.
     fn update_lighting(&self, queue: &wgpu::Queue, outline_width: f32) {
         let lighting_uniform = LightingUniform {
-            light_dir: [-0.5, -0.7, -0.5], // Normalized in shader
+            light_dir: self.light_dir,
             ambient: 0.15,
             light_color: self.light_color,
             outline_width,

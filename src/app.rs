@@ -126,6 +126,10 @@ impl App {
                 self.ui.save_ui_state();
                 // Save cell type visuals before exit
                 self.editor_state.save_cell_type_visuals();
+                // Save fluid and light settings before exit
+                self.editor_state.save_fluid_settings();
+                self.editor_state.save_fluid_render_settings();
+                self.editor_state.save_light_settings();
                 return false;
             }
             WindowEvent::Resized(physical_size) => {
@@ -433,24 +437,34 @@ impl App {
                     if let Some(ref mut surface_nets) = gpu_scene.gpu_surface_nets {
                         // Update iso level
                         surface_nets.set_iso_level(&self.queue, self.editor_state.fluid_iso_level);
-                        
-                        // Update render params
-                        let params = crate::rendering::DensityMeshParams {
-                            base_color: [0.2, 0.5, 0.9], // Default water blue color
-                            ambient: self.editor_state.fluid_ambient,
-                            diffuse: self.editor_state.fluid_diffuse,
-                            specular: self.editor_state.fluid_specular,
-                            shininess: self.editor_state.fluid_shininess,
-                            fresnel: self.editor_state.fluid_fresnel,
-                            fresnel_power: self.editor_state.fluid_fresnel_power,
-                            rim: self.editor_state.fluid_rim,
-                            reflection: self.editor_state.fluid_reflection,
-                            alpha: self.editor_state.fluid_alpha,
-                        };
-                        surface_nets.update_render_params(&self.queue, &params);
                     }
                     self.editor_state.fluid_mesh_needs_regen = false;
                     self.editor_state.fluid_mesh_params_dirty = false;
+                }
+                
+                // Always update render params every frame (time drives wave animation)
+                if let Some(ref surface_nets) = gpu_scene.gpu_surface_nets {
+                    let params = crate::rendering::DensityMeshParams {
+                        base_color: [0.2, 0.5, 0.9],
+                        ambient: self.editor_state.fluid_ambient,
+                        diffuse: self.editor_state.fluid_diffuse,
+                        specular: self.editor_state.fluid_specular,
+                        shininess: self.editor_state.fluid_shininess,
+                        fresnel: self.editor_state.fluid_fresnel,
+                        fresnel_power: self.editor_state.fluid_fresnel_power,
+                        rim: self.editor_state.fluid_rim,
+                        reflection: self.editor_state.fluid_reflection,
+                        alpha: self.editor_state.fluid_alpha,
+                        time: gpu_scene.current_time,
+                        wave_height: self.editor_state.fluid_wave_height,
+                        wave_speed: self.editor_state.fluid_wave_speed,
+                        noise_scale: self.editor_state.fluid_noise_scale,
+                        noise_octaves: self.editor_state.fluid_noise_octaves as f32,
+                        noise_lacunarity: self.editor_state.fluid_noise_lacunarity,
+                        noise_persistence: self.editor_state.fluid_noise_persistence,
+                        _pad: 0.0,
+                    };
+                    surface_nets.update_render_params(&self.queue, &params);
                 }
             }
         }

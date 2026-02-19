@@ -103,11 +103,17 @@ struct ShadowFieldParams {
     caustic_scale: f32,
     caustic_speed: f32,
     time: f32,
+    sun_color_r: f32,
+    sun_color_g: f32,
+    sun_color_b: f32,
+    light_dir_x: f32,
+    light_dir_y: f32,
+    light_dir_z: f32,
 }
 
 @group(2) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
 @group(2) @binding(1) var<storage, read> light_field: array<f32>;
-@group(2) @binding(2) var<storage, read> water_bitfield: array<u32>;
+@group(2) @binding(2) var<storage, read> water_density: array<f32>;
 
 // Sample light field at world position with trilinear interpolation
 fn sample_light_field(world_pos: vec3<f32>) -> f32 {
@@ -174,9 +180,9 @@ fn vs_main(vertex: VertexInput) -> VertexOutput {
 }
 
 // ============================================================
-// Water detection using bitfield
+// Smooth water density sampling (trilinear interpolation)
 // ============================================================
-fn is_underwater(world_pos: vec3<f32>) -> bool {
+fn sample_water_density(world_pos: vec3<f32>) -> f32 {
     let res = shadow_params.grid_resolution;
     let fres = f32(res);
     let grid_origin = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
@@ -188,16 +194,39 @@ fn is_underwater(world_pos: vec3<f32>) -> bool {
     let ix = i32(floor(gx));
     let iy = i32(floor(gy));
     let iz = i32(floor(gz));
-    let ires = i32(res);
+    let fx = gx - floor(gx);
+    let fy = gy - floor(gy);
+    let fz = gz - floor(gz);
     
-    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
-        return false;
+    let ires = i32(res);
+    if (ix < 0 || ix >= ires - 1 || iy < 0 || iy >= ires - 1 || iz < 0 || iz >= ires - 1) {
+        return 0.0;
     }
     
-    let voxel_idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
-    let word_idx = voxel_idx / 32u;
-    let bit_idx = voxel_idx % 32u;
-    return (water_bitfield[word_idx] & (1u << bit_idx)) != 0u;
+    let x0 = u32(ix);
+    let x1 = u32(ix + 1);
+    let y0 = u32(iy);
+    let y1 = u32(iy + 1);
+    let z0 = u32(iz);
+    let z1 = u32(iz + 1);
+    
+    let d000 = water_density[x0 + y0 * res + z0 * res * res];
+    let d100 = water_density[x1 + y0 * res + z0 * res * res];
+    let d010 = water_density[x0 + y1 * res + z0 * res * res];
+    let d110 = water_density[x1 + y1 * res + z0 * res * res];
+    let d001 = water_density[x0 + y0 * res + z1 * res * res];
+    let d101 = water_density[x1 + y0 * res + z1 * res * res];
+    let d011 = water_density[x0 + y1 * res + z1 * res * res];
+    let d111 = water_density[x1 + y1 * res + z1 * res * res];
+    
+    let d00 = mix(d000, d100, fx);
+    let d10 = mix(d010, d110, fx);
+    let d01 = mix(d001, d101, fx);
+    let d11 = mix(d011, d111, fx);
+    let d0 = mix(d00, d10, fy);
+    let d1 = mix(d01, d11, fy);
+    
+    return mix(d0, d1, fz);
 }
 
 // ============================================================
@@ -307,8 +336,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Normalize normal
     let N = normalize(in.normal);
     
-    // Light direction (from above and slightly to the side)
-    let light_dir = normalize(vec3<f32>(0.3, 1.0, 0.2));
+    // Light direction from uniform (matches sun direction)
+    let light_dir = normalize(vec3<f32>(shadow_params.light_dir_x, shadow_params.light_dir_y, shadow_params.light_dir_z));
     
     // View direction
     let V = normalize(camera.camera_pos - in.world_position);
@@ -373,20 +402,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let grid_max = grid_min + vec3<f32>(grid_size, grid_size, grid_size);
     let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
     let shadow = mix(1.0, sample_light_field(clamped_pos), shadow_params.shadow_strength);
+    let sun_color = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
     let ambient = vec3<f32>(0.1) * ao;
-    var final_color = final_base_color * (ambient + diffuse * 0.7 * shadow) + vec3<f32>(specular * 0.3 * shadow);
+    var final_color = final_base_color * (ambient + sun_color * diffuse * 0.7 * shadow) + sun_color * vec3<f32>(specular * 0.3 * shadow);
     
     // Apply underwater caustics on lit surfaces
-    // Check slightly inside the cave interior (along normal) since the wall surface
-    // sits at the solid/empty boundary - water occupies the voxels in front of the wall
+    // Sample smooth density slightly inside the cave interior (along normal)
     let water_check_pos = in.world_position + N * shadow_params.cell_size * 1.5;
-    if (shadow_params.caustic_intensity > 0.0 && shadow > 0.3) {
-        if (is_underwater(water_check_pos)) {
-            let caustic = caustic_pattern(in.world_position, N, shadow_params.time);
-            // Caustics add light to underwater surfaces, modulated by shadow (only on lit areas)
-            let caustic_color = vec3<f32>(0.4, 0.7, 1.0); // Bluish-white light
-            final_color += caustic_color * caustic * shadow_params.caustic_intensity * shadow * 0.5;
-        }
+    let density = sample_water_density(water_check_pos);
+    if (shadow_params.caustic_intensity > 0.0 && shadow > 0.3 && density > 0.01) {
+        let caustic = caustic_pattern(in.world_position, N, shadow_params.time);
+        // Smooth density falloff modulates caustic intensity at boundaries
+        let density_fade = smoothstep(0.0, 0.5, density);
+        // Tint caustics with sun color, biased slightly blue for underwater feel
+        let caustic_tint = sun_color * vec3<f32>(0.7, 0.85, 1.0);
+        final_color += caustic_tint * caustic * shadow_params.caustic_intensity * shadow * density_fade * 0.5;
     }
     
     // Completely opaque walls

@@ -2914,6 +2914,11 @@ impl GpuScene {
             light_field.set_caustic_intensity(editor_state.caustic_intensity);
             light_field.set_caustic_scale(editor_state.caustic_scale);
             light_field.set_caustic_speed(editor_state.caustic_speed);
+            light_field.set_sun_color([
+                editor_state.sun_color[0] * editor_state.sun_intensity,
+                editor_state.sun_color[1] * editor_state.sun_intensity,
+                editor_state.sun_color[2] * editor_state.sun_intensity,
+            ]);
         }
         
         // Update volumetric fog renderer parameters
@@ -2930,8 +2935,24 @@ impl GpuScene {
             fog_renderer.height_fog_falloff = editor_state.fog_height_falloff;
         }
         
+        // Combine sun color with intensity for all lighting
+        let scaled_sun_color = [
+            editor_state.sun_color[0] * editor_state.sun_intensity,
+            editor_state.sun_color[1] * editor_state.sun_intensity,
+            editor_state.sun_color[2] * editor_state.sun_intensity,
+        ];
+        
+        // Update cell renderer light color and direction
+        self.renderer.set_light_color(scaled_sun_color);
+        // Cell shader expects light_dir pointing FROM light; editor stores direction TOWARD light
+        self.renderer.set_light_dir([
+            -editor_state.light_dir[0],
+            -editor_state.light_dir[1],
+            -editor_state.light_dir[2],
+        ]);
+        
         // Update tail renderer light color
-        self.tail_renderer.set_light_color(editor_state.sun_color);
+        self.tail_renderer.set_light_color(scaled_sun_color);
         
         // Update sun renderer parameters
         self.show_sun = editor_state.show_sun;
@@ -3495,11 +3516,11 @@ impl Scene for GpuScene {
             // Update shadow bind group from light field system (with water bitfield for caustics)
             if let Some(ref light_field) = self.light_field_system {
                 light_field.update_shadow_params(queue);
-                // Use water bitfield from fluid simulator if available, otherwise dummy
-                let water_buf = self.fluid_simulator.as_ref()
-                    .map(|fs| fs.water_bitfield_buffer())
-                    .unwrap_or(light_field.dummy_water_bitfield());
-                let shadow_bg = light_field.create_cave_shadow_bind_group(device, water_buf);
+                // Use smoothed density buffer from surface nets if available, otherwise dummy
+                let density_buf = self.gpu_surface_nets.as_ref()
+                    .map(|sn| sn.smoothed_density_buffer())
+                    .unwrap_or(light_field.dummy_water_density());
+                let shadow_bg = light_field.create_cave_shadow_bind_group(device, density_buf);
                 cave_renderer.set_shadow_bind_group(shadow_bg);
             }
             cave_renderer.render(
@@ -3629,7 +3650,10 @@ impl Scene for GpuScene {
             }
 
             if let Some(ref gpu_surface_nets) = self.gpu_surface_nets {
-                // Run compute shaders to extract mesh from density buffer
+                // Smooth the raw density: spatial blur + temporal blend
+                gpu_surface_nets.smooth_density(&mut encoder);
+                
+                // Run compute shaders to extract mesh from smoothed density buffer
                 gpu_surface_nets.extract_mesh(&mut encoder);
 
                 // Render the extracted mesh

@@ -968,6 +968,59 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
             context.editor_state.save_fluid_settings();
         }
     
+    // === Water Surface Waves ===
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("Water Surface Waves");
+    ui.add_space(4.0);
+    
+    ui.label("Wave Height:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_wave_height, 0.0..=5.0)
+        .step_by(0.05).fixed_decimals(2)).changed() {
+        context.editor_state.fluid_mesh_params_dirty = true;
+        context.editor_state.save_fluid_render_settings();
+    }
+    
+    ui.add_space(4.0);
+    ui.label("Wave Speed:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_wave_speed, 0.0..=5.0)
+        .step_by(0.05).fixed_decimals(2)).changed() {
+        context.editor_state.fluid_mesh_params_dirty = true;
+        context.editor_state.save_fluid_render_settings();
+    }
+    
+    ui.add_space(4.0);
+    ui.label("Noise Scale (lower = larger waves):");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_scale, 0.01..=20.0)
+        .step_by(0.01).fixed_decimals(2).logarithmic(true)).changed() {
+        context.editor_state.fluid_mesh_params_dirty = true;
+        context.editor_state.save_fluid_render_settings();
+    }
+    
+    ui.add_space(4.0);
+    ui.label("Octaves:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_octaves, 1.0..=6.0)
+        .step_by(1.0).fixed_decimals(0)).changed() {
+        context.editor_state.fluid_mesh_params_dirty = true;
+        context.editor_state.save_fluid_render_settings();
+    }
+    
+    ui.add_space(4.0);
+    ui.label("Lacunarity (freq per octave):");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_lacunarity, 1.0..=4.0)
+        .step_by(0.1).fixed_decimals(1)).changed() {
+        context.editor_state.fluid_mesh_params_dirty = true;
+        context.editor_state.save_fluid_render_settings();
+    }
+    
+    ui.add_space(4.0);
+    ui.label("Persistence (amp per octave):");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_persistence, 0.1..=1.0)
+        .step_by(0.05).fixed_decimals(2)).changed() {
+        context.editor_state.fluid_mesh_params_dirty = true;
+        context.editor_state.save_fluid_render_settings();
+    }
+    
     // === Caustics ===
     ui.add_space(8.0);
     ui.separator();
@@ -1022,6 +1075,38 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
     
     let mut changed = false;
     
+    // === Light Direction ===
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("Light Direction");
+    ui.add_space(4.0);
+    
+    ui.label("X:");
+    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[0], -1.0..=1.0)
+        .step_by(0.01).fixed_decimals(2)).changed();
+    ui.label("Y:");
+    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[1], -1.0..=1.0)
+        .step_by(0.01).fixed_decimals(2)).changed();
+    ui.label("Z:");
+    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[2], -1.0..=1.0)
+        .step_by(0.01).fixed_decimals(2)).changed();
+    
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        if ui.button("☀ Top-Down").clicked() {
+            context.editor_state.light_dir = [0.0, 1.0, 0.0];
+            changed = true;
+        }
+        if ui.button("🌅 Sunset").clicked() {
+            context.editor_state.light_dir = [-0.7, 0.3, 0.5];
+            changed = true;
+        }
+        if ui.button("↗ Default").clicked() {
+            context.editor_state.light_dir = [-0.5, 0.7, 0.5];
+            changed = true;
+        }
+    });
+    
     // === Procedural Sun ===
     ui.add_space(8.0);
     ui.separator();
@@ -1052,8 +1137,8 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
         
         ui.add_space(4.0);
         ui.label("Sun Brightness:");
-        sun_changed |= ui.add(egui::Slider::new(&mut context.editor_state.sun_intensity, 0.0..=50.0)
-            .step_by(0.5).fixed_decimals(1)).changed();
+        sun_changed |= ui.add(egui::Slider::new(&mut context.editor_state.sun_intensity, 0.01..=50.0)
+            .logarithmic(true).fixed_decimals(2)).changed();
     }
     
     // === Surface Shadows ===
@@ -1084,36 +1169,6 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
         }
         context.editor_state.save_light_settings();
     }
-    
-    // === Light Direction ===
-    ui.heading("Light Direction");
-    ui.add_space(4.0);
-    
-    ui.label("X:");
-    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[0], -1.0..=1.0)
-        .step_by(0.01).fixed_decimals(2)).changed();
-    ui.label("Y:");
-    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[1], -1.0..=1.0)
-        .step_by(0.01).fixed_decimals(2)).changed();
-    ui.label("Z:");
-    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[2], -1.0..=1.0)
-        .step_by(0.01).fixed_decimals(2)).changed();
-    
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        if ui.button("☀ Top-Down").clicked() {
-            context.editor_state.light_dir = [0.0, 1.0, 0.0];
-            changed = true;
-        }
-        if ui.button("🌅 Sunset").clicked() {
-            context.editor_state.light_dir = [-0.7, 0.3, 0.5];
-            changed = true;
-        }
-        if ui.button("↗ Default").clicked() {
-            context.editor_state.light_dir = [-0.5, 0.7, 0.5];
-            changed = true;
-        }
-    });
     
     // === Light Field Settings ===
     ui.add_space(8.0);

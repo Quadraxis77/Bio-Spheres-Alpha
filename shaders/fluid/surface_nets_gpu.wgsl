@@ -73,111 +73,6 @@ fn is_at_boundary(x: i32, y: i32, z: i32) -> bool {
     return x < 0 || x >= res || y < 0 || y >= res || z < 0 || z >= res;
 }
 
-// GREEDY APPROACH: Only create surface if water touches empty space (not solid or boundary)
-fn should_create_water_surface(x: i32, y: i32, z: i32) -> bool {
-    // First check if this voxel actually contains water
-    if x < 0 || y < 0 || z < 0 {
-        return false;
-    }
-    
-    let res = i32(params.grid_resolution);
-    if x >= res || y >= res || z >= res {
-        return false;
-    }
-    
-    let idx = grid_index(u32(x), u32(y), u32(z));
-    let water_density = density[idx];
-    
-    // Must have water to create surface
-    if water_density <= params.iso_level {
-        return false;
-    }
-    
-    // Check all 6 neighbors - if ANY is empty space, create surface
-    // If ALL neighbors are either water or solid/boundary, DON'T create surface
-    let offsets = array<vec3<i32>, 6>(
-        vec3<i32>(1, 0, 0),   // +X
-        vec3<i32>(-1, 0, 0),  // -X
-        vec3<i32>(0, 1, 0),   // +Y
-        vec3<i32>(0, -1, 0),  // -Y
-        vec3<i32>(0, 0, 1),   // +Z
-        vec3<i32>(0, 0, -1)   // -Z
-    );
-    
-    for (var i = 0u; i < 6u; i++) {
-        let nx = x + offsets[i].x;
-        let ny = y + offsets[i].y;
-        let nz = z + offsets[i].z;
-        
-        // If neighbor is outside boundary, this water touches world boundary - NO SURFACE
-        if is_at_boundary(nx, ny, nz) {
-            continue; // Skip this neighbor, don't create surface for boundary contact
-        }
-        
-        // If neighbor is solid, water touches solid - NO SURFACE
-        if is_solid(u32(nx), u32(ny), u32(nz)) {
-            continue; // Skip this neighbor, don't create surface for solid contact
-        }
-        
-        // If neighbor is empty (no water), water touches air - CREATE SURFACE
-        let neighbor_idx = grid_index(u32(nx), u32(ny), u32(nz));
-        let neighbor_density = density[neighbor_idx];
-        
-        if neighbor_density <= params.iso_level {
-            return true; // Water touches empty space - create surface!
-        }
-    }
-    
-    // All neighbors are either water, solid, or boundary - NO SURFACE
-    return false;
-}
-
-// Multi-voxel averaging kernel for smoothing density field
-fn sample_density_averaged(x: i32, y: i32, z: i32, kernel_size: i32) -> f32 {
-    var sum = 0.0;
-    var count = 0;
-    let res = i32(params.grid_resolution);
-    
-    // Sample surrounding voxels in a cubic kernel
-    for (var dx = -kernel_size; dx <= kernel_size; dx++) {
-        for (var dy = -kernel_size; dy <= kernel_size; dy++) {
-            for (var dz = -kernel_size; dz <= kernel_size; dz++) {
-                let nx = clamp(x + dx, 0, res - 1);
-                let ny = clamp(y + dy, 0, res - 1);
-                let nz = clamp(z + dz, 0, res - 1);
-                
-                // Weight by distance (Gaussian-like falloff)
-                let dist_sq = f32(dx * dx + dy * dy + dz * dz);
-                let weight = exp(-dist_sq * 0.2); // Reduced weight for gentler smoothing
-                
-                sum += sample_density_clamped(nx, ny, nz) * weight;
-                count += 1;
-            }
-        }
-    }
-    
-    return sum / f32(count);
-}
-
-// Height-based filtering to ignore single voxel differences
-fn should_create_surface(corners: array<f32, 8>, iso: f32) -> bool {
-    // Count significant height differences (more than 1 voxel)
-    var significant_changes = 0;
-    var prev_inside = corners[0] >= iso;
-    
-    for (var i = 1u; i < 8u; i++) {
-        let current_inside = corners[i] >= iso;
-        if prev_inside != current_inside {
-            significant_changes++;
-        }
-        prev_inside = current_inside;
-    }
-    
-    // Only create surface if there are significant height changes
-    // This filters out single voxel variations
-    return significant_changes >= 1; // Reduced threshold to allow more surfaces
-}
-
 // Sample density with aggressive smoothing to eliminate fine details
 fn sample_density_height_filtered(x: i32, y: i32, z: i32) -> f32 {
     // Use a 3x3x3 kernel for strong averaging
@@ -206,58 +101,6 @@ fn sample_density_height_filtered(x: i32, y: i32, z: i32) -> f32 {
     return sum / weight_sum;
 }
 
-// Smoothed trilinear interpolation
-fn sample_density_trilinear_smooth(world_pos: vec3<f32>) -> f32 {
-    // Convert world position to grid coordinates
-    let grid_pos = (world_pos - params.grid_origin) / params.cell_size;
-    let grid_x = grid_pos.x - 0.5;
-    let grid_y = grid_pos.y - 0.5;
-    let grid_z = grid_pos.z - 0.5;
-    
-    // Get integer grid coordinates and fractional parts
-    let x0 = i32(floor(grid_x));
-    let y0 = i32(floor(grid_y));
-    let z0 = i32(floor(grid_z));
-    let fx = fract(grid_x);
-    let fy = fract(grid_y);
-    let fz = fract(grid_z);
-    
-    // Sample 8 corners with height filtering
-    let c000 = sample_density_height_filtered(x0, y0, z0);
-    let c100 = sample_density_height_filtered(x0 + 1, y0, z0);
-    let c010 = sample_density_height_filtered(x0, y0 + 1, z0);
-    let c110 = sample_density_height_filtered(x0 + 1, y0 + 1, z0);
-    let c001 = sample_density_height_filtered(x0, y0, z0 + 1);
-    let c101 = sample_density_height_filtered(x0 + 1, y0, z0 + 1);
-    let c011 = sample_density_height_filtered(x0, y0 + 1, z0 + 1);
-    let c111 = sample_density_height_filtered(x0 + 1, y0 + 1, z0 + 1);
-    
-    // Trilinear interpolation
-    let c00 = mix(c000, c100, fx);
-    let c01 = mix(c001, c101, fx);
-    let c10 = mix(c010, c110, fx);
-    let c11 = mix(c011, c111, fx);
-    
-    let c0 = mix(c00, c10, fy);
-    let c1 = mix(c01, c11, fy);
-    
-    return mix(c0, c1, fz);
-}
-
-// Improved gradient calculation with smoothed trilinear sampling
-fn sample_gradient_trilinear(world_pos: vec3<f32>) -> vec3<f32> {
-    let epsilon = params.cell_size * 0.1; // Small offset for gradient
-    
-    let dx = (sample_density_trilinear_smooth(world_pos + vec3<f32>(epsilon, 0.0, 0.0)) - 
-             sample_density_trilinear_smooth(world_pos - vec3<f32>(epsilon, 0.0, 0.0))) / (2.0 * epsilon);
-    let dy = (sample_density_trilinear_smooth(world_pos + vec3<f32>(0.0, epsilon, 0.0)) - 
-             sample_density_trilinear_smooth(world_pos - vec3<f32>(0.0, epsilon, 0.0))) / (2.0 * epsilon);
-    let dz = (sample_density_trilinear_smooth(world_pos + vec3<f32>(0.0, 0.0, epsilon)) - 
-             sample_density_trilinear_smooth(world_pos - vec3<f32>(0.0, 0.0, epsilon))) / (2.0 * epsilon);
-    
-    return vec3<f32>(-dx, -dy, -dz);
-}
-
 // Corner offsets for the 8 corners of a cell
 const CORNER_OFFSETS: array<vec3<i32>, 8> = array<vec3<i32>, 8>(
     vec3<i32>(0, 0, 0), vec3<i32>(1, 0, 0), vec3<i32>(0, 1, 0), vec3<i32>(1, 1, 0),
@@ -284,26 +127,6 @@ fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ix = i32(gid.x);
     let iy = i32(gid.y);
     let iz = i32(gid.z);
-    
-    // GREEDY APPROACH: Check if any corner of this cell should create a surface
-    var should_create_surface = false;
-    for (var cx = 0; cx < 2; cx++) {
-        for (var cy = 0; cy < 2; cy++) {
-            for (var cz = 0; cz < 2; cz++) {
-                if should_create_water_surface(ix + cx, iy + cy, iz + cz) {
-                    should_create_surface = true;
-                    break;
-                }
-            }
-            if should_create_surface { break; }
-        }
-        if should_create_surface { break; }
-    }
-    
-    if !should_create_surface {
-        atomicStore(&vertex_map[cell_idx], 0u);
-        return;
-    }
     
     // Sample 8 corners with aggressive smoothing
     var corners: array<f32, 8>;
@@ -371,10 +194,16 @@ fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
     let local_pos = sum / f32(count);
     let world_pos = grid_to_world(f32(gid.x) + local_pos.x, f32(gid.y) + local_pos.y, f32(gid.z) + local_pos.z);
     
-    // Compute smooth normal using trilinear gradient
-    let gradient = sample_gradient_trilinear(world_pos);
+    // Compute normal from density gradient across cell corners (zero additional reads)
+    let grad_x = (corners[1] + corners[3] + corners[5] + corners[7])
+               - (corners[0] + corners[2] + corners[4] + corners[6]);
+    let grad_y = (corners[2] + corners[3] + corners[6] + corners[7])
+               - (corners[0] + corners[1] + corners[4] + corners[5]);
+    let grad_z = (corners[4] + corners[5] + corners[6] + corners[7])
+               - (corners[0] + corners[1] + corners[2] + corners[3]);
+    let gradient = vec3<f32>(-grad_x, -grad_y, -grad_z);
     var normal = normalize(gradient);
-    if length(gradient) < 1e-6 {
+    if dot(gradient, gradient) < 1e-12 {
         normal = vec3<f32>(0.0, 1.0, 0.0);
     }
     

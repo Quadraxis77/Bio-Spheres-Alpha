@@ -1,0 +1,18 @@
+(
+    iso_level: 0.05,
+    ambient: 0.15,
+    diffuse: 0.6,
+    specular: 0.8,
+    shininess: 64.0,
+    fresnel: 0.5,
+    fresnel_power: 3.0,
+    reflection: 0.3,
+    alpha: 0.25,
+    rim: 0.5,
+    wave_height: 5.0,
+    wave_speed: 2.0,
+    noise_scale: 0.02,
+    noise_octaves: 1.0,
+    noise_lacunarity: 2.6,
+    noise_persistence: 1.0,
+)

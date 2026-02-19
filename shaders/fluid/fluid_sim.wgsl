@@ -33,7 +33,7 @@ struct FluidParams {
     // Fluid type for spawning (0=Empty, 1=Water, 2=Lava, 3=Steam)
     spawn_fluid_type: u32,
 
-    _pad0: u32,
+    sub_step: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: FluidParams;
@@ -70,6 +70,11 @@ fn is_solid(x: u32, y: u32, z: u32) -> bool {
 // Check if a voxel is encapsulated (surrounded on all 6 sides by solids or water)
 // If true, this voxel can be skipped during processing as it cannot move
 fn is_encapsulated(x: u32, y: u32, z: u32) -> bool {
+    // Never skip fluid inside solid — it needs the push-out path
+    if is_solid(x, y, z) {
+        return false;
+    }
+    
     let res = params.grid_resolution;
     
     // Check all 6 neighbors
@@ -107,38 +112,6 @@ fn is_encapsulated(x: u32, y: u32, z: u32) -> bool {
     return true;
 }
 
-fn count_surrounding_water(x: u32, y: u32, z: u32) -> u32 {
-    let res = params.grid_resolution;
-    var count = 0u;
-    
-    // Check 6 neighbors (not up/down, just horizontal)
-    let offsets = array<vec3<i32>, 6>(
-        vec3<i32>(1, 0, 0),   // +X
-        vec3<i32>(-1, 0, 0),  // -X
-        vec3<i32>(0, 0, 1),   // +Z
-        vec3<i32>(0, 0, -1),  // -Z
-        vec3<i32>(0, 1, 0),   // +Y (same level)
-        vec3<i32>(0, -1, 0)   // -Y (below)
-    );
-    
-    for (var i = 0; i < 6; i++) {
-        let offset = offsets[i];
-        let nx = i32(x) + offset.x;
-        let ny = i32(y) + offset.y;
-        let nz = i32(z) + offset.z;
-        
-        if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
-            let neighbor_idx = grid_index(u32(nx), u32(ny), u32(nz));
-            let neighbor_state = atomicLoad(&voxels[neighbor_idx]);
-            if get_fluid_type(neighbor_state) == 1u {
-                count++;
-            }
-        }
-    }
-    
-    return count;
-}
-
 fn grid_to_world(x: u32, y: u32, z: u32) -> vec3<f32> {
     return vec3<f32>(
         params.grid_origin_x + (f32(x) + 0.5) * params.cell_size,
@@ -148,124 +121,8 @@ fn grid_to_world(x: u32, y: u32, z: u32) -> vec3<f32> {
 }
 
 fn is_in_bounds(pos: vec3<f32>) -> bool {
-    return length(pos) < params.world_radius * 0.98; // Reduced dead zone near boundaries
-}
-
-// Perlin noise implementation
-fn fade(t: f32) -> f32 {
-    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
-}
-
-fn lerp(t: f32, a: f32, b: f32) -> f32 {
-    return a + t * (b - a);
-}
-
-fn grad(hash: u32, x: f32, y: f32, z: f32) -> f32 {
-    let h = hash & 15u;
-    var u: f32;
-    var v: f32;
-    
-    if h < 8u {
-        u = x;
-    } else {
-        u = y;
-    }
-    
-    if h < 4u {
-        v = y;
-    } else if h == 12u || h == 14u {
-        v = x;
-    } else {
-        v = z;
-    }
-    
-    var result: f32;
-    if (h & 1u) == 0u {
-        result = u;
-    } else {
-        result = -u;
-    }
-    
-    if (h & 2u) == 0u {
-        result = result + v;
-    } else {
-        result = result - v;
-    }
-    
-    return result;
-}
-
-fn perlin_noise(pos: vec3<f32>) -> f32 {
-    // Convert to integer lattice points
-    let X = u32(floor(pos.x)) & 255u;
-    let Y = u32(floor(pos.y)) & 255u;
-    let Z = u32(floor(pos.z)) & 255u;
-    
-    // Relative position within lattice cell
-    let x = pos.x - floor(pos.x);
-    let y = pos.y - floor(pos.y);
-    let z = pos.z - floor(pos.z);
-    
-    // Fade curves
-    let u = fade(x);
-    let v = fade(y);
-    let w = fade(z);
-    
-    // Hash coordinates for the 8 corners of the cube
-    let A = u32(X) + 1u;
-    let B = u32(Y) + 1u;
-    let C = u32(Z) + 1u;
-    
-    let h000 = (u32(X) + u32(Y) + u32(Z)) * 73856093u ^ 19349663u;
-    let h001 = (u32(X) + u32(Y) + u32(C)) * 73856093u ^ 83492791u;
-    let h010 = (u32(X) + u32(B) + u32(Z)) * 73856093u ^ 12673291u;
-    let h011 = (u32(X) + u32(B) + u32(C)) * 73856093u ^ 52328767u;
-    let h100 = (u32(A) + u32(Y) + u32(Z)) * 73856093u ^ 29537387u;
-    let h101 = (u32(A) + u32(Y) + u32(C)) * 73856093u ^ 97284321u;
-    let h110 = (u32(A) + u32(B) + u32(Z)) * 73856093u ^ 41283947u;
-    let h111 = (u32(A) + u32(B) + u32(C)) * 73856093u ^ 62348719u;
-    
-    // Interpolate
-    let n000 = grad(h000, x, y, z);
-    let n001 = grad(h001, x, y, z - 1.0);
-    let n010 = grad(h010, x, y - 1.0, z);
-    let n011 = grad(h011, x, y - 1.0, z - 1.0);
-    let n100 = grad(h100, x - 1.0, y, z);
-    let n101 = grad(h101, x - 1.0, y, z - 1.0);
-    let n110 = grad(h110, x - 1.0, y - 1.0, z);
-    let n111 = grad(h111, x - 1.0, y - 1.0, z - 1.0);
-    
-    let n00 = lerp(u, n000, n100);
-    let n01 = lerp(u, n001, n101);
-    let n10 = lerp(u, n010, n110);
-    let n11 = lerp(u, n011, n111);
-    
-    let n0 = lerp(v, n00, n10);
-    let n1 = lerp(v, n01, n11);
-    
-    return lerp(w, n0, n1);
-}
-
-// Get wave-based flow direction for smooth water surface movement
-fn get_wave_flow_direction(gid: vec3<u32>, time: f32) -> f32 {
-    // Use world position for wave patterns
-    let world_pos = grid_to_world(gid.x, gid.y, gid.z);
-    
-    // Create traveling waves in XZ plane
-    let wave_speed = 0.5;
-    let wave_frequency = 0.1;
-    
-    // Primary wave in X direction
-    let wave_x = sin(world_pos.x * wave_frequency + time * wave_speed);
-    
-    // Secondary wave in Z direction (90 degrees out of phase)
-    let wave_z = cos(world_pos.z * wave_frequency + time * wave_speed * 0.7);
-    
-    // Combine waves to create circular/elliptical flow patterns
-    let combined_wave = (wave_x + wave_z) * 0.5;
-    
-    // Normalize to [0, 1] for direction selection
-    return (combined_wave + 1.0) * 0.5;
+    let threshold = params.world_radius * 0.98;
+    return dot(pos, pos) < threshold * threshold;
 }
 
 // Direction offsets: +X, -X, +Y, -Y, +Z, -Z
@@ -301,7 +158,6 @@ fn get_steam_dispersion_bias(gid: vec3<u32>, direction: u32) -> f32 {
     let time_hash = u32(params.time * 1000.0);
     
     // Create different dispersion patterns based on direction
-    let direction_factor = f32(direction + 1u) * 0.3;
     let dispersion_factor = sin(f32(pos_hash) * 0.001 + params.time * 2.0) * 0.3 + 0.7;
     
     // Steam has higher dispersion in horizontal directions (spreads out)
@@ -423,38 +279,46 @@ fn should_convert_to_steam(gid: vec3<u32>) -> bool {
     return (combined_hash & 255u) < u32(conversion_probability * 255.0);
 }
 
-// Check if water voxel is in contact with other water or solid surfaces
+// Check if water voxel is supported from below (in the gravity direction)
+// Only water resting on solid or other water should spread laterally.
+// Water clinging to walls or ceilings is NOT supported and should fall.
 fn water_is_supported(gid: vec3<u32>) -> bool {
     let res = params.grid_resolution;
+    let grav_dir = vec3<f32>(params.gravity_dir_x, params.gravity_dir_y, params.gravity_dir_z);
     
-    // Check all 6 neighbors for water or solid contact
-    let offsets = array<vec3<i32>, 6>(
-        vec3<i32>(1, 0, 0),   // +X
-        vec3<i32>(-1, 0, 0),  // -X
-        vec3<i32>(0, 1, 0),   // +Y
-        vec3<i32>(0, -1, 0),  // -Y
-        vec3<i32>(0, 0, 1),   // +Z
-        vec3<i32>(0, 0, -1)   // -Z
-    );
-    
-    for (var i = 0u; i < 6u; i++) {
-        let nx = i32(gid.x) + offsets[i].x;
-        let ny = i32(gid.y) + offsets[i].y;
-        let nz = i32(gid.z) + offsets[i].z;
-        
-        if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
-            let neighbor_idx = u32(nx) + u32(ny) * res + u32(nz) * res * res;
-            let neighbor_state = atomicLoad(&voxels[neighbor_idx]);
-            let neighbor_type = get_fluid_type(neighbor_state);
-            
-            // If neighbor is water or solid, water is supported
-            if neighbor_type == 1u || neighbor_type >= 2u {
-                return true;
-            }
-        }
+    // Find the primary gravity direction (same logic as fluid_swap)
+    var gravity_dir_index = 3u; // Default to -Y
+    if abs(grav_dir.x) > abs(grav_dir.y) && abs(grav_dir.x) > abs(grav_dir.z) {
+        gravity_dir_index = select(1u, 0u, grav_dir.x > 0.0);
+    } else if abs(grav_dir.y) > abs(grav_dir.z) {
+        gravity_dir_index = select(3u, 2u, grav_dir.y > 0.0);
+    } else if abs(grav_dir.z) > 0.0 {
+        gravity_dir_index = select(5u, 4u, grav_dir.z > 0.0);
     }
     
-    return false;
+    let down = get_offset(gravity_dir_index);
+    let nx = i32(gid.x) + down.x;
+    let ny = i32(gid.y) + down.y;
+    let nz = i32(gid.z) + down.z;
+    
+    // Out of bounds below = not supported
+    if nx < 0 || nx >= i32(res) || ny < 0 || ny >= i32(res) || nz < 0 || nz >= i32(res) {
+        return false;
+    }
+    
+    // Solid below = supported (water rests on this surface and can spread laterally).
+    // Lateral spreading + gravity naturally produces wall-sliding behaviour:
+    // each lateral step may expose an empty cell below, letting gravity act.
+    if is_solid(u32(nx), u32(ny), u32(nz)) {
+        return true;
+    }
+    
+    // Water or lava below = supported (resting on fluid)
+    let neighbor_idx = u32(nx) + u32(ny) * res + u32(nz) * res * res;
+    let neighbor_state = atomicLoad(&voxels[neighbor_idx]);
+    let neighbor_type = get_fluid_type(neighbor_state);
+    
+    return neighbor_type >= 1u && neighbor_type <= 2u;
 }
 
 // Get randomized horizontal direction order based on position and time, relative to gravity
@@ -573,10 +437,9 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Special case: Push water out of solid voxels
-    // If water is trapped in a solid voxel, force it to move to the nearest non-solid voxel
-    if fluid_type == 1u && is_solid(gid.x, gid.y, gid.z) {
-        // Try all 6 directions to find an escape route
+    // Special case: Push any fluid out of solid voxels
+    // Search up to 16 voxels along each axis to find a non-solid empty cell
+    if fluid_type >= 1u && is_solid(gid.x, gid.y, gid.z) {
         let directions = array<vec3<i32>, 6>(
             vec3<i32>(1, 0, 0),   // +X
             vec3<i32>(-1, 0, 0),  // -X
@@ -586,38 +449,56 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
             vec3<i32>(0, 0, -1)   // -Z
         );
         
-        // Check each direction for an escape
-        for (var i = 0u; i < 6u; i++) {
-            let nx = i32(gid.x) + directions[i].x;
-            let ny = i32(gid.y) + directions[i].y;
-            let nz = i32(gid.z) + directions[i].z;
+        // Randomize starting direction to avoid bias
+        let dir_hash = (hash_position(gid) ^ u32(params.time * 1000.0)) % 6u;
+        
+        var escaped = false;
+        for (var d = 0u; d < 6u; d++) {
+            let dir_idx = (dir_hash + d) % 6u;
+            let dir = directions[dir_idx];
             
-            // Bounds check
-            if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
-                let neighbor_idx = grid_index(u32(nx), u32(ny), u32(nz));
-                let neighbor_state = atomicLoad(&voxels[neighbor_idx]);
-                let neighbor_type = get_fluid_type(neighbor_state);
+            // Walk along this axis up to 16 voxels
+            for (var step = 1; step <= 16; step++) {
+                let nx = i32(gid.x) + dir.x * step;
+                let ny = i32(gid.y) + dir.y * step;
+                let nz = i32(gid.z) + dir.z * step;
                 
-                // If neighbor is empty and not solid, move water there
-                if neighbor_type == 0u && !is_solid(u32(nx), u32(ny), u32(nz)) {
-                    // Try to claim both voxels atomically
-                    let result_current = atomicCompareExchangeWeak(&voxels[idx], state, 0xFFFFFFFFu);
-                    if result_current.exchanged {
-                        let result_neighbor = atomicCompareExchangeWeak(&voxels[neighbor_idx], neighbor_state, state);
-                        if result_neighbor.exchanged {
-                            // Successfully moved water
-                            atomicStore(&voxels[idx], neighbor_state);
-                            return;
-                        } else {
-                            // Failed to claim neighbor, restore current
-                            atomicStore(&voxels[idx], state);
-                        }
-                    }
+                if nx < 0 || nx >= i32(res) || ny < 0 || ny >= i32(res) || nz < 0 || nz >= i32(res) {
+                    break; // Hit grid boundary, try next direction
                 }
+                
+                // Skip cells that are still solid
+                if is_solid(u32(nx), u32(ny), u32(nz)) {
+                    continue;
+                }
+                
+                let target_idx = grid_index(u32(nx), u32(ny), u32(nz));
+                let target_state = atomicLoad(&voxels[target_idx]);
+                let target_type = get_fluid_type(target_state);
+                
+                if target_type == 0u {
+                    // Found empty non-solid cell — teleport fluid there
+                    let result = atomicCompareExchangeWeak(&voxels[target_idx], target_state, state);
+                    if result.exchanged {
+                        atomicStore(&voxels[idx], 0u);
+                        escaped = true;
+                    }
+                    break;
+                }
+                
+                // Hit another fluid — can't place here, stop this direction
+                break;
             }
+            
+            if escaped { break; }
         }
         
-        // If no escape route found, stay in place (don't process further)
+        // If no escape route found after searching all directions, destroy the fluid
+        // to prevent permanent accumulation inside solids
+        if !escaped {
+            atomicStore(&voxels[idx], 0u);
+        }
+        
         return;
     }
 
@@ -626,13 +507,14 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
     let grav_dir = vec3<f32>(params.gravity_dir_x, params.gravity_dir_y, params.gravity_dir_z);
     
     // Find the primary gravity axis and direction
+    // Negative values point in negative direction (down)
     var gravity_dir_index = 3u; // Default to -Y
     if abs(grav_dir.x) > abs(grav_dir.y) && abs(grav_dir.x) > abs(grav_dir.z) {
-        gravity_dir_index = select(1u, 0u, grav_dir.x > 0.0); // -X or +X
+        gravity_dir_index = select(0u, 1u, grav_dir.x > 0.0); // +X or -X
     } else if abs(grav_dir.y) > abs(grav_dir.z) {
-        gravity_dir_index = select(3u, 2u, grav_dir.y > 0.0); // -Y or +Y
+        gravity_dir_index = select(2u, 3u, grav_dir.y > 0.0); // +Y or -Y
     } else if abs(grav_dir.z) > 0.0 {
-        gravity_dir_index = select(5u, 4u, grav_dir.z > 0.0); // -Z or +Z
+        gravity_dir_index = select(4u, 5u, grav_dir.z > 0.0); // +Z or -Z
     }
     
     // Process gravity direction first (highest priority)
@@ -649,163 +531,6 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var i = 0u; i < 4u; i++) {
         process_direction(gid, horizontal_order[i]);
     }
-}
-
-// Check if vertical swap is possible from this position
-fn can_swap_vertical(gid: vec3<u32>, direction: u32) -> bool {
-    let res = params.grid_resolution;
-    let offset = get_offset(direction);
-    let nx = i32(gid.x) + offset.x;
-    let ny = i32(gid.y) + offset.y;
-    let nz = i32(gid.z) + offset.z;
-
-    // Bounds check
-    if nx < 0 || nx >= i32(res) || ny < 0 || ny >= i32(res) || nz < 0 || nz >= i32(res) {
-        return false;
-    }
-
-    // Check solid mask - prevent movement from or into solid voxels
-    if is_solid(gid.x, gid.y, gid.z) || is_solid(u32(nx), u32(ny), u32(nz)) {
-        return false;
-    }
-
-    let idx_a = grid_index(gid.x, gid.y, gid.z);
-    let idx_b = grid_index(u32(nx), u32(ny), u32(nz));
-
-    let state_a = atomicLoad(&voxels[idx_a]);
-    let state_b = atomicLoad(&voxels[idx_b]);
-
-    let type_a = get_fluid_type(state_a);
-    let type_b = get_fluid_type(state_b);
-
-    // Check if this is a valid water-empty vertical pair
-    if direction == 3u {
-        // -Y: water above, empty below
-        return type_a == 1u && type_b == 0u;
-    } else if direction == 2u {
-        // +Y: empty below, water above
-        return type_a == 0u && type_b == 1u;
-    }
-    
-    return false;
-}
-
-// Fast horizontal processing for accelerated settling
-fn process_direction_fast(gid: vec3<u32>, direction: u32) {
-    let res = params.grid_resolution;
-    let offset = get_offset(direction);
-    let nx = i32(gid.x) + offset.x;
-    let ny = i32(gid.y) + offset.y;
-    let nz = i32(gid.z) + offset.z;
-
-    // Bounds check
-    if nx < 0 || nx >= i32(res) || ny < 0 || ny >= i32(res) || nz < 0 || nz >= i32(res) {
-        return;
-    }
-
-    // Check solid mask - prevent movement from or into solid voxels
-    if is_solid(gid.x, gid.y, gid.z) || is_solid(u32(nx), u32(ny), u32(nz)) {
-        return;
-    }
-
-    let idx_a = grid_index(gid.x, gid.y, gid.z);
-    let idx_b = grid_index(u32(nx), u32(ny), u32(nz));
-
-    // Use checkerboard pattern to avoid duplicate work
-    let checker_coord = get_checker_coord(gid, direction);
-    if (checker_coord & 1u) == 0u {
-        return;
-    }
-
-    let state_a = atomicLoad(&voxels[idx_a]);
-    let state_b = atomicLoad(&voxels[idx_b]);
-
-    let type_a = get_fluid_type(state_a);
-    let type_b = get_fluid_type(state_b);
-
-    // Only consider swaps involving water (1), steam (3), and empty (0)
-    let a_is_water = type_a == 1u;
-    let b_is_water = type_b == 1u;
-    let a_is_steam = type_a == 3u;
-    let b_is_steam = type_b == 3u;
-    let a_is_empty = type_a == 0u;
-    let b_is_empty = type_b == 0u;
-
-    // Skip if both same or neither fluid/empty
-    // Now also allow steam-water exchanges
-    if !((a_is_water && b_is_empty) || (a_is_empty && b_is_water) ||
-          (a_is_steam && b_is_empty) || (a_is_empty && b_is_steam) ||
-          (a_is_water && b_is_steam) || (a_is_steam && b_is_water)) {
-        return;
-    }
-
-    // For horizontal directions: Use configurable probability for lateral movement
-    if direction == 0u || direction == 1u || direction == 4u || direction == 5u {
-        // Water can only move laterally if it's supported (touching other water or solids)
-        // But steam-water exchanges should be allowed regardless of water support
-        if (a_is_water && b_is_water) || (a_is_water && b_is_empty) || (a_is_empty && b_is_water) {
-            // Pure water or water-empty exchanges require support check
-            if a_is_water && !water_is_supported(gid) {
-                return; // Water not supported, no lateral movement
-            }
-            if b_is_water && !water_is_supported(vec3<u32>(u32(nx), u32(ny), u32(nz))) {
-                return; // Water not supported, no lateral movement
-            }
-        }
-        // Steam-water and steam-empty exchanges don't need water support checks
-        
-        // Use the configurable lateral flow probability
-        let time_hash = u32(params.time * 1000.0) + direction * 12345u;
-        let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
-        let combined_hash = time_hash ^ pos_hash;
-        
-        // Apply steam dispersion bias for more gas-like behavior
-        var fluid_probability = get_lateral_flow_probability(type_a) * get_lateral_flow_probability(type_b);
-        
-        // Preferential steam-water swapping when fluids are stacked vertically
-        if (a_is_steam && b_is_water) || (a_is_water && b_is_steam) {
-            // Check if this is a vertical direction (up/down)
-            let is_vertical = (direction == 2u || direction == 3u); // +Y or -Y
-            
-            if is_vertical {
-                // Boost probability for steam-water exchanges in vertical directions
-                // This helps steam rise through water
-                fluid_probability = fluid_probability * 2.0; // Double the probability
-            }
-        }
-        
-        if a_is_steam || b_is_steam {
-            fluid_probability = fluid_probability * get_steam_dispersion_bias(gid, direction);
-        }
-        
-        let probability_threshold = fluid_probability * 255.0;
-        if (combined_hash & 255u) > u32(probability_threshold) {
-            return;
-        }
-    }
-
-    // Check world boundaries for both cells
-    let world_a = grid_to_world(gid.x, gid.y, gid.z);
-    let world_b = grid_to_world(u32(nx), u32(ny), u32(nz));
-    if !is_in_bounds(world_a) || !is_in_bounds(world_b) {
-        return;
-    }
-
-    // Atomic swap using compare-and-exchange
-    let result_a = atomicCompareExchangeWeak(&voxels[idx_a], state_a, 0xFFFFFFFFu);
-    if !result_a.exchanged {
-        return;
-    }
-    
-    let result_b = atomicCompareExchangeWeak(&voxels[idx_b], state_b, 0xFFFFFFFFu);
-    if !result_b.exchanged {
-        atomicExchange(&voxels[idx_a], state_a);
-        return;
-    }
-    
-    // Both cells claimed, perform the swap
-    atomicStore(&voxels[idx_a], state_b);
-    atomicStore(&voxels[idx_b], state_a);
 }
 
 fn process_direction(gid: vec3<u32>, direction: u32) {
@@ -831,7 +556,7 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
     // Use simple checkerboard pattern based on grid position to avoid duplicate work
     // This is more predictable than hash-based checkering
     let checker_coord = get_checker_coord(gid, direction);
-    if (checker_coord & 1u) == 0u {
+    if ((checker_coord + params.sub_step) & 1u) == 0u {
         return;
     }
 
@@ -876,9 +601,10 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
     // For gravity-aligned directions: use magnitude for probability
     if abs(alignment) > 0.1 {
         let gravity_strength = length(grav_dir);
-        // Higher gravity magnitude = higher probability of movement
-        // Halved fall rates for both water and steam
-        let gravity_probability = min(1.0, (gravity_strength / 10.0) * 0.5);
+        // Fall rate proportional to gravity magnitude
+        // Scale gravity to reasonable probability range (0.02 to 1.0)
+        // gravity_magnitude of 1.0 = 2% fall rate, 50.0 = 100% fall rate
+        let gravity_probability = min(1.0, gravity_strength * 0.02);
         
         // Use hash-based probability for gravity direction
         let time_hash = u32(params.time * 1000.0) + direction * 12345u;

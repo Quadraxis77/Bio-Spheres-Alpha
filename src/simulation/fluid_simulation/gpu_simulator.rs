@@ -45,8 +45,8 @@ pub struct GpuFluidParams {
     // Fluid type for spawning (0=Empty, 1=Water, 2=Lava, 3=Steam)
     pub spawn_fluid_type: u32,
 
-    // Additional padding to match WGSL struct size
-    pub _pad0: u32,
+    // Sub-step index for alternating checker phase (0..N)
+    pub sub_step: u32,
 }
 
 /// Extract params (must match shader)
@@ -138,6 +138,9 @@ pub struct GpuFluidSimulator {
     bitfield_pipeline: wgpu::ComputePipeline,
     bitfield_bind_group_layout: wgpu::BindGroupLayout,
 
+    // Sub-step staging buffer for multi-pass fluid simulation [0,1,2,3]
+    sub_step_staging_buffer: wgpu::Buffer,
+
     // Nutrient system - stores which voxels have nutrients (1 = has nutrient, 0 = empty)
     nutrient_voxels_buffer: wgpu::Buffer,
     nutrient_populate_params_buffer: wgpu::Buffer,
@@ -184,13 +187,20 @@ impl GpuFluidSimulator {
             condensation_probability: 0.1,  // Default condensation probability
             vaporization_probability: 0.1,  // Default vaporization probability
             spawn_fluid_type: 1u32,  // Default to water
-            _pad0: 0,
+            sub_step: 0,
         };
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fluid Params Buffer"),
             contents: bytemuck::cast_slice(&[params]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Pre-create staging buffer with sub-step values [0,1,2,3] for multi-pass dispatch
+        let sub_step_staging_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Sub-step Staging Buffer"),
+            contents: bytemuck::cast_slice(&[0u32, 1u32, 2u32, 3u32]),
+            usage: wgpu::BufferUsages::COPY_SRC,
         });
 
         // Create bind group layout (params + voxel buffer + solid mask)
@@ -562,6 +572,7 @@ impl GpuFluidSimulator {
             bitfield_params_buffer,
             bitfield_pipeline,
             bitfield_bind_group_layout,
+            sub_step_staging_buffer,
             nutrient_voxels_buffer,
             nutrient_populate_params_buffer,
             nutrient_populate_pipeline,
@@ -604,9 +615,9 @@ impl GpuFluidSimulator {
         let mut grav_y = 0.0;
         let mut grav_z = 0.0;
         
-        if gravity_dir[0] { grav_x = gravity_magnitude; }
-        if gravity_dir[1] { grav_y = gravity_magnitude; }
-        if gravity_dir[2] { grav_z = gravity_magnitude; }
+        if gravity_dir[0] { grav_x = -gravity_magnitude; }
+        if gravity_dir[1] { grav_y = -gravity_magnitude; }
+        if gravity_dir[2] { grav_z = -gravity_magnitude; }
 
         let params = GpuFluidParams {
             grid_resolution: GRID_RESOLUTION,
@@ -628,7 +639,7 @@ impl GpuFluidSimulator {
             condensation_probability,
             vaporization_probability,
             spawn_fluid_type: self.fluid_type.get(),
-            _pad0: 0,
+            sub_step: 0,
         };
 
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
@@ -712,15 +723,18 @@ impl GpuFluidSimulator {
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
         let bind_group = self.create_bind_group(device);
 
-        // Update parameters for GPU (required for shader logic)
-        self.update_params(queue, 3, current_time, gravity_magnitude, gravity_dir, lateral_flow_probabilities, condensation_probability, vaporization_probability); // Set direction to -Y for gravity
+        // Update parameters for GPU (required for shader logic) — sub_step starts at 0
+        self.update_params(queue, 3, current_time, gravity_magnitude, gravity_dir, lateral_flow_probabilities, condensation_probability, vaporization_probability);
 
-        // Pure GPU dispatch - no CPU direction processing whatsoever
+        // Byte offset of sub_step field in GpuFluidParams (20 fields × 4 bytes each, last field)
+        const SUB_STEP_OFFSET: u64 = 76;
+        const NUM_FLUID_SUB_STEPS: u32 = 4;
+
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Fluid GPU Encoder"),
         });
 
-        // First: spawn continuous water (only if enabled)
+        // Spawn continuous water once per frame (only on first sub-step)
         if self.continuous_spawn_enabled.get() {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Fluid Spawn Continuous Pass"),
@@ -731,15 +745,30 @@ impl GpuFluidSimulator {
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
 
-        // Then: run fluid simulation
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Fluid GPU Pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.swap_pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+        // Multi-pass fluid simulation with alternating checker phase
+        // Each sub-step flips which cells are active, allowing water to cascade
+        // multiple cells per frame for dramatically faster lateral flow.
+        for sub_step in 0..NUM_FLUID_SUB_STEPS {
+            if sub_step > 0 {
+                // Copy sub_step value from staging buffer to params uniform
+                encoder.copy_buffer_to_buffer(
+                    &self.sub_step_staging_buffer,
+                    (sub_step as u64) * 4,
+                    &self.params_buffer,
+                    SUB_STEP_OFFSET,
+                    4,
+                );
+            }
+
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Fluid GPU Pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.swap_pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+            }
         }
 
         queue.submit(std::iter::once(encoder.finish()));
