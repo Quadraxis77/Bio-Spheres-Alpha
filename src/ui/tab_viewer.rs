@@ -3047,30 +3047,26 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     // Gravity slider
     ui.label("Gravity:");
     ui.add(egui::Slider::new(&mut world.gravity, -50.0..=50.0).suffix(" m/s²"));
+    
+    // Gravity axis / mode
+    ui.label("Gravity Axis:");
     ui.horizontal(|ui| {
-        ui.label("Direction:");
-        
-        // Radio button logic for gravity axis selection
-        let selected_x = world.gravity_x;
-        let selected_y = world.gravity_y;
-        let selected_z = world.gravity_z;
-        
-        if ui.selectable_label(selected_x, "X").clicked() {
-            world.gravity_x = true;
-            world.gravity_y = false;
-            world.gravity_z = false;
+        if ui.selectable_label(world.gravity_mode == 0, "X").clicked() {
+            world.gravity_mode = 0;
         }
-        if ui.selectable_label(selected_y, "Y").clicked() {
-            world.gravity_x = false;
-            world.gravity_y = true;
-            world.gravity_z = false;
+        if ui.selectable_label(world.gravity_mode == 1, "Y").clicked() {
+            world.gravity_mode = 1;
         }
-        if ui.selectable_label(selected_z, "Z").clicked() {
-            world.gravity_x = false;
-            world.gravity_y = false;
-            world.gravity_z = true;
+        if ui.selectable_label(world.gravity_mode == 2, "Z").clicked() {
+            world.gravity_mode = 2;
+        }
+        if ui.selectable_label(world.gravity_mode == 3, "Radial").clicked() {
+            world.gravity_mode = 3;
         }
     });
+    if world.gravity_mode == 3 {
+        ui.label(egui::RichText::new("Pulls fluid toward origin; world boundary is the shell").small());
+    }
 }
 
 /// Render the Help panel showing context-specific controls and shortcuts.

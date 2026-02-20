@@ -30,6 +30,8 @@ pub struct CameraController {
 
     // Up direction for orbit mode (opposite of gravity direction)
     pub up_direction: Vec3,
+    // Current gravity mode (0=X, 1=Y, 2=Z, 3=radial)
+    pub gravity_mode: u32,
 
     // Mouse state
     is_dragging: bool,
@@ -85,6 +87,7 @@ impl CameraController {
             mode: CameraMode::FreeFly,
             scene_type: SceneType::GpuScene,  // Default to GPU scene
             up_direction: Vec3::Y, // Default up is +Y (gravity pulls down in -Y)
+            gravity_mode: 1,
             is_dragging: false,
             last_mouse_pos: None,
             accumulated_mouse_delta: Vec3::ZERO,
@@ -115,6 +118,7 @@ impl CameraController {
             mode: CameraMode::Orbit,  // GPU scene now defaults to Orbit mode
             scene_type: SceneType::GpuScene,
             up_direction: Vec3::Y,
+            gravity_mode: 1,
             is_dragging: false,
             last_mouse_pos: None,
             accumulated_mouse_delta: Vec3::ZERO,
@@ -145,6 +149,7 @@ impl CameraController {
             mode: CameraMode::Orbit,  // Preview starts in Orbit mode
             scene_type: SceneType::PreviewScene,
             up_direction: Vec3::Y,
+            gravity_mode: 1,
             is_dragging: false,
             last_mouse_pos: None,
             accumulated_mouse_delta: Vec3::ZERO,
@@ -161,35 +166,44 @@ impl CameraController {
         }
     }
 
-    /// Set up direction from gravity (up is opposite of gravity direction)
-    /// Always realigns camera when gravity axis is set to ensure proper orientation
-    pub fn set_gravity_direction(&mut self, gravity: f32, gravity_dir: [bool; 3]) {
-        // Build gravity vector from direction flags (this is the axis, unsigned)
-        let mut grav_axis = Vec3::ZERO;
-        if gravity_dir[0] { grav_axis.x = 1.0; }
-        if gravity_dir[1] { grav_axis.y = 1.0; }
-        if gravity_dir[2] { grav_axis.z = 1.0; }
+    /// Set up direction from gravity mode.
+    /// gravity_mode: 0=X axis, 1=Y axis, 2=Z axis, 3=radial
+    /// For axial modes, up = the gravity axis (camera orbits with that axis as "up").
+    /// For radial mode, up = outward from origin based on camera position (quaternion-based).
+    pub fn set_gravity_direction(&mut self, gravity: f32, gravity_mode: u32) {
+        // Store gravity mode so orbit rotation can use it
+        self.gravity_mode = gravity_mode;
 
-        // If no direction selected or gravity is zero, default to Y up
-        if grav_axis.length_squared() < 0.001 || gravity.abs() < 0.001 {
-            if self.up_direction != Vec3::Y {
-                self.up_direction = Vec3::Y;
-                // Realign camera to default Y up
-                self.realign_camera_to_up(Vec3::Y);
-            }
+        // In radial mode, don't realign — there is no fixed "up" axis.
+        // Recomputing up from camera position every frame causes a feedback spin loop.
+        if gravity_mode == 3 {
             return;
         }
 
-        grav_axis = grav_axis.normalize();
-        let new_up = grav_axis;
+        let new_up = if gravity.abs() < 0.001 {
+            Vec3::Y // no gravity → default Y up
+        } else {
+            match gravity_mode {
+                0 => Vec3::X,
+                2 => Vec3::Z,
+                3 => {
+                    // Radial orbit: up = outward from origin to camera position
+                    let cam_pos = self.rotation * Vec3::new(0.0, 0.0, self.distance) + self.center;
+                    let outward = cam_pos - self.center;
+                    if outward.length_squared() > 0.001 {
+                        outward.normalize()
+                    } else {
+                        Vec3::Y
+                    }
+                }
+                _ => Vec3::Y, // mode 1 = Y axis (default)
+            }
+        };
 
-        // Always realign camera when gravity direction is explicitly set
-        // This ensures camera repositioning when user selects Y axis
         if self.up_direction != new_up {
+            self.up_direction = new_up;
             self.realign_camera_to_up(new_up);
         }
-
-        self.up_direction = new_up;
     }
 
     /// Helper method to realign camera to a new up direction
@@ -364,25 +378,27 @@ impl CameraController {
             let delta = self.accumulated_mouse_delta.truncate() * self.mouse_sensitivity;
             
             if self.mode == CameraMode::Orbit {
-                // Orbit mode: longitude/latitude rotation around gravity-defined up axis
-                // Yaw (longitude): rotate around the up direction (opposite of gravity)
-                let yaw_rotation = Quat::from_axis_angle(self.up_direction, -delta.x);
+                if self.gravity_mode == 3 {
+                    // Radial mode: fully quaternion-based orbit — no fixed axis.
+                    // Yaw around camera's local Y, pitch around camera's local X.
+                    let local_y = self.target_rotation * Vec3::Y;
+                    let local_x = self.target_rotation * Vec3::X;
+                    let yaw   = Quat::from_axis_angle(local_y, -delta.x);
+                    let pitch = Quat::from_axis_angle(local_x, -delta.y);
+                    self.target_rotation = (yaw * pitch * self.target_rotation).normalize();
+                } else {
+                    // Axial mode: longitude/latitude rotation around gravity-defined up axis
+                    let yaw_rotation = Quat::from_axis_angle(self.up_direction, -delta.x);
+                    self.target_rotation = yaw_rotation * self.target_rotation;
 
-                // Apply yaw rotation to current target rotation
-                self.target_rotation = yaw_rotation * self.target_rotation;
-
-                // Pitch (latitude): rotate around the camera's right axis, but ensure
-                // the right axis is perpendicular to the up direction to prevent tilt drift
-                let camera_right = self.target_rotation * Vec3::X;
-                // Project right axis onto plane perpendicular to up_direction
-                let right_axis = (camera_right - self.up_direction * camera_right.dot(self.up_direction)).normalize_or_zero();
-
-                // Only apply pitch if we have a valid right axis (not looking straight up/down)
-                if right_axis.length_squared() > 0.001 {
-                    let pitch_rotation = Quat::from_axis_angle(right_axis, -delta.y);
-                    self.target_rotation = pitch_rotation * self.target_rotation;
+                    let camera_right = self.target_rotation * Vec3::X;
+                    let right_axis = (camera_right - self.up_direction * camera_right.dot(self.up_direction)).normalize_or_zero();
+                    if right_axis.length_squared() > 0.001 {
+                        let pitch_rotation = Quat::from_axis_angle(right_axis, -delta.y);
+                        self.target_rotation = pitch_rotation * self.target_rotation;
+                    }
+                    self.target_rotation = self.target_rotation.normalize();
                 }
-                self.target_rotation = self.target_rotation.normalize();
             } else {
                 // FreeFly mode: free rotation
                 let pitch = Quat::from_axis_angle(self.target_rotation * Vec3::X, -delta.y);

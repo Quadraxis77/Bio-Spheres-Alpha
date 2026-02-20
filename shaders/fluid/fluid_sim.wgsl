@@ -34,6 +34,13 @@ struct FluidParams {
     spawn_fluid_type: u32,
 
     sub_step: u32,
+
+    // Gravity mode: 0=X axis, 1=Y axis, 2=Z axis, 3=radial (toward origin)
+    // Radial: world sphere boundary is the effective shell. gravity_magnitude controls strength.
+    gravity_mode: u32,
+    _pad_rg0: u32,
+    _pad_rg1: u32,
+    _pad_rg2: u32,
 }
 
 struct ExtractParams {
@@ -131,6 +138,79 @@ fn grid_to_world(x: u32, y: u32, z: u32) -> vec3<f32> {
 fn is_in_bounds(pos: vec3<f32>) -> bool {
     let threshold = params.world_radius * 0.98;
     return dot(pos, pos) < threshold * threshold;
+}
+
+// Get the effective gravity direction for a voxel.
+// gravity_mode: 0=X axis, 1=Y axis, 2=Z axis, 3=radial (toward origin)
+fn get_effective_gravity(gid: vec3<u32>) -> vec3<f32> {
+    let mag = params.gravity_magnitude;
+    
+    if params.gravity_mode == 0u {
+        // X axis gravity
+        return vec3<f32>(-mag, 0.0, 0.0);
+    } else if params.gravity_mode == 1u {
+        // Y axis gravity
+        return vec3<f32>(0.0, -mag, 0.0);
+    } else if params.gravity_mode == 2u {
+        // Z axis gravity
+        return vec3<f32>(0.0, 0.0, -mag);
+    }
+    
+    // Radial: positive mag = pull toward origin (shell), negative = push away (explode)
+    let world_pos = grid_to_world(gid.x, gid.y, gid.z);
+    let r = length(world_pos);
+    if r < 0.001 {
+        return vec3<f32>(0.0, -mag, 0.0);
+    }
+    // radial_dir points outward; negate to get inward pull, sign(mag) flips for outward push
+    let radial_dir = world_pos / r;
+    return -radial_dir * mag;
+}
+
+// Convert a gravity direction vector to a discrete direction index (0-5).
+// 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z
+// Uses position-based noise to probabilistically break cubic symmetry:
+// when two axes have similar magnitude, randomly alternate between them
+// so the boundary between octants is fuzzy rather than a sharp plane.
+fn gravity_dir_to_index_noisy(grav_dir: vec3<f32>, gid: vec3<u32>) -> u32 {
+    let ax = abs(grav_dir.x);
+    let ay = abs(grav_dir.y);
+    let az = abs(grav_dir.z);
+    let total = ax + ay + az + 0.0001; // avoid div-by-zero
+    
+    // Position + time hash for noise (0..255)
+    let h = (gid.x * 73u + gid.y * 157u + gid.z * 239u + u32(params.time * 60.0)) & 255u;
+    let noise = f32(h) / 255.0; // 0..1
+    
+    // Weighted random selection: probability of picking each axis ∝ its component magnitude
+    let px = ax / total;
+    let py = ay / total;
+    // pz = az / total = 1 - px - py
+    
+    if noise < px {
+        return select(1u, 0u, grav_dir.x > 0.0);
+    } else if noise < px + py {
+        return select(3u, 2u, grav_dir.y > 0.0);
+    } else if az > 0.0 {
+        return select(5u, 4u, grav_dir.z > 0.0);
+    }
+    return 3u; // Default to -Y
+}
+
+// Deterministic version (no noise) for support checks and fast-drop
+fn gravity_dir_to_index(grav_dir: vec3<f32>) -> u32 {
+    let ax = abs(grav_dir.x);
+    let ay = abs(grav_dir.y);
+    let az = abs(grav_dir.z);
+    
+    if ax > ay && ax > az {
+        return select(1u, 0u, grav_dir.x > 0.0);
+    } else if ay > az {
+        return select(3u, 2u, grav_dir.y > 0.0);
+    } else if az > 0.0 {
+        return select(5u, 4u, grav_dir.z > 0.0);
+    }
+    return 3u; // Default to -Y
 }
 
 // Direction offsets: +X, -X, +Y, -Y, +Z, -Z
@@ -292,18 +372,10 @@ fn should_convert_to_steam(gid: vec3<u32>) -> bool {
 // Water clinging to walls or ceilings is NOT supported and should fall.
 fn water_is_supported(gid: vec3<u32>) -> bool {
     let res = params.grid_resolution;
-    let grav_dir = vec3<f32>(params.gravity_dir_x, params.gravity_dir_y, params.gravity_dir_z);
+    let grav_dir = get_effective_gravity(gid);
     
-    // Find the primary gravity direction (same logic as fluid_swap)
-    // Positive values select positive direction, negative values select negative direction
-    var gravity_dir_index = 3u; // Default to -Y
-    if abs(grav_dir.x) > abs(grav_dir.y) && abs(grav_dir.x) > abs(grav_dir.z) {
-        gravity_dir_index = select(1u, 0u, grav_dir.x > 0.0); // -X or +X
-    } else if abs(grav_dir.y) > abs(grav_dir.z) {
-        gravity_dir_index = select(3u, 2u, grav_dir.y > 0.0); // -Y or +Y
-    } else if abs(grav_dir.z) > 0.0 {
-        gravity_dir_index = select(5u, 4u, grav_dir.z > 0.0); // -Z or +Z
-    }
+    // Find the primary gravity direction
+    let gravity_dir_index = gravity_dir_to_index(grav_dir);
     
     let down = get_offset(gravity_dir_index);
     let nx = i32(gid.x) + down.x;
@@ -370,6 +442,168 @@ fn get_horizontal_direction_order(gid: vec3<u32>, time: f32, gravity_dir_index: 
     return order;
 }
 
+// Compute tangential surface-tension force for radial gravity mode.
+// Iterates all 26 neighbors, decomposes each neighbor direction into
+// radial + tangential components, and accumulates a net tangential force
+// toward the less-occupied side. This avoids the round()-quantization
+// bias of sampling along fixed tangent vectors.
+fn get_surface_force(gid: vec3<u32>) -> vec3<f32> {
+    if params.gravity_mode != 3u {
+        return vec3<f32>(0.0);
+    }
+
+    let world_pos = grid_to_world(gid.x, gid.y, gid.z);
+    let r = length(world_pos);
+    if r < 0.001 { return vec3<f32>(0.0); }
+    let radial = world_pos / r;
+
+    let res = i32(params.grid_resolution);
+    var tangential_sum = vec3<f32>(0.0);
+
+    // Accumulate tangential component of each occupied neighbor's direction
+    for (var dx = -1; dx <= 1; dx++) {
+        for (var dy = -1; dy <= 1; dy++) {
+            for (var dz = -1; dz <= 1; dz++) {
+                if dx == 0 && dy == 0 && dz == 0 { continue; }
+                let nx = i32(gid.x) + dx;
+                let ny = i32(gid.y) + dy;
+                let nz = i32(gid.z) + dz;
+                if nx < 0 || nx >= res || ny < 0 || ny >= res || nz < 0 || nz >= res { continue; }
+
+                let n_type = get_fluid_type(atomicLoad(&voxels[grid_index(u32(nx), u32(ny), u32(nz))]));
+                if n_type == 0u { continue; } // only occupied neighbors pull
+
+                // Direction to neighbor (normalized)
+                let dir = vec3<f32>(f32(dx), f32(dy), f32(dz));
+                let dir_n = dir / length(dir);
+
+                // Tangential component = dir - (dir·radial)*radial
+                let tangential = dir_n - dot(dir_n, radial) * radial;
+                tangential_sum += tangential;
+            }
+        }
+    }
+
+    // Net tangential force pulls toward the denser side;
+    // surface pressure slides voxel away from dense neighbors → negate
+    return -tangential_sum * 0.15;
+}
+
+// Radial movement: score all 26 neighbors, pick the best empty one, atomic swap.
+// This is the 3D equivalent of the JS reference demo's "evaluate 8 neighbors" logic.
+fn radial_move(gid: vec3<u32>) {
+    let res = params.grid_resolution;
+    let idx = grid_index(gid.x, gid.y, gid.z);
+    let state = atomicLoad(&voxels[idx]);
+    let fluid_type = get_fluid_type(state);
+
+    // Only move water (1) and steam (3)
+    if fluid_type == 0u || fluid_type == 2u { return; }
+
+    // Gravity force (used for probability gate)
+    let grav_force = get_effective_gravity(gid);
+    let grav_mag = length(grav_force);
+    if grav_mag < 0.001 { return; }
+
+    // Probability gate uses only gravity magnitude so surface force always has effect
+    let gravity_probability = min(1.0, grav_mag * grav_mag * 0.0004);
+    let prob_hash = (gid.x * 7u + gid.y * 13u + gid.z * 17u + u32(params.time * 1000.0)) & 255u;
+    if prob_hash > u32(gravity_probability * 255.0) { return; }
+
+    // Combined force for direction scoring: gravity + tangential surface tension
+    let surf_force = get_surface_force(gid);
+    var total_force = grav_force + surf_force;
+
+    // Reverse force for steam (rises against gravity)
+    if fluid_type == 3u {
+        total_force = -total_force;
+    }
+
+    let force_mag = length(total_force);
+    if force_mag < 0.001 { return; }
+    let force_dir = total_force / force_mag;
+
+    // Score all 26 neighbors, pick the best empty target
+    var best_score = 0.05; // minimum threshold to bother moving
+    var best_dx = 0;
+    var best_dy = 0;
+    var best_dz = 0;
+    var found = false;
+
+    // Noise seed for tie-breaking
+    let noise_seed = gid.x * 73u + gid.y * 157u + gid.z * 239u + u32(params.time * 1000.0);
+
+    for (var dx = -1; dx <= 1; dx++) {
+        for (var dy = -1; dy <= 1; dy++) {
+            for (var dz = -1; dz <= 1; dz++) {
+                if dx == 0 && dy == 0 && dz == 0 { continue; }
+
+                let nx = i32(gid.x) + dx;
+                let ny = i32(gid.y) + dy;
+                let nz = i32(gid.z) + dz;
+
+                // Bounds
+                if nx < 0 || nx >= i32(res) || ny < 0 || ny >= i32(res) || nz < 0 || nz >= i32(res) { continue; }
+
+                // Solid
+                if is_solid(u32(nx), u32(ny), u32(nz)) { continue; }
+
+                // Must be empty
+                let n_idx = grid_index(u32(nx), u32(ny), u32(nz));
+                let n_state = atomicLoad(&voxels[n_idx]);
+                if get_fluid_type(n_state) != 0u { continue; }
+
+                // World bounds
+                if !is_in_bounds(grid_to_world(u32(nx), u32(ny), u32(nz))) { continue; }
+
+                // Alignment score: dot(neighbor_direction, force_direction)
+                let dir = vec3<f32>(f32(dx), f32(dy), f32(dz));
+                let dir_len = length(dir);
+                var score = dot(dir, force_dir) / dir_len;
+
+                // Tie-breaking noise (±0.04)
+                let nh = (noise_seed ^ (u32(nx) * 31u + u32(ny) * 97u + u32(nz) * 61u)) & 255u;
+                score += (f32(nh) / 255.0 - 0.5) * 0.08;
+
+                if score > best_score {
+                    best_score = score;
+                    best_dx = dx;
+                    best_dy = dy;
+                    best_dz = dz;
+                    found = true;
+                }
+            }
+        }
+    }
+
+    if !found { return; }
+
+    let target_idx = grid_index(u32(i32(gid.x) + best_dx),
+                                u32(i32(gid.y) + best_dy),
+                                u32(i32(gid.z) + best_dz));
+
+    // Atomic CAS swap: claim source, then claim target
+    let claim_src = atomicCompareExchangeWeak(&voxels[idx], state, 0xFFFFFFFFu);
+    if !claim_src.exchanged { return; }
+
+    let target_state = atomicLoad(&voxels[target_idx]);
+    if get_fluid_type(target_state) != 0u {
+        // Target no longer empty — restore source
+        atomicExchange(&voxels[idx], state);
+        return;
+    }
+
+    let claim_dst = atomicCompareExchangeWeak(&voxels[target_idx], target_state, 0xFFFFFFFFu);
+    if !claim_dst.exchanged {
+        atomicExchange(&voxels[idx], state);
+        return;
+    }
+
+    // Both claimed — swap
+    atomicStore(&voxels[idx], target_state);
+    atomicStore(&voxels[target_idx], state);
+}
+
 // Main simulation pass - GPU handles all movement with proper physics order
 @compute @workgroup_size(4, 4, 4)
 fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -407,8 +641,8 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Steam teleportation - find topmost water and swap with it
-    if fluid_type == 3u {
+    // Steam teleportation - find topmost water and swap with it (directional mode only)
+    if fluid_type == 3u && params.gravity_mode != 3u {
         // Scan upward to find the topmost water voxel above this steam
         var found_water_above = false;
         var water_top_y = gid.y;
@@ -448,16 +682,8 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let water_gid = vec3<u32>(gid.x, gid.y, gid.z); // Water is now at steam's old position
                     if !water_is_supported(water_gid) {
                         // Water is unsupported - trigger fast-drop immediately
-                        let grav_dir = vec3<f32>(params.gravity_dir_x, params.gravity_dir_y, params.gravity_dir_z);
-                        
-                        var gravity_dir_index = 3u;
-                        if abs(grav_dir.x) > abs(grav_dir.y) && abs(grav_dir.x) > abs(grav_dir.z) {
-                            gravity_dir_index = select(1u, 0u, grav_dir.x > 0.0);
-                        } else if abs(grav_dir.y) > abs(grav_dir.z) {
-                            gravity_dir_index = select(3u, 2u, grav_dir.y > 0.0);
-                        } else if abs(grav_dir.z) > 0.0 {
-                            gravity_dir_index = select(5u, 4u, grav_dir.z > 0.0);
-                        }
+                        let grav_dir = get_effective_gravity(water_gid);
+                        let gravity_dir_index = gravity_dir_to_index(grav_dir);
                         
                         let down = get_offset(gravity_dir_index);
                         
@@ -526,17 +752,10 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Water fast-drop: unsupported water falls instantly to nearest support
     // This bypasses checker/probability gates in process_direction
-    if fluid_type == 1u && !water_is_supported(gid) {
-        let grav_dir = vec3<f32>(params.gravity_dir_x, params.gravity_dir_y, params.gravity_dir_z);
-        
-        var gravity_dir_index = 3u;
-        if abs(grav_dir.x) > abs(grav_dir.y) && abs(grav_dir.x) > abs(grav_dir.z) {
-            gravity_dir_index = select(1u, 0u, grav_dir.x > 0.0);
-        } else if abs(grav_dir.y) > abs(grav_dir.z) {
-            gravity_dir_index = select(3u, 2u, grav_dir.y > 0.0);
-        } else if abs(grav_dir.z) > 0.0 {
-            gravity_dir_index = select(5u, 4u, grav_dir.z > 0.0);
-        }
+    // Skip in radial mode — radial_move() handles all movement there.
+    if fluid_type == 1u && params.gravity_mode != 3u && !water_is_supported(gid) {
+        let grav_dir = get_effective_gravity(gid);
+        let gravity_dir_index = gravity_dir_to_index(grav_dir);
         
         let down = get_offset(gravity_dir_index);
         
@@ -663,20 +882,16 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Phase 1: Process gravity (primary movement direction)
-    // Use gravity direction from parameters instead of hardcoded -Y
-    let grav_dir = vec3<f32>(params.gravity_dir_x, params.gravity_dir_y, params.gravity_dir_z);
-    
-    // Find the primary gravity axis and direction
-    // Positive values select positive direction, negative values select negative direction
-    var gravity_dir_index = 3u; // Default to -Y
-    if abs(grav_dir.x) > abs(grav_dir.y) && abs(grav_dir.x) > abs(grav_dir.z) {
-        gravity_dir_index = select(1u, 0u, grav_dir.x > 0.0); // -X or +X
-    } else if abs(grav_dir.y) > abs(grav_dir.z) {
-        gravity_dir_index = select(3u, 2u, grav_dir.y > 0.0); // -Y or +Y
-    } else if abs(grav_dir.z) > 0.0 {
-        gravity_dir_index = select(5u, 4u, grav_dir.z > 0.0); // -Z or +Z
+    // Branch: radial mode uses 26-neighbor scoring (like reference demo),
+    // directional mode uses the 6-direction sequential processing.
+    if params.gravity_mode == 3u {
+        radial_move(gid);
+        return;
     }
+
+    // Phase 1: Process gravity (primary movement direction)
+    let grav_dir = get_effective_gravity(gid);
+    let gravity_dir_index = gravity_dir_to_index_noisy(grav_dir, gid);
     
     // Process gravity direction first (highest priority)
     process_direction(gid, gravity_dir_index);
@@ -743,8 +958,8 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
         return;
     }
 
-    // Check if this direction aligns with gravity
-    let grav_dir = vec3<f32>(params.gravity_dir_x, params.gravity_dir_y, params.gravity_dir_z);
+    // Check if this direction aligns with gravity (per-voxel for radial mode)
+    let grav_dir = get_effective_gravity(gid);
     
     // Simple dot product to check if direction aligns with gravity
     let dir_vec = get_offset(direction);
@@ -813,7 +1028,8 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
     if abs(alignment) <= 0.5 {
         // Water can only move laterally if it's supported (touching other water or solids)
         // Exception: water at sphere boundary can slide off like cave walls
-        if a_is_water || b_is_water {
+        // Exception: radial mode — water on the shell surface must flow freely to round out
+        if params.gravity_mode != 3u && (a_is_water || b_is_water) {
             var a_supported = true;
             var b_supported = true;
             
@@ -845,6 +1061,7 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
         
         // Apply steam dispersion bias for more gas-like behavior
         var fluid_probability = get_lateral_flow_probability(type_a) * get_lateral_flow_probability(type_b);
+        
         
         // Preferential steam-water swapping when fluids are stacked vertically
         if (a_is_steam && b_is_water) || (a_is_water && b_is_steam) {

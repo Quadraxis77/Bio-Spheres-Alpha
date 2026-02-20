@@ -467,7 +467,7 @@ impl App {
         if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
             self.scene_manager.active_scene_mut().camera_mut().set_gravity_direction(
                 self.ui.state.world_settings.gravity,
-                [self.ui.state.world_settings.gravity_x, self.ui.state.world_settings.gravity_y, self.ui.state.world_settings.gravity_z],
+                self.ui.state.world_settings.gravity_mode,
             );
         }
         self.scene_manager.active_scene_mut().camera_mut().update(dt);
@@ -577,11 +577,7 @@ impl App {
 
             // Apply gravity from UI
             gpu_scene.gravity = self.ui.state.world_settings.gravity;
-            gpu_scene.gravity_dir = [
-                self.ui.state.world_settings.gravity_x,
-                self.ui.state.world_settings.gravity_y,
-                self.ui.state.world_settings.gravity_z,
-            ];
+            gpu_scene.gravity_mode = self.ui.state.world_settings.gravity_mode;
 
             // Apply fluid settings from UI
             gpu_scene.lateral_flow_probabilities = self.editor_state.fluid_lateral_flow_probabilities;

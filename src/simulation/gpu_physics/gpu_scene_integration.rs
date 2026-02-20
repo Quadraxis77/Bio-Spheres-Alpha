@@ -57,9 +57,10 @@ struct PhysicsParams {
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
     
-    // Capacity and gravity direction (16 bytes)
+    // Capacity and gravity mode (16 bytes)
     cell_capacity: u32,        // Maximum cells that can exist
-    gravity_dir: [f32; 3],     // Gravity direction multipliers (0.0 or 1.0 for X, Y, Z)
+    gravity_mode: u32,         // 0=X, 1=Y, 2=Z, 3=radial (toward origin)
+    _gravity_pad: [f32; 2],    // padding
     
     // Padding to 256 bytes (192 bytes = 48 floats)
     _padding: [f32; 48],
@@ -91,7 +92,7 @@ pub fn execute_gpu_physics_step(
     current_frame: i32,
     world_diameter: f32,
     gravity: f32,
-    gravity_dir: [bool; 3],
+    gravity_mode: u32,
     cave_renderer: Option<&crate::rendering::CaveSystemRenderer>,
     cave_physics_bind_groups: Option<&[wgpu::BindGroup; 3]>,
     cell_count_hint: u32,
@@ -117,11 +118,8 @@ pub fn execute_gpu_physics_step(
         max_cells_per_grid: 16,
         enable_thrust_force: 1, // Enable swim force for Flagellocyte cells
         cell_capacity: triple_buffers.capacity,
-        gravity_dir: [
-            if gravity_dir[0] { 1.0 } else { 0.0 },
-            if gravity_dir[1] { 1.0 } else { 0.0 },
-            if gravity_dir[2] { 1.0 } else { 0.0 },
-        ],
+        gravity_mode,
+        _gravity_pad: [0.0; 2],
         _padding: [0.0; 48],
     };
     queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
@@ -303,7 +301,7 @@ pub fn execute_gpu_mechanics_step(
     current_frame: i32,
     world_diameter: f32,
     gravity: f32,
-    gravity_dir: [bool; 3],
+    gravity_mode: u32,
     cave_renderer: Option<&crate::rendering::CaveSystemRenderer>,
     cave_physics_bind_groups: Option<&[wgpu::BindGroup; 3]>,
     cell_count_hint: u32,
@@ -326,11 +324,8 @@ pub fn execute_gpu_mechanics_step(
         max_cells_per_grid: 16,
         enable_thrust_force: 1,
         cell_capacity: triple_buffers.capacity,
-        gravity_dir: [
-            if gravity_dir[0] { 1.0 } else { 0.0 },
-            if gravity_dir[1] { 1.0 } else { 0.0 },
-            if gravity_dir[2] { 1.0 } else { 0.0 },
-        ],
+        gravity_mode,
+        _gravity_pad: [0.0; 2],
         _padding: [0.0; 48],
     };
     queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));

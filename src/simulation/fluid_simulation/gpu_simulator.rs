@@ -47,6 +47,12 @@ pub struct GpuFluidParams {
 
     // Sub-step index for alternating checker phase (0..N)
     pub sub_step: u32,
+
+    // Gravity mode: 0=X axis, 1=Y axis, 2=Z axis, 3=radial (toward origin)
+    pub gravity_mode: u32,
+    pub _pad_rg0: u32,
+    pub _pad_rg1: u32,
+    pub _pad_rg2: u32,
 }
 
 /// Extract params (must match shader)
@@ -116,6 +122,9 @@ pub struct GpuFluidSimulator {
     
     // Fluid type control (0=Empty, 1=Water, 2=Lava, 3=Steam)
     fluid_type: std::cell::Cell<u32>,
+
+    // Gravity mode: 0=X, 1=Y, 2=Z, 3=radial
+    gravity_mode: std::cell::Cell<u32>,
 
     // Compute pipelines
     swap_pipeline: wgpu::ComputePipeline,
@@ -198,6 +207,10 @@ impl GpuFluidSimulator {
             vaporization_probability: 0.1,  // Default vaporization probability
             spawn_fluid_type: 1u32,  // Default to water
             sub_step: 0,
+            gravity_mode: 1, // default Y axis
+            _pad_rg0: 0,
+            _pad_rg1: 0,
+            _pad_rg2: 0,
         };
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -656,6 +669,7 @@ impl GpuFluidSimulator {
             cached_nutrient_bind_group,
             cached_extract_bind_group: std::cell::RefCell::new(None),
             fluid_type: std::cell::Cell::new(1u32), // Default to water
+            gravity_mode: std::cell::Cell::new(1), // default Y axis
             paused: false,
         }
     }
@@ -718,6 +732,10 @@ impl GpuFluidSimulator {
             vaporization_probability,
             spawn_fluid_type: self.fluid_type.get(),
             sub_step: 0,
+            gravity_mode: self.gravity_mode.get(),
+            _pad_rg0: 0,
+            _pad_rg1: 0,
+            _pad_rg2: 0,
         };
 
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
@@ -786,6 +804,11 @@ impl GpuFluidSimulator {
     /// Get current fluid type
     pub fn get_fluid_type(&self) -> u32 {
         self.fluid_type.get()
+    }
+
+    /// Set gravity mode (0=X, 1=Y, 2=Z, 3=radial)
+    pub fn set_gravity_mode(&self, mode: u32) {
+        self.gravity_mode.set(mode);
     }
 
     /// Step the simulation - 100% GPU with zero CPU logic

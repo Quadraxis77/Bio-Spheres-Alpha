@@ -178,17 +178,9 @@ pub struct WorldSettings {
     #[serde(default)]
     pub gravity: f32,
 
-    /// Gravity applies to X axis
-    #[serde(default)]
-    pub gravity_x: bool,
-
-    /// Gravity applies to Y axis
-    #[serde(default = "default_true")]
-    pub gravity_y: bool,
-
-    /// Gravity applies to Z axis
-    #[serde(default)]
-    pub gravity_z: bool,
+    /// Gravity mode: 0=X axis, 1=Y axis, 2=Z axis, 3=radial (toward origin)
+    #[serde(default = "default_gravity_mode")]
+    pub gravity_mode: u32,
 }
 
 impl Default for WorldSettings {
@@ -196,11 +188,49 @@ impl Default for WorldSettings {
         Self {
             cell_capacity: 20_000,
             gravity: 0.0,
-            gravity_x: false,
-            gravity_y: true,
-            gravity_z: false,
+            gravity_mode: 1, // default Y axis
         }
     }
+}
+
+fn default_mip_override() -> i32 {
+    -1
+}
+
+fn default_occlusion_bias() -> f32 {
+    0.005 // Small positive bias to prevent self-occlusion from temporal jitter
+}
+
+fn default_cell_capacity() -> u32 {
+    20_000
+}
+
+fn default_world_diameter() -> f32 {
+    395.0
+}
+
+fn default_lod_scale_factor() -> f32 {
+    500.0 // Default scale factor for screen radius calculation
+}
+
+fn default_lod_threshold_low() -> f32 {
+    10.0 // Low to Medium transition
+}
+
+fn default_lod_threshold_medium() -> f32 {
+    25.0 // Medium to High transition
+}
+
+fn default_lod_threshold_high() -> f32 {
+    50.0 // High to Ultra transition
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_gravity_mode() -> u32 {
+    1 // Y axis
 }
 
 /// Global UI state shared across all UI components.
@@ -303,42 +333,6 @@ pub struct GlobalUiState {
     /// Requested mode change (processed by main app loop)
     #[serde(skip)]
     pub mode_request: Option<SimulationMode>,
-}
-
-fn default_mip_override() -> i32 {
-    -1
-}
-
-fn default_occlusion_bias() -> f32 {
-    0.005 // Small positive bias to prevent self-occlusion from temporal jitter
-}
-
-fn default_cell_capacity() -> u32 {
-    20_000
-}
-
-fn default_world_diameter() -> f32 {
-    395.0
-}
-
-fn default_lod_scale_factor() -> f32 {
-    500.0 // Default scale factor for screen radius calculation
-}
-
-fn default_lod_threshold_low() -> f32 {
-    10.0 // Low to Medium transition
-}
-
-fn default_lod_threshold_medium() -> f32 {
-    25.0 // Medium to High transition
-}
-
-fn default_lod_threshold_high() -> f32 {
-    50.0 // High to Ultra transition
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl Default for GlobalUiState {

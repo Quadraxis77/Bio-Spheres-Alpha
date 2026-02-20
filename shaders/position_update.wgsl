@@ -21,9 +21,9 @@ struct PhysicsParams {
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
     cell_capacity: u32,
-    gravity_dir_x: f32,
-    gravity_dir_y: f32,
-    gravity_dir_z: f32,
+    gravity_mode: u32,  // 0=X, 1=Y, 2=Z, 3=radial (toward origin)
+    _gravity_pad0: f32,
+    _gravity_pad1: f32,
 }
 
 // Water grid parameters for buoyancy (must match WaterGridParams in Rust)
@@ -168,11 +168,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         gravity_multiplier = 0.05;
     }
 
-    // Apply gravity (F = mg) in selected directions, reduced if in water
+    // Apply gravity (F = mg) in the selected axis or radially toward origin
     let gravity_force = params.gravity * mass * gravity_multiplier;
-    force.x += gravity_force * params.gravity_dir_x;
-    force.y += gravity_force * params.gravity_dir_y;
-    force.z += gravity_force * params.gravity_dir_z;
+    if params.gravity_mode == 3u {
+        // Radial: pull toward origin (positive gravity = inward)
+        let r = length(pos);
+        if r > 0.001 {
+            let inward = -(pos / r);
+            force += gravity_force * inward;
+        }
+    } else if params.gravity_mode == 0u {
+        force.x -= gravity_force;
+    } else if params.gravity_mode == 2u {
+        force.z -= gravity_force;
+    } else {
+        force.y -= gravity_force;
+    }
 
     // Read previous acceleration for Verlet integration
     let old_acceleration = prev_accelerations[cell_idx].xyz;
