@@ -693,9 +693,9 @@ impl GpuFluidSimulator {
         let mut grav_y = 0.0;
         let mut grav_z = 0.0;
         
-        if gravity_dir[0] { grav_x = -gravity_magnitude; }
-        if gravity_dir[1] { grav_y = -gravity_magnitude; }
-        if gravity_dir[2] { grav_z = -gravity_magnitude; }
+        if gravity_dir[0] { grav_x = gravity_magnitude; }
+        if gravity_dir[1] { grav_y = gravity_magnitude; }
+        if gravity_dir[2] { grav_z = gravity_magnitude; }
 
         let params = GpuFluidParams {
             grid_resolution: GRID_RESOLUTION,
