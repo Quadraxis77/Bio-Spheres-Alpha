@@ -526,6 +526,30 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
     }
     
+    // After division execute, propagate the output buffer to the third (stale) triple buffer.
+    // Division writes new child cells only to positions_out (output_idx). The third buffer
+    // (stale_idx) still holds old dead-cell data at recycled slot indices. Two physics steps
+    // later that stale buffer rotates back into positions_in, causing ghost flickering.
+    // Copying output → stale keeps all 3 triple buffers consistent after every division.
+    let output_idx = (current_index + 1) % 3;
+    let stale_idx  = (current_index + 2) % 3;
+    let buf_size   = triple_buffers.capacity as u64 * 16; // Vec4<f32> = 16 bytes per slot
+    encoder.copy_buffer_to_buffer(
+        &triple_buffers.position_and_mass[output_idx], 0,
+        &triple_buffers.position_and_mass[stale_idx],  0,
+        buf_size,
+    );
+    encoder.copy_buffer_to_buffer(
+        &triple_buffers.velocity[output_idx], 0,
+        &triple_buffers.velocity[stale_idx],  0,
+        buf_size,
+    );
+    encoder.copy_buffer_to_buffer(
+        &triple_buffers.rotations[output_idx], 0,
+        &triple_buffers.rotations[stale_idx],  0,
+        buf_size,
+    );
+
     // Sync next_adhesion_id to adhesion_counts[0] so adhesion line renderer sees GPU-created adhesions
     // The division shader atomically increments next_adhesion_id when creating adhesions,
     // but the adhesion line shader reads from adhesion_counts[0] for the total count.
