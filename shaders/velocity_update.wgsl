@@ -89,6 +89,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     let mass = positions_out[cell_idx].w;
+
+    // Skip dead cells - clear angular velocity so recycled slots start clean
+    if (mass < 0.5) {
+        angular_velocities[cell_idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return;
+    }
+
     let radius = calculate_radius_from_mass(mass);
     
     // Read accumulated torque from adhesion physics (convert from fixed-point)

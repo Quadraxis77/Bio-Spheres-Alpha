@@ -135,6 +135,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pos_mass = positions[cell_idx];
     let pos = pos_mass.xyz;
     let current_mass = pos_mass.w;
+
+    // Skip dead/dying cells - do not resurrect cells that death_scan should remove
+    if (current_mass < 0.5) {
+        return;
+    }
     
     // Mass cap: 2x split_mass
     let max_mass = split_masses[cell_idx] * 2.0;

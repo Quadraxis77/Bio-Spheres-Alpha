@@ -1175,12 +1175,34 @@ impl InstanceBuilder {
         }));
     }
 
-    /// Extract frustum planes from a view-projection matrix.
-    /// Note: The shader now uses a simpler clip-space method, but we still
-    /// populate this for potential future use or debugging.
-    fn extract_frustum_planes(_view_proj: Mat4) -> [FrustumPlane; 6] {
-        // Return zeroed planes - the shader uses clip-space culling instead
-        [FrustumPlane { normal_and_dist: [0.0; 4] }; 6]
+    /// Extract frustum planes from a view-projection matrix (Gribb/Hartmann method).
+    /// Each plane is stored as (normal.xyz, distance) with inward-pointing normals.
+    /// A point is inside the frustum if dot(normal, point) + distance >= 0 for all planes.
+    fn extract_frustum_planes(vp: Mat4) -> [FrustumPlane; 6] {
+        let r0 = vp.row(0);
+        let r1 = vp.row(1);
+        let r2 = vp.row(2);
+        let r3 = vp.row(3);
+
+        let raw = [
+            r3 + r0, // Left
+            r3 - r0, // Right
+            r3 + r1, // Bottom
+            r3 - r1, // Top
+            r2,       // Near  (wgpu depth [0,1])
+            r3 - r2, // Far
+        ];
+
+        let mut planes = [FrustumPlane { normal_and_dist: [0.0; 4] }; 6];
+        for i in 0..6 {
+            let p = raw[i];
+            let len = (p.x * p.x + p.y * p.y + p.z * p.z).sqrt();
+            if len > 1e-8 {
+                let inv = 1.0 / len;
+                planes[i].normal_and_dist = [p.x * inv, p.y * inv, p.z * inv, p.w * inv];
+            }
+        }
+        planes
     }
     
     /// Run the compute shader to build instance data with culling.

@@ -136,6 +136,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     let pos = positions_in[cell_idx].xyz;
     let mass = positions_in[cell_idx].w;
+
+    // Skip dead cells - they must not generate or receive collision forces
+    // No need to copy pos/vel to output — position_update handles that for all cells.
+    if (mass < 0.5) {
+        return;
+    }
+
     let vel = velocities_in[cell_idx].xyz;
     let radius = calculate_radius_from_mass(mass);
     let my_stiffness = stiffnesses[cell_idx];
@@ -244,6 +251,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             
             let other_pos = positions_in[other_idx].xyz;
             let other_mass = positions_in[other_idx].w;
+            // Skip dead neighbors - their stale positions cause phantom pinning forces
+            if (other_mass < 0.5) {
+                continue;
+            }
             let other_radius = calculate_radius_from_mass(other_mass);
             
             let delta = pos - other_pos;
@@ -297,8 +308,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     atomicAdd(&torque_accum_y[cell_idx], i32(torque.y * FIXED_POINT_SCALE));
     atomicAdd(&torque_accum_z[cell_idx], i32(torque.z * FIXED_POINT_SCALE));
     
-    // Copy position and velocity to output (no modification here)
-    // Velocity will be updated in position_update after all forces are accumulated
-    positions_out[cell_idx] = vec4<f32>(pos, mass);
-    velocities_out[cell_idx] = vec4<f32>(vel, 0.0);
+    // No position/velocity copy needed — position_update writes positions_out/velocities_out
+    // for all cells after forces are accumulated.
 }

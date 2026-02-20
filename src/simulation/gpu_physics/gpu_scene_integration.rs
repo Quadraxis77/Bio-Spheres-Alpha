@@ -3,32 +3,33 @@
 //! Executes the GPU physics pipeline using compute shaders.
 //! 
 //! ## Pipeline Stages (all use 256-thread workgroups for optimal GPU occupancy)
-//! 1. Clear spatial grid
-//! 2. Assign cells to grid
-//! 3. Insert cells into grid
-//! 4. Collision detection (optimized with pre-computed neighbor indices)
-//! 5. Adhesion physics (spring-damper forces between adhered cells)
-//! 5.5. Swim force (thrust for Flagellocyte cells based on rotation and swim_force setting)
-//! 6. Position integration
-//! 7. Velocity integration
-//! 8. Mass accumulation - nutrient growth based on nutrient_gain_rate
-//! 9. Nutrient transport - consumption, transport between cells, death detection
+//! 0. DMA zero-fill: spatial grid counts + force/torque accumulators + mass deltas
+//! 1. Build spatial grid (combined assign + insert, skips dead cells)
+//! 2. Collision detection (optimized with pre-computed neighbor indices)
+//! 3. Adhesion physics (spring-damper forces between adhered cells)
+//! 3.5. Swim force (thrust for Flagellocyte cells based on rotation and swim_force setting)
+//! 4. Position integration
+//! 5. Velocity integration
+//! 6. Mass accumulation - nutrient growth based on nutrient_gain_rate
+//! 7. Nutrient transport - consumption, transport between cells, death detection
 //! 
 //! ## Lifecycle Pipeline (128-thread workgroups)
 //! 1. Death scan - identify dead cells
 //! 1.5. Adhesion cleanup - remove adhesions for dead cells, update per-cell indices
-//! 2. Prefix sum - compact free slots
-//! 3. Division scan - identify dividing cells
-//! 4. Division execute - create child cells
+//! 2. Division scan - identify dividing cells
+//! 3. Division execute - create child cells
 //! 
 //! ## Performance Optimizations
+//! - DMA zero-fill replaces clear_forces compute dispatch (GPU DMA engine vs shader overhead)
+//! - Combined spatial grid build (assign + insert in one dispatch, skips dead cells)
+//! - Collision shader writes only force/torque atomics (no redundant pos/vel copy)
 //! - Unified 256-thread workgroups (8 warps = optimal GPU scheduling)
 //! - Pre-computed neighbor grid indices in collision detection
 //! - Branchless boundary checks using clamp + select
 //! - Cached bind groups (created once, not per-frame)
 //! - NO CPU readback during simulation
 //! - Triple buffering for lock-free GPU computation
-//! - 64³ spatial grid for collision acceleration
+//! - 128³ spatial grid for collision acceleration
 
 use super::{CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem};
 use super::adhesion::MAX_ADHESION_CONNECTIONS;
@@ -95,7 +96,8 @@ pub fn execute_gpu_physics_step(
     gravity_mode: u32,
     cave_renderer: Option<&crate::rendering::CaveSystemRenderer>,
     cave_physics_bind_groups: Option<&[wgpu::BindGroup; 3]>,
-    cell_count_hint: u32,
+    adhesion_buffers: &super::AdhesionBuffers,
+    _cell_count_hint: u32,
 ) {
     // Rotate to next buffer set
     let current_index = triple_buffers.rotate_buffers();
@@ -124,9 +126,17 @@ pub fn execute_gpu_physics_step(
     };
     queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
     
-    // Clear mass_deltas buffer before nutrient transport (prevents race condition where
-    // atomicStore inside shader overwrites transfers from other cells)
+    // DMA zero-fill all buffers that need clearing before the compute pass.
+    // This replaces the clear_forces compute dispatch and is significantly faster
+    // because the GPU's DMA engine handles bulk zeroing without compute shader overhead.
     encoder.clear_buffer(&triple_buffers.mass_deltas_buffer, 0, None);
+    encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
+    encoder.clear_buffer(&adhesion_buffers.force_accum_x, 0, None);
+    encoder.clear_buffer(&adhesion_buffers.force_accum_y, 0, None);
+    encoder.clear_buffer(&adhesion_buffers.force_accum_z, 0, None);
+    encoder.clear_buffer(&adhesion_buffers.torque_accum_x, 0, None);
+    encoder.clear_buffer(&adhesion_buffers.torque_accum_y, 0, None);
+    encoder.clear_buffer(&adhesion_buffers.torque_accum_z, 0, None);
     
     // Use cached bind groups (no per-frame allocation!)
     let physics_bind_group = &cached_bind_groups.physics[current_index];
@@ -135,46 +145,23 @@ pub fn execute_gpu_physics_step(
     let position_update_rotations_bind_group = &cached_bind_groups.position_update_rotations[current_index];
     let mass_accum_bind_group = &cached_bind_groups.mass_accum;
     
-    // Calculate workgroup counts - dispatch for cell_count_hint (with safety margin)
-    // Shaders still check cell_count_buffer[0] for exact bounds, so slight over-dispatch is safe
-    // All cell operations use unified 256-thread workgroups for optimal GPU occupancy
-    // Use hint + safety margin (256 extra threads covers 1 frame of division growth)
-    // Fall back to capacity if hint is 0 (no readback yet)
-    let effective_cell_count = if cell_count_hint > 0 {
-        (cell_count_hint + 256).min(triple_buffers.capacity)
-    } else {
-        triple_buffers.capacity
-    };
-    let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+    // Always dispatch at full capacity — shaders check cell_count_buffer[0] for exact
+    // bounds so over-dispatch is cheap (threads beyond cell_count early-exit immediately).
+    let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
     
-    // Stage 1: Clear spatial grid counts using DMA zero-fill (faster than compute shader with atomics)
-    // This clears 128³ × 4 bytes = 8MB using the GPU's DMA engine instead of 8192 workgroups
-    encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
-    
-    // Execute the remaining compute shader stages
+    // Execute compute shader stages
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("GPU Physics Pipeline"),
             timestamp_writes: None,
         });
         
-        // Stage 2: Assign cells to grid (256 threads)
-        compute_pass.set_pipeline(&pipelines.spatial_grid_assign);
+        // Stage 2+3: Build spatial grid (combined assign + insert + dead cell skip)
+        // Single dispatch replaces the previous two-pass approach, and skips dead cells
+        // to avoid wasting grid slots and collision checks against dead neighbors.
+        compute_pass.set_pipeline(&pipelines.spatial_grid_build);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-        
-        // Stage 3: Insert cells into grid (256 threads)
-        compute_pass.set_pipeline(&pipelines.spatial_grid_insert);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-        
-        // Stage 3.5: Clear force accumulators (256 threads)
-        // Must run before collision detection and adhesion physics
-        compute_pass.set_pipeline(&pipelines.clear_forces);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.clear_forces, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
         // Stage 4: Collision detection (256 threads - optimized with pre-computed neighbors)
@@ -304,7 +291,8 @@ pub fn execute_gpu_mechanics_step(
     gravity_mode: u32,
     cave_renderer: Option<&crate::rendering::CaveSystemRenderer>,
     cave_physics_bind_groups: Option<&[wgpu::BindGroup; 3]>,
-    cell_count_hint: u32,
+    adhesion_buffers: &super::AdhesionBuffers,
+    _cell_count_hint: u32,
 ) {
     // Rotate to next buffer set
     let current_index = triple_buffers.rotate_buffers();
@@ -335,15 +323,17 @@ pub fn execute_gpu_mechanics_step(
     let adhesion_rotations_bind_group = &cached_bind_groups.rotations[current_index];
     let position_update_rotations_bind_group = &cached_bind_groups.position_update_rotations[current_index];
 
-    let effective_cell_count = if cell_count_hint > 0 {
-        (cell_count_hint + 256).min(triple_buffers.capacity)
-    } else {
-        triple_buffers.capacity
-    };
-    let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+    // Always dispatch at full capacity (see execute_gpu_physics_step comment)
+    let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
 
-    // Stage 1: Clear spatial grid counts using DMA zero-fill (faster than compute shader)
+    // DMA zero-fill spatial grid + force/torque buffers before compute pass
     encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
+    encoder.clear_buffer(&adhesion_buffers.force_accum_x, 0, None);
+    encoder.clear_buffer(&adhesion_buffers.force_accum_y, 0, None);
+    encoder.clear_buffer(&adhesion_buffers.force_accum_z, 0, None);
+    encoder.clear_buffer(&adhesion_buffers.torque_accum_x, 0, None);
+    encoder.clear_buffer(&adhesion_buffers.torque_accum_y, 0, None);
+    encoder.clear_buffer(&adhesion_buffers.torque_accum_z, 0, None);
 
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -351,22 +341,10 @@ pub fn execute_gpu_mechanics_step(
             timestamp_writes: None,
         });
 
-        // Stage 2: Assign cells to grid
-        compute_pass.set_pipeline(&pipelines.spatial_grid_assign);
+        // Stage 2+3: Build spatial grid (combined assign + insert + dead cell skip)
+        compute_pass.set_pipeline(&pipelines.spatial_grid_build);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-
-        // Stage 3: Insert cells into grid
-        compute_pass.set_pipeline(&pipelines.spatial_grid_insert);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-
-        // Stage 3.5: Clear force accumulators
-        compute_pass.set_pipeline(&pipelines.clear_forces);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.clear_forces, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 4: Collision detection
@@ -570,18 +548,14 @@ pub fn rebuild_spatial_grid_after_lifecycle(
     pipelines: &GpuPhysicsPipelines,
     triple_buffers: &GpuTripleBufferSystem,
     cached_bind_groups: &CachedBindGroups,
-    cell_count_hint: u32,
+    _cell_count_hint: u32,
 ) {
     let current_index = triple_buffers.current_index();
     let physics_bind_group = &cached_bind_groups.physics[current_index];
     let spatial_grid_bind_group = &cached_bind_groups.spatial_grid;
     
-    let effective_cell_count = if cell_count_hint > 0 {
-        (cell_count_hint + 256).min(triple_buffers.capacity)
-    } else {
-        triple_buffers.capacity
-    };
-    let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+    // Always dispatch at full capacity (see execute_gpu_physics_step comment)
+    let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
     
     // Stage 1: Clear spatial grid counts using DMA zero-fill
     encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);

@@ -244,6 +244,7 @@ pub struct GpuPhysicsPipelines {
     pub spatial_grid_clear: wgpu::ComputePipeline,
     pub spatial_grid_assign: wgpu::ComputePipeline,
     pub spatial_grid_insert: wgpu::ComputePipeline,
+    pub spatial_grid_build: wgpu::ComputePipeline,
     pub clear_forces: wgpu::ComputePipeline,
     pub collision_detection: wgpu::ComputePipeline,
     pub position_update: wgpu::ComputePipeline,
@@ -470,6 +471,15 @@ impl GpuPhysicsPipelines {
             "Spatial Grid Insert",
         );
         
+        // Combined spatial grid build (assign + insert + dead cell skip in one dispatch)
+        let spatial_grid_build = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/spatial_grid_build.wgsl"),
+            "main",
+            &[&physics_layout, &spatial_grid_layout],
+            "Spatial Grid Build",
+        );
+        
         // Clear forces pipeline (runs before collision and adhesion)
         let clear_forces = Self::create_compute_pipeline(
             device,
@@ -655,6 +665,7 @@ impl GpuPhysicsPipelines {
             spatial_grid_clear,
             spatial_grid_assign,
             spatial_grid_insert,
+            spatial_grid_build,
             clear_forces,
             collision_detection,
             position_update,

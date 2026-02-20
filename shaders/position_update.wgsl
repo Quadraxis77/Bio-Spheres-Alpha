@@ -151,6 +151,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     let pos = positions_in[cell_idx].xyz;
     let mass = positions_in[cell_idx].w;
+
+    // Clear prev_accelerations for dead/near-dead cells so recycled slots start clean.
+    // Do NOT freeze position — death_scan (lifecycle pipeline) is the authority on removal.
+    // Freezing here caused starving cells to get stuck when mass transiently dipped below
+    // the threshold before death_scan ran, since mass_accum can bump it back above 0.5.
+    if (mass < 0.5) {
+        prev_accelerations[cell_idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
     let vel = velocities_in[cell_idx].xyz;
     
     // Read accumulated forces from collision and adhesion stages (convert from fixed-point)
@@ -188,8 +196,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Read previous acceleration for Verlet integration
     let old_acceleration = prev_accelerations[cell_idx].xyz;
 
-    // Calculate new acceleration from accumulated forces
-    let new_acceleration = force / mass;
+    // Calculate new acceleration from accumulated forces (guard against near-zero mass)
+    let safe_mass = max(mass, 0.001);
+    let new_acceleration = force / safe_mass;
     
     // Verlet integration (matching CPU exactly):
     // velocity_change = 0.5 * (old_acceleration + new_acceleration) * dt

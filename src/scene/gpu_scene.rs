@@ -619,6 +619,7 @@ impl GpuScene {
             self.gravity_mode,
             self.cave_renderer.as_ref(),
             self.cave_physics_bind_groups.as_ref(),
+            &self.adhesion_buffers,
             self.current_cell_count,
         );
         
@@ -666,6 +667,7 @@ impl GpuScene {
             self.gravity_mode,
             self.cave_renderer.as_ref(),
             self.cave_physics_bind_groups.as_ref(),
+            &self.adhesion_buffers,
             self.current_cell_count,
         );
         
