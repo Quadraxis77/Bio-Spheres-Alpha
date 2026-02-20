@@ -151,6 +151,65 @@ impl App {
                 }
             }
             WindowEvent::MouseInput { button, state, .. } => {
+                // Handle cell click in Preview mode to select mode
+                if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Preview
+                    && *button == MouseButton::Left
+                    && *state == ElementState::Pressed
+                    && !self.ui.wants_pointer_input()
+                {
+                    if let Some(preview_scene) = self.scene_manager.preview_scene_mut() {
+                        let (mx, my) = self.mouse_position;
+                        let w = self.config.width as f32;
+                        let h = self.config.height as f32;
+                        let aspect = w / h;
+
+                        // Build camera ray from screen position
+                        let cam_pos = preview_scene.camera.position();
+                        let cam_rot = preview_scene.camera.rotation;
+                        let fov_y = 45.0_f32.to_radians();
+                        let tan_half_fov = (fov_y / 2.0).tan();
+
+                        // NDC [-1, 1]
+                        let ndc_x = (mx / w) * 2.0 - 1.0;
+                        let ndc_y = 1.0 - (my / h) * 2.0;
+
+                        let ray_dir_cam = glam::Vec3::new(
+                            ndc_x * aspect * tan_half_fov,
+                            ndc_y * tan_half_fov,
+                            -1.0,
+                        ).normalize();
+                        let ray_dir = cam_rot * ray_dir_cam;
+
+                        // Ray-sphere intersection against all cells
+                        let cell_count = preview_scene.state.display_state.cell_count;
+                        let mut best_t = f32::MAX;
+                        let mut hit_mode: Option<usize> = None;
+
+                        for i in 0..cell_count {
+                            let center = preview_scene.state.display_state.positions[i];
+                            let radius = preview_scene.state.display_state.radii[i];
+                            let oc = cam_pos - center;
+                            let b = oc.dot(ray_dir);
+                            let c = oc.dot(oc) - radius * radius;
+                            let disc = b * b - c;
+                            if disc >= 0.0 {
+                                let t = -b - disc.sqrt();
+                                if t > 0.001 && t < best_t {
+                                    best_t = t;
+                                    hit_mode = Some(preview_scene.state.display_state.mode_indices[i]);
+                                }
+                            }
+                        }
+
+                        if let Some(mode_idx) = hit_mode {
+                            preview_scene.selected_mode_index = Some(mode_idx);
+                            self.editor_state.selected_mode_index = mode_idx;
+                            log::info!("Preview cell click: selected mode {}", mode_idx);
+                        }
+                    }
+                    self.window.request_redraw();
+                }
+
                 // Handle radial menu click (GPU mode only)
                 if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
                     // Read menu state before mutable borrow
@@ -643,6 +702,9 @@ impl App {
                         self.editor_state.max_preview_duration,
                         self.editor_state.time_slider_dragging,
                     );
+                    
+                    // Bidirectional sync: genome panel selection → preview highlight
+                    preview_scene.selected_mode_index = Some(self.editor_state.selected_mode_index);
                 }
             }
             

@@ -638,6 +638,7 @@ impl CellRenderer {
         _lod_threshold_medium: f32,
         _lod_threshold_high: f32,
         _lod_debug_colors: bool,
+        selected_mode_index: Option<usize>,
     ) -> Vec<CellInstance> {
         if state.cell_count == 0 {
             return Vec::new();
@@ -702,6 +703,7 @@ impl CellRenderer {
             // Ensure cell_type is stored in data[7] for hybrid shader branching
             data.data[4] = visuals.nucleus_scale;
             data.data[5] = visuals.membrane_noise_speed; // animation speed (Glueocyte slime)
+            data.data[6] = if selected_mode_index == Some(mode_index) { 1.0 } else { 0.0 }; // yellow outline highlight
             data.data[7] = cell_type_index as f32;
             
             // Pack Goldberg ridge params into type_data[0..3] for non-tail cells
@@ -766,6 +768,7 @@ impl CellRenderer {
         lod_threshold_high: f32,
         _lod_debug_colors: bool,
         outline_width: f32,
+        selected_mode_index: Option<usize>,
     ) {
         if state.cell_count == 0 {
             return;
@@ -781,6 +784,7 @@ impl CellRenderer {
             lod_threshold_medium, 
             lod_threshold_high,
             _lod_debug_colors,
+            selected_mode_index,
         );
         let instance_count = instances.len() as u32;
         

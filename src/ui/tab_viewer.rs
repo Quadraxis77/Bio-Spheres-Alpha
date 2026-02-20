@@ -2174,6 +2174,53 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                         }
                     }
 
+                    // Right-click: seed euler buffer from current orientation when menu opens
+                    if response.secondary_clicked() {
+                        let (pitch, yaw, roll) = child_a_orientation.to_euler(glam::EulerRot::XYZ);
+                        context.editor_state.qball_manual_xyzw = [
+                            pitch.to_degrees() as f64,
+                            yaw.to_degrees() as f64,
+                            roll.to_degrees() as f64,
+                            0.0,
+                        ];
+                    }
+                    let mut apply_a: Option<glam::Quat> = None;
+                    egui::Popup::context_menu(&response)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| {
+                        ui.set_min_width(180.0);
+                        ui.label("Set orientation (degrees):");
+                        ui.separator();
+                        let euler = &mut context.editor_state.qball_manual_xyzw;
+                        egui::Grid::new("qball_a_input").num_columns(2).spacing([4.0, 4.0]).show(ui, |ui| {
+                            ui.label("Pitch (X):"); ui.add(egui::DragValue::new(&mut euler[0]).speed(1.0).range(-180.0..=180.0).suffix("°")); ui.end_row();
+                            ui.label("Yaw (Y):");   ui.add(egui::DragValue::new(&mut euler[1]).speed(1.0).range(-180.0..=180.0).suffix("°")); ui.end_row();
+                            ui.label("Roll (Z):");  ui.add(egui::DragValue::new(&mut euler[2]).speed(1.0).range(-180.0..=180.0).suffix("°")); ui.end_row();
+                        });
+                        ui.separator();
+                        let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        ui.horizontal(|ui| {
+                            if ui.button("Apply").clicked() || enter_pressed {
+                                apply_a = Some(glam::Quat::from_euler(
+                                    glam::EulerRot::XYZ,
+                                    euler[0].to_radians() as f32,
+                                    euler[1].to_radians() as f32,
+                                    euler[2].to_radians() as f32,
+                                ).normalize());
+                                egui::Popup::close_all(ui.ctx());
+                            }
+                            if ui.button("Cancel").clicked() {
+                                egui::Popup::close_all(ui.ctx());
+                            }
+                        });
+                    });
+                    if let Some(q) = apply_a {
+                        context.editor_state.child_a_orientation = q;
+                        if has_valid_mode {
+                            context.genome.modes[selected_idx].child_a.orientation = q;
+                        }
+                    }
+
                     ui.add_space(2.0); // Reduced spacing
 
                     // Keep Adhesion checkbox for Child A - modify genome directly
@@ -2292,6 +2339,53 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                         // CRITICAL: Also update the actual genome mode's child orientation
                         if has_valid_mode {
                             context.genome.modes[selected_idx].child_b.orientation = child_b_orientation;
+                        }
+                    }
+
+                    // Right-click: seed euler buffer from current orientation when menu opens
+                    if response.secondary_clicked() {
+                        let (pitch, yaw, roll) = child_b_orientation.to_euler(glam::EulerRot::XYZ);
+                        context.editor_state.qball_manual_xyzw = [
+                            pitch.to_degrees() as f64,
+                            yaw.to_degrees() as f64,
+                            roll.to_degrees() as f64,
+                            0.0,
+                        ];
+                    }
+                    let mut apply_b: Option<glam::Quat> = None;
+                    egui::Popup::context_menu(&response)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| {
+                        ui.set_min_width(180.0);
+                        ui.label("Set orientation (degrees):");
+                        ui.separator();
+                        let euler = &mut context.editor_state.qball_manual_xyzw;
+                        egui::Grid::new("qball_b_input").num_columns(2).spacing([4.0, 4.0]).show(ui, |ui| {
+                            ui.label("Pitch (X):"); ui.add(egui::DragValue::new(&mut euler[0]).speed(1.0).range(-180.0..=180.0).suffix("°")); ui.end_row();
+                            ui.label("Yaw (Y):");   ui.add(egui::DragValue::new(&mut euler[1]).speed(1.0).range(-180.0..=180.0).suffix("°")); ui.end_row();
+                            ui.label("Roll (Z):");  ui.add(egui::DragValue::new(&mut euler[2]).speed(1.0).range(-180.0..=180.0).suffix("°")); ui.end_row();
+                        });
+                        ui.separator();
+                        let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        ui.horizontal(|ui| {
+                            if ui.button("Apply").clicked() || enter_pressed {
+                                apply_b = Some(glam::Quat::from_euler(
+                                    glam::EulerRot::XYZ,
+                                    euler[0].to_radians() as f32,
+                                    euler[1].to_radians() as f32,
+                                    euler[2].to_radians() as f32,
+                                ).normalize());
+                                egui::Popup::close_all(ui.ctx());
+                            }
+                            if ui.button("Cancel").clicked() {
+                                egui::Popup::close_all(ui.ctx());
+                            }
+                        });
+                    });
+                    if let Some(q) = apply_b {
+                        context.editor_state.child_b_orientation = q;
+                        if has_valid_mode {
+                            context.genome.modes[selected_idx].child_b.orientation = q;
                         }
                     }
 

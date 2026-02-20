@@ -961,6 +961,15 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         final_color = mix(vec3<f32>(0.0, 0.0, 0.0), final_color, outline);
     }
 
+    // Yellow outline for selected-mode cells (type_data_1.z == 1.0)
+    let highlight_flag = in.type_data_1.z;
+    if (highlight_flag > 0.5) {
+        let yellow_width = max(lighting.outline_width, 0.08);
+        let aa2 = fwidth(z_front);
+        let yellow_outline = smoothstep(yellow_width - aa2, yellow_width + aa2, z_front);
+        final_color = mix(vec3<f32>(1.0, 1.0, 0.0), final_color, yellow_outline);
+    }
+
     // ====================================================================
     // Sphere depth (front surface)
     // ====================================================================
@@ -970,10 +979,10 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     out.depth = sphere_clip.z / sphere_clip.w;
 
     // ====================================================================
-    // Debug LOD colors
+    // Debug LOD colors (skipped for highlighted cells since they share the same flag slot)
     // ====================================================================
     var output_color: vec3<f32>;
-    if (debug_colors > 0.5) {
+    if (debug_colors > 0.5 && highlight_flag < 0.5) {
         switch (lod) {
             case 0u: { output_color = vec3<f32>(1.0, 0.2, 0.2); }
             case 1u: { output_color = vec3<f32>(0.2, 1.0, 0.2); }

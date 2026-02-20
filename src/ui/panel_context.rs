@@ -115,6 +115,12 @@ pub struct GenomeEditorState {
     pub child_b_z_axis_lat: f32,
     pub child_b_z_axis_lon: f32,
 
+    // Quaternion ball manual-input context menu state
+    /// Which ball has the context menu open: 0 = none, 1 = Child A, 2 = Child B
+    pub qball_context_menu_open: u8,
+    /// Manual input buffer: [x, y, z, w]
+    pub qball_manual_xyzw: [f64; 4],
+
     // Keep Adhesion state
     /// Whether Child A should keep adhesion
     pub child_a_keep_adhesion: bool,
@@ -381,6 +387,8 @@ impl GenomeEditorState {
             child_b_y_axis_lon: 0.0,
             child_b_z_axis_lat: 0.0,
             child_b_z_axis_lon: 0.0,
+            qball_context_menu_open: 0,
+            qball_manual_xyzw: [0.0, 0.0, 0.0, 1.0],
             child_a_keep_adhesion: false,
             child_b_keep_adhesion: false,
             enable_snapping: true,

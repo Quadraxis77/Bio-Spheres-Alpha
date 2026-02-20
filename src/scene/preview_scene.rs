@@ -38,6 +38,8 @@ pub struct PreviewScene {
     last_ui_time_value: f32,
     /// Whether to show adhesion lines
     pub show_adhesion_lines: bool,
+    /// Mode index selected by clicking a cell in the preview (None = no selection)
+    pub selected_mode_index: Option<usize>,
 }
 
 impl PreviewScene {
@@ -74,6 +76,7 @@ impl PreviewScene {
             camera: CameraController::new_for_preview_scene(),
             last_ui_time_value: 0.0,
             show_adhesion_lines: true,
+            selected_mode_index: None,
         }
     }
 
@@ -218,6 +221,7 @@ impl Scene for PreviewScene {
             lod_threshold_high,
             lod_debug_colors,
             outline_width,
+            self.selected_mode_index,
         );
 
         // Pass 2.5: Render flagellocyte tails
