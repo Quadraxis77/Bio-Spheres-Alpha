@@ -57,7 +57,7 @@ struct FogParams {
 @group(0) @binding(0)
 var<uniform> camera: CameraUniforms;
 
-// Group 1: Fog parameters and data
+// Group 1: Fog parameters and data (solid_mask removed — light_field encodes solid as 0.0)
 @group(1) @binding(0)
 var<uniform> fog_params: FogParams;
 
@@ -65,12 +65,9 @@ var<uniform> fog_params: FogParams;
 var<storage, read> light_field: array<f32>;
 
 @group(1) @binding(2)
-var<storage, read> solid_mask: array<u32>;
-
-@group(1) @binding(3)
 var depth_texture: texture_depth_2d;
 
-@group(1) @binding(4)
+@group(1) @binding(3)
 var depth_sampler: sampler;
 
 // Vertex output
@@ -129,22 +126,9 @@ fn sample_light_field(world_pos: vec3<f32>) -> f32 {
     return light_field[idx];
 }
 
-// Check if a world position is inside a solid voxel
-fn is_solid_at(world_pos: vec3<f32>) -> bool {
-    let res = fog_params.grid_resolution;
-    let fres = f32(res);
-    
-    let gx = (world_pos.x - fog_params.grid_origin_x) / fog_params.cell_size;
-    let gy = (world_pos.y - fog_params.grid_origin_y) / fog_params.cell_size;
-    let gz = (world_pos.z - fog_params.grid_origin_z) / fog_params.cell_size;
-    
-    if (gx < 0.0 || gx >= fres || gy < 0.0 || gy >= fres || gz < 0.0 || gz >= fres) {
-        return false;
-    }
-    
-    let idx = u32(gx) + u32(gy) * res + u32(gz) * res * res;
-    return solid_mask[idx] != 0u;
-}
+// Solid detection threshold: solid voxels have light_field = 0.0,
+// non-solid always have >= ambient_floor (0.02). Using 0.01 as threshold.
+const SOLID_LIGHT_THRESHOLD: f32 = 0.01;
 
 // Ray-sphere intersection. Returns (t_near, t_far) or (-1, -1) if no hit.
 // Sphere centered at origin with given radius.
@@ -174,14 +158,9 @@ fn reconstruct_world_pos(uv: vec2<f32>, depth: f32) -> vec3<f32> {
     return world_h.xyz / world_h.w;
 }
 
-// Compute fog density at a given world position
+// Compute fog density at a given world position (no solid check — handled by caller via light_field)
 fn fog_density_at(world_pos: vec3<f32>) -> f32 {
     var density = fog_params.fog_density;
-    
-    // Skip fog inside solid geometry
-    if (is_solid_at(world_pos)) {
-        return 0.0;
-    }
     
     // Smooth fade near sphere boundary to prevent hard edges
     let dist_from_center = length(world_pos);
@@ -267,15 +246,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let t = start_offset + f32(i) * step_size;
         let sample_pos = camera.camera_pos + ray_dir * t;
         
-        // Get fog density at this position
+        // Sample light field FIRST — also detects solid voxels (light = 0.0)
+        // This single read replaces both the old solid_mask check and the light sample
+        let light_intensity = sample_light_field(sample_pos);
+        
+        // Solid voxels have light = 0.0, non-solid have >= ambient_floor (0.02)
+        if (light_intensity < SOLID_LIGHT_THRESHOLD) {
+            continue;
+        }
+        
+        // Get fog density at this position (no solid check needed)
         let density = fog_density_at(sample_pos);
         
         if (density <= 0.0) {
             continue;
         }
-        
-        // Sample light field at this position
-        let light_intensity = sample_light_field(sample_pos);
         
         // In-scattered light: light that scatters toward camera at this point
         let in_scattered = light_color * light_intensity * phase * fog_params.light_intensity;

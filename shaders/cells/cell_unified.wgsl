@@ -821,7 +821,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     if (cell_type == 6u && lod >= 1u) {
         let surf_local = normalize(quat_rotate_inverse(in.rotation,
             in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
-        let cell_seed = fract(in.type_data_1.x * 0.00023283064365); // stable: cell_id / 2^32 approx
+        let cell_seed = fract(f32(in.instance_index) * 0.6180339887); // golden ratio hash for per-cell variation
         let anim_speed = in.type_data_1.y; // membrane_noise_speed -> animation speed multiplier
         let slime = internals_glueocyte(
             surf_local,

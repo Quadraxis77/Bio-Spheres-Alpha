@@ -226,6 +226,23 @@ pub struct GpuScene {
     pub sun_intensity: f32,
     /// Index of cell currently being dragged (u32::MAX = none)
     pub dragged_cell_index: u32,
+    /// Cached shared camera buffer for environment renderers (voxel, particles)
+    /// Updated once per frame via queue.write_buffer instead of creating new buffers
+    env_camera_buffer: Option<wgpu::Buffer>,
+    /// Cached camera bind group for voxel renderer
+    env_camera_bind_group_voxel: Option<wgpu::BindGroup>,
+    /// Cached camera bind group for steam particle renderer
+    env_camera_bind_group_steam: Option<wgpu::BindGroup>,
+    /// Cached camera bind group for water particle renderer
+    env_camera_bind_group_water: Option<wgpu::BindGroup>,
+    /// Cached camera bind group for nutrient particle renderer
+    env_camera_bind_group_nutrient: Option<wgpu::BindGroup>,
+    /// Cached adhesion data bind groups (one per triple buffer index)
+    cached_adhesion_data_bind_groups: Option<[wgpu::BindGroup; 3]>,
+    /// Whether the cave shadow bind group has been created and set
+    cave_shadow_bind_group_set: bool,
+    /// Whether genome settings are dirty and need GPU sync
+    genomes_dirty: bool,
 }
 
 impl GpuScene {
@@ -391,6 +408,14 @@ impl GpuScene {
             show_sun: true,
             sun_intensity: 10.0,
             dragged_cell_index: u32::MAX,
+            env_camera_buffer: None,
+            env_camera_bind_group_voxel: None,
+            env_camera_bind_group_steam: None,
+            env_camera_bind_group_water: None,
+            env_camera_bind_group_nutrient: None,
+            cached_adhesion_data_bind_groups: None,
+            cave_shadow_bind_group_set: false,
+            genomes_dirty: false,
         }
     }
 
@@ -594,6 +619,7 @@ impl GpuScene {
             self.gravity_dir,
             self.cave_renderer.as_ref(),
             self.cave_physics_bind_groups.as_ref(),
+            self.current_cell_count,
         );
         
         // Increment frame counter for time-based shader logic
@@ -613,14 +639,10 @@ impl GpuScene {
             self.current_time,
         );
         
-        // CRITICAL: Rebuild spatial grid after lifecycle pipeline
-        // This ensures dead cells are not included in collision detection
-        crate::simulation::gpu_physics::gpu_scene_integration::rebuild_spatial_grid_after_lifecycle(
-            encoder,
-            &self.gpu_physics_pipelines,
-            &self.gpu_triple_buffers,
-            &self.cached_bind_groups,
-        );
+        // NOTE: Spatial grid rebuild after lifecycle is unnecessary because the grid
+        // is rebuilt at the START of each physics step (stages 1-3). Nothing between
+        // lifecycle and the next physics step reads the spatial grid. Removing this
+        // saves 3 compute dispatches (clear 128³ grid + assign + insert) per step.
         
         // Copy GPU physics output to instance builder's buffers
         self.copy_buffers_to_instance_builder(encoder);
@@ -644,6 +666,7 @@ impl GpuScene {
             self.gravity_dir,
             self.cave_renderer.as_ref(),
             self.cave_physics_bind_groups.as_ref(),
+            self.current_cell_count,
         );
         
         // Copy GPU physics output to instance builder's buffers
@@ -756,8 +779,12 @@ impl GpuScene {
         // For cell insertion, we write to ALL 3 buffer sets, so any buffer index works
         // For physics output, we use output_buffer_index which is where physics wrote
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
-        let vec4_copy_size = (self.gpu_triple_buffers.capacity as usize * 16) as u64; // Vec4<f32> = 16 bytes
-        let u32_copy_size = (self.gpu_triple_buffers.capacity as usize * 4) as u64; // u32 = 4 bytes
+        // Must copy full capacity — divided cells land at recycled slot indices scattered
+        // throughout the buffer, not at the front. Truncating by cell_count would leave
+        // those slots with stale data causing broken rendering.
+        let capacity = self.gpu_triple_buffers.capacity as usize;
+        let vec4_copy_size = (capacity * 16) as u64; // Vec4<f32> = 16 bytes
+        let u32_copy_size = (capacity * 4) as u64; // u32 = 4 bytes
         
         // Copy positions (Vec4: x, y, z, mass)
         encoder.copy_buffer_to_buffer(
@@ -882,6 +909,7 @@ impl GpuScene {
         
         // Update the genome in place
         self.genomes[genome_id] = genome.clone();
+        self.genomes_dirty = true;
         
         // Perform incremental sync of only this genome's data
         self.incremental_sync_genome(device, queue, genome_id);
@@ -912,6 +940,7 @@ impl GpuScene {
         // This preserves existing cells' behavior when genome is modified
         let id = self.genomes.len();
         self.genomes.push(genome);
+        self.genomes_dirty = true;
 
         log::info!("Added new genome {} (total: {})", id, self.genomes.len());
         Some((id, true)) // needs_sync = true because genome was added
@@ -1933,6 +1962,134 @@ impl GpuScene {
         })
     }
     
+    /// Ensure the shared environment camera buffer exists and update it with current camera data.
+    /// Returns the camera buffer reference. Creates the buffer on first call, then reuses it.
+    fn ensure_env_camera_buffer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let camera_uniform = self.create_camera_uniform();
+        
+        if let Some(ref buffer) = self.env_camera_buffer {
+            // Reuse existing buffer - just update data
+            queue.write_buffer(buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
+        } else {
+            // First time: create the buffer with COPY_DST so we can update it
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Shared Env Camera Buffer"),
+                contents: bytemuck::cast_slice(&[camera_uniform]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+            self.env_camera_buffer = Some(buffer);
+        }
+    }
+    
+    /// Ensure cached camera bind group exists for a specific environment renderer.
+    /// Creates the bind group on first call using the shared camera buffer.
+    fn ensure_env_camera_bind_groups(&mut self, device: &wgpu::Device) {
+        let buffer = match &self.env_camera_buffer {
+            Some(b) => b,
+            None => return,
+        };
+        
+        // Create voxel camera bind group if needed
+        if self.env_camera_bind_group_voxel.is_none() {
+            if self.voxel_renderer.is_some() {
+                let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("Env Voxel Camera Layout"),
+                    entries: &[wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    }],
+                });
+                self.env_camera_bind_group_voxel = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Env Voxel Camera Bind Group"),
+                    layout: &layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffer.as_entire_binding(),
+                    }],
+                }));
+            }
+        }
+        
+        // Create steam particle camera bind group if needed
+        if self.env_camera_bind_group_steam.is_none() {
+            if let Some(ref renderer) = self.steam_particle_renderer {
+                self.env_camera_bind_group_steam = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Env Steam Camera Bind Group"),
+                    layout: renderer.camera_bind_group_layout(),
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffer.as_entire_binding(),
+                    }],
+                }));
+            }
+        }
+        
+        // Create water particle camera bind group if needed
+        if self.env_camera_bind_group_water.is_none() {
+            if let Some(ref renderer) = self.water_particle_renderer {
+                self.env_camera_bind_group_water = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Env Water Camera Bind Group"),
+                    layout: renderer.camera_bind_group_layout(),
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffer.as_entire_binding(),
+                    }],
+                }));
+            }
+        }
+        
+        // Create nutrient particle camera bind group if needed
+        if self.env_camera_bind_group_nutrient.is_none() {
+            if let Some(ref renderer) = self.nutrient_particle_renderer {
+                self.env_camera_bind_group_nutrient = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Env Nutrient Camera Bind Group"),
+                    layout: renderer.camera_bind_group_layout(),
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffer.as_entire_binding(),
+                    }],
+                }));
+            }
+        }
+    }
+    
+    /// Ensure cached adhesion data bind groups exist (one per triple buffer index).
+    /// These are created once and reused since the underlying buffers don't change.
+    fn ensure_cached_adhesion_bind_groups(&mut self, device: &wgpu::Device) {
+        if self.cached_adhesion_data_bind_groups.is_some() {
+            return;
+        }
+        
+        let bg0 = self.adhesion_renderer.create_data_bind_group(
+            device,
+            &self.gpu_triple_buffers.position_and_mass[0],
+            &self.adhesion_buffers.adhesion_connections,
+            &self.adhesion_buffers.adhesion_counts,
+            &self.gpu_triple_buffers.cell_count_buffer,
+        );
+        let bg1 = self.adhesion_renderer.create_data_bind_group(
+            device,
+            &self.gpu_triple_buffers.position_and_mass[1],
+            &self.adhesion_buffers.adhesion_connections,
+            &self.adhesion_buffers.adhesion_counts,
+            &self.gpu_triple_buffers.cell_count_buffer,
+        );
+        let bg2 = self.adhesion_renderer.create_data_bind_group(
+            device,
+            &self.gpu_triple_buffers.position_and_mass[2],
+            &self.adhesion_buffers.adhesion_connections,
+            &self.adhesion_buffers.adhesion_counts,
+            &self.gpu_triple_buffers.cell_count_buffer,
+        );
+        self.cached_adhesion_data_bind_groups = Some([bg0, bg1, bg2]);
+    }
+    
     /// Create camera uniform for rendering
     fn create_camera_uniform(&self) -> CameraUniform {
         let camera_pos = self.camera.position();
@@ -2013,8 +2170,8 @@ impl GpuScene {
         let light_field_system = LightFieldSystem::new(device, world_radius);
         self.light_field_system = Some(light_field_system);
         
-        // Create volumetric fog renderer
-        let volumetric_fog_renderer = VolumetricFogRenderer::new(device, surface_format);
+        // Create volumetric fog renderer (with half-res support)
+        let volumetric_fog_renderer = VolumetricFogRenderer::new(device, surface_format, self.renderer.width, self.renderer.height);
         self.volumetric_fog_renderer = Some(volumetric_fog_renderer);
         
         // Create procedural sun renderer
@@ -3246,8 +3403,11 @@ impl Scene for GpuScene {
         _lod_debug_colors: bool,
         outline_width: f32,
     ) {
-        // Sync adhesion settings to GPU when genomes are added or modified
-        self.sync_adhesion_settings(queue);
+        // Sync adhesion settings to GPU only when genomes are added or modified
+        if self.genomes_dirty {
+            self.sync_adhesion_settings(queue);
+            self.genomes_dirty = false;
+        }
         
         // Check and update cave world radius if world diameter changed
         self.check_world_diameter_change(device, queue, world_diameter);
@@ -3277,6 +3437,11 @@ impl Scene for GpuScene {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("GPU Scene Encoder"),
         });
+
+        // Update shared environment camera buffer once per frame (reused by voxel, particle renderers)
+        // This replaces 4+ per-frame buffer allocations with a single write_buffer call
+        self.ensure_env_camera_buffer(device, queue);
+        self.ensure_env_camera_bind_groups(device);
 
         // Update cave parameters if dirty
         self.update_cave_params(device, queue);
@@ -3519,12 +3684,15 @@ impl Scene for GpuScene {
             // Update shadow bind group from light field system (with water bitfield for caustics)
             if let Some(ref light_field) = self.light_field_system {
                 light_field.update_shadow_params(queue);
-                // Use smoothed density buffer from surface nets if available, otherwise dummy
-                let density_buf = self.gpu_surface_nets.as_ref()
-                    .map(|sn| sn.smoothed_density_buffer())
-                    .unwrap_or(light_field.dummy_water_density());
-                let shadow_bg = light_field.create_cave_shadow_bind_group(device, density_buf);
-                cave_renderer.set_shadow_bind_group(shadow_bg);
+                // Create and set shadow bind group once (buffers never change, params updated via write_buffer)
+                if !self.cave_shadow_bind_group_set {
+                    let density_buf = self.gpu_surface_nets.as_ref()
+                        .map(|sn| sn.smoothed_density_buffer())
+                        .unwrap_or(light_field.dummy_water_density());
+                    let shadow_bg = light_field.create_cave_shadow_bind_group(device, density_buf);
+                    cave_renderer.set_shadow_bind_group(shadow_bg);
+                    self.cave_shadow_bind_group_set = true;
+                }
             }
             cave_renderer.render(
                 &mut encoder,
@@ -3577,40 +3745,10 @@ impl Scene for GpuScene {
             );
         }
         
-        // Render fluid voxels if enabled
+        // Render fluid voxels if enabled (uses cached camera bind group)
         if self.show_fluid_voxels {
-            if let (Some(ref voxel_renderer), Some(ref _fluid_buffers)) = (&self.voxel_renderer, &self.fluid_buffers) {
-                // Create camera bind group for voxel rendering
-                // We need to create this each frame since we don't store it
-                let camera_uniform = self.create_camera_uniform();
-                let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Voxel Camera Buffer"),
-                    contents: bytemuck::cast_slice(&[camera_uniform]),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                });
-                
-                let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("Voxel Camera Layout"),
-                    entries: &[wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    }],
-                });
-                
-                let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Voxel Camera Bind Group"),
-                    layout: &camera_bind_group_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: camera_buffer.as_entire_binding(),
-                    }],
-                });
+            if let (Some(ref voxel_renderer), Some(ref _fluid_buffers), Some(ref camera_bind_group)) = 
+                (&self.voxel_renderer, &self.fluid_buffers, &self.env_camera_bind_group_voxel) {
                 
                 let mut voxel_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Voxel Rendering Pass"),
@@ -3636,7 +3774,7 @@ impl Scene for GpuScene {
                 });
                 
                 // Render voxels with tracked instance count
-                voxel_renderer.render(&mut voxel_pass, &camera_bind_group, self.voxel_instance_count);
+                voxel_renderer.render(&mut voxel_pass, camera_bind_group, self.voxel_instance_count);
             }
         }
         
@@ -3671,168 +3809,121 @@ impl Scene for GpuScene {
             }
         }
 
-        // Render steam particles if enabled
+        // Render steam particles if enabled (uses cached camera bind group)
         if self.show_steam_particles {
-            if let (Some(ref steam_particle_renderer), Some(ref render_bind_group)) =
-                (&self.steam_particle_renderer, &self.steam_render_bind_group) {
-
-                // Create camera bind group for steam particles
-                let camera_uniform = self.create_camera_uniform();
-                let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Steam Particle Camera Buffer"),
-                    contents: bytemuck::cast_slice(&[camera_uniform]),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                });
-
-                let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Steam Particle Camera Bind Group"),
-                    layout: steam_particle_renderer.camera_bind_group_layout(),
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: camera_buffer.as_entire_binding(),
-                    }],
-                });
+            if let (Some(ref steam_particle_renderer), Some(ref render_bind_group), Some(ref camera_bind_group)) =
+                (&self.steam_particle_renderer, &self.steam_render_bind_group, &self.env_camera_bind_group_steam) {
 
                 steam_particle_renderer.render(
                     &mut encoder,
                     view,
                     &self.renderer.depth_view,
-                    &camera_bind_group,
+                    camera_bind_group,
                     render_bind_group,
                 );
             }
         }
 
-        // Render water particles if enabled
+        // Render water particles if enabled (uses cached camera bind group)
         if self.show_water_particles {
-            if let (Some(ref water_particle_renderer), Some(ref render_bind_group)) =
-                (&self.water_particle_renderer, &self.water_render_bind_group) {
-
-                // Create camera bind group for water particles
-                let camera_uniform = self.create_camera_uniform();
-                let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Water Particle Camera Buffer"),
-                    contents: bytemuck::cast_slice(&[camera_uniform]),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                });
-
-                let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Water Particle Camera Bind Group"),
-                    layout: water_particle_renderer.camera_bind_group_layout(),
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: camera_buffer.as_entire_binding(),
-                    }],
-                });
+            if let (Some(ref water_particle_renderer), Some(ref render_bind_group), Some(ref camera_bind_group)) =
+                (&self.water_particle_renderer, &self.water_render_bind_group, &self.env_camera_bind_group_water) {
 
                 water_particle_renderer.render(
                     &mut encoder,
                     view,
                     &self.renderer.depth_view,
-                    &camera_bind_group,
+                    camera_bind_group,
                     render_bind_group,
                 );
             }
         }
 
-        // Render nutrient particles if enabled
+        // Render nutrient particles if enabled (uses cached camera bind group)
         if self.show_nutrient_particles {
-            if let (Some(ref nutrient_particle_renderer), Some(ref render_bind_group)) =
-                (&self.nutrient_particle_renderer, &self.nutrient_render_bind_group) {
-
-                // Create camera bind group for nutrient particles
-                let camera_uniform = self.create_camera_uniform();
-                let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Nutrient Particle Camera Buffer"),
-                    contents: bytemuck::cast_slice(&[camera_uniform]),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                });
-
-                let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Nutrient Particle Camera Bind Group"),
-                    layout: nutrient_particle_renderer.camera_bind_group_layout(),
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: camera_buffer.as_entire_binding(),
-                    }],
-                });
+            if let (Some(ref nutrient_particle_renderer), Some(ref render_bind_group), Some(ref camera_bind_group)) =
+                (&self.nutrient_particle_renderer, &self.nutrient_render_bind_group, &self.env_camera_bind_group_nutrient) {
 
                 nutrient_particle_renderer.render(
                     &mut encoder,
                     view,
                     &self.renderer.depth_view,
-                    &camera_bind_group,
+                    camera_bind_group,
                     render_bind_group,
                 );
             }
         }
 
 
-        // Render adhesion lines if enabled
+        // Render adhesion lines if enabled (uses cached bind groups per triple buffer index)
         if self.show_adhesion_lines {
-            // Create bind group with current output buffer (physics results)
+            self.ensure_cached_adhesion_bind_groups(device);
             let output_idx = self.gpu_triple_buffers.output_buffer_index();
-            let adhesion_data_bind_group = self.adhesion_renderer.create_data_bind_group(
-                device,
-                &self.gpu_triple_buffers.position_and_mass[output_idx],
-                &self.adhesion_buffers.adhesion_connections,
-                &self.adhesion_buffers.adhesion_counts,
-                &self.gpu_triple_buffers.cell_count_buffer,
-            );
             
-            let mut adhesion_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("GPU Adhesion Lines Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // Preserve cell rendering
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.renderer.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // Use existing depth for occlusion
-                        store: wgpu::StoreOp::Store,
+            if let Some(ref cached_bgs) = self.cached_adhesion_data_bind_groups {
+                let adhesion_data_bind_group = &cached_bgs[output_idx];
+                
+                let mut adhesion_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("GPU Adhesion Lines Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load, // Preserve cell rendering
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.renderer.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load, // Use existing depth for occlusion
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
                     }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
 
-            self.adhesion_renderer.render_in_pass(
-                &mut adhesion_pass,
-                queue,
-                &adhesion_data_bind_group,
-                self.camera.position(),
-                self.camera.rotation,
-            );
+                self.adhesion_renderer.render_in_pass(
+                    &mut adhesion_pass,
+                    queue,
+                    adhesion_data_bind_group,
+                    self.camera.position(),
+                    self.camera.rotation,
+                );
+            }
         }
 
-        // Render volumetric fog if enabled (post-process over scene)
+        // Render volumetric fog if enabled (post-process over scene, half-res + composite)
         if self.show_volumetric_fog {
-            if let (Some(ref fog_renderer), Some(ref light_field), Some(ref fluid_sim)) =
-                (&self.volumetric_fog_renderer, &self.light_field_system, &self.fluid_simulator)
+            if let (Some(ref light_field), true) =
+                (&self.light_field_system, self.volumetric_fog_renderer.is_some())
             {
-                fog_renderer.render(
+                let lf_buffer = light_field.light_field_buffer();
+                let lf_dir = light_field.light_dir();
+                let lf_cell_size = light_field.cell_size();
+                let lf_origin = light_field.grid_origin();
+                let lf_radius = light_field.world_radius();
+                let depth_view = &self.renderer.depth_view;
+                let cam_pos = self.camera.position();
+                let time = self.current_time;
+                self.volumetric_fog_renderer.as_mut().unwrap().render(
                     &mut encoder,
                     queue,
                     view,
-                    &self.renderer.depth_view,
+                    depth_view,
                     device,
-                    light_field.light_field_buffer(),
-                    fluid_sim.solid_mask_buffer(),
+                    lf_buffer,
                     view_proj,
-                    self.camera.position(),
-                    self.current_time,
-                    light_field.light_dir(),
+                    cam_pos,
+                    time,
+                    lf_dir,
                     128, // GRID_RESOLUTION
-                    light_field.cell_size(),
-                    light_field.grid_origin(),
-                    light_field.world_radius(),
+                    lf_cell_size,
+                    lf_origin,
+                    lf_radius,
                 );
             }
         }
@@ -3897,6 +3988,11 @@ impl Scene for GpuScene {
         // Resize sun renderer if initialized
         if let Some(ref mut sun_renderer) = self.sun_renderer {
             sun_renderer.resize(width, height);
+        }
+        
+        // Resize volumetric fog renderer (recreates half-res texture)
+        if let Some(ref mut fog_renderer) = self.volumetric_fog_renderer {
+            fog_renderer.resize(device, width, height);
         }
     }
 

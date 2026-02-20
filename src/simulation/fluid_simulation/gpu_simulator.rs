@@ -134,8 +134,10 @@ pub struct GpuFluidSimulator {
     // Water bitfield for fast cell-water detection (32x compressed)
     water_bitfield_buffer: wgpu::Buffer,
     water_grid_params_buffer: wgpu::Buffer,
+    #[allow(dead_code)] // Kept alive - referenced by cached_bitfield_bind_group
     bitfield_params_buffer: wgpu::Buffer,
     bitfield_pipeline: wgpu::ComputePipeline,
+    #[allow(dead_code)] // Kept alive - referenced by cached_bitfield_bind_group
     bitfield_bind_group_layout: wgpu::BindGroupLayout,
 
     // Sub-step staging buffer for multi-pass fluid simulation [0,1,2,3]
@@ -145,7 +147,15 @@ pub struct GpuFluidSimulator {
     nutrient_voxels_buffer: wgpu::Buffer,
     nutrient_populate_params_buffer: wgpu::Buffer,
     nutrient_populate_pipeline: wgpu::ComputePipeline,
+    #[allow(dead_code)] // Kept alive - referenced by cached_nutrient_bind_group
     nutrient_populate_bind_group_layout: wgpu::BindGroupLayout,
+
+    // Cached bind groups (created once, reused every frame)
+    cached_sim_bind_group: wgpu::BindGroup,
+    cached_bitfield_bind_group: wgpu::BindGroup,
+    cached_nutrient_bind_group: wgpu::BindGroup,
+    // Cached extract bind group (created lazily on first extract_to_surface_nets call)
+    cached_extract_bind_group: std::cell::RefCell<Option<wgpu::BindGroup>>,
 
     /// Whether simulation is paused
     pub paused: bool,
@@ -557,6 +567,64 @@ impl GpuFluidSimulator {
             cache: None,
         });
 
+        // Pre-create cached bind groups (buffers never change)
+        let cached_sim_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cached Fluid Sim Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: state_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: solid_mask_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let cached_bitfield_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cached Bitfield Bind Group"),
+            layout: &bitfield_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: bitfield_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: state_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: water_bitfield_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let cached_nutrient_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cached Nutrient Populate Bind Group"),
+            layout: &nutrient_populate_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: nutrient_populate_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: state_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: nutrient_voxels_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
         Self {
             state_buffer,
             solid_mask_buffer,
@@ -583,6 +651,10 @@ impl GpuFluidSimulator {
             nutrient_populate_params_buffer,
             nutrient_populate_pipeline,
             nutrient_populate_bind_group_layout,
+            cached_sim_bind_group,
+            cached_bitfield_bind_group,
+            cached_nutrient_bind_group,
+            cached_extract_bind_group: std::cell::RefCell::new(None),
             fluid_type: std::cell::Cell::new(1u32), // Default to water
             paused: false,
         }
@@ -717,7 +789,8 @@ impl GpuFluidSimulator {
     }
 
     /// Step the simulation - 100% GPU with zero CPU logic
-    pub fn step(&self, device: &wgpu::Device, queue: &wgpu::Queue, _encoder: &mut wgpu::CommandEncoder, dt: f32, gravity_magnitude: f32, gravity_dir: [bool; 3], lateral_flow_probabilities: [f32; 4], condensation_probability: f32, vaporization_probability: f32) {
+    /// Uses the caller's command encoder to avoid a separate queue.submit (GPU sync point)
+    pub fn step(&self, _device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, dt: f32, gravity_magnitude: f32, gravity_dir: [bool; 3], lateral_flow_probabilities: [f32; 4], condensation_probability: f32, vaporization_probability: f32) {
         if self.paused {
             return;
         }
@@ -727,7 +800,6 @@ impl GpuFluidSimulator {
         self.time.set(current_time);
         
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
-        let bind_group = self.create_bind_group(device);
 
         // Update parameters for GPU (required for shader logic) — sub_step starts at 0
         self.update_params(queue, 3, current_time, gravity_magnitude, gravity_dir, lateral_flow_probabilities, condensation_probability, vaporization_probability);
@@ -736,10 +808,6 @@ impl GpuFluidSimulator {
         const SUB_STEP_OFFSET: u64 = 76;
         const NUM_FLUID_SUB_STEPS: u32 = 4;
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Fluid GPU Encoder"),
-        });
-
         // Spawn continuous water once per frame (only on first sub-step)
         if self.continuous_spawn_enabled.get() {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -747,7 +815,7 @@ impl GpuFluidSimulator {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.spawn_continuous_pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
 
@@ -772,12 +840,10 @@ impl GpuFluidSimulator {
                     timestamp_writes: None,
                 });
                 pass.set_pipeline(&self.swap_pipeline);
-                pass.set_bind_group(0, &bind_group, &[]);
+                pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
                 pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
             }
         }
-
-        queue.submit(std::iter::once(encoder.finish()));
     }
 
     /// Get current state buffer
@@ -803,28 +869,33 @@ impl GpuFluidSimulator {
         density_buffer: &wgpu::Buffer,
         fluid_type_buffer: &wgpu::Buffer,
     ) {
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Fluid Extract Bind Group"),
-            layout: &self.extract_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.extract_params_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.state_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: density_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: fluid_type_buffer.as_entire_binding(),
-                },
-            ],
-        });
+        // Lazily create and cache the extract bind group (buffers never change after init)
+        let mut cached = self.cached_extract_bind_group.borrow_mut();
+        if cached.is_none() {
+            *cached = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Cached Fluid Extract Bind Group"),
+                layout: &self.extract_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.extract_params_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.state_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: density_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: fluid_type_buffer.as_entire_binding(),
+                    },
+                ],
+            }));
+        }
+        let bind_group = cached.as_ref().unwrap();
 
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
@@ -833,32 +904,13 @@ impl GpuFluidSimulator {
             timestamp_writes: None,
         });
         pass.set_pipeline(&self.extract_pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_bind_group(0, bind_group, &[]);
         pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
     }
 
     /// Update the water bitfield from current voxel state
     /// Call this after fluid simulation step, before cell physics
-    pub fn update_water_bitfield(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Bitfield Generation Bind Group"),
-            layout: &self.bitfield_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.bitfield_params_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.state_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.water_bitfield_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
+    pub fn update_water_bitfield(&self, _device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
         // 65536 bitfield entries / 256 threads per workgroup = 256 workgroups
         let bitfield_size = TOTAL_VOXELS / 32;
         let workgroup_count = (bitfield_size as u32 + 255) / 256;
@@ -868,7 +920,7 @@ impl GpuFluidSimulator {
             timestamp_writes: None,
         });
         pass.set_pipeline(&self.bitfield_pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_bind_group(0, &self.cached_bitfield_bind_group, &[]);
         pass.dispatch_workgroups(workgroup_count, 1, 1);
     }
 
@@ -909,7 +961,7 @@ impl GpuFluidSimulator {
 
     /// Populate nutrients in water voxels using drifting noise pattern
     /// Called every frame to create rolling/drifting nutrient zones
-    pub fn populate_nutrients(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, nutrient_density: f32) {
+    pub fn populate_nutrients(&self, _device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, nutrient_density: f32) {
         let world_diameter = self.world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
@@ -927,26 +979,6 @@ impl GpuFluidSimulator {
         };
         queue.write_buffer(&self.nutrient_populate_params_buffer, 0, bytemuck::cast_slice(&[params]));
 
-        // Create bind group
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Nutrient Populate Bind Group"),
-            layout: &self.nutrient_populate_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.nutrient_populate_params_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.state_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.nutrient_voxels_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -954,7 +986,7 @@ impl GpuFluidSimulator {
             timestamp_writes: None,
         });
         pass.set_pipeline(&self.nutrient_populate_pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_bind_group(0, &self.cached_nutrient_bind_group, &[]);
         pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
     }
 }

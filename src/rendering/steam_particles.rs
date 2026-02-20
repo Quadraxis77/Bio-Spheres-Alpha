@@ -372,8 +372,8 @@ impl SteamParticleRenderer {
     ) {
         self.time += dt;
 
-        // Reset counter to 0
-        queue.write_buffer(&self.counter_buffer, 0, bytemuck::cast_slice(&[0u32]));
+        // Reset counter to 0 using DMA clear (stays on GPU timeline, no CPU-GPU sync)
+        encoder.clear_buffer(&self.counter_buffer, 0, None);
 
         // Update params
         let params = ExtractParams {

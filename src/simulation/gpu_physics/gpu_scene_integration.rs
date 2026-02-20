@@ -68,9 +68,6 @@ struct PhysicsParams {
 /// Grid resolution: 128³ = 2,097,152 grid cells
 const GRID_RESOLUTION: u32 = 128;
 
-/// Workgroup size for grid operations (optimal for 64³ grid)
-const WORKGROUP_SIZE_GRID: u32 = 256;
-
 /// Workgroup size for cell operations (unified for optimal GPU occupancy)
 /// 256 threads = 8 warps = optimal for GPU scheduling
 const WORKGROUP_SIZE_CELLS: u32 = 256;
@@ -97,6 +94,7 @@ pub fn execute_gpu_physics_step(
     gravity_dir: [bool; 3],
     cave_renderer: Option<&crate::rendering::CaveSystemRenderer>,
     cave_physics_bind_groups: Option<&[wgpu::BindGroup; 3]>,
+    cell_count_hint: u32,
 ) {
     // Rotate to next buffer set
     let current_index = triple_buffers.rotate_buffers();
@@ -139,23 +137,28 @@ pub fn execute_gpu_physics_step(
     let position_update_rotations_bind_group = &cached_bind_groups.position_update_rotations[current_index];
     let mass_accum_bind_group = &cached_bind_groups.mass_accum;
     
-    // Calculate workgroup counts - dispatch for capacity, shaders check cell_count
+    // Calculate workgroup counts - dispatch for cell_count_hint (with safety margin)
+    // Shaders still check cell_count_buffer[0] for exact bounds, so slight over-dispatch is safe
     // All cell operations use unified 256-thread workgroups for optimal GPU occupancy
-    let total_grid_cells = GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION;
-    let grid_workgroups = (total_grid_cells + WORKGROUP_SIZE_GRID - 1) / WORKGROUP_SIZE_GRID;
-    let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+    // Use hint + safety margin (256 extra threads covers 1 frame of division growth)
+    // Fall back to capacity if hint is 0 (no readback yet)
+    let effective_cell_count = if cell_count_hint > 0 {
+        (cell_count_hint + 256).min(triple_buffers.capacity)
+    } else {
+        triple_buffers.capacity
+    };
+    let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
     
-    // Execute the 8 compute shader stages
+    // Stage 1: Clear spatial grid counts using DMA zero-fill (faster than compute shader with atomics)
+    // This clears 128³ × 4 bytes = 8MB using the GPU's DMA engine instead of 8192 workgroups
+    encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
+    
+    // Execute the remaining compute shader stages
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("GPU Physics Pipeline"),
             timestamp_writes: None,
         });
-        
-        // Stage 1: Clear spatial grid (256 threads)
-        compute_pass.set_pipeline(&pipelines.spatial_grid_clear);
-        compute_pass.set_bind_group(0, spatial_grid_bind_group, &[]);
-        compute_pass.dispatch_workgroups(grid_workgroups, 1, 1);
         
         // Stage 2: Assign cells to grid (256 threads)
         compute_pass.set_pipeline(&pipelines.spatial_grid_assign);
@@ -303,6 +306,7 @@ pub fn execute_gpu_mechanics_step(
     gravity_dir: [bool; 3],
     cave_renderer: Option<&crate::rendering::CaveSystemRenderer>,
     cave_physics_bind_groups: Option<&[wgpu::BindGroup; 3]>,
+    cell_count_hint: u32,
 ) {
     // Rotate to next buffer set
     let current_index = triple_buffers.rotate_buffers();
@@ -336,20 +340,21 @@ pub fn execute_gpu_mechanics_step(
     let adhesion_rotations_bind_group = &cached_bind_groups.rotations[current_index];
     let position_update_rotations_bind_group = &cached_bind_groups.position_update_rotations[current_index];
 
-    let total_grid_cells = GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION;
-    let grid_workgroups = (total_grid_cells + WORKGROUP_SIZE_GRID - 1) / WORKGROUP_SIZE_GRID;
-    let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+    let effective_cell_count = if cell_count_hint > 0 {
+        (cell_count_hint + 256).min(triple_buffers.capacity)
+    } else {
+        triple_buffers.capacity
+    };
+    let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+
+    // Stage 1: Clear spatial grid counts using DMA zero-fill (faster than compute shader)
+    encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
 
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("GPU Mechanics-Only Pipeline (Drag)"),
             timestamp_writes: None,
         });
-
-        // Stage 1: Clear spatial grid
-        compute_pass.set_pipeline(&pipelines.spatial_grid_clear);
-        compute_pass.set_bind_group(0, spatial_grid_bind_group, &[]);
-        compute_pass.dispatch_workgroups(grid_workgroups, 1, 1);
 
         // Stage 2: Assign cells to grid
         compute_pass.set_pipeline(&pipelines.spatial_grid_assign);
@@ -452,7 +457,10 @@ pub fn execute_lifecycle_pipeline(
     let cell_state_read_bind_group = &cached_bind_groups.cell_state_read;
     let cell_state_write_bind_group = &cached_bind_groups.cell_state_write[current_index];
     
-    // Calculate workgroup counts - dispatch for capacity, shaders check cell_count
+    // Always dispatch lifecycle at full capacity — the async readback hint lags 1-3 frames
+    // behind the true GPU cell count, so using it here would cause death_scan/division_scan
+    // to miss newly-divided cells and halt further splitting. Lifecycle shaders early-exit
+    // on dead/empty slots so over-dispatch is cheap.
     let cell_workgroups_lifecycle = (triple_buffers.capacity + WORKGROUP_SIZE_LIFECYCLE - 1) / WORKGROUP_SIZE_LIFECYCLE;
     
     // Execute 3-stage lifecycle pipeline with ring buffer for slot recycling
@@ -536,31 +544,34 @@ pub fn execute_lifecycle_pipeline(
 }
 
 /// Rebuild spatial grid after lifecycle pipeline
-/// This ensures dead cells are not included in collision detection
+/// NOTE: This is no longer called from the main physics loop since the grid
+/// is rebuilt at the start of each physics step. Kept for potential future use.
 pub fn rebuild_spatial_grid_after_lifecycle(
     encoder: &mut wgpu::CommandEncoder,
     pipelines: &GpuPhysicsPipelines,
     triple_buffers: &GpuTripleBufferSystem,
     cached_bind_groups: &CachedBindGroups,
+    cell_count_hint: u32,
 ) {
     let current_index = triple_buffers.current_index();
     let physics_bind_group = &cached_bind_groups.physics[current_index];
     let spatial_grid_bind_group = &cached_bind_groups.spatial_grid;
     
-    let total_grid_cells = GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION;
-    let grid_workgroups = (total_grid_cells + WORKGROUP_SIZE_GRID - 1) / WORKGROUP_SIZE_GRID;
-    let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+    let effective_cell_count = if cell_count_hint > 0 {
+        (cell_count_hint + 256).min(triple_buffers.capacity)
+    } else {
+        triple_buffers.capacity
+    };
+    let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+    
+    // Stage 1: Clear spatial grid counts using DMA zero-fill
+    encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
     
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Spatial Grid Rebuild After Lifecycle"),
             timestamp_writes: None,
         });
-        
-        // Stage 1: Clear spatial grid
-        compute_pass.set_pipeline(&pipelines.spatial_grid_clear);
-        compute_pass.set_bind_group(0, spatial_grid_bind_group, &[]);
-        compute_pass.dispatch_workgroups(grid_workgroups, 1, 1);
         
         // Stage 2: Assign cells to grid (now only live cells)
         compute_pass.set_pipeline(&pipelines.spatial_grid_assign);

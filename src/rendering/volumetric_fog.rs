@@ -49,13 +49,34 @@ pub struct FogParams {
 }
 
 /// Volumetric fog renderer
+///
+/// Renders fog at half resolution for ~4× speedup, then composites
+/// back to full resolution with bilinear upscaling.
 pub struct VolumetricFogRenderer {
+    // Fog ray-march pipeline (renders to half-res offscreen texture)
     pipeline: wgpu::RenderPipeline,
+    #[allow(dead_code)] // Kept alive - referenced by cached_camera_bind_group
     camera_layout: wgpu::BindGroupLayout,
     fog_data_layout: wgpu::BindGroupLayout,
     camera_buffer: wgpu::Buffer,
     fog_params_buffer: wgpu::Buffer,
     depth_sampler: wgpu::Sampler,
+
+    // Half-resolution offscreen target
+    fog_texture: wgpu::Texture,
+    fog_texture_view: wgpu::TextureView,
+    fog_width: u32,
+    fog_height: u32,
+
+    // Composite pipeline (upscales half-res fog to full-res scene)
+    composite_pipeline: wgpu::RenderPipeline,
+    composite_bind_group_layout: wgpu::BindGroupLayout,
+    composite_bind_group: wgpu::BindGroup,
+    fog_sampler: wgpu::Sampler,
+
+    // Cached bind groups (invalidated on resize)
+    cached_camera_bind_group: wgpu::BindGroup,
+    cached_fog_data_bind_group: Option<wgpu::BindGroup>,
 
     // Configurable parameters
     pub fog_density: f32,
@@ -73,9 +94,16 @@ pub struct VolumetricFogRenderer {
 }
 
 impl VolumetricFogRenderer {
+    /// Half-resolution divisor (2 = half-res = 4× fewer pixels)
+    const HALF_RES_DIVISOR: u32 = 2;
+    /// Format for the offscreen fog texture (needs alpha for blending)
+    const FOG_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
     pub fn new(
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
     ) -> Self {
         // Camera bind group layout (group 0)
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -92,7 +120,7 @@ impl VolumetricFogRenderer {
             }],
         });
 
-        // Fog data bind group layout (group 1)
+        // Fog data bind group layout (group 1) — no solid_mask, uses light_field sentinel instead
         let fog_data_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Fog Data Layout"),
             entries: &[
@@ -107,7 +135,7 @@ impl VolumetricFogRenderer {
                     },
                     count: None,
                 },
-                // Binding 1: light_field storage
+                // Binding 1: light_field storage (also encodes solid as 0.0)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -118,20 +146,9 @@ impl VolumetricFogRenderer {
                     },
                     count: None,
                 },
-                // Binding 2: solid_mask storage
+                // Binding 2: depth texture
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Binding 3: depth texture
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
@@ -140,9 +157,9 @@ impl VolumetricFogRenderer {
                     },
                     count: None,
                 },
-                // Binding 4: depth sampler
+                // Binding 3: depth sampler
                 wgpu::BindGroupLayoutEntry {
-                    binding: 4,
+                    binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
@@ -165,7 +182,7 @@ impl VolumetricFogRenderer {
             push_constant_ranges: &[],
         });
 
-        // Create render pipeline (full-screen triangle, alpha blending)
+        // Create render pipeline — renders to half-res Rgba16Float offscreen texture
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Volumetric Fog Pipeline"),
             layout: Some(&pipeline_layout),
@@ -177,6 +194,78 @@ impl VolumetricFogRenderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: Self::FOG_FORMAT,
+                    blend: None, // No blending — write raw fog to offscreen
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // === Composite pipeline (upscales half-res fog to full-res scene) ===
+        let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Fog Composite Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/volumetric_fog_composite.wgsl").into(),
+            ),
+        });
+
+        let composite_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Fog Composite Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
+        let composite_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Fog Composite Pipeline Layout"),
+                bind_group_layouts: &[&composite_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Fog Composite Pipeline"),
+            layout: Some(&composite_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &composite_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &composite_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
@@ -239,6 +328,42 @@ impl VolumetricFogRenderer {
             ..Default::default()
         });
 
+        // Bilinear sampler for upscaling the half-res fog texture
+        let fog_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Fog Upscale Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        // Create half-res offscreen texture
+        let fog_width = (width / Self::HALF_RES_DIVISOR).max(1);
+        let fog_height = (height / Self::HALF_RES_DIVISOR).max(1);
+        let (fog_texture, fog_texture_view) =
+            Self::create_fog_texture(device, fog_width, fog_height);
+
+        // Cached camera bind group (buffer never changes)
+        let cached_camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Fog Camera Bind Group (cached)"),
+            layout: &camera_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
+        });
+
+        // Composite bind group (references the fog texture)
+        let composite_bind_group = Self::create_composite_bind_group(
+            device,
+            &composite_bind_group_layout,
+            &fog_texture_view,
+            &fog_sampler,
+        );
+
         Self {
             pipeline,
             camera_layout,
@@ -246,8 +371,18 @@ impl VolumetricFogRenderer {
             camera_buffer,
             fog_params_buffer,
             depth_sampler,
+            fog_texture,
+            fog_texture_view,
+            fog_width,
+            fog_height,
+            composite_pipeline,
+            composite_bind_group_layout,
+            composite_bind_group,
+            fog_sampler,
+            cached_camera_bind_group,
+            cached_fog_data_bind_group: None,
             fog_density: 0.5,
-            fog_steps: 48,
+            fog_steps: 32,
             light_color: [1.0, 0.95, 0.85],
             light_intensity: 2.0,
             fog_color: [0.4, 0.5, 0.6],
@@ -261,52 +396,117 @@ impl VolumetricFogRenderer {
         }
     }
 
-    /// Create fog data bind group
-    pub fn create_fog_data_bind_group(
-        &self,
+    fn create_fog_texture(
         device: &wgpu::Device,
-        light_field_buffer: &wgpu::Buffer,
-        solid_mask_buffer: &wgpu::Buffer,
-        depth_view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Half-Res Fog Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: Self::FOG_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    fn create_composite_bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        fog_view: &wgpu::TextureView,
+        fog_sampler: &wgpu::Sampler,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Fog Data Bind Group"),
-            layout: &self.fog_data_layout,
+            label: Some("Fog Composite Bind Group"),
+            layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: self.fog_params_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(fog_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: light_field_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: solid_mask_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(depth_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&self.depth_sampler),
+                    resource: wgpu::BindingResource::Sampler(fog_sampler),
                 },
             ],
         })
     }
 
-    /// Update camera and fog parameters, then render
+    /// Resize the half-res fog texture (call on window resize)
+    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        let fog_width = (width / Self::HALF_RES_DIVISOR).max(1);
+        let fog_height = (height / Self::HALF_RES_DIVISOR).max(1);
+        if fog_width == self.fog_width && fog_height == self.fog_height {
+            return;
+        }
+        self.fog_width = fog_width;
+        self.fog_height = fog_height;
+        let (texture, view) = Self::create_fog_texture(device, fog_width, fog_height);
+        self.fog_texture = texture;
+        self.fog_texture_view = view;
+        // Recreate composite bind group (references new texture view)
+        self.composite_bind_group = Self::create_composite_bind_group(
+            device,
+            &self.composite_bind_group_layout,
+            &self.fog_texture_view,
+            &self.fog_sampler,
+        );
+        // Invalidate cached fog data bind group (depth_view may have changed)
+        self.cached_fog_data_bind_group = None;
+    }
+
+    /// Ensure the fog data bind group is created and cached
+    fn ensure_fog_data_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        light_field_buffer: &wgpu::Buffer,
+        depth_view: &wgpu::TextureView,
+    ) {
+        if self.cached_fog_data_bind_group.is_none() {
+            self.cached_fog_data_bind_group =
+                Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Fog Data Bind Group (cached)"),
+                    layout: &self.fog_data_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.fog_params_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: light_field_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(depth_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Sampler(&self.depth_sampler),
+                        },
+                    ],
+                }));
+        }
+    }
+
+    /// Update camera and fog parameters, then render at half resolution + composite
     pub fn render(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         color_view: &wgpu::TextureView,
         depth_view: &wgpu::TextureView,
         device: &wgpu::Device,
         light_field_buffer: &wgpu::Buffer,
-        solid_mask_buffer: &wgpu::Buffer,
         view_proj: glam::Mat4,
         camera_pos: glam::Vec3,
         time: f32,
@@ -357,24 +557,37 @@ impl VolumetricFogRenderer {
         };
         queue.write_buffer(&self.fog_params_buffer, 0, bytemuck::bytes_of(&fog_params));
 
-        // Create camera bind group
-        let camera_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Fog Camera Bind Group"),
-            layout: &self.camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.camera_buffer.as_entire_binding(),
-            }],
-        });
+        // Ensure cached fog data bind group exists
+        self.ensure_fog_data_bind_group(device, light_field_buffer, depth_view);
 
-        // Create fog data bind group
-        let fog_data_bg =
-            self.create_fog_data_bind_group(device, light_field_buffer, solid_mask_buffer, depth_view);
-
-        // Render full-screen fog pass
+        // Pass 1: Ray march fog at half resolution → offscreen texture
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Volumetric Fog Pass"),
+                label: Some("Volumetric Fog Pass (half-res)"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.fog_texture_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.cached_camera_bind_group, &[]);
+            pass.set_bind_group(1, self.cached_fog_data_bind_group.as_ref().unwrap(), &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // Pass 2: Composite half-res fog onto full-res scene with bilinear upscaling
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Fog Composite Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: color_view,
                     resolve_target: None,
@@ -389,9 +602,8 @@ impl VolumetricFogRenderer {
                 occlusion_query_set: None,
             });
 
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &camera_bg, &[]);
-            pass.set_bind_group(1, &fog_data_bg, &[]);
+            pass.set_pipeline(&self.composite_pipeline);
+            pass.set_bind_group(0, &self.composite_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
     }

@@ -108,6 +108,7 @@ pub struct LightFieldSystem {
     dummy_water_density: wgpu::Buffer,
 
     // Compute pipelines
+    #[allow(dead_code)] // Pipeline kept alive but replaced by encoder.clear_buffer DMA
     clear_occupancy_pipeline: wgpu::ComputePipeline,
     build_occupancy_pipeline: wgpu::ComputePipeline,
     compute_light_pipeline: wgpu::ComputePipeline,
@@ -1014,7 +1015,6 @@ impl LightFieldSystem {
         self.update_photocyte_params(queue);
 
         let total_voxels = GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION;
-        let voxel_workgroups = (total_voxels + 255) / 256;
         let light_workgroups = (total_voxels + 63) / 64;
 
         // Create bind groups
@@ -1033,16 +1033,8 @@ impl LightFieldSystem {
             split_masses_buffer,
         );
 
-        // Step 1: Clear occupancy grid
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Clear Cell Occupancy"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.clear_occupancy_pipeline);
-            pass.set_bind_group(0, &occupancy_bg, &[]);
-            pass.dispatch_workgroups(voxel_workgroups, 1, 1);
-        }
+        // Step 1: Clear occupancy grid using DMA (faster than compute dispatch)
+        encoder.clear_buffer(&self.cell_occupancy_buffer, 0, None);
 
         // Step 2: Build occupancy from cell positions
         if cell_count > 0 {
@@ -1141,23 +1133,14 @@ impl LightFieldSystem {
         self.update_occupancy_params(queue);
 
         let total_voxels = GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION;
-        let voxel_workgroups = (total_voxels + 255) / 256;
         let light_workgroups = (total_voxels + 63) / 64;
 
         let occupancy_bg =
             self.create_occupancy_bind_group(device, positions_buffer, cell_count_buffer);
         let light_field_bg = self.create_light_field_bind_group(device, solid_mask_buffer);
 
-        // Clear + build occupancy
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Clear Cell Occupancy"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.clear_occupancy_pipeline);
-            pass.set_bind_group(0, &occupancy_bg, &[]);
-            pass.dispatch_workgroups(voxel_workgroups, 1, 1);
-        }
+        // Clear occupancy grid using DMA (faster than compute dispatch)
+        encoder.clear_buffer(&self.cell_occupancy_buffer, 0, None);
 
         if cell_count > 0 {
             let cell_workgroups = (cell_count + 255) / 256;
