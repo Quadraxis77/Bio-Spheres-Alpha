@@ -184,8 +184,8 @@ impl GpuSurfaceNets {
         width: u32,
         height: u32,
     ) -> Self {
-        let max_vertices = 500_000u32;
-        let max_indices = 1_500_000u32;
+        let max_vertices = 1_000_000u32;
+        let max_indices = 3_000_000u32;
         
         // Calculate grid parameters
         let world_diameter = world_radius * 2.0;

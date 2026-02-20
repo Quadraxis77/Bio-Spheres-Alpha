@@ -142,6 +142,8 @@ pub struct GpuScene {
     pub gravity: f32,
     /// Gravity mode: 0=X axis, 1=Y axis, 2=Z axis, 3=radial (toward origin)
     pub gravity_mode: u32,
+    /// Surface pressure: tangential smoothing strength for radial fluid mode (0.0-1.0)
+    pub surface_pressure: f32,
     /// Per-fluid-type lateral flow probabilities for fluid simulation (0.0 to 1.0)
     /// Index: 0=Empty (unused), 1=Water, 2=Lava, 3=Steam
     pub lateral_flow_probabilities: [f32; 4],
@@ -366,6 +368,7 @@ impl GpuScene {
             lod_debug_colors: false,
             gravity: 0.0,
             gravity_mode: 1, // default Y axis
+            surface_pressure: 0.5,
             lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
             condensation_probability: 0.1,
             vaporization_probability: 0.1,
@@ -2696,6 +2699,7 @@ impl GpuScene {
     pub fn step_fluid_simulation(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, dt: f32) {
         if let Some(ref simulator) = self.fluid_simulator {
             simulator.set_gravity_mode(self.gravity_mode);
+            simulator.set_surface_pressure(self.surface_pressure);
             simulator.step(device, queue, encoder, dt, self.gravity, [self.gravity_mode == 0, self.gravity_mode == 1, self.gravity_mode == 2], self.lateral_flow_probabilities, self.condensation_probability, self.vaporization_probability);
             // Update water bitfield for cell physics (compressed 32x for fast lookup)
             simulator.update_water_bitfield(device, encoder);

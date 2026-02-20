@@ -50,7 +50,7 @@ pub struct GpuFluidParams {
 
     // Gravity mode: 0=X axis, 1=Y axis, 2=Z axis, 3=radial (toward origin)
     pub gravity_mode: u32,
-    pub _pad_rg0: u32,
+    pub surface_pressure: f32,  // Tangential smoothing strength for radial mode (0.0-1.0)
     pub _pad_rg1: u32,
     pub _pad_rg2: u32,
 }
@@ -125,6 +125,9 @@ pub struct GpuFluidSimulator {
 
     // Gravity mode: 0=X, 1=Y, 2=Z, 3=radial
     gravity_mode: std::cell::Cell<u32>,
+
+    // Surface pressure: tangential smoothing strength for radial mode (0.0-1.0)
+    surface_pressure: std::cell::Cell<f32>,
 
     // Compute pipelines
     swap_pipeline: wgpu::ComputePipeline,
@@ -208,7 +211,7 @@ impl GpuFluidSimulator {
             spawn_fluid_type: 1u32,  // Default to water
             sub_step: 0,
             gravity_mode: 1, // default Y axis
-            _pad_rg0: 0,
+            surface_pressure: 0.5,
             _pad_rg1: 0,
             _pad_rg2: 0,
         };
@@ -670,6 +673,7 @@ impl GpuFluidSimulator {
             cached_extract_bind_group: std::cell::RefCell::new(None),
             fluid_type: std::cell::Cell::new(1u32), // Default to water
             gravity_mode: std::cell::Cell::new(1), // default Y axis
+            surface_pressure: std::cell::Cell::new(0.5),
             paused: false,
         }
     }
@@ -733,7 +737,7 @@ impl GpuFluidSimulator {
             spawn_fluid_type: self.fluid_type.get(),
             sub_step: 0,
             gravity_mode: self.gravity_mode.get(),
-            _pad_rg0: 0,
+            surface_pressure: self.surface_pressure.get(),
             _pad_rg1: 0,
             _pad_rg2: 0,
         };
@@ -809,6 +813,11 @@ impl GpuFluidSimulator {
     /// Set gravity mode (0=X, 1=Y, 2=Z, 3=radial)
     pub fn set_gravity_mode(&self, mode: u32) {
         self.gravity_mode.set(mode);
+    }
+
+    /// Set surface pressure (tangential smoothing strength for radial mode, 0.0-1.0)
+    pub fn set_surface_pressure(&self, pressure: f32) {
+        self.surface_pressure.set(pressure);
     }
 
     /// Step the simulation - 100% GPU with zero CPU logic

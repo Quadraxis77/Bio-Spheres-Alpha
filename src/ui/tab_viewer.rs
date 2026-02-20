@@ -3006,9 +3006,6 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the WorldSettings panel for simulation parameters and physics.
 fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
-    ui.heading("World Settings");
-    ui.separator();
-    
     // Only show world settings in GPU mode
     if context.current_mode != crate::ui::types::SimulationMode::Gpu {
         ui.label("World settings are only available in GPU mode.");
@@ -3016,10 +3013,6 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     }
     
     let world = &mut state.world_settings;
-    
-    // World Settings section
-    ui.heading("World Parameters");
-    ui.separator();
     
     // Cell capacity slider
     let current_capacity = context.gpu_capacity().unwrap_or(world.cell_capacity);
@@ -3066,6 +3059,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     });
     if world.gravity_mode == 3 {
         ui.label(egui::RichText::new("Pulls fluid toward origin; world boundary is the shell").small());
+        ui.add(egui::Slider::new(&mut world.surface_pressure, 0.0..=1.0).text("Surface Pressure"));
     }
 }
 

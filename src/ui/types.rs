@@ -181,6 +181,10 @@ pub struct WorldSettings {
     /// Gravity mode: 0=X axis, 1=Y axis, 2=Z axis, 3=radial (toward origin)
     #[serde(default = "default_gravity_mode")]
     pub gravity_mode: u32,
+
+    /// Surface pressure: tangential smoothing strength for radial fluid mode (0.0-1.0)
+    #[serde(default = "default_surface_pressure")]
+    pub surface_pressure: f32,
 }
 
 impl Default for WorldSettings {
@@ -189,6 +193,7 @@ impl Default for WorldSettings {
             cell_capacity: 20_000,
             gravity: 0.0,
             gravity_mode: 1, // default Y axis
+            surface_pressure: 0.5,
         }
     }
 }
@@ -231,6 +236,10 @@ fn default_true() -> bool {
 
 fn default_gravity_mode() -> u32 {
     1 // Y axis
+}
+
+fn default_surface_pressure() -> f32 {
+    0.5
 }
 
 /// Global UI state shared across all UI components.

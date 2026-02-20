@@ -38,7 +38,7 @@ struct FluidParams {
     // Gravity mode: 0=X axis, 1=Y axis, 2=Z axis, 3=radial (toward origin)
     // Radial: world sphere boundary is the effective shell. gravity_magnitude controls strength.
     gravity_mode: u32,
-    _pad_rg0: u32,
+    surface_pressure: f32,  // Tangential smoothing strength for radial mode (0.0-1.0)
     _pad_rg1: u32,
     _pad_rg2: u32,
 }
@@ -485,8 +485,10 @@ fn get_surface_force(gid: vec3<u32>) -> vec3<f32> {
     }
 
     // Net tangential force pulls toward the denser side;
-    // surface pressure slides voxel away from dense neighbors → negate
-    return -tangential_sum * 0.15;
+    // surface pressure slides voxel away from dense neighbors → negate.
+    // Scale by gravity magnitude so surface smoothing is proportional to gravity strength.
+    let grav_mag = length(get_effective_gravity(gid));
+    return -tangential_sum * params.surface_pressure * grav_mag * 0.1;
 }
 
 // Radial movement: score all 26 neighbors, pick the best empty one, atomic swap.
@@ -505,11 +507,6 @@ fn radial_move(gid: vec3<u32>) {
     let grav_mag = length(grav_force);
     if grav_mag < 0.001 { return; }
 
-    // Probability gate uses only gravity magnitude so surface force always has effect
-    let gravity_probability = min(1.0, grav_mag * grav_mag * 0.0004);
-    let prob_hash = (gid.x * 7u + gid.y * 13u + gid.z * 17u + u32(params.time * 1000.0)) & 255u;
-    if prob_hash > u32(gravity_probability * 255.0) { return; }
-
     // Combined force for direction scoring: gravity + tangential surface tension
     let surf_force = get_surface_force(gid);
     var total_force = grav_force + surf_force;
@@ -523,15 +520,28 @@ fn radial_move(gid: vec3<u32>) {
     if force_mag < 0.001 { return; }
     let force_dir = total_force / force_mag;
 
-    // Score all 26 neighbors, pick the best empty target
-    var best_score = 0.05; // minimum threshold to bother moving
+    // Probability gate: surface voxels with significant tangential force always attempt
+    // to move so the surface can continuously level itself. Interior voxels use the
+    // gravity-magnitude gate to avoid wasted work.
+    // Use non-linear hash to avoid planar banding artifacts.
+    let surf_mag = length(surf_force);
+    let is_surface_voxel = surf_mag > 0.02;
+    if !is_surface_voxel {
+        let gravity_probability = min(1.0, grav_mag * grav_mag * 0.0004);
+        let prob_hash = (hash_position(gid) ^ u32(params.time * 1000.0)) & 255u;
+        if prob_hash > u32(gravity_probability * 255.0) { return; }
+    }
+
+    // Score all 26 neighbors, pick the best empty target.
+    // Lower threshold for surface voxels so tangential moves toward empty space are accepted.
+    var best_score = select(0.05, 0.01, is_surface_voxel);
     var best_dx = 0;
     var best_dy = 0;
     var best_dz = 0;
     var found = false;
 
-    // Noise seed for tie-breaking
-    let noise_seed = gid.x * 73u + gid.y * 157u + gid.z * 239u + u32(params.time * 1000.0);
+    // Noise seed for tie-breaking — use non-linear hash to avoid planar banding
+    let noise_seed = hash_position(gid) ^ u32(params.time * 1000.0);
 
     for (var dx = -1; dx <= 1; dx++) {
         for (var dy = -1; dy <= 1; dy++) {
