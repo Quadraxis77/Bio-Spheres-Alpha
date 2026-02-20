@@ -410,6 +410,7 @@ pub fn division_step(
                 data.child_a_slot,
                 data.child_b_slot,
                 data.parent_genome_orientation,
+                current_time,
             );
             
             // Create adhesion between children if parent_make_adhesion is enabled
@@ -478,7 +479,18 @@ pub fn division_step(
                             data.child_b_genome_orientation,
                             child_a_split_ratio,
                             child_b_split_ratio,
+                            current_time,
                         );
+                } else {
+                    // parent_make_adhesion is off: grant 1-second sister immunity so
+                    // Glueocyte children don't immediately bond to each other on contact.
+                    let id_a = state.cell_ids[data.child_a_slot];
+                    let id_b = state.cell_ids[data.child_b_slot];
+                    let expiry = current_time + 1.0;
+                    state.sister_cell_id[data.child_a_slot] = id_b;
+                    state.sister_expiry[data.child_a_slot] = expiry;
+                    state.sister_cell_id[data.child_b_slot] = id_a;
+                    state.sister_expiry[data.child_b_slot] = expiry;
                 }
             }
         }
@@ -850,6 +862,7 @@ pub fn division_step_multi(
                 data.child_a_slot,
                 data.child_b_slot,
                 data.parent_genome_orientation,
+                current_time,
             );
             
             // Create adhesion between children if parent_make_adhesion is enabled
@@ -898,6 +911,7 @@ pub fn division_step_multi(
                         data.child_b_genome_orientation,
                         child_a_split_ratio,
                         child_b_split_ratio,
+                        current_time,
                     );
                 }
             }

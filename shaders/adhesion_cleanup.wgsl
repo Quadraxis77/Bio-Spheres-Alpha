@@ -51,7 +51,8 @@ struct AdhesionConnection {
     anchor_direction_b: vec4<f32>,  // offset 48-63 (xyz = direction, w = padding)
     twist_reference_a: vec4<f32>,   // offset 64-79
     twist_reference_b: vec4<f32>,   // offset 80-95
-    _padding: vec2<u32>,            // offset 96-103
+    birth_time: f32,                // offset 96-99
+    _pad: u32,                      // offset 100-103
 };
 
 // Maximum adhesions per cell (reduced for 200K cell support)

@@ -437,6 +437,11 @@ impl GpuScene {
         // Reset ring buffers to empty state
         self.gpu_triple_buffers.reset_ring_buffers(queue);
 
+        // Clear env anchor buffer so no stale anchors persist across resets
+        let capacity = self.gpu_triple_buffers.capacity as usize;
+        let zero_anchors: Vec<f32> = vec![0.0; capacity * 4];
+        queue.write_buffer(&self.gpu_triple_buffers.env_anchor_buffer, 0, bytemuck::cast_slice(&zero_anchors));
+
         // Mark GPU buffers as needing sync (will be no-op since cell_count is 0)
         self.gpu_triple_buffers.mark_needs_sync();
 
@@ -978,6 +983,15 @@ impl GpuScene {
         
         // Update child keep adhesion flags for this genome's modes only
         self.incremental_sync_child_keep_adhesion_flags(queue, genome_id, global_start_index, mode_count);
+
+        // Update glueocyte env adhesion flags for this genome's modes only
+        let env_flags: Vec<u32> = self.genomes[genome_id].modes.iter()
+            .map(|mode| if mode.glueocyte_env_adhesion { 1u32 } else { 0u32 })
+            .collect();
+        if !env_flags.is_empty() {
+            let offset = (global_start_index * 4) as u64;
+            queue.write_buffer(&self.gpu_triple_buffers.glueocyte_env_adhesion_flags, offset, bytemuck::cast_slice(&env_flags));
+        }
         
         log::info!("Incrementally synced genome {} (modes: {} at global index {})", 
             genome_id, mode_count, global_start_index);
@@ -1080,6 +1094,9 @@ impl GpuScene {
 
         // Sync behavior flags for all cell types (applies_swim_force, etc.)
         self.gpu_triple_buffers.sync_behavior_flags(queue);
+
+        // Sync glueocyte env adhesion flags (one u32 per mode)
+        self.gpu_triple_buffers.sync_glueocyte_env_adhesion_flags(queue, &self.genomes);
 
         // Sync child mode indices for division (CRITICAL: determines what mode children get)
         self.gpu_triple_buffers.sync_child_mode_indices(queue, &self.genomes);

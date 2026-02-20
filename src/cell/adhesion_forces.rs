@@ -23,7 +23,9 @@ pub fn compute_adhesion_forces(
     mode_settings: &[AdhesionSettings],
     forces: &mut [Vec3],
     torques: &mut [Vec3],
+    current_time: f32,
 ) -> Vec<usize> {
+    const BREAK_GRACE_PERIOD: f32 = 0.5;
     let mut bonds_to_break = Vec::new();
 
     // Process each active adhesion connection
@@ -67,7 +69,9 @@ pub fn compute_adhesion_forces(
         );
         
         // Check break condition before applying forces
-        if settings.can_break && spring_force_mag > settings.break_force {
+        // Skip break check during grace period after bond creation
+        let in_grace = current_time - connections.birth_time[i] < BREAK_GRACE_PERIOD;
+        if settings.can_break && !in_grace && spring_force_mag > settings.break_force {
             bonds_to_break.push(i);
             continue;
         }
@@ -97,7 +101,9 @@ pub fn compute_adhesion_forces_parallel(
     mode_settings: &[AdhesionSettings],
     forces: &mut [Vec3],
     torques: &mut [Vec3],
+    current_time: f32,
 ) -> Vec<usize> {
+    const BREAK_GRACE_PERIOD: f32 = 0.5;
     use rayon::prelude::*;
     
     // Compute force contributions in parallel.
@@ -139,7 +145,9 @@ pub fn compute_adhesion_forces_parallel(
             );
 
             // Bond breaks: signal with Some(i), zero forces
-            if settings.can_break && spring_force_mag > settings.break_force {
+            // Skip break check during grace period after bond creation
+            let in_grace = current_time - connections.birth_time[i] < BREAK_GRACE_PERIOD;
+            if settings.can_break && !in_grace && spring_force_mag > settings.break_force {
                 return vec![(Some(i), 0, Vec3::ZERO, Vec3::ZERO)];
             }
             
@@ -426,7 +434,9 @@ pub fn compute_adhesion_forces_batched(
     mode_settings: &[AdhesionSettings],
     forces: &mut [Vec3],
     torques: &mut [Vec3],
+    current_time: f32,
 ) {
+    const BREAK_GRACE_PERIOD: f32 = 0.5;
     // Batch size tuned for L1 cache (typically 32KB)
     // Each cell needs ~200 bytes of data, so batch of 32 cells fits in L1
     const BATCH_SIZE: usize = 32;
@@ -476,8 +486,9 @@ pub fn compute_adhesion_forces_batched(
                 settings,
             );
             
-            // Skip bond if it exceeds break force
-            if settings.can_break && spring_force_mag > settings.break_force {
+            // Skip bond if it exceeds break force (but not during grace period)
+            let in_grace = current_time - connections.birth_time[i] < BREAK_GRACE_PERIOD;
+            if settings.can_break && !in_grace && spring_force_mag > settings.break_force {
                 continue;
             }
 

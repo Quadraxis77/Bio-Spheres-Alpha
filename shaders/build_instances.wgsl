@@ -601,7 +601,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (cell_type < params.cell_type_count) {
             nuc_scale = cell_type_visuals[cell_type].nucleus_scale;
         }
-        instance.type_data_1 = vec4<f32>(nuc_scale, 0.0, f32(params.lod_debug_colors), f32(cell_type));
+        var anim_speed_val = 0.0;
+        if (cell_type < params.cell_type_count) {
+            anim_speed_val = cell_type_visuals[cell_type].membrane_noise_speed;
+        }
+        // type_data_1: x=cell_id_f (stable seed), y=anim_speed, z=debug_colors, w=cell_type
+        instance.type_data_1 = vec4<f32>(f32(cell_id), anim_speed_val, f32(params.lod_debug_colors), f32(cell_type));
     }
 
     // Dynamic instance allocation - single buffer for all cell types

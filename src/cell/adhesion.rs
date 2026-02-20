@@ -31,7 +31,10 @@ pub struct AdhesionConnections {
     pub twist_reference_a: Vec<Quat>,
     /// Twist reference quaternion for cell B
     pub twist_reference_b: Vec<Quat>,
-    
+
+    /// Simulation time when this connection was created (for break grace period)
+    pub birth_time: Vec<f32>,
+
     /// Number of active connections
     pub active_count: usize,
 }
@@ -49,6 +52,7 @@ impl AdhesionConnections {
             anchor_direction_b: vec![-Vec3::X; capacity],
             twist_reference_a: vec![Quat::IDENTITY; capacity],
             twist_reference_b: vec![Quat::IDENTITY; capacity],
+            birth_time: vec![0.0f32; capacity],
             active_count: 0,
         }
     }

@@ -133,7 +133,8 @@ struct AdhesionConnection {
     anchor_direction_b: vec4<f32>,
     twist_reference_a: vec4<f32>,
     twist_reference_b: vec4<f32>,
-    _padding: vec2<u32>,
+    birth_time: f32,
+    _pad: u32,
 };
 
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;

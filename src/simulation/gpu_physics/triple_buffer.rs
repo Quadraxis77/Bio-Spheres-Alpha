@@ -354,6 +354,13 @@ pub struct GpuTripleBufferSystem {
     
     /// Behavior flags per cell type for parameterized shader logic
     pub behavior_flags: wgpu::Buffer,
+
+    /// Per-cell environment adhesion anchor: Vec4(anchor_x, anchor_y, anchor_z, is_active)
+    /// w=1.0 means anchor is active, w=0.0 means no anchor.
+    pub env_anchor_buffer: wgpu::Buffer,
+
+    /// Per-mode glueocyte environment adhesion flags (one u32 per mode)
+    pub glueocyte_env_adhesion_flags: wgpu::Buffer,
 }
 
 impl GpuTripleBufferSystem {
@@ -502,6 +509,17 @@ impl GpuTripleBufferSystem {
         // Behavior flags per cell type for parameterized shader logic
         // Each GpuCellTypeBehaviorFlags struct is 64 bytes (6 u32 fields + 10 u32 padding)
         let behavior_flags = Self::create_storage_buffer(device, 30 * 64, "Behavior Flags"); // CellType::MAX_TYPES = 30
+
+        // Per-cell env anchor buffer: Vec4(anchor_x, anchor_y, anchor_z, is_active)
+        // Zero-initialized so all cells start with no anchor (w=0.0)
+        let env_anchor_buffer = Self::create_zero_initialized_storage_buffer(
+            device,
+            capacity as u64 * 16, // vec4<f32> = 16 bytes
+            "Env Anchor Buffer",
+        );
+
+        // Per-mode glueocyte env adhesion flags (one u32 per mode)
+        let glueocyte_env_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Glueocyte Env Adhesion Flags");
         
         Self {
             position_and_mass,
@@ -544,6 +562,8 @@ impl GpuTripleBufferSystem {
             mode_properties,
             mode_cell_types,
             behavior_flags,
+            env_anchor_buffer,
+            glueocyte_env_adhesion_flags,
             current_index: AtomicUsize::new(0),
             capacity,
             needs_sync: true,
@@ -808,6 +828,9 @@ impl GpuTripleBufferSystem {
         // Sync mode cell types lookup table (for deriving cell_type from mode_index)
         self.sync_mode_cell_types(queue, genomes);
 
+        // Sync glueocyte env adhesion flags (one u32 per mode across all genomes)
+        self.sync_glueocyte_env_adhesion_flags(queue, genomes);
+
         // Sync behavior flags for all cell types (applies_swim_force, etc.)
         self.sync_behavior_flags(queue);
     }
@@ -988,6 +1011,19 @@ impl GpuTripleBufferSystem {
 
         if !mode_cell_types.is_empty() {
             queue.write_buffer(&self.mode_cell_types, 0, bytemuck::cast_slice(&mode_cell_types));
+        }
+    }
+
+    /// Sync glueocyte env adhesion flags (one u32 per mode across all genomes)
+    pub fn sync_glueocyte_env_adhesion_flags(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let flags: Vec<u32> = genomes
+            .iter()
+            .flat_map(|genome| {
+                genome.modes.iter().map(|mode| if mode.glueocyte_env_adhesion { 1u32 } else { 0u32 })
+            })
+            .collect();
+        if !flags.is_empty() {
+            queue.write_buffer(&self.glueocyte_env_adhesion_flags, 0, bytemuck::cast_slice(&flags));
         }
     }
 

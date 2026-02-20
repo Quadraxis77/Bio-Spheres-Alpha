@@ -52,7 +52,8 @@ struct AdhesionConnection {
     anchor_direction_b: vec4<f32>,
     twist_reference_a: vec4<f32>,
     twist_reference_b: vec4<f32>,
-    _padding: vec2<u32>,
+    birth_time: f32,
+    _pad: u32,
 }
 
 @group(0) @binding(0)
@@ -474,7 +475,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         );
 
         // Break bond if force exceeds threshold - only cell_a thread writes to avoid races
-        if (settings.can_break != 0 && spring_force_mag > settings.break_force && is_cell_a) {
+        // Skip break check during grace period after bond creation (0.5s)
+        let in_grace = (params.current_time - connection.birth_time) < 0.5;
+        if (settings.can_break != 0 && !in_grace && spring_force_mag > settings.break_force && is_cell_a) {
             adhesion_connections[adhesion_idx].is_active = 0u;
             continue;
         }

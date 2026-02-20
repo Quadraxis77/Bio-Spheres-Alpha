@@ -20,7 +20,8 @@
 //! - anchor_direction_b: vec4<f32> - Local anchor direction for cell B (xyz=dir, w=padding)
 //! - twist_reference_a: vec4<f32> - Reference quaternion for twist constraint
 //! - twist_reference_b: vec4<f32> - Reference quaternion for twist constraint
-//! - _padding: [u32; 2] - Padding to 104 bytes
+//! - birth_time: f32 - Simulation time when bond was created (for grace period)
+//! - _padding: u32 - Padding to 104 bytes
 
 use bytemuck::{Pod, Zeroable};
 
@@ -59,8 +60,10 @@ pub struct GpuAdhesionConnection {
     pub twist_reference_a: [f32; 4],   // offset 64-79 (16 bytes)
     /// Reference quaternion for twist constraint for cell B (x, y, z, w)
     pub twist_reference_b: [f32; 4],   // offset 80-95 (16 bytes)
-    /// Padding to match WGSL struct size
-    pub _padding: [u32; 2],         // offset 96-103 (8 bytes)
+    /// Simulation time when this bond was created (for break grace period)
+    pub birth_time: f32,            // offset 96-99 (4 bytes)
+    /// Padding to 104 bytes
+    pub _padding: u32,              // offset 100-103 (4 bytes)
 }                                   // total: 104 bytes
 
 // Verify size at compile time
@@ -81,7 +84,8 @@ impl GpuAdhesionConnection {
             anchor_direction_b: [0.0, 0.0, -1.0, 0.0],
             twist_reference_a: [0.0, 0.0, 0.0, 1.0], // Identity quaternion
             twist_reference_b: [0.0, 0.0, 0.0, 1.0],
-            _padding: [0, 0],
+            birth_time: 0.0,
+            _padding: 0,
         }
     }
 
@@ -94,6 +98,7 @@ impl GpuAdhesionConnection {
         anchor_b: glam::Vec3,
         twist_ref_a: glam::Quat,
         twist_ref_b: glam::Quat,
+        birth_time: f32,
     ) -> Self {
         Self {
             cell_a_index,
@@ -107,7 +112,8 @@ impl GpuAdhesionConnection {
             anchor_direction_b: [anchor_b.x, anchor_b.y, anchor_b.z, 0.0],
             twist_reference_a: [twist_ref_a.x, twist_ref_a.y, twist_ref_a.z, twist_ref_a.w],
             twist_reference_b: [twist_ref_b.x, twist_ref_b.y, twist_ref_b.z, twist_ref_b.w],
-            _padding: [0, 0],
+            birth_time,
+            _padding: 0,
         }
     }
 }

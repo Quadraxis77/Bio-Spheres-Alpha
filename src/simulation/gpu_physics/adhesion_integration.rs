@@ -59,6 +59,8 @@ pub struct AdhesionCreationRequest {
     pub zone_a: AdhesionZone,
     /// Zone classification for cell B
     pub zone_b: AdhesionZone,
+    /// Simulation time when this request was created (for grace period)
+    pub birth_time: f32,
 }
 
 impl AdhesionCreationRequest {
@@ -112,6 +114,7 @@ impl AdhesionCreationRequest {
             twist_ref_b: child_b_rotation,
             zone_a,
             zone_b,
+            birth_time: 0.0,
         }
     }
     
@@ -182,6 +185,7 @@ impl AdhesionIntegration {
         &mut self,
         adhesion_buffers: &mut AdhesionBuffers,
         queue: &wgpu::Queue,
+        current_time: f32,
     ) -> (usize, usize) {
         // Process removals first (in sorted order for determinism)
         self.pending_removals.sort_unstable();
@@ -209,6 +213,7 @@ impl AdhesionIntegration {
                     request.anchor_b,
                     request.twist_ref_a,
                     request.twist_ref_b,
+                    current_time,
                 ).is_some() {
                     creations += 1;
                 }
@@ -337,6 +342,7 @@ mod tests {
             twist_ref_b: Quat::IDENTITY,
             zone_a: AdhesionZone::ZoneB,
             zone_b: AdhesionZone::ZoneA,
+            birth_time: 0.0,
         };
         
         let request2 = AdhesionCreationRequest {
@@ -349,6 +355,7 @@ mod tests {
             twist_ref_b: Quat::IDENTITY,
             zone_a: AdhesionZone::ZoneB,
             zone_b: AdhesionZone::ZoneA,
+            birth_time: 0.0,
         };
         
         // Same cells should have same hash regardless of order

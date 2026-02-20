@@ -434,24 +434,14 @@ impl UiSystem {
             self.mark_ui_state_dirty();
         }
 
-        // Handle global click to clear text selection
+        // Handle global click to clear label text selection
         if self.ctx.input(|i| i.pointer.any_click()) {
-            // Clear text selection on any click
-            self.ctx.memory_mut(|mem| {
-                mem.request_focus(egui::Id::NULL);
-            });
-            
-            // Clear text selection in labels
             let plugin = self.ctx.plugin::<egui::text_selection::LabelSelectionState>();
             plugin.lock().clear_selection();
         }
         
         // Also clear text selection if Escape is pressed
         if self.ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.ctx.memory_mut(|mem| {
-                mem.request_focus(egui::Id::NULL);
-            });
-            
             let plugin = self.ctx.plugin::<egui::text_selection::LabelSelectionState>();
             plugin.lock().clear_selection();
         }

@@ -58,6 +58,9 @@ pub struct GenomeBufferGroup {
     /// Genome mode data (child orientations, split directions)
     pub genome_mode_data: wgpu::Buffer,
     
+    /// Per-mode glueocyte environment adhesion flags (one u32 per mode)
+    pub glueocyte_env_adhesion_flags: wgpu::Buffer,
+
     /// Reference count - how many cells are using this genome
     pub reference_count: u32,
     
@@ -134,6 +137,13 @@ impl GenomeBufferGroup {
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             &format!("Genome {} Mode Data", genome_id),
         );
+
+        let glueocyte_env_adhesion_flags = create_aligned_buffer(
+            device,
+            (mode_count * 4) as u64,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            &format!("Genome {} Glueocyte Env Adhesion Flags", genome_id),
+        );
         
         Self {
             genome_id,
@@ -145,6 +155,7 @@ impl GenomeBufferGroup {
             child_a_keep_adhesion_flags,
             child_b_keep_adhesion_flags,
             genome_mode_data,
+            glueocyte_env_adhesion_flags,
             reference_count: 0,
             marked_for_deletion: false,
             needs_sync: true,
@@ -224,6 +235,14 @@ impl GenomeBufferGroup {
         
         if !child_b_flags_data.is_empty() {
             queue.write_buffer(&self.child_b_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_b_flags_data));
+        }
+
+        // Sync glueocyte env adhesion flags
+        let env_adhesion_flags_data: Vec<u32> = genome.modes.iter()
+            .map(|mode| if mode.glueocyte_env_adhesion { 1 } else { 0 })
+            .collect();
+        if !env_adhesion_flags_data.is_empty() {
+            queue.write_buffer(&self.glueocyte_env_adhesion_flags, 0, bytemuck::cast_slice(&env_adhesion_flags_data));
         }
         
         // Sync genome mode data (child orientations, split directions)

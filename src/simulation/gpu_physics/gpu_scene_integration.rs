@@ -203,6 +203,17 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(1, &cached_bind_groups.swim_force_force_accum[current_index], &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        // Stage 5.6: Glueocyte environment adhesion (when cave is present)
+        // Must run BEFORE position_update so forces are accumulated and applied this frame
+        if let (Some(cave_renderer), _) = (cave_renderer.as_ref(), cave_physics_bind_groups.as_ref()) {
+            compute_pass.set_pipeline(&pipelines.glueocyte_env_adhesion);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.env_adhesion_force_accum[current_index], &[]);
+            compute_pass.set_bind_group(2, &cached_bind_groups.env_adhesion_mode_data, &[]);
+            compute_pass.set_bind_group(3, cave_renderer.collision_bind_group(), &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
         
         // Stage 6: Position integration (256 threads)
         // Now reads accumulated forces and applies them with proper integration
@@ -379,6 +390,17 @@ pub fn execute_gpu_mechanics_step(
         compute_pass.set_bind_group(1, &cached_bind_groups.swim_force_force_accum[current_index], &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        // Stage 5.6: Glueocyte environment adhesion (when cave is present)
+        // Must run BEFORE position_update so forces are accumulated and applied this frame
+        if let (Some(cave_renderer), _) = (cave_renderer.as_ref(), cave_physics_bind_groups.as_ref()) {
+            compute_pass.set_pipeline(&pipelines.glueocyte_env_adhesion);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.env_adhesion_force_accum[current_index], &[]);
+            compute_pass.set_bind_group(2, &cached_bind_groups.env_adhesion_mode_data, &[]);
+            compute_pass.set_bind_group(3, cave_renderer.collision_bind_group(), &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
 
         // Stage 6: Position integration
         compute_pass.set_pipeline(&pipelines.position_update);

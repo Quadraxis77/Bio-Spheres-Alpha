@@ -510,7 +510,7 @@ pub fn consume_swim_nutrients(
 /// Any Glueocyte (cell_type == 6) that is currently overlapping another cell
 /// will attempt to form an adhesion bond using its configured adhesion_settings,
 /// subject to the cell's max_adhesions limit and the global adhesion capacity.
-pub fn form_glueocyte_contact_bonds(state: &mut CanonicalState, genome: &Genome) {
+pub fn form_glueocyte_contact_bonds(state: &mut CanonicalState, genome: &Genome, current_time: f32) {
     let collision_pairs = detect_collisions(state);
 
     for pair in collision_pairs {
@@ -521,6 +521,16 @@ pub fn form_glueocyte_contact_bonds(state: &mut CanonicalState, genome: &Genome)
             continue;
         }
 
+        // Skip if either cell still has sister immunity toward the other
+        let id_b = state.cell_ids[idx_b];
+        let id_a = state.cell_ids[idx_a];
+        if state.sister_cell_id[idx_a] == id_b && current_time < state.sister_expiry[idx_a] {
+            continue;
+        }
+        if state.sister_cell_id[idx_b] == id_a && current_time < state.sister_expiry[idx_b] {
+            continue;
+        }
+
         let mode_a = state.mode_indices[idx_a];
         let mode_b = state.mode_indices[idx_b];
 
@@ -528,6 +538,13 @@ pub fn form_glueocyte_contact_bonds(state: &mut CanonicalState, genome: &Genome)
         let is_glue_b = genome.modes.get(mode_b).map(|m| m.cell_type == 6).unwrap_or(false);
 
         if !is_glue_a && !is_glue_b {
+            continue;
+        }
+
+        // Skip if the Glueocyte(s) in this pair have cell adhesion disabled
+        let cell_adhesion_a = genome.modes.get(mode_a).map(|m| !is_glue_a || m.glueocyte_cell_adhesion).unwrap_or(true);
+        let cell_adhesion_b = genome.modes.get(mode_b).map(|m| !is_glue_b || m.glueocyte_cell_adhesion).unwrap_or(true);
+        if !cell_adhesion_a || !cell_adhesion_b {
             continue;
         }
 
@@ -575,6 +592,7 @@ pub fn form_glueocyte_contact_bonds(state: &mut CanonicalState, genome: &Genome)
             state.genome_orientations[idx_b],
             split_ratio_a,
             split_ratio_b,
+            current_time,
         );
     }
 }
@@ -620,6 +638,7 @@ pub fn physics_step_with_genome(
             &state.cached_adhesion_settings,
             &mut state.forces[..state.cell_count],
             &mut state.torques[..state.cell_count],
+            current_time,
         );
         for conn_idx in bonds_to_break {
             state.adhesion_manager.remove_adhesion(&mut state.adhesion_connections, conn_idx);
@@ -680,7 +699,7 @@ pub fn physics_step_with_genome(
     }
 
     // Form contact adhesion bonds for Glueocyte cells
-    form_glueocyte_contact_bonds(state, genome);
+    form_glueocyte_contact_bonds(state, genome, current_time);
 
     let max_cells = state.capacity;
     let rng_seed = 12345;

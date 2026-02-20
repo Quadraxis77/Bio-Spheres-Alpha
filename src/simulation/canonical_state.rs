@@ -398,6 +398,25 @@ pub struct CanonicalState {
     /// 
     /// Final list of divisions that will actually be processed.
     pub filtered_divisions_buffer: Vec<usize>,
+
+    // === Sister Cell Immunity ===
+    // Prevents Glueocyte cells from immediately bonding to their sister cell
+    // after division, unless the parent had parent_make_adhesion enabled.
+
+    /// The cell_id of this cell's sister (u32::MAX = no sister immunity)
+    pub sister_cell_id: Vec<u32>,
+
+    /// Simulation time at which sister immunity expires (0.0 = already expired)
+    pub sister_expiry: Vec<f32>,
+
+    // === Environment Adhesion ===
+    // Glueocyte cells can anchor to a fixed world-space position on boundary contact.
+
+    /// World-space anchor position for environment adhesion (only valid when env_anchor_active is true)
+    pub env_anchor_pos: Vec<Vec3>,
+
+    /// Whether this cell currently has an active environment anchor
+    pub env_anchor_active: Vec<bool>,
 }
 
 impl CanonicalState {
@@ -496,6 +515,14 @@ impl CanonicalState {
             already_split_buffer: vec![false; capacity],        // One flag per potential cell
             divisions_to_process_buffer: Vec::with_capacity(256),
             filtered_divisions_buffer: Vec::with_capacity(256),
+
+            // Sister immunity — no immunity by default
+            sister_cell_id: vec![u32::MAX; capacity],
+            sister_expiry: vec![0.0; capacity],
+
+            // Environment adhesion — no anchors by default
+            env_anchor_pos: vec![Vec3::ZERO; capacity],
+            env_anchor_active: vec![false; capacity],
         }
     }
     
@@ -590,6 +617,14 @@ impl CanonicalState {
         // Initialize adhesion system for this cell
         // This sets up the data structures needed to track connections
         self.adhesion_manager.init_cell_adhesion_indices(index);
+
+        // No sister immunity for externally-added cells
+        self.sister_cell_id[index] = u32::MAX;
+        self.sister_expiry[index] = 0.0;
+
+        // No environment anchor for new cells
+        self.env_anchor_pos[index] = Vec3::ZERO;
+        self.env_anchor_active[index] = false;
         
         Some(index)
     }
@@ -692,6 +727,14 @@ impl CanonicalState {
         
         // Initialize adhesion system for this cell
         self.adhesion_manager.init_cell_adhesion_indices(slot_index);
+
+        // No sister immunity for externally-added cells
+        self.sister_cell_id[slot_index] = u32::MAX;
+        self.sister_expiry[slot_index] = 0.0;
+
+        // No environment anchor for new cells
+        self.env_anchor_pos[slot_index] = Vec3::ZERO;
+        self.env_anchor_active[slot_index] = false;
         
         Some(slot_index)
     }
@@ -749,6 +792,10 @@ impl CanonicalState {
             self.split_intervals[cell_index] = self.split_intervals[last_index];
             self.split_masses[cell_index] = self.split_masses[last_index];
             self.split_counts[cell_index] = self.split_counts[last_index];
+            self.sister_cell_id[cell_index] = self.sister_cell_id[last_index];
+            self.sister_expiry[cell_index] = self.sister_expiry[last_index];
+            self.env_anchor_pos[cell_index] = self.env_anchor_pos[last_index];
+            self.env_anchor_active[cell_index] = self.env_anchor_active[last_index];
             
             // Update adhesion system for the swapped cell
             self.adhesion_manager.update_cell_index_after_swap(

@@ -1426,6 +1426,8 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     max_splits: -1, // -1 means infinite
                     mode_a_after_splits: -1,
                     mode_b_after_splits: -1,
+                    glueocyte_cell_adhesion: true,
+                    glueocyte_env_adhesion: false,
                     swim_force: 0.5,
                     buoyancy_force: 0.5, // Default buoyancy force for buoyocytes
                     membrane_stiffness: 50.0, // Default: moderate membrane stiffness
@@ -1676,8 +1678,8 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                     ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.break_force, 0.1..=100.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.break_force).speed(0.1).range(0.1..=100.0));
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.break_force, 200.0..=1000.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.break_force).speed(0.1).range(200.0..=1000.0));
                 });
             });
 
@@ -1813,6 +1815,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::Slider::new(&mut mode.split_interval, 1.0..=60.0).show_value(false));
                         ui.add(egui::DragValue::new(&mut mode.split_interval).speed(0.1).range(1.0..=60.0).suffix("s"));
                     });
+                });
+            } else if mode.cell_type == 6 { // Glueocyte (cell_type == 6)
+                group_container(ui, "Glueocyte Functions", egui::Color32::from_rgb(140, 200, 140), |ui| {
+                    ui.checkbox(&mut mode.glueocyte_cell_adhesion, "Cell Adhesion");
+                    ui.checkbox(&mut mode.glueocyte_env_adhesion, "Environment Adhesion");
                 });
             } else if mode.cell_type == 1 { // Flagellocyte (cell_type == 1)
                 group_container(ui, "Flagellocyte Functions", egui::Color32::from_rgb(140, 180, 220), |ui| {
@@ -1969,7 +1976,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     let mut new_mode_b: Option<i32> = None;
                     
                     ui.add_space(4.0);
-                    ui.label("Mode A After Splits:");
+                    ui.label("Child A After Splits:");
                     ui.horizontal(|ui| {
                         let selected_text = if current_mode_a < 0 {
                             "Default".to_string()
@@ -2006,7 +2013,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             });
                     });
                     
-                    ui.label("Mode B After Splits:");
+                    ui.label("Child B After Splits:");
                     ui.horizontal(|ui| {
                         let selected_text = if current_mode_b < 0 {
                             "Default".to_string()

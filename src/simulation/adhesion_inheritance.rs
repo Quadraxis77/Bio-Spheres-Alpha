@@ -22,6 +22,7 @@ pub fn inherit_adhesions_on_division(
     child_a_idx: usize,
     child_b_idx: usize,
     parent_genome_orientation: Quat,
+    current_time: f32,
 ) {
     // Get parent mode settings
     let parent_mode = match genome.modes.get(parent_mode_idx) {
@@ -136,6 +137,7 @@ pub fn inherit_adhesions_on_division(
                     split_offset_magnitude,
                     split_dir_parent,
                     false,
+                    current_time,
                 );
             }
             AdhesionZone::ZoneB if child_a_keep => {
@@ -156,6 +158,7 @@ pub fn inherit_adhesions_on_division(
                     split_offset_magnitude,
                     split_dir_parent,
                     true,
+                    current_time,
                 );
             }
             AdhesionZone::ZoneC => {
@@ -178,6 +181,7 @@ pub fn inherit_adhesions_on_division(
                         split_offset_magnitude,
                         split_dir_parent,
                         false,
+                        current_time,
                     );
                 }
                 if child_a_keep {
@@ -198,6 +202,7 @@ pub fn inherit_adhesions_on_division(
                         split_offset_magnitude,
                         split_dir_parent,
                         true,
+                        current_time,
                     );
                 }
             }
@@ -231,6 +236,7 @@ fn create_inherited_adhesion(
     split_offset_magnitude: f32,
     split_dir_parent: Vec3,
     is_child_a: bool,
+    current_time: f32,
 ) {
     // Get child mode to use its adhesion settings (not parent's)
     let child_mode_idx = state.mode_indices[child_idx];
@@ -313,6 +319,7 @@ fn create_inherited_adhesion(
             neighbor_genome_orientation_for_twist,
             child_split_ratio,
             neighbor_split_ratio,
+            current_time,
         )
     } else {
         // Parent was cellB, neighbor was cellA, so neighbor becomes cellA
@@ -329,6 +336,7 @@ fn create_inherited_adhesion(
             child_genome_orientation,
             neighbor_split_ratio,
             child_split_ratio,
+            current_time,
         )
     };
     

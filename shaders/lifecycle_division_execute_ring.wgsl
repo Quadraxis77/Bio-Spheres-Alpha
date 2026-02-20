@@ -54,7 +54,8 @@ struct AdhesionConnection {
     anchor_direction_b: vec4<f32>,
     twist_reference_a: vec4<f32>,
     twist_reference_b: vec4<f32>,
-    _padding: vec2<u32>,
+    birth_time: f32,
+    _pad: u32,
 };
 
 const PI: f32 = 3.14159265359;
@@ -554,7 +555,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Set twist references to child rotations (parent_rotation * child_orientation)
             connection.twist_reference_a = child_a_rotation;
             connection.twist_reference_b = child_b_rotation;
-            connection._padding = vec2<u32>(0u, 0u);
+            connection.birth_time = params.current_time;
+            connection._pad = 0u;
             adhesion_connections[adhesion_id] = connection;
             
             // Add to cell adhesion indices
@@ -821,7 +823,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 dup_conn.mode_index = conn.mode_index;
                 dup_conn.is_active = 1u;
                 dup_conn._align_pad = vec2<u32>(0u, 0u);
-                dup_conn._padding = vec2<u32>(0u, 0u);
+                dup_conn.birth_time = params.current_time;
+                dup_conn._pad = 0u;
                 
                 // Get neighbor's split_ratio for zone classification on their side
                 let neighbor_mode_idx = mode_indices[neighbor_idx];

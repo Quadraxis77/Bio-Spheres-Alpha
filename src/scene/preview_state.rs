@@ -204,6 +204,8 @@ impl PreviewState {
             mode.buoyancy_force.to_bits().hash(&mut hasher);
             mode.nutrient_priority.to_bits().hash(&mut hasher);
             mode.prioritize_when_low.hash(&mut hasher);
+            mode.glueocyte_cell_adhesion.hash(&mut hasher);
+            mode.glueocyte_env_adhesion.hash(&mut hasher);
             // Hash child settings
             mode.child_a.mode_number.hash(&mut hasher);
             mode.child_b.mode_number.hash(&mut hasher);

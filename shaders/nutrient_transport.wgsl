@@ -108,7 +108,8 @@ struct AdhesionConnection {
     anchor_direction_b: vec4<f32>,    // xyz = direction, w = padding
     twist_reference_a: vec4<f32>,
     twist_reference_b: vec4<f32>,
-    _padding: vec2<u32>,              // Final padding to match 104 bytes
+    birth_time: f32,                  // offset 96-99
+    _pad: u32,                        // offset 100-103
 }
 
 // Mode properties structure (48 bytes per mode)

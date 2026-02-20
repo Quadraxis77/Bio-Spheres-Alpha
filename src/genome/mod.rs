@@ -66,7 +66,7 @@ impl Default for AdhesionSettings {
     fn default() -> Self {
         Self {
             can_break: true,
-            break_force: 10.0,
+            break_force: 500.0,
             rest_length: 1.0,
             linear_spring_stiffness: 150.0,
             linear_spring_damping: 5.0,
@@ -108,6 +108,10 @@ pub struct ModeSettings {
     pub mode_a_after_splits: i32, // Mode that Child A transitions to when max_splits is reached (-1 = use normal child_a mode)
     pub mode_b_after_splits: i32, // Mode that Child B transitions to when max_splits is reached (-1 = use normal child_b mode)
     
+    // Glueocyte settings
+    pub glueocyte_cell_adhesion: bool, // Whether this Glueocyte bonds to other cells on contact
+    pub glueocyte_env_adhesion: bool,  // Whether this Glueocyte bonds to the environment on contact
+
     // Flagellocyte settings
     pub swim_force: f32, // Forward thrust force (0.0 to 1.0, for Flagellocyte cells)
     
@@ -163,6 +167,8 @@ impl Default for ModeSettings {
             max_splits: -1, // Infinite by default
             mode_a_after_splits: -1, // Use normal child_a mode by default
             mode_b_after_splits: -1, // Use normal child_b mode by default
+            glueocyte_cell_adhesion: true,  // Default: cell adhesion enabled
+            glueocyte_env_adhesion: false,     // Default: environment adhesion disabled
             swim_force: 0.5, // Default swim force for flagellocytes
             buoyancy_force: 0.5, // Default buoyancy force for buoyocytes
             membrane_stiffness: 50.0, // Default: moderate membrane stiffness

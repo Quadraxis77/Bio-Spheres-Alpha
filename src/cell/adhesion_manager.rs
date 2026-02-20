@@ -106,6 +106,7 @@ impl AdhesionConnectionManager {
         genome_orientation_b: Quat,
         split_ratio_a: f32,
         split_ratio_b: f32,
+        current_time: f32,
     ) -> Option<usize> {
         // Check if cells are the same
         if cell_a == cell_b {
@@ -167,6 +168,9 @@ impl AdhesionConnectionManager {
         // This is critical for proper twist constraint behavior
         connections.twist_reference_a[connection_index] = genome_orientation_a;
         connections.twist_reference_b[connection_index] = genome_orientation_b;
+
+        // Record creation time for break grace period
+        connections.birth_time[connection_index] = current_time;
         
         // Update adhesion indices in both cells
         if !self.set_adhesion_index(cell_a, slot_a, connection_index as i32) ||

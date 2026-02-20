@@ -266,6 +266,7 @@ impl AdhesionBuffers {
         anchor_b: glam::Vec3,
         twist_ref_a: glam::Quat,
         twist_ref_b: glam::Quat,
+        birth_time: f32,
     ) -> Option<u32> {
         // Allocate slot deterministically
         let slot = self.slot_allocator.allocate_slot()?;
@@ -297,6 +298,7 @@ impl AdhesionBuffers {
             anchor_b,
             twist_ref_a,
             twist_ref_b,
+            birth_time,
         );
         
         // Update caches
