@@ -5,6 +5,7 @@
 
 use crate::genome::Genome;
 use crate::rendering::{AdhesionLineRenderer, CellRenderer, OrientationGizmoRenderer, SplitRingRenderer, TailRenderer, TailInstance};
+use crate::rendering::fov_cone::FovConeRenderer;
 use crate::scene::{PreviewState, Scene};
 use crate::simulation::PhysicsConfig;
 use crate::ui::camera::CameraController;
@@ -40,6 +41,14 @@ pub struct PreviewScene {
     pub show_adhesion_lines: bool,
     /// Mode index selected by clicking a cell in the preview (None = no selection)
     pub selected_mode_index: Option<usize>,
+    /// Right-click context menu: cell index that was right-clicked (None = menu closed)
+    pub context_menu_cell: Option<usize>,
+    /// Screen position where right-click occurred (for egui popup placement, in logical points)
+    pub context_menu_screen_pos: (f32, f32),
+    /// Time when context menu was opened (to avoid closing on same click)
+    pub context_menu_open_time: std::time::Instant,
+    /// FOV cone renderer for oculocyte visualization
+    pub fov_cone_renderer: FovConeRenderer,
 }
 
 impl PreviewScene {
@@ -62,6 +71,7 @@ impl PreviewScene {
         let gizmo_renderer = OrientationGizmoRenderer::new(device, queue, surface_config);
         let split_ring_renderer = SplitRingRenderer::new(device, queue, surface_config);
         let tail_renderer = TailRenderer::new(device, surface_config.format, capacity);
+        let fov_cone_renderer = FovConeRenderer::new(device, surface_config);
 
         Self {
             state,
@@ -70,6 +80,7 @@ impl PreviewScene {
             gizmo_renderer,
             split_ring_renderer,
             tail_renderer,
+            fov_cone_renderer,
             genome,
             config,
             paused: false,
@@ -77,6 +88,9 @@ impl PreviewScene {
             last_ui_time_value: 0.0,
             show_adhesion_lines: true,
             selected_mode_index: None,
+            context_menu_cell: None,
+            context_menu_screen_pos: (0.0, 0.0),
+            context_menu_open_time: std::time::Instant::now(),
         }
     }
 
@@ -330,6 +344,26 @@ impl Scene for PreviewScene {
                 // Render all queued gizmos and rings in batches
                 self.gizmo_renderer.render_queued(&mut render_pass, queue, view_proj, self.camera.position());
                 self.split_ring_renderer.render_queued(&mut render_pass, queue, view_proj, self.camera.position());
+
+                // Render FOV cones for all cells of the selected mode (if it's an oculocyte mode)
+                self.fov_cone_renderer.begin_frame();
+                if let Some(selected_mode) = self.selected_mode_index {
+                    if let Some(mode) = self.genome.modes.get(selected_mode) {
+                        if mode.cell_type == 7 { // Oculocyte
+                            let sense_range = mode.oculocyte_sense_range.clamp(25.0, 50.0);
+                            let t = (sense_range / 50.0).clamp(0.0, 0.998);
+                            let cos_half_fov = t * t;
+                            for i in 0..self.state.display_state.cell_count {
+                                if self.state.display_state.mode_indices[i] == selected_mode {
+                                    let cell_pos = self.state.display_state.positions[i];
+                                    let cell_rot = self.state.display_state.rotations[i];
+                                    self.fov_cone_renderer.queue_cone(cell_pos, cell_rot, sense_range, cos_half_fov);
+                                }
+                            }
+                        }
+                    }
+                }
+                self.fov_cone_renderer.render_queued(&mut render_pass, queue, view_proj, self.camera.position());
             }
 
             queue.submit(std::iter::once(encoder.finish()));

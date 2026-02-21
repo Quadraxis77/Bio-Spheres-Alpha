@@ -1,15 +1,19 @@
 //! Adhesion line rendering with wgpu.
 //!
-//! Renders adhesion connections between cells as colored line segments.
-//! Each connection is rendered as two segments (cell A → midpoint, midpoint → cell B)
-//! with colors based on zone classification.
+//! Renders adhesion connections between cells as outlined quads.
+//! Each connection half is a camera-facing quad with zone colors in the center
+//! and signal-state colors (black/yellow) as an outline.
 
+use crate::cell::adhesion_zones::{AdhesionZone, get_zone_color};
 use crate::simulation::CanonicalState;
-use crate::cell::{AdhesionZone, get_zone_color};
+use crate::simulation::signal_system;
 use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
-/// Renderer for adhesion connection lines.
+/// Half-width of the billboard quad in world units
+const LINE_HALF_WIDTH: f32 = 0.04;
+
+/// Renderer for adhesion connection lines (outlined quads).
 pub struct AdhesionLineRenderer {
     render_pipeline: wgpu::RenderPipeline,
     camera_bind_group: wgpu::BindGroup,
@@ -32,7 +36,9 @@ struct CameraUniform {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct LineVertex {
     position: [f32; 3],
-    color: [f32; 4],
+    zone_color: [f32; 4],
+    signal_color: [f32; 4],
+    edge_factor: f32,
 }
 
 impl AdhesionLineRenderer {
@@ -81,8 +87,8 @@ impl AdhesionLineRenderer {
             }],
         });
 
-        // Each connection needs 4 vertices (2 line segments × 2 vertices each)
-        let vertex_capacity = max_connections * 4;
+        // Each connection needs 12 vertices (2 half-segments × 2 triangles × 3 vertices)
+        let vertex_capacity = max_connections * 12;
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Adhesion Line Vertex Buffer"),
             size: (vertex_capacity * std::mem::size_of::<LineVertex>()) as u64,
@@ -114,16 +120,28 @@ impl AdhesionLineRenderer {
                     shader_location: 0,
                     format: wgpu::VertexFormat::Float32x3,
                 },
-                // Color
+                // Zone color
                 wgpu::VertexAttribute {
                     offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
                     format: wgpu::VertexFormat::Float32x4,
                 },
+                // Signal color
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 7]>() as wgpu::BufferAddress,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // Edge factor
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 11]>() as wgpu::BufferAddress,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32,
+                },
             ],
         };
 
-        // Create render pipeline
+        // Create render pipeline - TriangleList for billboard quads
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Adhesion Line Pipeline"),
             layout: Some(&pipeline_layout),
@@ -144,7 +162,7 @@ impl AdhesionLineRenderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
+                topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
                 cull_mode: None,
@@ -154,8 +172,8 @@ impl AdhesionLineRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false, // Lines don't write depth
-                depth_compare: wgpu::CompareFunction::LessEqual, // Respect depth for proper occlusion
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -185,6 +203,32 @@ impl AdhesionLineRenderer {
         self.height = height;
     }
 
+    /// Push 6 vertices (2 triangles) forming a camera-facing quad for one half-segment.
+    fn push_quad(
+        vertices: &mut Vec<LineVertex>,
+        start: Vec3,
+        end: Vec3,
+        perp: Vec3,
+        zone_color: [f32; 4],
+        signal_color: [f32; 4],
+    ) {
+        let hw = LINE_HALF_WIDTH;
+        // Quad corners: left edge = +perp, right edge = -perp
+        let v0 = start + perp * hw; // start, left  (edge=+1)
+        let v1 = start - perp * hw; // start, right (edge=-1)
+        let v2 = end + perp * hw;   // end, left    (edge=+1)
+        let v3 = end - perp * hw;   // end, right   (edge=-1)
+
+        // Triangle 1: v0, v1, v2
+        vertices.push(LineVertex { position: v0.to_array(), zone_color, signal_color, edge_factor: 1.0 });
+        vertices.push(LineVertex { position: v1.to_array(), zone_color, signal_color, edge_factor: -1.0 });
+        vertices.push(LineVertex { position: v2.to_array(), zone_color, signal_color, edge_factor: 1.0 });
+
+        // Triangle 2: v1, v3, v2
+        vertices.push(LineVertex { position: v1.to_array(), zone_color, signal_color, edge_factor: -1.0 });
+        vertices.push(LineVertex { position: v3.to_array(), zone_color, signal_color, edge_factor: -1.0 });
+        vertices.push(LineVertex { position: v2.to_array(), zone_color, signal_color, edge_factor: 1.0 });
+    }
 
     /// Render adhesion lines within an existing render pass
     pub fn render_in_pass(
@@ -220,7 +264,7 @@ impl AdhesionLineRenderer {
 
         // Build vertex data for all active connections
         let connections = &state.adhesion_connections;
-        let mut vertices = Vec::with_capacity(connections.active_count * 4);
+        let mut vertices = Vec::with_capacity(connections.active_count * 12);
 
         for i in 0..connections.active_count {
             if connections.is_active[i] == 0 {
@@ -239,7 +283,7 @@ impl AdhesionLineRenderer {
             let pos_b = state.positions[cell_b_idx];
             let midpoint = (pos_a + pos_b) * 0.5;
 
-            // Get zone colors
+            // Zone colors from zone classification
             let zone_a = match connections.zone_a[i] {
                 0 => AdhesionZone::ZoneA,
                 1 => AdhesionZone::ZoneB,
@@ -250,29 +294,31 @@ impl AdhesionLineRenderer {
                 1 => AdhesionZone::ZoneB,
                 _ => AdhesionZone::ZoneC,
             };
+            let zone_color_a = get_zone_color(zone_a);
+            let zone_color_b = get_zone_color(zone_b);
 
-            let color_a = get_zone_color(zone_a);
-            let color_b = get_zone_color(zone_b);
+            // Signal outline color: yellow if signal, black otherwise
+            let has_signal = signal_system::adhesion_has_signal(state, cell_a_idx, cell_b_idx);
+            let signal_color = if has_signal {
+                [1.0, 0.9, 0.0, 0.9] // Yellow
+            } else {
+                [0.0, 0.0, 0.0, 0.6] // Black
+            };
 
-            // Segment 1: Cell A → Midpoint (Zone A color)
-            vertices.push(LineVertex {
-                position: pos_a.to_array(),
-                color: color_a,
-            });
-            vertices.push(LineVertex {
-                position: midpoint.to_array(),
-                color: color_a,
-            });
+            // Compute billboard perpendicular direction
+            let line_dir = (pos_b - pos_a).normalize_or_zero();
+            let view_dir = (camera_pos - midpoint).normalize_or_zero();
+            let mut perp = line_dir.cross(view_dir).normalize_or_zero();
+            // Fallback if line is pointing at camera
+            if perp.length_squared() < 0.001 {
+                perp = Vec3::Y;
+            }
 
-            // Segment 2: Midpoint → Cell B (Zone B color)
-            vertices.push(LineVertex {
-                position: midpoint.to_array(),
-                color: color_b,
-            });
-            vertices.push(LineVertex {
-                position: pos_b.to_array(),
-                color: color_b,
-            });
+            // Half-segment 1: Cell A → Midpoint (zone A color)
+            Self::push_quad(&mut vertices, pos_a, midpoint, perp, zone_color_a, signal_color);
+
+            // Half-segment 2: Midpoint → Cell B (zone B color)
+            Self::push_quad(&mut vertices, midpoint, pos_b, perp, zone_color_b, signal_color);
         }
 
         // Update vertex buffer and render

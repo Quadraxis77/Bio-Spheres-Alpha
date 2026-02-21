@@ -114,9 +114,21 @@ pub struct ModeSettings {
 
     // Flagellocyte settings
     pub swim_force: f32, // Forward thrust force (0.0 to 1.0, for Flagellocyte cells)
+    pub flagellocyte_use_signal: bool, // If true, use signal-based speed; if false, use fixed swim_force
+    pub flagellocyte_signal_channel: i32, // Which signal channel to read (0-15)
+    pub flagellocyte_speed_a: f32, // Swim speed when signal < threshold_c
+    pub flagellocyte_speed_b: f32, // Swim speed when signal >= threshold_c
+    pub flagellocyte_threshold_c: f32, // Signal threshold for speed switching
     
     // Buoyocyte settings
     pub buoyancy_force: f32, // Upward buoyancy force (0.0 to 1.0, for Buoyocyte cells)
+    
+    // Oculocyte settings
+    pub oculocyte_sense_type: i32, // 0=Cell, 1=Food, 2=Light, 3=Barrier
+    pub oculocyte_signal_channel: i32, // Which channel to send on (0-15)
+    pub oculocyte_signal_value: f32, // Signal value to send when target detected (-50.0 to 50.0)
+    pub oculocyte_signal_hops: i32, // How many adhesion hops the signal propagates (1-20)
+    pub oculocyte_sense_range: f32, // How far ahead the oculocyte looks (1.0 to 50.0)
     
     // Membrane settings
     pub membrane_stiffness: f32, // Cell membrane stiffness for collision response (0.0 = no repulsion, higher = more rigid)
@@ -170,7 +182,17 @@ impl Default for ModeSettings {
             glueocyte_cell_adhesion: true,  // Default: cell adhesion enabled
             glueocyte_env_adhesion: false,     // Default: environment adhesion disabled
             swim_force: 0.5, // Default swim force for flagellocytes
+            flagellocyte_use_signal: false, // Default: fixed speed mode
+            flagellocyte_signal_channel: 0, // Default: channel 0
+            flagellocyte_speed_a: 0.5, // Default: same as swim_force
+            flagellocyte_speed_b: 0.0, // Default: stop when signal received
+            flagellocyte_threshold_c: 1.0, // Default: threshold of 1.0
             buoyancy_force: 0.5, // Default buoyancy force for buoyocytes
+            oculocyte_sense_type: 0, // Default: sense cells
+            oculocyte_signal_channel: 0, // Default: channel 0
+            oculocyte_signal_value: 10.0, // Default: +10 signal
+            oculocyte_signal_hops: 3, // Default: 3 hops
+            oculocyte_sense_range: 25.0, // Default: 25 units range
             membrane_stiffness: 50.0, // Default: moderate membrane stiffness
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),

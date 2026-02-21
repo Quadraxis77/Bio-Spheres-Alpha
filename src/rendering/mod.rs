@@ -142,6 +142,7 @@ pub mod gpu_surface_nets;
 pub mod voxel_renderer;
 pub mod sun_renderer;
 pub mod world_sphere;
+pub mod fov_cone;
 
 pub use adhesion_lines::AdhesionLineRenderer;
 pub use cave_system::{CaveSystemRenderer, CaveParams};

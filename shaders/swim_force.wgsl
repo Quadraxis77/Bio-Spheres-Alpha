@@ -28,8 +28,8 @@ struct PhysicsParams {
 }
 
 // Mode properties (per-mode settings from genome)
-// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3]
-// Total: 12 floats = 48 bytes per mode
+// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a, flagellocyte_speed_b, flagellocyte_threshold_c, flagellocyte_use_signal, pad]
+// Total: 16 floats = 64 bytes per mode
 struct ModeProperties {
     nutrient_gain_rate: f32,
     max_cell_size: f32,
@@ -40,9 +40,13 @@ struct ModeProperties {
     swim_force: f32,
     prioritize_when_low: f32,
     max_splits: f32,
-    _pad0: f32,
+    split_ratio: f32,
+    flagellocyte_signal_channel: f32,
+    flagellocyte_speed_a: f32,
+    flagellocyte_speed_b: f32,
+    flagellocyte_threshold_c: f32,
+    flagellocyte_use_signal: f32,  // 1.0 = signal mode, 0.0 = fixed mode
     _pad1: f32,
-    _pad2: f32,
 }
 
 // Cell type behavior flags for parameterized shader logic
@@ -108,6 +112,10 @@ var<storage, read> mode_cell_types: array<u32>;
 @group(2) @binding(4)
 var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
 
+// Signal flags buffer (read-only) - for flagellocyte signal-responsive speed
+@group(2) @binding(5)
+var<storage, read> signal_flags: array<u32>;
+
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const SWIM_FORCE_MULTIPLIER: f32 = 50.0; // Scale swim_force (0-1) to actual force magnitude
 
@@ -156,8 +164,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Get mode properties
     let mode = mode_properties[mode_idx];
     
-    // Skip if no swim force configured
-    if (mode.swim_force <= 0.0) {
+    // Determine effective swim speed
+    var effective_speed: f32;
+    if (mode.flagellocyte_use_signal >= 0.5) {
+        // Signal-based mode
+        let signal_value = f32(signal_flags[cell_idx]);
+        if (signal_value >= mode.flagellocyte_threshold_c) {
+            effective_speed = mode.flagellocyte_speed_b;
+        } else {
+            effective_speed = mode.flagellocyte_speed_a;
+        }
+    } else {
+        // Fixed speed mode
+        effective_speed = mode.swim_force;
+    }
+    
+    // Skip if no effective swim speed
+    if (effective_speed <= 0.0) {
         return;
     }
     
@@ -167,7 +190,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let forward = quat_rotate(rotation, vec3<f32>(0.0, 0.0, 1.0));
     
     // Calculate swim force vector
-    let force_magnitude = mode.swim_force * SWIM_FORCE_MULTIPLIER;
+    let force_magnitude = effective_speed * SWIM_FORCE_MULTIPLIER;
     let swim_force = forward * force_magnitude;
     
     // Add to force accumulation buffers (atomic for thread safety)

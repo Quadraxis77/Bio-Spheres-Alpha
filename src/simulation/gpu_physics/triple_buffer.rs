@@ -313,7 +313,7 @@ pub struct GpuTripleBufferSystem {
     pub child_b_keep_adhesion_flags: wgpu::Buffer,
     
     /// Mode properties buffer for division (per-mode properties)
-    /// Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3] = 48 bytes
+    /// Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a, flagellocyte_speed_b, flagellocyte_threshold_c, pad x2] = 64 bytes
     pub mode_properties: wgpu::Buffer,
     
     /// Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
@@ -361,6 +361,9 @@ pub struct GpuTripleBufferSystem {
 
     /// Per-mode glueocyte environment adhesion flags (one u32 per mode)
     pub glueocyte_env_adhesion_flags: wgpu::Buffer,
+
+    /// Per-mode oculocyte parameters: [sense_type(u32), sense_range(f32), signal_hops(u32), padding(u32)] = 16 bytes per mode
+    pub oculocyte_params: wgpu::Buffer,
 }
 
 impl GpuTripleBufferSystem {
@@ -500,8 +503,8 @@ impl GpuTripleBufferSystem {
         // Child B keep adhesion flags: one u32 per mode
         let child_b_keep_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Child B Keep Adhesion Flags");
         
-        // Mode properties: 12 floats per mode (48 bytes) - nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3
-        let mode_properties = Self::create_storage_buffer(device, max_modes * 48, "Mode Properties");
+        // Mode properties: 16 floats per mode (64 bytes) - nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a, flagellocyte_speed_b, flagellocyte_threshold_c, pad x2
+        let mode_properties = Self::create_storage_buffer(device, max_modes * 64, "Mode Properties");
         
         // Mode cell types: one u32 per mode - lookup table for deriving cell_type from mode_index
         let mode_cell_types = Self::create_storage_buffer(device, max_modes * 4, "Mode Cell Types");
@@ -520,6 +523,9 @@ impl GpuTripleBufferSystem {
 
         // Per-mode glueocyte env adhesion flags (one u32 per mode)
         let glueocyte_env_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Glueocyte Env Adhesion Flags");
+
+        // Per-mode oculocyte parameters: vec4<u32> per mode (sense_type, sense_range_bits, signal_hops, padding)
+        let oculocyte_params = Self::create_storage_buffer(device, max_modes * 16, "Oculocyte Params");
         
         Self {
             position_and_mass,
@@ -564,6 +570,7 @@ impl GpuTripleBufferSystem {
             behavior_flags,
             env_anchor_buffer,
             glueocyte_env_adhesion_flags,
+            oculocyte_params,
             current_index: AtomicUsize::new(0),
             capacity,
             needs_sync: true,
@@ -965,9 +972,10 @@ impl GpuTripleBufferSystem {
     pub fn sync_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
         // Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval] (vec4)
         //                  [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
-        //                  [max_splits, split_ratio, padding, padding] (vec4)
-        // Total: 12 floats = 48 bytes per mode
-        let mut properties_data: Vec<[f32; 12]> = Vec::new();
+        //                  [max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a] (vec4)
+        //                  [flagellocyte_speed_b, flagellocyte_threshold_c, padding, padding] (vec4)
+        // Total: 16 floats = 64 bytes per mode
+        let mut properties_data: Vec<[f32; 16]> = Vec::new();
         
         let mut global_mode_idx = 0usize;
         for (genome_idx, genome) in genomes.iter().enumerate() {
@@ -987,8 +995,12 @@ impl GpuTripleBufferSystem {
                     mode.swim_force,
                     if mode.prioritize_when_low { 1.0 } else { 0.0 },
                     gpu_max_splits,
-                    mode.split_ratio, // split_ratio instead of padding
-                    0.0, // padding
+                    mode.split_ratio,
+                    mode.flagellocyte_signal_channel as f32,
+                    mode.flagellocyte_speed_a,
+                    mode.flagellocyte_speed_b,
+                    mode.flagellocyte_threshold_c,
+                    if mode.flagellocyte_use_signal { 1.0 } else { 0.0 },
                     0.0, // padding
                 ]);
             }
@@ -1027,6 +1039,27 @@ impl GpuTripleBufferSystem {
         }
     }
 
+    /// Sync oculocyte parameters for all modes across all genomes
+    /// Layout per mode: [sense_type(u32), sense_range_bits(u32), signal_hops(u32), padding(u32)]
+    pub fn sync_oculocyte_params(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let params: Vec<[u32; 4]> = genomes
+            .iter()
+            .flat_map(|genome| {
+                genome.modes.iter().map(|mode| {
+                    [
+                        mode.oculocyte_sense_type as u32,
+                        mode.oculocyte_sense_range.to_bits(),
+                        mode.oculocyte_signal_hops as u32,
+                        0u32, // padding
+                    ]
+                })
+            })
+            .collect();
+        if !params.is_empty() {
+            queue.write_buffer(&self.oculocyte_params, 0, bytemuck::cast_slice(&params));
+        }
+    }
+
     /// Sync behavior flags for all cell types
     /// This populates the GPU buffer with behavior flags (applies_swim_force, etc.)
     /// for each cell type. Should be called once during initialization.
@@ -1044,9 +1077,10 @@ impl GpuTripleBufferSystem {
     pub fn incremental_sync_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
         // Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval] (vec4)
         //                  [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
-        //                  [max_splits, split_ratio, padding, padding] (vec4)
-        // Total: 12 floats = 48 bytes per mode
-        let mut properties_data: Vec<[f32; 12]> = Vec::new();
+        //                  [max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a] (vec4)
+        //                  [flagellocyte_speed_b, flagellocyte_threshold_c, padding, padding] (vec4)
+        // Total: 16 floats = 64 bytes per mode
+        let mut properties_data: Vec<[f32; 16]> = Vec::new();
         
         for mode in &genome.modes {
             let gpu_max_splits = if mode.max_splits < 0 { -1.0 } else { mode.max_splits as f32 };
@@ -1061,13 +1095,17 @@ impl GpuTripleBufferSystem {
                 if mode.prioritize_when_low { 1.0 } else { 0.0 },
                 gpu_max_splits,
                 mode.split_ratio,
-                0.0, // padding
+                mode.flagellocyte_signal_channel as f32,
+                mode.flagellocyte_speed_a,
+                mode.flagellocyte_speed_b,
+                mode.flagellocyte_threshold_c,
+                if mode.flagellocyte_use_signal { 1.0 } else { 0.0 },
                 0.0, // padding
             ]);
         }
         
         if !properties_data.is_empty() {
-            let offset = (global_start_index * 48) as u64; // 48 bytes per mode
+            let offset = (global_start_index * 64) as u64; // 64 bytes per mode
             queue.write_buffer(&self.mode_properties, offset, bytemuck::cast_slice(&properties_data));
         }
     }

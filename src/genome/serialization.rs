@@ -112,7 +112,27 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub swim_force: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub flagellocyte_use_signal: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flagellocyte_signal_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flagellocyte_speed_a: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flagellocyte_speed_b: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flagellocyte_threshold_c: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub buoyancy_force: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oculocyte_sense_type: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oculocyte_signal_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oculocyte_signal_value: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oculocyte_signal_hops: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oculocyte_sense_range: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -250,7 +270,17 @@ fn mode_to_serializable(
         mode_a_after_splits: diff_i32(mode.mode_a_after_splits, default.mode_a_after_splits),
         mode_b_after_splits: diff_i32(mode.mode_b_after_splits, default.mode_b_after_splits),
         swim_force: diff_f32(mode.swim_force, default.swim_force),
+        flagellocyte_use_signal: diff_bool(mode.flagellocyte_use_signal, default.flagellocyte_use_signal),
+        flagellocyte_signal_channel: diff_i32(mode.flagellocyte_signal_channel, default.flagellocyte_signal_channel),
+        flagellocyte_speed_a: diff_f32(mode.flagellocyte_speed_a, default.flagellocyte_speed_a),
+        flagellocyte_speed_b: diff_f32(mode.flagellocyte_speed_b, default.flagellocyte_speed_b),
+        flagellocyte_threshold_c: diff_f32(mode.flagellocyte_threshold_c, default.flagellocyte_threshold_c),
         buoyancy_force: diff_f32(mode.buoyancy_force, default.buoyancy_force),
+        oculocyte_sense_type: diff_i32(mode.oculocyte_sense_type, default.oculocyte_sense_type),
+        oculocyte_signal_channel: diff_i32(mode.oculocyte_signal_channel, default.oculocyte_signal_channel),
+        oculocyte_signal_value: diff_f32(mode.oculocyte_signal_value, default.oculocyte_signal_value),
+        oculocyte_signal_hops: diff_i32(mode.oculocyte_signal_hops, default.oculocyte_signal_hops),
+        oculocyte_sense_range: diff_f32(mode.oculocyte_sense_range, default.oculocyte_sense_range),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(&mode.adhesion_settings, &default.adhesion_settings),
@@ -288,6 +318,17 @@ impl SerializableModeSettings {
             || self.mode_a_after_splits.is_some()
             || self.mode_b_after_splits.is_some()
             || self.swim_force.is_some()
+            || self.flagellocyte_use_signal.is_some()
+            || self.flagellocyte_signal_channel.is_some()
+            || self.flagellocyte_speed_a.is_some()
+            || self.flagellocyte_speed_b.is_some()
+            || self.flagellocyte_threshold_c.is_some()
+            || self.buoyancy_force.is_some()
+            || self.oculocyte_sense_type.is_some()
+            || self.oculocyte_signal_channel.is_some()
+            || self.oculocyte_signal_value.is_some()
+            || self.oculocyte_signal_hops.is_some()
+            || self.oculocyte_sense_range.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -421,8 +462,38 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(swim_force) = ser.swim_force {
         mode.swim_force = swim_force;
     }
+    if let Some(use_signal) = ser.flagellocyte_use_signal {
+        mode.flagellocyte_use_signal = use_signal;
+    }
+    if let Some(channel) = ser.flagellocyte_signal_channel {
+        mode.flagellocyte_signal_channel = channel;
+    }
+    if let Some(speed_a) = ser.flagellocyte_speed_a {
+        mode.flagellocyte_speed_a = speed_a;
+    }
+    if let Some(speed_b) = ser.flagellocyte_speed_b {
+        mode.flagellocyte_speed_b = speed_b;
+    }
+    if let Some(threshold_c) = ser.flagellocyte_threshold_c {
+        mode.flagellocyte_threshold_c = threshold_c;
+    }
     if let Some(buoyancy_force) = ser.buoyancy_force {
         mode.buoyancy_force = buoyancy_force;
+    }
+    if let Some(sense_type) = ser.oculocyte_sense_type {
+        mode.oculocyte_sense_type = sense_type;
+    }
+    if let Some(channel) = ser.oculocyte_signal_channel {
+        mode.oculocyte_signal_channel = channel;
+    }
+    if let Some(value) = ser.oculocyte_signal_value {
+        mode.oculocyte_signal_value = value;
+    }
+    if let Some(hops) = ser.oculocyte_signal_hops {
+        mode.oculocyte_signal_hops = hops;
+    }
+    if let Some(range) = ser.oculocyte_sense_range {
+        mode.oculocyte_sense_range = range;
     }
     if let Some(ref child_a) = ser.child_a {
         apply_child_settings(&mut mode.child_a, child_a);

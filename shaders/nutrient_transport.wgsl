@@ -112,8 +112,8 @@ struct AdhesionConnection {
     _pad: u32,                        // offset 100-103
 }
 
-// Mode properties structure (48 bytes per mode)
-// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3]
+// Mode properties structure (64 bytes per mode)
+// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a, flagellocyte_speed_b, flagellocyte_threshold_c, pad x2]
 struct ModeProperties {
     nutrient_gain_rate: f32,
     max_cell_size: f32,
@@ -124,9 +124,13 @@ struct ModeProperties {
     swim_force: f32,
     prioritize_when_low: f32,  // 1.0 = true, 0.0 = false
     max_splits: f32,
-    _pad0: f32,
+    split_ratio: f32,
+    flagellocyte_signal_channel: f32,
+    flagellocyte_speed_a: f32,
+    flagellocyte_speed_b: f32,
+    flagellocyte_threshold_c: f32,
+    flagellocyte_use_signal: f32,  // 1.0 = signal mode, 0.0 = fixed mode
     _pad1: f32,
-    _pad2: f32,
 }
 
 // Constants matching reference implementation
@@ -198,8 +202,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         var mass_loss = BASE_METABOLISM_RATE * params.delta_time;
 
         // Additional consumption from swim force (Flagellocytes only)
-        if (mode.swim_force > 0.0) {
-            mass_loss += mode.swim_force * SWIM_CONSUMPTION_RATE * params.delta_time;
+        var effective_swim_speed = 0.0;
+        if (mode.flagellocyte_use_signal >= 0.5) {
+            // Signal-based: use speed_a as the active speed (conservative estimate for consumption)
+            effective_swim_speed = max(mode.flagellocyte_speed_a, mode.flagellocyte_speed_b);
+        } else {
+            effective_swim_speed = mode.swim_force;
+        }
+        if (effective_swim_speed > 0.0) {
+            mass_loss += effective_swim_speed * SWIM_CONSUMPTION_RATE * params.delta_time;
         }
 
         let consumption_fixed = float_to_fixed(-mass_loss);

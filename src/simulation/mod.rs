@@ -8,10 +8,12 @@ pub mod fluid_simulation;
 pub mod gpu_physics;
 pub mod physics_config;
 pub mod preview_physics;
+pub mod signal_system;
 pub mod spatial_grid;
 
 pub use adhesion_inheritance::inherit_adhesions_on_division;
 pub use canonical_state::CanonicalState;
 pub use physics_config::PhysicsConfig;
+pub use signal_system::*;
 pub use spatial_grid::DeterministicSpatialGrid;
 pub use gpu_physics::*;

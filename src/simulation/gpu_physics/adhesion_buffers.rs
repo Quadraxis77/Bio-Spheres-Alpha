@@ -87,6 +87,15 @@ pub struct AdhesionBuffers {
     
     /// Whether buffers need sync to GPU
     needs_sync: bool,
+
+    /// Per-cell signal active flags: u32 per cell (1 = any signal active, 0 = no signal)
+    /// Used by GPU adhesion line renderer for signal-based coloring.
+    /// Size: cell_capacity * 4 bytes
+    pub signal_flags: wgpu::Buffer,
+
+    /// Second signal flags buffer for double-buffered propagation.
+    /// During propagation: read from signal_flags, write to signal_flags_next, then swap.
+    pub signal_flags_next: wgpu::Buffer,
 }
 
 impl AdhesionBuffers {
@@ -155,6 +164,20 @@ impl AdhesionBuffers {
         let torque_accum_y = Self::create_storage_buffer(device, atomic_buffer_size, "Torque Accum Y");
         let torque_accum_z = Self::create_storage_buffer(device, atomic_buffer_size, "Torque Accum Z");
         
+        // Per-cell signal flags for adhesion line coloring (0 = no signal, 1 = has signal)
+        let signal_flags = Self::create_storage_buffer(
+            device,
+            cell_capacity as u64 * 4,
+            "Signal Flags",
+        );
+
+        // Second signal flags buffer for double-buffered propagation
+        let signal_flags_next = Self::create_storage_buffer(
+            device,
+            cell_capacity as u64 * 4,
+            "Signal Flags Next",
+        );
+
         // Initialize CPU-side caches
         let connections_cache = vec![GpuAdhesionConnection::inactive(); max_connections as usize];
         let cell_indices_cache = vec![CellAdhesionIndices::default(); cell_capacity as usize];
@@ -180,6 +203,8 @@ impl AdhesionBuffers {
             connections_cache,
             cell_indices_cache,
             needs_sync: true,
+            signal_flags,
+            signal_flags_next,
         }
     }
     

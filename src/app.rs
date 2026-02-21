@@ -210,6 +210,67 @@ impl App {
                     self.window.request_redraw();
                 }
 
+                // Handle right-click in Preview mode for cell context menu
+                if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Preview
+                    && *button == MouseButton::Right
+                    && *state == ElementState::Pressed
+                    && !self.ui.wants_pointer_input()
+                {
+                    if let Some(preview_scene) = self.scene_manager.preview_scene_mut() {
+                        let (mx, my) = self.mouse_position;
+                        let w = self.config.width as f32;
+                        let h = self.config.height as f32;
+                        let aspect = w / h;
+
+                        let cam_pos = preview_scene.camera.position();
+                        let cam_rot = preview_scene.camera.rotation;
+                        let fov_y = 45.0_f32.to_radians();
+                        let tan_half_fov = (fov_y / 2.0).tan();
+
+                        let ndc_x = (mx / w) * 2.0 - 1.0;
+                        let ndc_y = 1.0 - (my / h) * 2.0;
+
+                        let ray_dir_cam = glam::Vec3::new(
+                            ndc_x * aspect * tan_half_fov,
+                            ndc_y * tan_half_fov,
+                            -1.0,
+                        ).normalize();
+                        let ray_dir = cam_rot * ray_dir_cam;
+
+                        let cell_count = preview_scene.state.display_state.cell_count;
+                        let mut best_t = f32::MAX;
+                        let mut hit_cell: Option<usize> = None;
+
+                        for i in 0..cell_count {
+                            let center = preview_scene.state.display_state.positions[i];
+                            let radius = preview_scene.state.display_state.radii[i];
+                            let oc = cam_pos - center;
+                            let b = oc.dot(ray_dir);
+                            let c = oc.dot(oc) - radius * radius;
+                            let disc = b * b - c;
+                            if disc >= 0.0 {
+                                let t = -b - disc.sqrt();
+                                if t > 0.001 && t < best_t {
+                                    best_t = t;
+                                    hit_cell = Some(i);
+                                }
+                            }
+                        }
+
+                        if let Some(cell_idx) = hit_cell {
+                            preview_scene.context_menu_cell = Some(cell_idx);
+                            // Convert physical pixels to egui logical points
+                            let scale = self.window.scale_factor() as f32;
+                            preview_scene.context_menu_screen_pos = (mx / scale, my / scale);
+                            preview_scene.context_menu_open_time = std::time::Instant::now();
+                            log::info!("Right-click on cell {} at screen ({}, {})", cell_idx, mx, my);
+                        } else {
+                            preview_scene.context_menu_cell = None;
+                        }
+                    }
+                    self.window.request_redraw();
+                }
+
                 // Handle radial menu click (GPU mode only)
                 if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
                     // Read menu state before mutable borrow
@@ -678,6 +739,144 @@ impl App {
                 }
             }
             
+            // Render right-click cell context menu for Preview mode
+            if current_mode == crate::ui::types::SimulationMode::Preview {
+                if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut() {
+                    let ctx = self.ui.ctx().clone();
+                    if let Some(cell_idx) = preview_scene.context_menu_cell {
+                        let screen_pos = preview_scene.context_menu_screen_pos;
+                        let display_state = &preview_scene.state.display_state;
+                        let genome = &preview_scene.genome;
+
+                        // Gather cell info before mutable borrow
+                        let mode_idx = display_state.mode_indices.get(cell_idx).copied().unwrap_or(0);
+                        let cell_type_name = genome.modes.get(mode_idx)
+                            .map(|m| crate::cell::CellType::from_index(m.cell_type as u32)
+                                .map(|ct| ct.name())
+                                .unwrap_or("Unknown"))
+                            .unwrap_or("Unknown");
+                        let is_oculocyte = genome.modes.get(mode_idx)
+                            .map(|m| m.cell_type == 7)
+                            .unwrap_or(false);
+                        let mass = display_state.masses.get(cell_idx).copied().unwrap_or(0.0);
+                        let signal_channel = genome.modes.get(mode_idx)
+                            .map(|m| m.oculocyte_signal_channel.clamp(0, 15) as usize)
+                            .unwrap_or(0);
+                        let signal_value = genome.modes.get(mode_idx)
+                            .map(|m| m.oculocyte_signal_value)
+                            .unwrap_or(10.0);
+                        let signal_hops = genome.modes.get(mode_idx)
+                            .map(|m| m.oculocyte_signal_hops.clamp(1, 20) as usize)
+                            .unwrap_or(3);
+
+                        // Read all 16 signal channels for this cell
+                        let cell_signals: [Option<f32>; 16] = std::array::from_fn(|ch| {
+                            display_state.signal_channels.get(cell_idx * 16 + ch).copied().flatten()
+                        });
+
+                        let mut close_menu = false;
+                        let mut send_test_signal = false;
+
+                        let area_resp = egui::Area::new(egui::Id::new("cell_context_menu"))
+                            .fixed_pos(egui::Pos2::new(screen_pos.0, screen_pos.1))
+                            .interactable(true)
+                            .order(egui::Order::Foreground)
+                            .show(&ctx, |ui| {
+                                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                    ui.set_min_width(160.0);
+                                    ui.label(format!("Cell #{}", cell_idx));
+                                    ui.label(format!("Type: {}", cell_type_name));
+                                    ui.label(format!("Mode: M{}", mode_idx + 1));
+                                    ui.label(format!("Mass: {:.2}", mass));
+                                    ui.separator();
+
+                                    // Signal channels
+                                    ui.label("Signal Channels:");
+                                    egui::Grid::new("signal_channels_grid")
+                                        .num_columns(2)
+                                        .spacing([8.0, 2.0])
+                                        .show(ui, |ui| {
+                                            for ch in 0..16usize {
+                                                let val = cell_signals[ch];
+                                                ui.label(format!("Ch {:2}:", ch));
+                                                match val {
+                                                    Some(v) => {
+                                                        ui.colored_label(
+                                                            egui::Color32::from_rgb(255, 220, 50),
+                                                            format!("{:.1}", v),
+                                                        );
+                                                    }
+                                                    None => {
+                                                        ui.colored_label(
+                                                            egui::Color32::from_rgb(100, 100, 100),
+                                                            "—",
+                                                        );
+                                                    }
+                                                }
+                                                ui.end_row();
+                                            }
+                                        });
+                                    ui.separator();
+
+                                    if is_oculocyte {
+                                        if ui.button("Send Test Signal").clicked() {
+                                            send_test_signal = true;
+                                            close_menu = true;
+                                        }
+                                    }
+
+                                    if ui.button("Close").clicked() {
+                                        close_menu = true;
+                                    }
+                                });
+                            });
+
+                        // Close on escape
+                        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            close_menu = true;
+                        }
+
+                        // Close on click outside the popup, with a 300ms grace period
+                        // so the right-click that opened the menu doesn't immediately close it
+                        let elapsed = preview_scene.context_menu_open_time.elapsed();
+                        if elapsed > std::time::Duration::from_millis(300) {
+                            // Check if pointer clicked outside the popup area
+                            let popup_rect = area_resp.response.rect;
+                            let clicked_outside = ctx.input(|i| {
+                                if let Some(pos) = i.pointer.interact_pos() {
+                                    i.pointer.any_pressed() && !popup_rect.contains(pos)
+                                } else {
+                                    false
+                                }
+                            });
+                            if clicked_outside {
+                                close_menu = true;
+                            }
+                        }
+
+                        if send_test_signal {
+                            let emission = crate::simulation::signal_system::SignalEmission {
+                                source_cell: cell_idx,
+                                channel: signal_channel,
+                                value: signal_value,
+                                hops: signal_hops,
+                            };
+                            crate::simulation::signal_system::clear_all_signals(&mut preview_scene.state.display_state);
+                            crate::simulation::signal_system::propagate_test_signals(
+                                &mut preview_scene.state.display_state,
+                                vec![emission],
+                            );
+                            log::info!("Sent test signal from cell {} on channel {} (value={}, hops={})",
+                                cell_idx, signal_channel, signal_value, signal_hops);
+                        }
+
+                        if close_menu {
+                            preview_scene.context_menu_cell = None;
+                        }
+                    }
+                }
+            }
+
             let output = self.ui.end_frame(
                 &mut self.dock_manager,
                 &mut self.working_genome,

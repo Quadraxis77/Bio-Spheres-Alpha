@@ -201,6 +201,11 @@ impl PreviewState {
             mode.nutrient_gain_rate.to_bits().hash(&mut hasher);
             mode.max_cell_size.to_bits().hash(&mut hasher);
             mode.swim_force.to_bits().hash(&mut hasher);
+            mode.flagellocyte_use_signal.hash(&mut hasher);
+            mode.flagellocyte_signal_channel.hash(&mut hasher);
+            mode.flagellocyte_speed_a.to_bits().hash(&mut hasher);
+            mode.flagellocyte_speed_b.to_bits().hash(&mut hasher);
+            mode.flagellocyte_threshold_c.to_bits().hash(&mut hasher);
             mode.buoyancy_force.to_bits().hash(&mut hasher);
             mode.nutrient_priority.to_bits().hash(&mut hasher);
             mode.prioritize_when_low.hash(&mut hasher);
@@ -219,6 +224,13 @@ impl PreviewState {
             mode.child_b.orientation.z.to_bits().hash(&mut hasher);
             mode.child_b.orientation.w.to_bits().hash(&mut hasher);
             mode.child_b.keep_adhesion.hash(&mut hasher);
+            
+            // Hash oculocyte settings
+            mode.oculocyte_sense_type.hash(&mut hasher);
+            mode.oculocyte_signal_channel.hash(&mut hasher);
+            mode.oculocyte_signal_value.to_bits().hash(&mut hasher);
+            mode.oculocyte_signal_hops.hash(&mut hasher);
+            mode.oculocyte_sense_range.to_bits().hash(&mut hasher);
             
             // Hash adhesion settings
             mode.adhesion_settings.can_break.hash(&mut hasher);

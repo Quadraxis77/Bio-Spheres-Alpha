@@ -87,8 +87,8 @@ fn get_global_mode_index(genome_id: u32, local_mode_idx: u32) -> u32 {
 // Get mode properties for a specific genome and mode
 fn get_mode_properties(genome_id: u32, local_mode_idx: u32, property_index: u32) -> vec4<f32> {
     let global_idx = get_global_mode_index(genome_id, local_mode_idx);
-    // Each mode has 3 property vectors (12 floats total)
-    return genome_mode_properties[global_idx * 3u + property_index];
+    // Each mode has 4 property vectors (16 floats total)
+    return genome_mode_properties[global_idx * 4u + property_index];
 }
 
 @compute @workgroup_size(1)

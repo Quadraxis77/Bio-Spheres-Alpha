@@ -417,6 +417,17 @@ pub struct CanonicalState {
 
     /// Whether this cell currently has an active environment anchor
     pub env_anchor_active: Vec<bool>,
+
+    // === Signal System ===
+    // Per-cell signal channels for oculocyte sensing and inter-cell communication.
+    // 16 channels per cell. None = null (no signal), Some(v) = active signal value.
+
+    /// Signal channels for each cell: signal_channels[cell_index * 16 + channel]
+    /// None = null (no signal on this channel), Some(value) = active signal
+    pub signal_channels: Vec<Option<f32>>,
+
+    /// Whether any cell has an active signal (optimization flag to skip rendering checks)
+    pub has_any_signal: bool,
 }
 
 impl CanonicalState {
@@ -523,6 +534,10 @@ impl CanonicalState {
             // Environment adhesion — no anchors by default
             env_anchor_pos: vec![Vec3::ZERO; capacity],
             env_anchor_active: vec![false; capacity],
+
+            // Signal system — all channels null by default
+            signal_channels: vec![None; capacity * 16],
+            has_any_signal: false,
         }
     }
     
@@ -625,6 +640,11 @@ impl CanonicalState {
         // No environment anchor for new cells
         self.env_anchor_pos[index] = Vec3::ZERO;
         self.env_anchor_active[index] = false;
+
+        // Clear signal channels for new cell
+        for ch in 0..16 {
+            self.signal_channels[index * 16 + ch] = None;
+        }
         
         Some(index)
     }
@@ -735,6 +755,11 @@ impl CanonicalState {
         // No environment anchor for new cells
         self.env_anchor_pos[slot_index] = Vec3::ZERO;
         self.env_anchor_active[slot_index] = false;
+
+        // Clear signal channels for new cell
+        for ch in 0..16 {
+            self.signal_channels[slot_index * 16 + ch] = None;
+        }
         
         Some(slot_index)
     }
@@ -796,6 +821,11 @@ impl CanonicalState {
             self.sister_expiry[cell_index] = self.sister_expiry[last_index];
             self.env_anchor_pos[cell_index] = self.env_anchor_pos[last_index];
             self.env_anchor_active[cell_index] = self.env_anchor_active[last_index];
+
+            // Swap signal channels (16 channels per cell)
+            for ch in 0..16 {
+                self.signal_channels[cell_index * 16 + ch] = self.signal_channels[last_index * 16 + ch];
+            }
             
             // Update adhesion system for the swapped cell
             self.adhesion_manager.update_cell_index_after_swap(

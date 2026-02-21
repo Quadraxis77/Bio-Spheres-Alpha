@@ -265,181 +265,34 @@ pub fn apply_buoyancy_forces(state: &mut CanonicalState, genome: &Genome) {
         }
     }
 }
-
 pub fn apply_swim_forces(state: &mut CanonicalState, genome: &Genome) {
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
         if let Some(mode) = genome.modes.get(mode_index) {
             // Only apply swim force to Flagellocyte cells (cell_type == 1)
-            if mode.cell_type == 1 && mode.swim_force > 0.0 {
+            if mode.cell_type == 1 {
+                // Determine effective swim speed
+                let effective_speed = if mode.flagellocyte_use_signal {
+                    let channel = mode.flagellocyte_signal_channel.clamp(0, 15) as usize;
+                    let signal_value = state.signal_channels[i * 16 + channel].unwrap_or(0.0);
+                    if signal_value >= mode.flagellocyte_threshold_c {
+                        mode.flagellocyte_speed_b
+                    } else {
+                        mode.flagellocyte_speed_a
+                    }
+                } else {
+                    mode.swim_force
+                };
+
+                if effective_speed <= 0.0 { continue; }
+
                 // Get forward direction from cell's rotation (local +Z axis)
                 let forward = state.rotations[i] * Vec3::Z;
                 
                 // Apply thrust force in forward direction
                 // Scale by 120.0 to make the force meaningful in the physics simulation
-                let thrust_force = forward * mode.swim_force * 120.0;
+                let thrust_force = forward * effective_speed * 120.0;
                 state.forces[i] += thrust_force;
-            }
-        }
-    }
-}
-
-/// Update nutrient growth
-/// Note: Flagellocytes (cell_type == 1) don't generate their own nutrients -
-/// they must receive nutrients through adhesion connections from other cells.
-pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f32) {
-    for i in 0..state.cell_count {
-        let mode_index = state.mode_indices[i];
-        if let Some(mode) = genome.modes.get(mode_index) {
-            // Preview scene auto-gain simulates GPU scene nutrient sources:
-            // - Test cells (0): Always auto-gain
-            // - Phagocytes (2): Simulate eating nutrient particles
-            // - Photocytes (3): Simulate photosynthesis from light
-            // All other cells (Flagellocytes, Lipocytes, Buoyocytes) must rely on nutrient transport
-            let can_auto_gain = mode.cell_type == 0  // Test
-                             || mode.cell_type == 2  // Phagocyte
-                             || mode.cell_type == 3; // Photocyte
-
-            let current_mass = state.masses[i];
-
-            if can_auto_gain {
-                let max_mass = mode.split_mass * 2.0;
-                if current_mass < max_mass {
-                    let mass_gain = mode.nutrient_gain_rate * dt;
-                    if mass_gain > 0.0 {
-                        let new_mass = (current_mass + mass_gain).min(max_mass);
-                        if new_mass != current_mass {
-                            state.masses[i] = new_mass;
-                            let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
-                            if new_radius != state.radii[i] {
-                                state.radii[i] = new_radius;
-                                state.masses_changed = true;
-                            }
-                        }
-                    }
-                }
-            } else {
-                // Non-auto-gain cells lose mass at the GPU's fixed base metabolism rate.
-                // Matches nutrient_transport.wgsl BASE_METABOLISM_RATE = 0.025 mass/sec.
-                const BASE_METABOLISM_RATE: f32 = 0.025;
-                let mass_loss = BASE_METABOLISM_RATE * dt;
-                let new_mass = (current_mass - mass_loss).max(0.0);
-                if new_mass != current_mass {
-                    state.masses[i] = new_mass;
-                    let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
-                    if new_radius != state.radii[i] {
-                        state.radii[i] = new_radius;
-                        state.masses_changed = true;
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Transport nutrients between adhesion-connected cells based on priority ratios.
-/// 
-/// Nutrients flow to establish equilibrium: mass_a / mass_b = priority_a / priority_b
-/// Flow is driven by "pressure" differences: pressure = mass / priority
-/// Cells with low mass get temporary priority boost when below danger threshold.
-/// 
-/// This allows Flagellocytes (which consume nutrients for swimming) to receive
-/// nutrients from connected cells with higher nutrient_gain_rate.
-pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome: &Genome, dt: f32) {
-    const DANGER_THRESHOLD: f32 = 0.6;
-    const PRIORITY_BOOST: f32 = 10.0;
-    const TRANSPORT_RATE: f32 = 2.0;
-    
-    // Collect mass deltas to apply atomically after processing all adhesions
-    let mut mass_deltas = vec![0.0f32; state.cell_count];
-    
-    // Process each active adhesion connection (SoA layout)
-    let connections = &state.adhesion_connections;
-    for i in 0..connections.is_active.len() {
-        if connections.is_active[i] == 0 {
-            continue;
-        }
-        
-        let cell_a = connections.cell_a_index[i];
-        let cell_b = connections.cell_b_index[i];
-        
-        if cell_a >= state.cell_count || cell_b >= state.cell_count {
-            continue;
-        }
-        
-        // Get mode settings for both cells
-        let mode_a_idx = state.mode_indices[cell_a];
-        let mode_b_idx = state.mode_indices[cell_b];
-        
-        let mode_a = match genome.modes.get(mode_a_idx) {
-            Some(m) => m,
-            None => continue,
-        };
-        let mode_b = match genome.modes.get(mode_b_idx) {
-            Some(m) => m,
-            None => continue,
-        };
-        
-        let mass_a = state.masses[cell_a];
-        let mass_b = state.masses[cell_b];
-        
-        // Get base priorities
-        let base_priority_a = mode_a.nutrient_priority;
-        let base_priority_b = mode_b.nutrient_priority;
-        
-        // Apply temporary priority boost when cells are dangerously low on nutrients
-        let priority_a = if mode_a.prioritize_when_low && mass_a < DANGER_THRESHOLD {
-            base_priority_a * PRIORITY_BOOST
-        } else {
-            base_priority_a
-        };
-        let priority_b = if mode_b.prioritize_when_low && mass_b < DANGER_THRESHOLD {
-            base_priority_b * PRIORITY_BOOST
-        } else {
-            base_priority_b
-        };
-        
-        // Calculate equilibrium-based nutrient flow
-        // At equilibrium: mass_a / mass_b = priority_a / priority_b
-        // Flow is driven by "pressure" difference: pressure = mass / priority
-        let pressure_a = mass_a / priority_a;
-        let pressure_b = mass_b / priority_b;
-        let pressure_diff = pressure_a - pressure_b;
-        
-        // Calculate mass transfer (positive = A -> B, negative = B -> A)
-        let mass_transfer = pressure_diff * TRANSPORT_RATE * dt;
-        
-        // Apply transfer with minimum thresholds
-        let min_mass_a = if mode_a.prioritize_when_low { 0.1 } else { 0.0 };
-        let min_mass_b = if mode_b.prioritize_when_low { 0.1 } else { 0.0 };
-        
-        let actual_transfer = if mass_transfer > 0.0 {
-            // A -> B: limit by A's available mass
-            mass_transfer.min(mass_a - min_mass_a)
-        } else {
-            // B -> A: limit by B's available mass
-            mass_transfer.max(-(mass_b - min_mass_b))
-        };
-        
-        // Accumulate deltas
-        mass_deltas[cell_a] -= actual_transfer;
-        mass_deltas[cell_b] += actual_transfer;
-    }
-    
-    // Apply accumulated mass deltas
-    for i in 0..state.cell_count {
-        if mass_deltas[i] != 0.0 {
-            let new_mass = (state.masses[i] + mass_deltas[i]).max(0.0);
-            if new_mass != state.masses[i] {
-                state.masses[i] = new_mass;
-                let max_size = genome.modes.get(state.mode_indices[i])
-                    .map(|m| m.max_cell_size)
-                    .unwrap_or(2.0);
-                let new_radius = new_mass.min(max_size).clamp(0.5, 2.0);
-                if new_radius != state.radii[i] {
-                    state.radii[i] = new_radius;
-                    state.masses_changed = true;
-                }
             }
         }
     }
@@ -480,9 +333,23 @@ pub fn consume_swim_nutrients(
         let mode_index = state.mode_indices[i];
         if let Some(mode) = genome.modes.get(mode_index) {
             // Only apply nutrient consumption to Flagellocyte cells (cell_type == 1)
-            if mode.cell_type == 1 && mode.swim_force > 0.0 {
-                // Consume mass proportional to swim force (automatic, not adjustable)
-                let mass_loss = mode.swim_force * CONSUMPTION_RATE * dt;
+            if mode.cell_type == 1 {
+                // Determine effective swim speed
+                let effective_speed = if mode.flagellocyte_use_signal {
+                    let channel = mode.flagellocyte_signal_channel.clamp(0, 15) as usize;
+                    let signal_value = state.signal_channels[i * 16 + channel].unwrap_or(0.0);
+                    if signal_value >= mode.flagellocyte_threshold_c {
+                        mode.flagellocyte_speed_b
+                    } else {
+                        mode.flagellocyte_speed_a
+                    }
+                } else {
+                    mode.swim_force
+                };
+                if effective_speed <= 0.0 { continue; }
+
+                // Consume mass proportional to effective speed (automatic, not adjustable)
+                let mass_loss = effective_speed * CONSUMPTION_RATE * dt;
                 state.masses[i] -= mass_loss;
                 
                 // Check if cell has died (below minimum mass threshold)
@@ -503,6 +370,136 @@ pub fn consume_swim_nutrients(
         }
     }
     cells_to_remove
+}
+
+/// Update nutrient growth
+/// Note: Flagellocytes (cell_type == 1) don't generate their own nutrients -
+/// they must receive nutrients through adhesion connections from other cells.
+pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f32) {
+    for i in 0..state.cell_count {
+        let mode_index = state.mode_indices[i];
+        if let Some(mode) = genome.modes.get(mode_index) {
+            let can_auto_gain = mode.cell_type == 0  // Test
+                             || mode.cell_type == 2  // Phagocyte
+                             || mode.cell_type == 3; // Photocyte
+
+            let current_mass = state.masses[i];
+
+            if can_auto_gain {
+                let max_mass = mode.split_mass * 2.0;
+                if current_mass < max_mass {
+                    let mass_gain = mode.nutrient_gain_rate * dt;
+                    if mass_gain > 0.0 {
+                        let new_mass = (current_mass + mass_gain).min(max_mass);
+                        if new_mass != current_mass {
+                            state.masses[i] = new_mass;
+                            let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
+                            if new_radius != state.radii[i] {
+                                state.radii[i] = new_radius;
+                                state.masses_changed = true;
+                            }
+                        }
+                    }
+                }
+            } else {
+                const BASE_METABOLISM_RATE: f32 = 0.025;
+                let mass_loss = BASE_METABOLISM_RATE * dt;
+                let new_mass = (current_mass - mass_loss).max(0.0);
+                if new_mass != current_mass {
+                    state.masses[i] = new_mass;
+                    let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
+                    if new_radius != state.radii[i] {
+                        state.radii[i] = new_radius;
+                        state.masses_changed = true;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Transport nutrients between adhesion-connected cells based on priority ratios.
+pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome: &Genome, dt: f32) {
+    const DANGER_THRESHOLD: f32 = 0.6;
+    const PRIORITY_BOOST: f32 = 10.0;
+    const TRANSPORT_RATE: f32 = 2.0;
+
+    let mut mass_deltas = vec![0.0f32; state.cell_count];
+
+    let connections = &state.adhesion_connections;
+    for i in 0..connections.is_active.len() {
+        if connections.is_active[i] == 0 {
+            continue;
+        }
+
+        let cell_a = connections.cell_a_index[i];
+        let cell_b = connections.cell_b_index[i];
+
+        if cell_a >= state.cell_count || cell_b >= state.cell_count {
+            continue;
+        }
+
+        let mode_a_idx = state.mode_indices[cell_a];
+        let mode_b_idx = state.mode_indices[cell_b];
+
+        let mode_a = match genome.modes.get(mode_a_idx) {
+            Some(m) => m,
+            None => continue,
+        };
+        let mode_b = match genome.modes.get(mode_b_idx) {
+            Some(m) => m,
+            None => continue,
+        };
+
+        let mass_a = state.masses[cell_a];
+        let mass_b = state.masses[cell_b];
+
+        let priority_a = if mode_a.prioritize_when_low && mass_a < DANGER_THRESHOLD {
+            mode_a.nutrient_priority * PRIORITY_BOOST
+        } else {
+            mode_a.nutrient_priority
+        };
+        let priority_b = if mode_b.prioritize_when_low && mass_b < DANGER_THRESHOLD {
+            mode_b.nutrient_priority * PRIORITY_BOOST
+        } else {
+            mode_b.nutrient_priority
+        };
+
+        let pressure_a = mass_a / priority_a;
+        let pressure_b = mass_b / priority_b;
+        let pressure_diff = pressure_a - pressure_b;
+
+        let mass_transfer = pressure_diff * TRANSPORT_RATE * dt;
+
+        let min_mass_a = if mode_a.prioritize_when_low { 0.1 } else { 0.0 };
+        let min_mass_b = if mode_b.prioritize_when_low { 0.1 } else { 0.0 };
+
+        let actual_transfer = if mass_transfer > 0.0 {
+            mass_transfer.min(mass_a - min_mass_a)
+        } else {
+            mass_transfer.max(-(mass_b - min_mass_b))
+        };
+
+        mass_deltas[cell_a] -= actual_transfer;
+        mass_deltas[cell_b] += actual_transfer;
+    }
+
+    for i in 0..state.cell_count {
+        if mass_deltas[i] != 0.0 {
+            let new_mass = (state.masses[i] + mass_deltas[i]).max(0.0);
+            if new_mass != state.masses[i] {
+                state.masses[i] = new_mass;
+                let max_size = genome.modes.get(state.mode_indices[i])
+                    .map(|m| m.max_cell_size)
+                    .unwrap_or(2.0);
+                let new_radius = new_mass.min(max_size).clamp(0.5, 2.0);
+                if new_radius != state.radii[i] {
+                    state.radii[i] = new_radius;
+                    state.masses_changed = true;
+                }
+            }
+        }
+    }
 }
 
 /// Form adhesion bonds for Glueocyte cells on contact with other cells.
@@ -700,6 +697,10 @@ pub fn physics_step_with_genome(
 
     // Form contact adhesion bonds for Glueocyte cells
     form_glueocyte_contact_bonds(state, genome, current_time);
+
+    // Run signal system (oculocyte sensing + BFS propagation)
+    let boundary_radius = config.sphere_radius;
+    crate::simulation::signal_system::run_signal_system(state, genome, boundary_radius);
 
     let max_cells = state.capacity;
     let rng_seed = 12345;

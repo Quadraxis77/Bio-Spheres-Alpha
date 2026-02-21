@@ -73,8 +73,8 @@ struct CellTypeVisuals {
 }
 
 // Mode properties (per-mode settings from genome)
-// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3]
-// Total: 12 floats = 48 bytes per mode
+// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a, flagellocyte_speed_b, flagellocyte_threshold_c, pad x2]
+// Total: 16 floats = 64 bytes per mode
 struct ModeProperties {
     nutrient_gain_rate: f32,
     max_cell_size: f32,
@@ -85,9 +85,13 @@ struct ModeProperties {
     swim_force: f32,
     prioritize_when_low: f32,
     max_splits: f32,
-    _pad0: f32,
+    split_ratio: f32,
+    flagellocyte_signal_channel: f32,
+    flagellocyte_speed_a: f32,
+    flagellocyte_speed_b: f32,
+    flagellocyte_threshold_c: f32,
+    flagellocyte_use_signal: f32,  // 1.0 = signal mode, 0.0 = fixed mode
     _pad1: f32,
-    _pad2: f32,
 }
 
 // Cell type behavior flags for parameterized shader logic

@@ -245,6 +245,17 @@ pub struct GpuScene {
     cave_shadow_bind_group_set: bool,
     /// Whether genome settings are dirty and need GPU sync
     genomes_dirty: bool,
+    /// Uniform buffer for signal sense world params (boundary_radius, light_dir, grid params)
+    signal_sense_world_params_buffer: wgpu::Buffer,
+    /// Dummy nutrient buffer (used when fluid simulator is not yet initialized)
+    #[allow(dead_code)]
+    signal_sense_dummy_nutrient_buffer: wgpu::Buffer,
+    /// Dummy light field buffer (used when light field system is not yet initialized)
+    #[allow(dead_code)]
+    signal_sense_dummy_light_buffer: wgpu::Buffer,
+    /// Dummy solid mask buffer (used when fluid simulator is not yet initialized)
+    #[allow(dead_code)]
+    signal_sense_dummy_solid_buffer: wgpu::Buffer,
 }
 
 impl GpuScene {
@@ -299,8 +310,44 @@ impl GpuScene {
         // Initialize adhesion buffers with default values
         adhesion_buffers.initialize(queue);
         
+        // Create signal sense world params uniform buffer (48 bytes = 12 floats)
+        // Matches SignalSenseWorldParams in signal_sense.wgsl
+        let signal_sense_world_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Signal Sense World Params Buffer"),
+            size: 48, // 12 x f32
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // Dummy storage buffers (4 bytes each) - used until real systems are initialized
+        let signal_sense_dummy_nutrient_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Signal Sense Dummy Nutrient Buffer"),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let signal_sense_dummy_light_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Signal Sense Dummy Light Buffer"),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let signal_sense_dummy_solid_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Signal Sense Dummy Solid Buffer"),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
         // Create cached bind groups (once, not per-frame!)
-        let cached_bind_groups = gpu_physics_pipelines.create_cached_bind_groups(device, &gpu_triple_buffers, &adhesion_buffers);
+        let cached_bind_groups = gpu_physics_pipelines.create_cached_bind_groups(
+            device,
+            &gpu_triple_buffers,
+            &adhesion_buffers,
+            &signal_sense_world_params_buffer,
+            &signal_sense_dummy_nutrient_buffer,
+            &signal_sense_dummy_light_buffer,
+            &signal_sense_dummy_solid_buffer,
+        );
 
         // Create GPU cell inspector system (will be initialized later with device)
         let cell_inspector = None; // Will be initialized when needed
@@ -419,6 +466,10 @@ impl GpuScene {
             cached_adhesion_data_bind_groups: None,
             cave_shadow_bind_group_set: false,
             genomes_dirty: false,
+            signal_sense_world_params_buffer,
+            signal_sense_dummy_nutrient_buffer,
+            signal_sense_dummy_light_buffer,
+            signal_sense_dummy_solid_buffer,
         }
     }
 
@@ -605,6 +656,32 @@ impl GpuScene {
         // Run photocyte light consumption each physics step (reads pre-computed light field)
         self.run_photocyte_light_consumption(device, encoder, queue);
         
+        // Update signal sense world params (boundary_radius, light_dir, fluid grid params)
+        {
+            let boundary_radius = world_diameter * 0.5;
+            let light_dir = self.light_field_system.as_ref()
+                .map(|lfs| lfs.light_dir())
+                .unwrap_or([-0.5, 0.7, 0.5]);
+            let (grid_resolution, cell_size, grid_origin) = self.fluid_simulator.as_ref()
+                .map(|fs| {
+                    let (wr, wc) = fs.grid_params();
+                    let wd = wr * 2.0;
+                    let cs = wd / 128.0;
+                    let go = wc - glam::Vec3::splat(wd / 2.0);
+                    (128u32, cs, [go.x, go.y, go.z])
+                })
+                .unwrap_or((0u32, 1.0, [0.0, 0.0, 0.0]));
+            let params: [f32; 12] = [
+                boundary_radius,
+                light_dir[0], light_dir[1], light_dir[2],
+                f32::from_bits(grid_resolution),
+                cell_size,
+                grid_origin[0], grid_origin[1], grid_origin[2],
+                0.0, 0.0, 0.0, // padding
+            ];
+            queue.write_buffer(&self.signal_sense_world_params_buffer, 0, bytemuck::cast_slice(&params));
+        }
+
         // Cell count is read from GPU buffer by shaders
         // Uses cached bind groups (no per-frame allocation!)
         execute_gpu_physics_step(
@@ -1131,6 +1208,9 @@ impl GpuScene {
 
         // Sync glueocyte env adhesion flags (one u32 per mode)
         self.gpu_triple_buffers.sync_glueocyte_env_adhesion_flags(queue, &self.genomes);
+
+        // Sync oculocyte parameters (sense_type, sense_range, signal_hops per mode)
+        self.gpu_triple_buffers.sync_oculocyte_params(queue, &self.genomes);
 
         // Sync child mode indices for division (CRITICAL: determines what mode children get)
         self.gpu_triple_buffers.sync_child_mode_indices(queue, &self.genomes);
@@ -2077,6 +2157,7 @@ impl GpuScene {
             &self.adhesion_buffers.adhesion_connections,
             &self.adhesion_buffers.adhesion_counts,
             &self.gpu_triple_buffers.cell_count_buffer,
+            &self.adhesion_buffers.signal_flags,
         );
         let bg1 = self.adhesion_renderer.create_data_bind_group(
             device,
@@ -2084,6 +2165,7 @@ impl GpuScene {
             &self.adhesion_buffers.adhesion_connections,
             &self.adhesion_buffers.adhesion_counts,
             &self.gpu_triple_buffers.cell_count_buffer,
+            &self.adhesion_buffers.signal_flags,
         );
         let bg2 = self.adhesion_renderer.create_data_bind_group(
             device,
@@ -2091,6 +2173,7 @@ impl GpuScene {
             &self.adhesion_buffers.adhesion_connections,
             &self.adhesion_buffers.adhesion_counts,
             &self.gpu_triple_buffers.cell_count_buffer,
+            &self.adhesion_buffers.signal_flags,
         );
         self.cached_adhesion_data_bind_groups = Some([bg0, bg1, bg2]);
     }
@@ -2173,6 +2256,25 @@ impl GpuScene {
         
         // Create light field system for photocyte nutrients and volumetric fog
         let light_field_system = LightFieldSystem::new(device, world_radius);
+
+        // Rebuild signal sense world data bind group with real light field buffer
+        {
+            let nutrient_buf = self.fluid_simulator.as_ref()
+                .map(|fs| fs.nutrient_voxels_buffer())
+                .unwrap_or(&self.signal_sense_dummy_nutrient_buffer);
+            let solid_buf = self.fluid_simulator.as_ref()
+                .map(|fs| fs.solid_mask_buffer())
+                .unwrap_or(&self.signal_sense_dummy_solid_buffer);
+            self.cached_bind_groups.signal_sense_world_data = self.gpu_physics_pipelines
+                .create_signal_sense_world_data_bind_group(
+                    device,
+                    &self.signal_sense_world_params_buffer,
+                    nutrient_buf,
+                    light_field_system.light_field_buffer(),
+                    solid_buf,
+                );
+        }
+
         self.light_field_system = Some(light_field_system);
         
         // Create volumetric fog renderer (with half-res support)
@@ -2652,6 +2754,21 @@ impl GpuScene {
 
         // Start with empty fluid - no initial sphere spawn
         // Fluid will only appear when continuous spawning is enabled
+
+        // Rebuild signal sense world data bind group with real buffers from fluid simulator
+        {
+            let light_buf = self.light_field_system.as_ref()
+                .map(|lfs| lfs.light_field_buffer())
+                .unwrap_or(&self.signal_sense_dummy_light_buffer);
+            self.cached_bind_groups.signal_sense_world_data = self.gpu_physics_pipelines
+                .create_signal_sense_world_data_bind_group(
+                    device,
+                    &self.signal_sense_world_params_buffer,
+                    simulator.nutrient_voxels_buffer(),
+                    light_buf,
+                    simulator.solid_mask_buffer(),
+                );
+        }
 
         self.fluid_simulator = Some(simulator);
         self.show_gpu_density_mesh = true;

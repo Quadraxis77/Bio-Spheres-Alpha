@@ -504,6 +504,48 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
     }
     
+    // ---- Signal system: clear → sense → propagate ----
+    // Runs after lifecycle so adhesion state is up-to-date
+    {
+        let signal_workgroups = (triple_buffers.capacity + 63) / 64;
+
+        // Step 1: Clear signal flags
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Signal Clear"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&pipelines.signal_clear);
+            compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
+            compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
+        }
+
+        // Step 2: Oculocyte sensing (detect targets, write initial signal values)
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Signal Sense"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&pipelines.signal_sense);
+            compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.signal_sense_cell_data[current_index], &[]);
+            compute_pass.set_bind_group(2, &cached_bind_groups.signal_sense_world_data, &[]);
+            compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
+        }
+
+        // Step 3: Pull-based propagation (one hop per dispatch, 20 iterations max)
+        for _ in 0..20u32 {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Signal Propagate"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&pipelines.signal_propagate);
+            compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.signal_propagate_adhesion, &[]);
+            compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
+        }
+    }
+
     // After division execute, propagate the output buffer to the third (stale) triple buffer.
     // Division writes new child cells only to positions_out (output_idx). The third buffer
     // (stale_idx) still holds old dead-cell data at recycled slot indices. Two physics steps

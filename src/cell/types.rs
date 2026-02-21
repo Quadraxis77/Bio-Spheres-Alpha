@@ -342,11 +342,12 @@ pub enum CellType {
     Lipocyte = 4,
     Buoyocyte = 5,
     Glueocyte = 6,
+    Oculocyte = 7,
 }
 
 impl CellType {
     /// Number of registered cell types. Update when adding new types.
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 8;
 
     /// Maximum number of cell types supported by GPU buffers.
     pub const MAX_TYPES: usize = 30;
@@ -361,6 +362,7 @@ impl CellType {
             CellType::Lipocyte,
             CellType::Buoyocyte,
             CellType::Glueocyte,
+            CellType::Oculocyte,
         ]
     }
 
@@ -379,12 +381,13 @@ impl CellType {
             CellType::Lipocyte => "Lipocyte",
             CellType::Buoyocyte => "Buoyocyte",
             CellType::Glueocyte => "Glueocyte",
+            CellType::Oculocyte => "Oculocyte",
         }
     }
 
     /// Get all cell type names as a slice.
     pub const fn names() -> &'static [&'static str] {
-        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte", "Buoyocyte", "Glueocyte"]
+        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte", "Buoyocyte", "Glueocyte", "Oculocyte"]
     }
 
     /// Convert from integer index to cell type.
@@ -397,6 +400,7 @@ impl CellType {
             4 => Some(CellType::Lipocyte),
             5 => Some(CellType::Buoyocyte),
             6 => Some(CellType::Glueocyte),
+            7 => Some(CellType::Oculocyte),
             _ => None,
         }
     }
@@ -487,6 +491,16 @@ impl CellType {
                 applies_buoyancy: 0,
                 _padding: [0; 9],
             },
+            CellType::Oculocyte => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 0,
+                applies_swim_force: 0,
+                uses_texture_atlas: 0,
+                has_procedural_tail: 0,
+                gains_mass_from_light: 0,
+                is_storage_cell: 0,
+                applies_buoyancy: 0,
+                _padding: [0; 9],
+            },
         }
     }
 
@@ -504,6 +518,11 @@ impl CellType {
                 mode.buoyancy_force = 0.5;
             }
             CellType::Glueocyte => {
+                mode.nutrient_priority = 2.0;
+                mode.max_cell_size = 2.0;
+                mode.split_mass = 3.1;
+            }
+            CellType::Oculocyte => {
                 mode.nutrient_priority = 2.0;
                 mode.max_cell_size = 2.0;
                 mode.split_mass = 3.1;

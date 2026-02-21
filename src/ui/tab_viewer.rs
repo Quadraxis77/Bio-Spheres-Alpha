@@ -1429,7 +1429,17 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     glueocyte_cell_adhesion: true,
                     glueocyte_env_adhesion: false,
                     swim_force: 0.5,
+                    flagellocyte_use_signal: false,
+                    flagellocyte_signal_channel: 0,
+                    flagellocyte_speed_a: 0.5,
+                    flagellocyte_speed_b: 0.0,
+                    flagellocyte_threshold_c: 1.0,
                     buoyancy_force: 0.5, // Default buoyancy force for buoyocytes
+                    oculocyte_sense_type: 0,
+                    oculocyte_signal_channel: 0,
+                    oculocyte_signal_value: 10.0,
+                    oculocyte_signal_hops: 3,
+                    oculocyte_sense_range: 25.0,
                     membrane_stiffness: 50.0, // Default: moderate membrane stiffness
                     child_a: crate::genome::ChildSettings {
                         mode_number: selected_index as i32,
@@ -1823,14 +1833,63 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
             } else if mode.cell_type == 1 { // Flagellocyte (cell_type == 1)
                 group_container(ui, "Flagellocyte Functions", egui::Color32::from_rgb(140, 180, 220), |ui| {
-                    ui.label("Swim Force:");
+                    // Mode toggle
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.swim_force, 0.0..=3.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.swim_force).speed(0.01).range(0.0..=3.0));
+                        ui.label("Speed Mode:");
+                        if ui.selectable_label(!mode.flagellocyte_use_signal, "Fixed").clicked() {
+                            mode.flagellocyte_use_signal = false;
+                        }
+                        if ui.selectable_label(mode.flagellocyte_use_signal, "Signal").clicked() {
+                            mode.flagellocyte_use_signal = true;
+                        }
                     });
+
+                    ui.separator();
+
+                    if !mode.flagellocyte_use_signal {
+                        // Fixed speed mode
+                        ui.label("Swim Force:");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.swim_force, 0.0..=3.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.swim_force).speed(0.01).range(0.0..=3.0));
+                        });
+                    } else {
+                        // Signal-based speed mode
+                        ui.horizontal(|ui| {
+                            ui.label("Channel:");
+                            ui.add(egui::DragValue::new(&mut mode.flagellocyte_signal_channel).range(0..=15));
+                        });
+
+                        ui.label("Speed A (signal < C):");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.flagellocyte_speed_a, 0.0..=3.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.flagellocyte_speed_a).speed(0.01).range(0.0..=3.0));
+                        });
+
+                        ui.label("Speed B (signal >= C):");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.flagellocyte_speed_b, 0.0..=3.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.flagellocyte_speed_b).speed(0.01).range(0.0..=3.0));
+                        });
+
+                        ui.label("Threshold C:");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.flagellocyte_threshold_c, -50.0..=50.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.flagellocyte_threshold_c).speed(0.1).range(-50.0..=50.0));
+                        });
+                    }
                 });
             } else if mode.cell_type == 5 { // Buoyocyte (cell_type == 5)
                 group_container(ui, "Buoyocyte Functions", egui::Color32::from_rgb(140, 200, 180), |ui| {
@@ -1841,6 +1900,60 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.style_mut().spacing.slider_width = slider_width;
                         ui.add(egui::Slider::new(&mut mode.buoyancy_force, 0.0..=3.0).show_value(false));
                         ui.add(egui::DragValue::new(&mut mode.buoyancy_force).speed(0.01).range(0.0..=3.0));
+                    });
+                });
+            } else if mode.cell_type == 7 { // Oculocyte (cell_type == 7)
+                group_container(ui, "Oculocyte Functions", egui::Color32::from_rgb(200, 160, 220), |ui| {
+                    // Sense Type dropdown
+                    ui.label("Sense Type:");
+                    let sense_labels = ["Cell", "Food", "Light", "Barrier"];
+                    let current_sense = mode.oculocyte_sense_type.clamp(0, 3) as usize;
+                    egui::ComboBox::from_id_salt("oculocyte_sense_type")
+                        .selected_text(sense_labels[current_sense])
+                        .show_ui(ui, |ui| {
+                            for (i, label) in sense_labels.iter().enumerate() {
+                                ui.selectable_value(&mut mode.oculocyte_sense_type, i as i32, *label);
+                            }
+                        });
+
+                    // Signal Channel
+                    ui.label("Signal Channel:");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_channel, 0..=15).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_channel).speed(0.1).range(0..=15));
+                    });
+
+                    // Signal Value
+                    ui.label("Signal Value:");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_value, -50.0..=50.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_value).speed(0.1).range(-50.0..=50.0));
+                    });
+
+                    // Signal Hops
+                    ui.label("Signal Hops:");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_hops, 1..=20).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_hops).speed(0.1).range(1..=20));
+                    });
+
+                    // Sense Range
+                    ui.label("Sense Range:");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.oculocyte_sense_range, 25.0..=50.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.oculocyte_sense_range).speed(0.1).range(25.0..=50.0));
                     });
                 });
             }

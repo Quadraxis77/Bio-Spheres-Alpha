@@ -1,6 +1,9 @@
-// GPU Adhesion Line Shader
+// GPU Adhesion Line Shader - Outlined Billboard Quads
 // Renders adhesion connections directly from GPU buffers (no CPU readback)
-// Each adhesion connection generates 4 vertices (2 line segments)
+// Each connection = 12 vertices (2 half-segments × 2 triangles × 3 verts)
+// Center colored by zone classification, outline by signal state
+
+const LINE_HALF_WIDTH: f32 = 0.04;
 
 struct CameraUniform {
     view_proj: mat4x4<f32>,
@@ -42,17 +45,22 @@ var<storage, read> adhesion_counts: array<u32>;
 @group(1) @binding(3)
 var<storage, read> cell_count_buffer: array<u32>;
 
+@group(1) @binding(4)
+var<storage, read> signal_flags: array<u32>;
+
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec4<f32>,
+    @location(0) zone_color: vec4<f32>,
+    @location(1) signal_color: vec4<f32>,
+    @location(2) edge_factor: f32,
 }
 
 // Zone colors (matching reference implementation)
 fn get_zone_color(zone: u32) -> vec4<f32> {
     switch (zone) {
-        case 0u: { return vec4<f32>(0.0, 1.0, 0.0, 0.8); } // Zone A - Green (opposite to split direction -> Child B)
-        case 1u: { return vec4<f32>(0.0, 0.0, 1.0, 0.8); } // Zone B - Blue (same as split direction -> Child A)
-        default: { return vec4<f32>(1.0, 0.0, 0.0, 0.8); } // Zone C - Red (equatorial -> both children)
+        case 0u: { return vec4<f32>(0.0, 1.0, 0.0, 0.8); } // Zone A - Green
+        case 1u: { return vec4<f32>(0.0, 0.0, 1.0, 0.8); } // Zone B - Blue
+        default: { return vec4<f32>(1.0, 0.0, 0.0, 0.8); } // Zone C - Red
     }
 }
 
@@ -63,18 +71,19 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
     
-    // Each instance is one adhesion connection
-    // Each connection has 4 vertices: (A, mid), (mid, B)
-    // vertex_index 0,1 = segment A->mid, vertex_index 2,3 = segment mid->B
+    // 12 vertices per instance: 2 half-segments × 2 triangles × 3 verts
+    // Half-segment 0 (verts 0-5): A → midpoint, zone_a color
+    // Half-segment 1 (verts 6-11): midpoint → B, zone_b color
     
     let adhesion_count = adhesion_counts[0];
     let cell_count = cell_count_buffer[0];
     
     // Check if this instance is valid
     if (instance_index >= adhesion_count) {
-        // Output degenerate vertex (will be clipped)
         out.clip_position = vec4<f32>(0.0, 0.0, -2.0, 1.0);
-        out.color = vec4<f32>(0.0);
+        out.zone_color = vec4<f32>(0.0);
+        out.signal_color = vec4<f32>(0.0);
+        out.edge_factor = 0.0;
         return out;
     }
     
@@ -83,14 +92,18 @@ fn vs_main(
     // Skip inactive connections
     if (connection.is_active == 0u) {
         out.clip_position = vec4<f32>(0.0, 0.0, -2.0, 1.0);
-        out.color = vec4<f32>(0.0);
+        out.zone_color = vec4<f32>(0.0);
+        out.signal_color = vec4<f32>(0.0);
+        out.edge_factor = 0.0;
         return out;
     }
     
     // Validate cell indices
     if (connection.cell_a_index >= cell_count || connection.cell_b_index >= cell_count) {
         out.clip_position = vec4<f32>(0.0, 0.0, -2.0, 1.0);
-        out.color = vec4<f32>(0.0);
+        out.zone_color = vec4<f32>(0.0);
+        out.signal_color = vec4<f32>(0.0);
+        out.edge_factor = 0.0;
         return out;
     }
     
@@ -99,39 +112,98 @@ fn vs_main(
     let pos_b = positions[connection.cell_b_index].xyz;
     let midpoint = (pos_a + pos_b) * 0.5;
     
-    // Determine position and color based on vertex index
-    var world_pos: vec3<f32>;
-    var color: vec4<f32>;
+    // Signal outline color: yellow only when both endpoints have signal,
+    // meaning the signal actually flowed through this bond (not just terminated at one end)
+    let has_signal_a = signal_flags[connection.cell_a_index];
+    let has_signal_b = signal_flags[connection.cell_b_index];
+    let has_signal = (has_signal_a != 0u) && (has_signal_b != 0u);
+    var sig_color: vec4<f32>;
+    if (has_signal) {
+        sig_color = vec4<f32>(1.0, 0.9, 0.0, 0.9); // Yellow
+    } else {
+        sig_color = vec4<f32>(0.0, 0.0, 0.0, 0.6); // Black
+    }
     
-    switch (vertex_index) {
-        case 0u: {
-            // Segment 1 start: Cell A
-            world_pos = pos_a;
-            color = get_zone_color(connection.zone_a);
+    // Compute billboard perpendicular direction
+    let line_dir = normalize(pos_b - pos_a);
+    let view_dir = normalize(camera.camera_pos - midpoint);
+    var perp = cross(line_dir, view_dir);
+    let perp_len = length(perp);
+    if (perp_len < 0.001) {
+        perp = vec3<f32>(0.0, 1.0, 0.0);
+    } else {
+        perp = perp / perp_len;
+    }
+    
+    // Determine which half-segment and which triangle vertex
+    let half_seg = vertex_index / 6u;  // 0 = A→mid, 1 = mid→B
+    let local_vert = vertex_index % 6u; // 0-5 within the half-segment
+    
+    // Endpoints for this half-segment
+    var seg_start: vec3<f32>;
+    var seg_end: vec3<f32>;
+    var zone_col: vec4<f32>;
+    
+    if (half_seg == 0u) {
+        seg_start = pos_a;
+        seg_end = midpoint;
+        zone_col = get_zone_color(connection.zone_a);
+    } else {
+        seg_start = midpoint;
+        seg_end = pos_b;
+        zone_col = get_zone_color(connection.zone_b);
+    }
+    
+    // Quad corners:
+    // v0 = start + perp * hw  (edge=+1)
+    // v1 = start - perp * hw  (edge=-1)
+    // v2 = end   + perp * hw  (edge=+1)
+    // v3 = end   - perp * hw  (edge=-1)
+    // Triangle 1: v0, v1, v2 → local_vert 0, 1, 2
+    // Triangle 2: v1, v3, v2 → local_vert 3, 4, 5
+    
+    var world_pos: vec3<f32>;
+    var edge_f: f32;
+    
+    switch (local_vert) {
+        case 0u: { // v0
+            world_pos = seg_start + perp * LINE_HALF_WIDTH;
+            edge_f = 1.0;
         }
-        case 1u: {
-            // Segment 1 end: Midpoint (Zone A color)
-            world_pos = midpoint;
-            color = get_zone_color(connection.zone_a);
+        case 1u: { // v1
+            world_pos = seg_start - perp * LINE_HALF_WIDTH;
+            edge_f = -1.0;
         }
-        case 2u: {
-            // Segment 2 start: Midpoint (Zone B color)
-            world_pos = midpoint;
-            color = get_zone_color(connection.zone_b);
+        case 2u: { // v2
+            world_pos = seg_end + perp * LINE_HALF_WIDTH;
+            edge_f = 1.0;
         }
-        default: {
-            // Segment 2 end: Cell B
-            world_pos = pos_b;
-            color = get_zone_color(connection.zone_b);
+        case 3u: { // v1 (second triangle)
+            world_pos = seg_start - perp * LINE_HALF_WIDTH;
+            edge_f = -1.0;
+        }
+        case 4u: { // v3
+            world_pos = seg_end - perp * LINE_HALF_WIDTH;
+            edge_f = -1.0;
+        }
+        default: { // v2 (second triangle)
+            world_pos = seg_end + perp * LINE_HALF_WIDTH;
+            edge_f = 1.0;
         }
     }
     
     out.clip_position = camera.view_proj * vec4<f32>(world_pos, 1.0);
-    out.color = color;
+    out.zone_color = zone_col;
+    out.signal_color = sig_color;
+    out.edge_factor = edge_f;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return in.color;
+    // abs(edge_factor): 0.0 at center, 1.0 at edges
+    let t = abs(in.edge_factor);
+    // Outer ~35% is outline (signal color), inner ~65% is zone color
+    let blend = smoothstep(0.5, 0.8, t);
+    return mix(in.zone_color, in.signal_color, blend);
 }

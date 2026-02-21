@@ -123,6 +123,17 @@ impl GpuAdhesionLineRenderer {
                         },
                         count: None,
                     },
+                    // Binding 4: Per-cell signal flags (u32: 0=no signal, 1=has signal)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -162,7 +173,7 @@ impl GpuAdhesionLineRenderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
+                topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
                 cull_mode: None,
@@ -207,6 +218,7 @@ impl GpuAdhesionLineRenderer {
         adhesion_connections_buffer: &wgpu::Buffer,
         adhesion_counts_buffer: &wgpu::Buffer,
         cell_count_buffer: &wgpu::Buffer,
+        signal_flags_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("GPU Adhesion Line Data Bind Group"),
@@ -227,6 +239,10 @@ impl GpuAdhesionLineRenderer {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: cell_count_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: signal_flags_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -271,8 +287,8 @@ impl GpuAdhesionLineRenderer {
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
         render_pass.set_bind_group(1, data_bind_group, &[]);
 
-        // Draw: 4 vertices per instance (2 line segments), max_adhesions instances
+        // Draw: 12 vertices per instance (2 half-segments × 2 triangles × 3 verts)
         // The shader will skip inactive adhesions by outputting degenerate vertices
-        render_pass.draw(0..4, 0..self.max_adhesions);
+        render_pass.draw(0..12, 0..self.max_adhesions);
     }
 }
