@@ -1243,6 +1243,7 @@ impl InstanceBuilder {
         lod_threshold_medium: f32,
         lod_threshold_high: f32,
         lod_debug_colors: bool,
+        cell_count_hint: u32, // Live cell count for dispatch scaling
     ) {
         if cell_capacity == 0 {
             self.last_visible_count = 0;
@@ -1328,8 +1329,10 @@ impl InstanceBuilder {
             compute_pass.set_pipeline(&self.pipeline);
             compute_pass.set_bind_group(0, bind_group, &[]);
             
-            // Dispatch for full capacity - shader reads actual cell_count from GPU buffer
-            let workgroup_count = (cell_capacity as u32 + 127) / 128;
+            // PERFORMANCE: Dispatch based on actual cell count, not full capacity
+            // At 100K cells, this reduces dispatch from 2048 to ~782 workgroups (2.6x reduction)
+            let effective_count = (cell_count_hint.max(1) + 127) / 128 * 128; // Round up to workgroup boundary
+            let workgroup_count = (effective_count + 127) / 128;
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
         
@@ -1397,6 +1400,7 @@ impl InstanceBuilder {
         lod_threshold_medium: f32,
         lod_threshold_high: f32,
         lod_debug_colors: bool,
+        cell_count_hint: u32,
     ) {
         // Ensure bind group exists before creating encoder
         if self.bind_group.is_none() {
@@ -1425,6 +1429,7 @@ impl InstanceBuilder {
             lod_threshold_medium,
             lod_threshold_high,
             lod_debug_colors,
+            cell_count_hint,
         );
         
         queue.submit(std::iter::once(encoder.finish()));

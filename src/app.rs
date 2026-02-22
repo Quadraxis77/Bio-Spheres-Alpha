@@ -750,24 +750,128 @@ impl App {
 
                         // Gather cell info before mutable borrow
                         let mode_idx = display_state.mode_indices.get(cell_idx).copied().unwrap_or(0);
-                        let cell_type_name = genome.modes.get(mode_idx)
+                        let mode = genome.modes.get(mode_idx);
+                        let cell_type_name = mode
                             .map(|m| crate::cell::CellType::from_index(m.cell_type as u32)
                                 .map(|ct| ct.name())
                                 .unwrap_or("Unknown"))
                             .unwrap_or("Unknown");
-                        let is_oculocyte = genome.modes.get(mode_idx)
-                            .map(|m| m.cell_type == 7)
-                            .unwrap_or(false);
-                        let mass = display_state.masses.get(cell_idx).copied().unwrap_or(0.0);
-                        let signal_channel = genome.modes.get(mode_idx)
+                        let cell_type_idx = mode.map(|m| m.cell_type).unwrap_or(0);
+                        let is_oculocyte = cell_type_idx == 7;
+                        let _mass = display_state.masses.get(cell_idx).copied().unwrap_or(0.0);
+                        let nutrients = display_state.nutrients.get(cell_idx).copied().unwrap_or(0.0);
+                        let signal_channel = mode
                             .map(|m| m.oculocyte_signal_channel.clamp(0, 15) as usize)
                             .unwrap_or(0);
-                        let signal_value = genome.modes.get(mode_idx)
-                            .map(|m| m.oculocyte_signal_value)
-                            .unwrap_or(10.0);
-                        let signal_hops = genome.modes.get(mode_idx)
+                        let signal_value = mode.map(|m| m.oculocyte_signal_value).unwrap_or(10.0);
+                        let signal_hops = mode
                             .map(|m| m.oculocyte_signal_hops.clamp(1, 20) as usize)
                             .unwrap_or(3);
+
+                        // Compute metabolism rates (nutrients/sec)
+                        // Matches preview_physics.rs logic
+                        const BASE_METABOLISM_RATE: f32 = 1.0;
+                        const AUTO_GAIN_RATE: f32 = 20.0;
+                        const SWIM_CONSUMPTION_RATE: f32 = 2.0;
+                        const OCULOCYTE_SENSE_CONSUMPTION_RATE: f32 = 0.08;
+                        let is_test_cell = cell_type_idx == 0;
+                        let can_auto_gain = is_test_cell
+                                         || cell_type_idx == 2  // Phagocyte
+                                         || cell_type_idx == 3; // Photocyte
+                        let is_flagellocyte = cell_type_idx == 1;
+                        // is_oculocyte already defined above
+                        // Test: pure 20/sec gain, no drain
+                        // Phagocyte/Photocyte: 20/sec gain - 1/sec drain = net 19/sec
+                        let gain_rate = if is_test_cell {
+                            AUTO_GAIN_RATE
+                        } else if can_auto_gain {
+                            AUTO_GAIN_RATE - BASE_METABOLISM_RATE
+                        } else {
+                            0.0
+                        };
+                        let swim_drain = if is_flagellocyte {
+                            let mode_settings = mode;
+                            let effective_speed = if mode_settings.map(|m| m.flagellocyte_use_signal).unwrap_or(false) {
+                                let channel = mode_settings.map(|m| m.flagellocyte_signal_channel.clamp(0, 15) as usize).unwrap_or(0);
+                                let signal_value = display_state.signal_channels.get(cell_idx * 16 + channel).copied().flatten().unwrap_or(0.0);
+                                let threshold_c = mode_settings.map(|m| m.flagellocyte_threshold_c).unwrap_or(0.0);
+                                if signal_value >= threshold_c {
+                                    mode_settings.map(|m| m.flagellocyte_speed_b).unwrap_or(0.0)
+                                } else {
+                                    mode_settings.map(|m| m.flagellocyte_speed_a).unwrap_or(0.0)
+                                }
+                            } else {
+                                mode_settings.map(|m| m.swim_force).unwrap_or(0.0)
+                            };
+                            effective_speed * SWIM_CONSUMPTION_RATE
+                        } else {
+                            0.0
+                        };
+                        let sense_drain = if is_oculocyte {
+                            mode.map(|m| m.oculocyte_sense_range * OCULOCYTE_SENSE_CONSUMPTION_RATE).unwrap_or(0.0)
+                        } else {
+                            0.0
+                        };
+                        let base_drain = if can_auto_gain { 0.0 } else { BASE_METABOLISM_RATE };
+                        let total_drain = base_drain + swim_drain + sense_drain;
+                        let _net_rate = gain_rate - total_drain;
+
+                        // Split info
+                        let split_mass = mode.map(|m| m.split_mass).unwrap_or(2.0);
+                        let split_never = split_mass > 2.0;
+                        let nutrient_priority = mode.map(|m| m.nutrient_priority).unwrap_or(1.0);
+                        let prioritize_when_low = mode.map(|m| m.prioritize_when_low).unwrap_or(false);
+
+                        // Calculate actual transport rate from adhesion connections.
+                        // pressure_diff = my_pressure - neighbor_pressure
+                        // positive pressure_diff => nutrients flow FROM this cell TO neighbor (out)
+                        // negative pressure_diff => nutrients flow FROM neighbor TO this cell (in)
+                        const DANGER_THRESHOLD_NUTRIENTS: f32 = 60.0;
+                        const PRIORITY_BOOST: f32 = 10.0;
+                        const TRANSPORT_RATE: f32 = 20.0;
+
+                        let mut transport_in_rate: f32 = 0.0;
+                        let mut transport_out_rate: f32 = 0.0;
+
+                        for (conn_idx, &active) in display_state.adhesion_connections.is_active.iter().enumerate() {
+                            if active == 0 { continue; }
+
+                            let cell_a = display_state.adhesion_connections.cell_a_index.get(conn_idx).copied().unwrap_or(0);
+                            let cell_b = display_state.adhesion_connections.cell_b_index.get(conn_idx).copied().unwrap_or(0);
+
+                            if cell_a != cell_idx && cell_b != cell_idx { continue; }
+
+                            let neighbor_idx = if cell_a == cell_idx { cell_b } else { cell_a };
+                            let neighbor_nutrients = display_state.nutrients.get(neighbor_idx).copied().unwrap_or(100.0);
+                            let neighbor_mode_idx = display_state.mode_indices.get(neighbor_idx).copied().unwrap_or(0);
+                            let neighbor_mode = genome.modes.get(neighbor_mode_idx);
+
+                            let neighbor_priority = neighbor_mode.map(|m| {
+                                if m.prioritize_when_low && neighbor_nutrients < DANGER_THRESHOLD_NUTRIENTS {
+                                    m.nutrient_priority * PRIORITY_BOOST
+                                } else {
+                                    m.nutrient_priority
+                                }
+                            }).unwrap_or(1.0);
+
+                            let my_priority = if prioritize_when_low && nutrients < DANGER_THRESHOLD_NUTRIENTS {
+                                nutrient_priority * PRIORITY_BOOST
+                            } else {
+                                nutrient_priority
+                            };
+
+                            // positive = flows out of this cell, negative = flows into this cell
+                            let pressure_diff = (nutrients / my_priority) - (neighbor_nutrients / neighbor_priority);
+                            let flow = pressure_diff * TRANSPORT_RATE;
+
+                            if flow > 0.0 {
+                                transport_out_rate += flow;
+                            } else {
+                                transport_in_rate += -flow;
+                            }
+                        }
+
+                        let _net_transport_rate = transport_in_rate - transport_out_rate;
 
                         // Read all 16 signal channels for this cell
                         let cell_signals: [Option<f32>; 16] = std::array::from_fn(|ch| {
@@ -783,36 +887,159 @@ impl App {
                             .order(egui::Order::Foreground)
                             .show(&ctx, |ui| {
                                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                                    ui.set_min_width(160.0);
-                                    ui.label(format!("Cell #{}", cell_idx));
-                                    ui.label(format!("Type: {}", cell_type_name));
-                                    ui.label(format!("Mode: M{}", mode_idx + 1));
-                                    ui.label(format!("Mass: {:.2}", mass));
+                                    ui.set_min_width(220.0);
+
+                                    // --- Header ---
+                                    ui.label(egui::RichText::new(format!("{} — M{}", cell_type_name, mode_idx + 1)).strong());
+                                    ui.label(egui::RichText::new(format!("Cell #{}", cell_idx)).color(egui::Color32::from_rgb(140, 140, 140)).small());
                                     ui.separator();
 
-                                    // Signal channels
-                                    ui.label("Signal Channels:");
-                                    egui::Grid::new("signal_channels_grid")
+                                    let dim = egui::Color32::from_rgb(160, 160, 160);
+                                    let red = egui::Color32::from_rgb(220, 80, 80);
+                                    let green = egui::Color32::from_rgb(80, 200, 120);
+                                    let white = egui::Color32::from_rgb(230, 230, 230);
+
+                                    // --- Nutrients bar ---
+                                    // split_nutrient_threshold: nutrients needed to divide
+                                    // When split_never, use 100 as display cap (cells max out at 100 normally)
+                                    let split_nutrient_threshold = (split_mass - 1.0) * 100.0;
+                                    let is_lipocyte = cell_type_idx == 4;
+                                    let nutrient_max = if is_lipocyte {
+                                        200.0
+                                    } else if split_never {
+                                        100.0
+                                    } else {
+                                        split_nutrient_threshold * 2.0
+                                    };
+                                    let nutrient_frac = (nutrients / nutrient_max).clamp(0.0, 1.0);
+                                    let bar_width = 180.0;
+                                    let bar_height = 8.0;
+                                    let (bar_rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(bar_width, bar_height),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(50, 50, 50));
+                                    let fill_color = if nutrient_frac > 0.5 { green } else if nutrient_frac > 0.2 { egui::Color32::from_rgb(220, 180, 50) } else { red };
+                                    let fill_rect = egui::Rect::from_min_size(bar_rect.min, egui::vec2(bar_rect.width() * nutrient_frac, bar_height));
+                                    ui.painter().rect_filled(fill_rect, 2.0, fill_color);
+                                    // Split threshold marker
+                                    if !split_never {
+                                        let split_frac = (split_nutrient_threshold / nutrient_max).clamp(0.0, 1.0);
+                                        let marker_x = bar_rect.min.x + bar_rect.width() * split_frac;
+                                        ui.painter().line_segment(
+                                            [egui::pos2(marker_x, bar_rect.min.y), egui::pos2(marker_x, bar_rect.max.y)],
+                                            egui::Stroke::new(1.5, white),
+                                        );
+                                    }
+                                    ui.label(egui::RichText::new(format!("{:.0} / {:.0}", nutrients, nutrient_max)).color(dim).small());
+
+                                    ui.separator();
+
+                                    // --- Metabolism ---
+                                    egui::Grid::new("metabolism_grid")
                                         .num_columns(2)
                                         .spacing([8.0, 2.0])
                                         .show(ui, |ui| {
-                                            for ch in 0..16usize {
-                                                let val = cell_signals[ch];
-                                                ui.label(format!("Ch {:2}:", ch));
-                                                match val {
-                                                    Some(v) => {
-                                                        ui.colored_label(
-                                                            egui::Color32::from_rgb(255, 220, 50),
-                                                            format!("{:.1}", v),
-                                                        );
-                                                    }
-                                                    None => {
-                                                        ui.colored_label(
-                                                            egui::Color32::from_rgb(100, 100, 100),
-                                                            "—",
-                                                        );
-                                                    }
+                                            // Gain row (only if cell produces)
+                                            if gain_rate > 0.0 {
+                                                ui.colored_label(dim, "Gain");
+                                                ui.colored_label(green, format!("+{:.1}/s", gain_rate));
+                                                ui.end_row();
+                                            }
+
+                                            // Base drain
+                                            let base_drain = total_drain - swim_drain - sense_drain;
+                                            if base_drain > 0.0 {
+                                                ui.colored_label(dim, "Upkeep");
+                                                ui.colored_label(red, format!("-{:.1}/s", base_drain));
+                                                ui.end_row();
+                                            }
+
+                                            // Swim drain (flagellocytes)
+                                            if swim_drain > 0.0 {
+                                                ui.colored_label(dim, "Swimming");
+                                                ui.colored_label(red, format!("-{:.1}/s", swim_drain));
+                                                ui.end_row();
+                                            }
+
+                                            // Sense drain (oculocytes)
+                                            if sense_drain > 0.0 {
+                                                ui.colored_label(dim, "Sensing");
+                                                ui.colored_label(red, format!("-{:.1}/s", sense_drain));
+                                                ui.end_row();
+                                            }
+
+                                            // Transport (only when connected)
+                                            if transport_in_rate > 0.0 || transport_out_rate > 0.0 {
+                                                let net_t = transport_in_rate - transport_out_rate;
+                                                ui.colored_label(dim, "Transport");
+                                                if net_t >= 0.0 {
+                                                    ui.colored_label(green, format!("+{:.1}/s", net_t));
+                                                } else {
+                                                    ui.colored_label(red, format!("{:.1}/s", net_t));
                                                 }
+                                                ui.end_row();
+                                            }
+
+                                            ui.separator();
+                                            ui.separator();
+                                            ui.end_row();
+
+                                            // Net = everything combined
+                                            let total_net = gain_rate - total_drain + transport_in_rate - transport_out_rate;
+                                            ui.label(egui::RichText::new("Net").strong());
+                                            if total_net >= 0.0 {
+                                                ui.colored_label(green, egui::RichText::new(format!("+{:.1}/s", total_net)).strong());
+                                            } else {
+                                                ui.colored_label(red, egui::RichText::new(format!("{:.1}/s", total_net)).strong());
+                                            }
+                                            ui.end_row();
+
+                                            // Split threshold
+                                            ui.colored_label(dim, "Splits at");
+                                            if split_never {
+                                                ui.colored_label(dim, "Never");
+                                            } else {
+                                                ui.colored_label(dim, format!("{:.0} nutrients", split_nutrient_threshold));
+                                            }
+                                            ui.end_row();
+
+                                            // Priority (only show if non-default)
+                                            if nutrient_priority != 1.0 || prioritize_when_low {
+                                                ui.colored_label(dim, "Priority");
+                                                let low_str = if prioritize_when_low { " (boost low)" } else { "" };
+                                                ui.colored_label(dim, format!("{:.1}{}", nutrient_priority, low_str));
+                                                ui.end_row();
+                                            }
+                                        });
+                                    ui.separator();
+
+                                    // --- Signal Channels (2 columns: Ch 0-7 left, Ch 8-15 right) ---
+                                    ui.label("Signal Channels:");
+                                    egui::Grid::new("signal_channels_grid")
+                                        .num_columns(4)
+                                        .spacing([4.0, 2.0])
+                                        .show(ui, |ui| {
+                                            let yellow = egui::Color32::from_rgb(255, 220, 50);
+                                            let gray = egui::Color32::from_rgb(100, 100, 100);
+                                            for row in 0..8usize {
+                                                let ch_left = row;
+                                                let ch_right = row + 8;
+
+                                                // Left column
+                                                ui.label(format!("Ch {:2}:", ch_left));
+                                                match cell_signals[ch_left] {
+                                                    Some(v) => ui.colored_label(yellow, format!("{:.1}", v)),
+                                                    None => ui.colored_label(gray, "—"),
+                                                };
+
+                                                // Right column
+                                                ui.label(format!("Ch{:2}:", ch_right));
+                                                match cell_signals[ch_right] {
+                                                    Some(v) => ui.colored_label(yellow, format!("{:.1}", v)),
+                                                    None => ui.colored_label(gray, "—"),
+                                                };
+
                                                 ui.end_row();
                                             }
                                         });

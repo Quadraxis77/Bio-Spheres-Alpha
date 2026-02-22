@@ -367,6 +367,11 @@ pub struct GpuTripleBufferSystem {
 
     /// Per-mode oculocyte parameters: [sense_type(u32), sense_range(f32), signal_hops(u32), padding(u32)] = 16 bytes per mode
     pub oculocyte_params: wgpu::Buffer,
+    
+    /// Indirect dispatch buffer for GPU-driven workgroup counts
+    /// Layout: [workgroup_count_x, workgroup_count_y, workgroup_count_z, padding]
+    /// Written by compute shader based on cell_count, used for indirect dispatch
+    pub indirect_dispatch_buffer: wgpu::Buffer,
 }
 
 impl GpuTripleBufferSystem {
@@ -536,6 +541,15 @@ impl GpuTripleBufferSystem {
         // Per-mode oculocyte parameters: vec4<u32> per mode (sense_type, sense_range_bits, signal_hops, padding)
         let oculocyte_params = Self::create_storage_buffer(device, max_modes * 16, "Oculocyte Params");
         
+        // Indirect dispatch buffer: 3 x u32 for workgroup counts + padding
+        // Used for GPU-driven dispatch that scales with actual cell count
+        let indirect_dispatch_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Indirect Dispatch Buffer"),
+            size: 16, // 4 x u32
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
         Self {
             position_and_mass,
             velocity,
@@ -581,6 +595,7 @@ impl GpuTripleBufferSystem {
             env_anchor_buffer,
             glueocyte_env_adhesion_flags,
             oculocyte_params,
+            indirect_dispatch_buffer,
             current_index: AtomicUsize::new(0),
             capacity,
             needs_sync: true,
@@ -1339,9 +1354,9 @@ impl GpuTripleBufferSystem {
     }
     
     /// Poll for async cell count read completion.
-    /// Returns Some(count) if new count is available, None if still pending or no read started.
+    /// Returns Some((total, live)) if new count is available, None if still pending or no read started.
     /// This is non-blocking.
-    pub fn poll_cell_count(&mut self, device: &wgpu::Device) -> Option<u32> {
+    pub fn poll_cell_count(&mut self, device: &wgpu::Device) -> Option<(u32, u32)> {
         if !self.cell_count_map_pending {
             return None;
         }
@@ -1358,16 +1373,19 @@ impl GpuTripleBufferSystem {
                     let data = buffer_slice.get_mapped_range();
                     let counts: &[u32] = bytemuck::cast_slice(&data);
                     
-                    // counts[0] = total cells, counts[1] = live cells
+                    // counts[0] = total cells (high water mark), counts[1] = live cells
+                    let total = counts[0];
+                    let live = counts[1];
+                    
                     // Use live cells count for display
-                    self.last_cell_count = counts[1];
+                    self.last_cell_count = live;
                     
                     drop(data);
                     self.cell_count_readback_buffer.unmap();
                     
                     self.cell_count_map_pending = false;
                     self.cell_count_receiver = None;
-                    return Some(self.last_cell_count);
+                    return Some((total, live));
                 }
                 Ok(Err(_)) => {
                     // Map failed, reset state

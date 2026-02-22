@@ -8,7 +8,7 @@ use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesio
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
-use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem};
+use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, execute_signal_system, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem};
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
@@ -88,6 +88,8 @@ pub struct GpuScene {
     pub current_time: f32,
     /// Genomes for cell behavior (growth, division) - supports multiple genomes
     pub genomes: Vec<Genome>,
+    /// Whether any genome has an oculocyte mode (for signal system gating)
+    has_oculocytes: bool,
     /// Genome buffer manager for per-genome GPU resources
     pub genome_buffer_manager: GenomeBufferManager,
     /// Cached parent_make_adhesion flags from genome modes for quick lookup during division
@@ -388,6 +390,7 @@ impl GpuScene {
             camera: CameraController::new_for_gpu_scene(),
             current_time: 0.0,
             genomes: Vec::new(),
+            has_oculocytes: false,
             genome_buffer_manager,
             parent_make_adhesion_flags: Vec::new(),
             time_accumulator: 0.0,
@@ -503,6 +506,7 @@ impl GpuScene {
         // Clear all genomes since no cells reference them
         self.genomes.clear();
         self.parent_make_adhesion_flags.clear();
+        self.has_oculocytes = false;
         // Mark instance builder dirty
         self.instance_builder.mark_all_dirty();
         // Reset GPU cell count buffer to 0 immediately
@@ -1027,6 +1031,9 @@ impl GpuScene {
         let id = self.genomes.len();
         self.genomes.push(genome);
         self.genomes_dirty = true;
+        
+        // Update has_oculocytes flag
+        self.update_has_oculocytes();
 
         log::info!("Added new genome {} (total: {})", id, self.genomes.len());
         Some((id, true)) // needs_sync = true because genome was added
@@ -1066,6 +1073,15 @@ impl GpuScene {
             }
         }
         true
+    }
+    
+    /// Update has_oculocytes flag based on current genomes
+    fn update_has_oculocytes(&mut self) {
+        use crate::cell::types::CellType;
+        let oculocyte_type = CellType::Oculocyte as u32 as i32;
+        self.has_oculocytes = self.genomes.iter().any(|g| {
+            g.modes.iter().any(|m| m.cell_type == oculocyte_type)
+        });
     }
     
     /// Incremental sync of a single genome's data to GPU buffers
@@ -3685,6 +3701,20 @@ impl Scene for GpuScene {
         // This extracts detailed cell data for the Cell Inspector panel
         let _cell_extracted = self.execute_pending_cell_extraction(device, &mut encoder, queue);
 
+        // Execute signal system ONCE PER FRAME (not per physics step)
+        // Runs after physics/lifecycle so adhesion state is up-to-date
+        // Skipped entirely if no genomes have oculocyte modes
+        if !self.paused && self.has_oculocytes {
+            execute_signal_system(
+                &mut encoder,
+                &self.gpu_physics_pipelines,
+                &self.gpu_triple_buffers,
+                &self.cached_bind_groups,
+                self.has_oculocytes,
+                self.current_cell_count,
+            );
+        }
+
         // Copy buffers to instance builder after physics (always needed for division)
         // Division creates new cells with updated cell_types that must be copied before rendering
         // Also copy after position update, cell removal, or cell boost
@@ -3727,6 +3757,7 @@ impl Scene for GpuScene {
             self.lod_threshold_medium,
             self.lod_threshold_high,
             self.lod_debug_colors,
+            self.current_cell_count, // Live cell count for dispatch scaling
         );
 
         // Clear pass
@@ -4074,8 +4105,18 @@ impl Scene for GpuScene {
         }
         
         // Poll for cell count readback completion and update current_cell_count
-        if let Some(count) = self.gpu_triple_buffers.poll_cell_count(device) {
-            self.current_cell_count = count;
+        if let Some((total, live)) = self.gpu_triple_buffers.poll_cell_count(device) {
+            self.current_cell_count = live;
+            
+            // CRITICAL FIX: Reset high water mark when all cells are dead.
+            // cell_count_buffer[0] is a high water mark that never decreases when cells die.
+            // This causes all GPU shaders to iterate through slots 0-N even when live count is 0,
+            // resulting in massive GPU work for no benefit. Resetting to 0 when live=0 ensures
+            // shaders early-exit immediately, eliminating the frame drop after mass starvation.
+            if live == 0 && total > 0 {
+                log::info!("All cells dead - resetting high water mark from {} to 0", total);
+                queue.write_buffer(&self.gpu_triple_buffers.cell_count_buffer, 0, bytemuck::cast_slice(&[0u32, 0u32]));
+            }
         }
 
         // Poll for steam particle count (GPU readback)

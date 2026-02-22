@@ -11,7 +11,7 @@
 // - Nutrients flow to establish equilibrium: mass_a / mass_b = priority_a / priority_b
 // - Flow is driven by "pressure" differences: pressure = mass / priority
 // - Cells with low mass get temporary priority boost (10x) when below danger threshold (0.6)
-// - Transport rate: 0.5 (matches reference implementation)
+// - Transport rate: 20.0 nutrients/sec
 
 struct PhysicsParams {
     delta_time: f32,
@@ -144,11 +144,11 @@ struct ModeProperties {
 const MIN_CELL_MASS: f32 = 0.5;
 const MIN_NUTRIENTS: f32 = 1.0;  // Death threshold: nutrients < 1.0
 const DANGER_THRESHOLD: f32 = 0.6;
-const DANGER_NUTRIENTS: f32 = 60.0;  // nutrients = (mass - 1.0) * 100.0 -> (0.6 - 1.0) * 100 = -40, but we use 60 for safety
+const DANGER_NUTRIENTS: f32 = 60.0;  // 0.6 * 100 = 60 nutrients danger threshold
 const PRIORITY_BOOST: f32 = 10.0;
-const TRANSPORT_RATE: f32 = 2.0;
-const BASE_METABOLISM_RATE: f32 = 2.5;  // Base metabolic cost in nutrients/sec for non-auto-gain cells
-const SWIM_CONSUMPTION_RATE: f32 = 10.0;  // 10 nutrients/sec at full swim force (matches 0.1 mass/sec * 100)
+const TRANSPORT_RATE: f32 = 20.0;
+const BASE_METABOLISM_RATE: f32 = 1.0;  // Base metabolic cost in nutrients/sec for non-auto-gain cells
+const SWIM_CONSUMPTION_RATE: f32 = 2.0;  // 2 nutrients/sec at swim_force=1, 6/sec at swim_force=3
 const DEFER_FRAMES: i32 = 6;  // ~0.1 seconds at 64 FPS = 6 frames
 
 // Fixed-point conversion for atomic operations (matching other shaders)
@@ -221,7 +221,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (!auto_gain_cell && mode_idx < arrayLength(&mode_properties)) {
         let mode = mode_properties[mode_idx];
 
-        // Base metabolism: consume nutrients to stay alive (2.5 nutrients/sec)
+        // Base metabolism: consume nutrients to stay alive (1.0 nutrients/sec)
         var nutrient_loss = BASE_METABOLISM_RATE * params.delta_time;
 
         // Additional consumption from swim force (Flagellocytes only)

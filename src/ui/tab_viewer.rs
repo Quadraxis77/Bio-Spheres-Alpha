@@ -1961,24 +1961,26 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
             // Division Settings Group (Yellow)
             group_container(ui, "Division Settings", egui::Color32::from_rgb(200, 180, 80), |ui| {
                 // Display nutrient threshold: nutrients = (split_mass - 1.0) * 100.0
-                // split_mass 1.0-2.0 -> nutrients 0-100, split_mass > 2.0 -> nutrients > 100 (Never)
-                let mut nutrient_threshold = ((mode.split_mass - 1.0) * 100.0).clamp(1.0, 101.0);
+                // Lipocytes (cell_type 4) can store up to 200 nutrients, so slider goes 1-201 (>200 = Never)
+                // All others: slider goes 1-101 (>100 = Never)
+                let is_lipocyte = mode.cell_type == 4;
+                let never_sentinel = if is_lipocyte { 201.0f32 } else { 101.0f32 };
+                let max_nutrients = if is_lipocyte { 200.0f32 } else { 100.0f32 };
+                let mut nutrient_threshold = ((mode.split_mass - 1.0) * 100.0).clamp(1.0, never_sentinel);
                 ui.label("Split Nutrients:");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                     ui.style_mut().spacing.slider_width = slider_width;
-                    // Range 1-101, values > 100 = never split
-                    ui.add(egui::Slider::new(&mut nutrient_threshold, 1.0..=101.0)
+                    ui.add(egui::Slider::new(&mut nutrient_threshold, 1.0..=never_sentinel)
                         .show_value(false)
-                        .custom_formatter(|v, _| {
-                            if v > 100.0 { "Never".to_string() } else { format!("{:.0}", v) }
+                        .custom_formatter(move |v, _| {
+                            if v > max_nutrients as f64 { "Never".to_string() } else { format!("{:.0}", v) }
                         }));
-                    // Show "Never" or the drag value
-                    if nutrient_threshold > 100.0 {
+                    if nutrient_threshold > max_nutrients {
                         ui.label("Never");
                     } else {
-                        ui.add(egui::DragValue::new(&mut nutrient_threshold).speed(1.0).range(1.0..=100.0));
+                        ui.add(egui::DragValue::new(&mut nutrient_threshold).speed(1.0).range(1.0..=max_nutrients));
                     }
                 });
                 // Convert back to split_mass

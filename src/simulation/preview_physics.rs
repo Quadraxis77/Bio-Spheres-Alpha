@@ -325,8 +325,8 @@ pub fn consume_swim_nutrients(
     const DEATH_NUTRIENT_THRESHOLD: f32 = 1.0;
     // Fixed consumption rate - NOT adjustable by user
     // This creates a direct tradeoff: faster swimming = higher nutrient cost
-    // Rate in nutrients/sec (was mass loss, converted: 0.1 mass * 100 = 10 nutrients)
-    const CONSUMPTION_RATE: f32 = 10.0; // nutrients per second at full swim force
+    // Rate: 2.0 nutrients/sec at swim_force=1.0, 6.0/sec at swim_force=3.0
+    const CONSUMPTION_RATE: f32 = 2.0;
     
     let mut cells_to_remove = Vec::new();
     
@@ -377,13 +377,13 @@ pub fn consume_swim_nutrients(
     cells_to_remove
 }
 
-/// Update nutrient growth
 /// Note: Flagellocytes (cell_type == 1) don't generate their own nutrients -
 /// they must receive nutrients through adhesion connections from other cells.
 /// Mass and radius are derived from nutrients: mass = 1.0 + nutrients/100.0
 pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f32) {
-    const BASE_METABOLISM_RATE: f32 = 2.5; // nutrients/sec drain for non-auto-gain cells
-    const AUTO_GAIN_RATE: f32 = 10.0; // nutrients/sec for Test, Phagocyte, Photocyte
+    const BASE_METABOLISM_RATE: f32 = 1.0; // nutrients/sec drain for non-auto-gain cells
+    const AUTO_GAIN_RATE: f32 = 20.0; // nutrients/sec for Test, Phagocyte, Photocyte
+    const OCULOCYTE_SENSE_CONSUMPTION_RATE: f32 = 0.08; // nutrients/sec per unit sense_range (default 25 range = 2.0/sec)
     
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
@@ -391,16 +391,25 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
             let can_auto_gain = mode.cell_type == 0  // Test
                              || mode.cell_type == 2  // Phagocyte
                              || mode.cell_type == 3; // Photocyte
+            let is_oculocyte = mode.cell_type == 7;
 
             let current_nutrients = state.nutrients[i];
             let split_nutrient_threshold = state.split_nutrient_thresholds[i];
 
             if can_auto_gain {
                 // Auto-gain nutrients up to split threshold * 2
+                // Test cells: pure auto-gain, no drain (matches mass_accum.wgsl)
+                // Phagocyte/Photocyte: gain - base drain (matches GPU: gain via specialized shader, drain via nutrient_transport.wgsl)
+                let is_test_cell = mode.cell_type == 0;
                 let max_nutrients = split_nutrient_threshold * 2.0;
+                let net_gain = if is_test_cell {
+                    AUTO_GAIN_RATE * dt
+                } else {
+                    // Phagocyte/Photocyte: gain 20/sec, drain 1/sec = net 19/sec (matches GPU scene)
+                    (AUTO_GAIN_RATE - BASE_METABOLISM_RATE) * dt
+                };
                 if current_nutrients < max_nutrients {
-                    let nutrient_gain = AUTO_GAIN_RATE * dt;
-                    let new_nutrients = (current_nutrients + nutrient_gain).min(max_nutrients);
+                    let new_nutrients = (current_nutrients + net_gain).min(max_nutrients).max(0.0);
                     if new_nutrients != current_nutrients {
                         state.nutrients[i] = new_nutrients;
                         // Derive mass and radius from nutrients
@@ -415,9 +424,16 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
                 }
             } else {
                 // Non-auto-gain cells lose nutrients to metabolism
-                // (Flagellocyte, Oculocyte have dedicated consumption functions elsewhere)
-                let nutrient_loss = BASE_METABOLISM_RATE * dt;
-                let new_nutrients = (current_nutrients - nutrient_loss).max(0.0);
+                // Base drain for all non-auto-gain cells
+                let base_loss = BASE_METABOLISM_RATE * dt;
+                // Oculocytes have additional sense range consumption
+                let sense_loss = if is_oculocyte {
+                    mode.oculocyte_sense_range * OCULOCYTE_SENSE_CONSUMPTION_RATE * dt
+                } else {
+                    0.0
+                };
+                let total_loss = base_loss + sense_loss;
+                let new_nutrients = (current_nutrients - total_loss).max(0.0);
                 if new_nutrients != current_nutrients {
                     state.nutrients[i] = new_nutrients;
                     // Derive mass and radius from nutrients
@@ -438,9 +454,9 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
 pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome: &Genome, dt: f32) {
     const DANGER_THRESHOLD: f32 = 0.6;
     const PRIORITY_BOOST: f32 = 10.0;
-    const TRANSPORT_RATE: f32 = 2.0;
+    const TRANSPORT_RATE: f32 = 20.0; // Max ~20 nutrients/sec transfer
 
-    let mut mass_deltas = vec![0.0f32; state.cell_count];
+    let mut nutrient_deltas = vec![0.0f32; state.cell_count];
 
     let connections = &state.adhesion_connections;
     for i in 0..connections.is_active.len() {
@@ -467,43 +483,48 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
             None => continue,
         };
 
-        let mass_a = state.masses[cell_a];
-        let mass_b = state.masses[cell_b];
+        let nutrients_a = state.nutrients[cell_a];
+        let nutrients_b = state.nutrients[cell_b];
 
-        let priority_a = if mode_a.prioritize_when_low && mass_a < DANGER_THRESHOLD {
+        let priority_a = if mode_a.prioritize_when_low && nutrients_a < DANGER_THRESHOLD * 100.0 {
             mode_a.nutrient_priority * PRIORITY_BOOST
         } else {
             mode_a.nutrient_priority
         };
-        let priority_b = if mode_b.prioritize_when_low && mass_b < DANGER_THRESHOLD {
+        let priority_b = if mode_b.prioritize_when_low && nutrients_b < DANGER_THRESHOLD * 100.0 {
             mode_b.nutrient_priority * PRIORITY_BOOST
         } else {
             mode_b.nutrient_priority
         };
 
-        let pressure_a = mass_a / priority_a;
-        let pressure_b = mass_b / priority_b;
+        // Pressure based on nutrients (higher nutrients = higher pressure = flows out)
+        let pressure_a = nutrients_a / priority_a;
+        let pressure_b = nutrients_b / priority_b;
         let pressure_diff = pressure_a - pressure_b;
 
-        let mass_transfer = pressure_diff * TRANSPORT_RATE * dt;
+        // Transfer nutrients directly
+        let nutrient_transfer = pressure_diff * TRANSPORT_RATE * dt;
 
-        let min_mass_a = if mode_a.prioritize_when_low { 0.1 } else { 0.0 };
-        let min_mass_b = if mode_b.prioritize_when_low { 0.1 } else { 0.0 };
+        let min_nutrients_a = if mode_a.prioritize_when_low { 10.0 } else { 0.0 };
+        let min_nutrients_b = if mode_b.prioritize_when_low { 10.0 } else { 0.0 };
 
-        let actual_transfer = if mass_transfer > 0.0 {
-            mass_transfer.min(mass_a - min_mass_a)
+        let actual_transfer = if nutrient_transfer > 0.0 {
+            nutrient_transfer.min(nutrients_a - min_nutrients_a)
         } else {
-            mass_transfer.max(-(mass_b - min_mass_b))
+            nutrient_transfer.max(-(nutrients_b - min_nutrients_b))
         };
 
-        mass_deltas[cell_a] -= actual_transfer;
-        mass_deltas[cell_b] += actual_transfer;
+        nutrient_deltas[cell_a] -= actual_transfer;
+        nutrient_deltas[cell_b] += actual_transfer;
     }
 
     for i in 0..state.cell_count {
-        if mass_deltas[i] != 0.0 {
-            let new_mass = (state.masses[i] + mass_deltas[i]).max(0.0);
-            if new_mass != state.masses[i] {
+        if nutrient_deltas[i] != 0.0 {
+            let new_nutrients = (state.nutrients[i] + nutrient_deltas[i]).max(0.0);
+            if new_nutrients != state.nutrients[i] {
+                state.nutrients[i] = new_nutrients;
+                // Derive mass from nutrients: mass = 1.0 + nutrients/100.0
+                let new_mass = 1.0 + new_nutrients / 100.0;
                 state.masses[i] = new_mass;
                 let max_size = genome.modes.get(state.mode_indices[i])
                     .map(|m| m.max_cell_size)

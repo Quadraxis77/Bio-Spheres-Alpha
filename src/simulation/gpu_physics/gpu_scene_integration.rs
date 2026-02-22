@@ -129,14 +129,17 @@ pub fn execute_gpu_physics_step(
     // DMA zero-fill all buffers that need clearing before the compute pass.
     // This replaces the clear_forces compute dispatch and is significantly faster
     // because the GPU's DMA engine handles bulk zeroing without compute shader overhead.
-    encoder.clear_buffer(&triple_buffers.mass_deltas_buffer, 0, None);
-    encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
-    encoder.clear_buffer(&adhesion_buffers.force_accum_x, 0, None);
-    encoder.clear_buffer(&adhesion_buffers.force_accum_y, 0, None);
-    encoder.clear_buffer(&adhesion_buffers.force_accum_z, 0, None);
-    encoder.clear_buffer(&adhesion_buffers.torque_accum_x, 0, None);
-    encoder.clear_buffer(&adhesion_buffers.torque_accum_y, 0, None);
-    encoder.clear_buffer(&adhesion_buffers.torque_accum_z, 0, None);
+    // PERFORMANCE: Skip clearing when no cells - saves ~15MB DMA per physics step
+    if _cell_count_hint > 0 {
+        encoder.clear_buffer(&triple_buffers.mass_deltas_buffer, 0, None);
+        encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
+        encoder.clear_buffer(&adhesion_buffers.force_accum_x, 0, None);
+        encoder.clear_buffer(&adhesion_buffers.force_accum_y, 0, None);
+        encoder.clear_buffer(&adhesion_buffers.force_accum_z, 0, None);
+        encoder.clear_buffer(&adhesion_buffers.torque_accum_x, 0, None);
+        encoder.clear_buffer(&adhesion_buffers.torque_accum_y, 0, None);
+        encoder.clear_buffer(&adhesion_buffers.torque_accum_z, 0, None);
+    }
     
     // Use cached bind groups (no per-frame allocation!)
     let physics_bind_group = &cached_bind_groups.physics[current_index];
@@ -145,9 +148,11 @@ pub fn execute_gpu_physics_step(
     let position_update_rotations_bind_group = &cached_bind_groups.position_update_rotations[current_index];
     let mass_accum_bind_group = &cached_bind_groups.mass_accum;
     
-    // Always dispatch at full capacity — shaders check cell_count_buffer[0] for exact
-    // bounds so over-dispatch is cheap (threads beyond cell_count early-exit immediately).
-    let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+    // PERFORMANCE: Dispatch based on actual cell count, not full capacity.
+    // At 100K cells, this reduces dispatch from 1024 to ~390 workgroups (2.6x reduction).
+    // Use max(live_count, 1) to avoid zero dispatch, and add small buffer for divisions.
+    let effective_cell_count = (_cell_count_hint.max(1) + 255) / 256 * 256; // Round up to workgroup boundary
+    let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
     
     // Execute compute shader stages
     {
@@ -323,17 +328,21 @@ pub fn execute_gpu_mechanics_step(
     let adhesion_rotations_bind_group = &cached_bind_groups.rotations[current_index];
     let position_update_rotations_bind_group = &cached_bind_groups.position_update_rotations[current_index];
 
-    // Always dispatch at full capacity (see execute_gpu_physics_step comment)
-    let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+    // PERFORMANCE: Dispatch based on actual cell count, not full capacity
+    let effective_cell_count = (_cell_count_hint.max(1) + 255) / 256 * 256;
+    let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
 
     // DMA zero-fill spatial grid + force/torque buffers before compute pass
-    encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
-    encoder.clear_buffer(&adhesion_buffers.force_accum_x, 0, None);
-    encoder.clear_buffer(&adhesion_buffers.force_accum_y, 0, None);
-    encoder.clear_buffer(&adhesion_buffers.force_accum_z, 0, None);
-    encoder.clear_buffer(&adhesion_buffers.torque_accum_x, 0, None);
-    encoder.clear_buffer(&adhesion_buffers.torque_accum_y, 0, None);
-    encoder.clear_buffer(&adhesion_buffers.torque_accum_z, 0, None);
+    // PERFORMANCE: Skip clearing when no cells - saves ~15MB DMA
+    if _cell_count_hint > 0 {
+        encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
+        encoder.clear_buffer(&adhesion_buffers.force_accum_x, 0, None);
+        encoder.clear_buffer(&adhesion_buffers.force_accum_y, 0, None);
+        encoder.clear_buffer(&adhesion_buffers.force_accum_z, 0, None);
+        encoder.clear_buffer(&adhesion_buffers.torque_accum_x, 0, None);
+        encoder.clear_buffer(&adhesion_buffers.torque_accum_y, 0, None);
+        encoder.clear_buffer(&adhesion_buffers.torque_accum_z, 0, None);
+    }
 
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -504,47 +513,8 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
     }
     
-    // ---- Signal system: clear → sense → propagate ----
-    // Runs after lifecycle so adhesion state is up-to-date
-    {
-        let signal_workgroups = (triple_buffers.capacity + 63) / 64;
-
-        // Step 1: Clear signal flags
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Signal Clear"),
-                timestamp_writes: None,
-            });
-            compute_pass.set_pipeline(&pipelines.signal_clear);
-            compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
-            compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
-        }
-
-        // Step 2: Oculocyte sensing (detect targets, write initial signal values)
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Signal Sense"),
-                timestamp_writes: None,
-            });
-            compute_pass.set_pipeline(&pipelines.signal_sense);
-            compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
-            compute_pass.set_bind_group(1, &cached_bind_groups.signal_sense_cell_data[current_index], &[]);
-            compute_pass.set_bind_group(2, &cached_bind_groups.signal_sense_world_data, &[]);
-            compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
-        }
-
-        // Step 3: Pull-based propagation (one hop per dispatch, 20 iterations max)
-        for _ in 0..20u32 {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Signal Propagate"),
-                timestamp_writes: None,
-            });
-            compute_pass.set_pipeline(&pipelines.signal_propagate);
-            compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
-            compute_pass.set_bind_group(1, &cached_bind_groups.signal_propagate_adhesion, &[]);
-            compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
-        }
-    }
+    // Signal system moved to execute_signal_system() - runs once per frame, not per physics step
+    // This prevents 4x over-dispatch when running 4 physics steps per frame
 
     // After division execute, propagate the output buffer to the third (stale) triple buffer.
     // Division writes new child cells only to positions_out (output_idx). The third buffer
@@ -619,5 +589,70 @@ pub fn rebuild_spatial_grid_after_lifecycle(
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+    }
+}
+
+/// Execute the signal system (clear → sense → propagate)
+/// 
+/// This runs ONCE PER FRAME, not per physics step, to avoid 4x over-dispatch.
+/// Should be called after lifecycle pipeline so adhesion state is up-to-date.
+/// 
+/// # Arguments
+/// * `has_oculocytes` - If false, skip entire signal system (no genomes have oculocyte modes)
+/// * `cell_count_hint` - Live cell count for dispatch scaling
+pub fn execute_signal_system(
+    encoder: &mut wgpu::CommandEncoder,
+    pipelines: &GpuPhysicsPipelines,
+    triple_buffers: &GpuTripleBufferSystem,
+    cached_bind_groups: &CachedBindGroups,
+    has_oculocytes: bool,
+    cell_count_hint: u32,
+) {
+    // Early-out if no oculocytes in any genome - skip entire signal system
+    if !has_oculocytes {
+        return;
+    }
+    
+    let current_index = triple_buffers.current_index();
+    
+    // PERFORMANCE: Dispatch based on actual cell count, not full capacity
+    let effective_count = (cell_count_hint.max(1) + 63) / 64 * 64; // Round up to workgroup boundary
+    let signal_workgroups = (effective_count + 63) / 64;
+
+    // Step 1: Clear signal flags
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Signal Clear"),
+            timestamp_writes: None,
+        });
+        compute_pass.set_pipeline(&pipelines.signal_clear);
+        compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
+        compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
+    }
+
+    // Step 2: Oculocyte sensing (detect targets, write initial signal values)
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Signal Sense"),
+            timestamp_writes: None,
+        });
+        compute_pass.set_pipeline(&pipelines.signal_sense);
+        compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.signal_sense_cell_data[current_index], &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.signal_sense_world_data, &[]);
+        compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
+    }
+
+    // Step 3: Pull-based propagation (one hop per dispatch, 10 iterations max)
+    // Reduced from 20 to 10 to cut dispatch count in half
+    for _ in 0..10u32 {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Signal Propagate"),
+            timestamp_writes: None,
+        });
+        compute_pass.set_pipeline(&pipelines.signal_propagate);
+        compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.signal_propagate_adhesion, &[]);
+        compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
     }
 }
