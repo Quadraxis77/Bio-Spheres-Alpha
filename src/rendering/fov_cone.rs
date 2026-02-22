@@ -1,21 +1,17 @@
-//! FOV cone visualization for oculocyte cells.
+//! Ray visualization for oculocyte cells.
 //!
-//! Renders a wireframe cone showing the oculocyte's field of view and sensing range.
-//! The cone apex is at the cell position, pointing along the cell's forward direction.
+//! Renders a line showing the oculocyte's forward sensing ray.
 
 use glam::{Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
 
-/// Number of segments around the cone base circle
-const CONE_SEGMENTS: usize = 24;
+/// Max rays per frame (one per cell of the selected mode)
+const MAX_RAYS: usize = 64;
 
-/// Max cones per frame (one per cell of the selected mode)
-const MAX_CONES: usize = 64;
+/// Vertices per ray: 2 (start + end)
+const VERTS_PER_RAY: usize = 2;
 
-/// Vertices per cone: (CONE_SEGMENTS/3) apex lines * 2 + CONE_SEGMENTS base circle * 2
-const VERTS_PER_CONE: usize = CONE_SEGMENTS / 3 * 2 + CONE_SEGMENTS * 2;
-
-const MAX_VERTICES: usize = MAX_CONES * VERTS_PER_CONE;
+const MAX_VERTICES: usize = MAX_RAYS * VERTS_PER_RAY;
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -32,7 +28,7 @@ struct LineVertex {
     color: [f32; 4],
 }
 
-/// Renderer for oculocyte FOV cone visualization.
+/// Renderer for oculocyte ray visualization.
 pub struct FovConeRenderer {
     render_pipeline: wgpu::RenderPipeline,
     camera_bind_group: wgpu::BindGroup,
@@ -166,7 +162,7 @@ impl FovConeRenderer {
             camera_bind_group,
             camera_buffer,
             vertex_buffer,
-            pending_vertices: Vec::with_capacity(VERTS_PER_CONE * 4),
+            pending_vertices: Vec::with_capacity(VERTS_PER_RAY * 4),
         }
     }
 
@@ -175,52 +171,24 @@ impl FovConeRenderer {
         self.pending_vertices.clear();
     }
 
-    /// Queue a cone for a single oculocyte cell.
-    pub fn queue_cone(
+    /// Queue a ray for a single oculocyte cell.
+    pub fn queue_ray(
         &mut self,
         cell_position: Vec3,
         cell_rotation: Quat,
-        sense_range: f32,
-        cos_half_fov: f32,
+        ray_length: f32,
     ) {
-        if self.pending_vertices.len() + VERTS_PER_CONE > MAX_VERTICES {
+        if self.pending_vertices.len() + VERTS_PER_RAY > MAX_VERTICES {
             return;
         }
 
         let forward = cell_rotation * Vec3::Z;
+        let ray_end = cell_position + forward * ray_length;
 
-        let half_angle = cos_half_fov.acos();
-        let base_radius = sense_range * half_angle.sin();
-        let cone_length = sense_range * half_angle.cos();
-        let base_center = cell_position + forward * cone_length;
+        let ray_color = [0.3, 0.9, 1.0, 0.8];
 
-        let right = if forward.y.abs() > 0.99 {
-            forward.cross(Vec3::X).normalize()
-        } else {
-            forward.cross(Vec3::Y).normalize()
-        };
-        let up = right.cross(forward).normalize();
-
-        let cone_color = [0.3, 0.9, 1.0, 0.7];
-        let base_color = [0.3, 0.9, 1.0, 0.4];
-
-        for i in 0..CONE_SEGMENTS {
-            let angle1 = std::f32::consts::TAU * (i as f32) / (CONE_SEGMENTS as f32);
-            let angle2 = std::f32::consts::TAU * ((i + 1) as f32) / (CONE_SEGMENTS as f32);
-
-            let p1 = base_center + right * angle1.cos() * base_radius + up * angle1.sin() * base_radius;
-            let p2 = base_center + right * angle2.cos() * base_radius + up * angle2.sin() * base_radius;
-
-            // Apex-to-base line (every 3rd segment)
-            if i % 3 == 0 {
-                self.pending_vertices.push(LineVertex { position: cell_position.to_array(), color: cone_color });
-                self.pending_vertices.push(LineVertex { position: p1.to_array(), color: cone_color });
-            }
-
-            // Base circle segment
-            self.pending_vertices.push(LineVertex { position: p1.to_array(), color: base_color });
-            self.pending_vertices.push(LineVertex { position: p2.to_array(), color: base_color });
-        }
+        self.pending_vertices.push(LineVertex { position: cell_position.to_array(), color: ray_color });
+        self.pending_vertices.push(LineVertex { position: ray_end.to_array(), color: ray_color });
     }
 
     /// Upload and render all queued cones.

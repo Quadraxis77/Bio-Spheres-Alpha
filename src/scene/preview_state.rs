@@ -230,7 +230,7 @@ impl PreviewState {
             mode.oculocyte_signal_channel.hash(&mut hasher);
             mode.oculocyte_signal_value.to_bits().hash(&mut hasher);
             mode.oculocyte_signal_hops.hash(&mut hasher);
-            mode.oculocyte_sense_range.to_bits().hash(&mut hasher);
+            mode.oculocyte_ray_length.to_bits().hash(&mut hasher);
             
             // Hash adhesion settings
             mode.adhesion_settings.can_break.hash(&mut hasher);

@@ -128,7 +128,7 @@ pub struct ModeSettings {
     pub oculocyte_signal_channel: i32, // Which channel to send on (0-15)
     pub oculocyte_signal_value: f32, // Signal value to send when target detected (-50.0 to 50.0)
     pub oculocyte_signal_hops: i32, // How many adhesion hops the signal propagates (1-20)
-    pub oculocyte_sense_range: f32, // How far ahead the oculocyte looks (1.0 to 50.0)
+    pub oculocyte_ray_length: f32, // How far ahead the oculocyte ray reaches (1.0 to 100.0)
     
     // Membrane settings
     pub membrane_stiffness: f32, // Cell membrane stiffness for collision response (0.0 = no repulsion, higher = more rigid)
@@ -192,7 +192,7 @@ impl Default for ModeSettings {
             oculocyte_signal_channel: 0, // Default: channel 0
             oculocyte_signal_value: 10.0, // Default: +10 signal
             oculocyte_signal_hops: 3, // Default: 3 hops
-            oculocyte_sense_range: 25.0, // Default: 25 units range
+            oculocyte_ray_length: 20.0, // Default: 20 units ray length
             membrane_stiffness: 50.0, // Default: moderate membrane stiffness
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),

@@ -72,23 +72,17 @@ pub fn sense_oculocytes(
         let channel = mode.oculocyte_signal_channel.clamp(0, 15) as usize;
         let signal_value = mode.oculocyte_signal_value.clamp(-50.0, 50.0);
         let hops = mode.oculocyte_signal_hops.clamp(1, 20) as usize;
-        let sense_range = mode.oculocyte_sense_range.clamp(25.0, 50.0);
+        let ray_length = mode.oculocyte_ray_length.clamp(1.0, 100.0);
 
         // Forward direction from genome orientation
         let forward = state.genome_orientations[cell_idx] * Vec3::Z;
         let pos = state.positions[cell_idx];
 
-        // FOV curve: quadratic so range drops faster as FOV widens
-        // range=25 -> t=0.5 -> cos=0.25 -> half_angle~75°
-        // range=50 -> t=1.0 -> cos~0.996 -> half_angle~5°
-        let t = (sense_range / 50.0).clamp(0.0, 0.998);
-        let cos_half_fov = t * t;
-
         let detected = match sense_type {
-            SENSE_CELL => sense_cells(state, cell_idx, pos, forward, sense_range, cos_half_fov),
+            SENSE_CELL => sense_cells_ray(state, cell_idx, pos, forward, ray_length),
             SENSE_FOOD => false, // Food sensing requires fluid system access — not available in preview
             SENSE_LIGHT => false, // Light sensing requires light field — not available in preview
-            SENSE_BARRIER => sense_barrier(pos, forward, sense_range, cos_half_fov, boundary_radius),
+            SENSE_BARRIER => sense_barrier_ray(pos, forward, ray_length, boundary_radius),
             _ => false,
         };
 
@@ -105,32 +99,32 @@ pub fn sense_oculocytes(
     emissions
 }
 
-/// Sense other cells in the forward cone.
-fn sense_cells(
+/// Sense other cells along the forward ray.
+/// Tests each cell as a sphere against the ray; exits early on first hit.
+fn sense_cells_ray(
     state: &CanonicalState,
     self_idx: usize,
     pos: Vec3,
     forward: Vec3,
-    range: f32,
-    cos_half_fov: f32,
+    ray_length: f32,
 ) -> bool {
-    let range_sq = range * range;
-
     for other_idx in 0..state.cell_count {
         if other_idx == self_idx {
             continue;
         }
 
         let other_pos = state.positions[other_idx];
-        let to_other = other_pos - pos;
-        let dist_sq = to_other.length_squared();
+        let radius = state.radii[other_idx];
 
-        if dist_sq > range_sq || dist_sq < 0.001 {
+        // Ray-sphere intersection: ray origin=pos, dir=forward (normalized)
+        // Sphere center=other_pos, radius=radius
+        let oc = other_pos - pos;
+        let tca = oc.dot(forward);
+        if tca < 0.0 || tca > ray_length {
             continue;
         }
-
-        let dir = to_other.normalize();
-        if forward.dot(dir) >= cos_half_fov {
+        let dist_sq = oc.length_squared() - tca * tca;
+        if dist_sq <= radius * radius {
             return true;
         }
     }
@@ -138,37 +132,32 @@ fn sense_cells(
     false
 }
 
-/// Sense barrier/cave walls or world boundary in the forward cone.
-fn sense_barrier(
+/// Sense barrier/world boundary along the forward ray.
+/// Ray-sphere intersection against the world boundary sphere.
+fn sense_barrier_ray(
     pos: Vec3,
     forward: Vec3,
-    range: f32,
-    _cos_half_fov: f32,
+    ray_length: f32,
     boundary_radius: f32,
 ) -> bool {
-    // Simple ray-sphere intersection with the world boundary
-    // Cast a ray from pos along forward direction, check if it hits the boundary sphere
-    // within range.
-    //
     // For a sphere centered at origin with radius R:
     // |pos + t*forward|² = R²
     // t² + 2*(pos·forward)*t + (|pos|² - R²) = 0
-    let a = 1.0; // forward is normalized
     let b = 2.0 * pos.dot(forward);
     let c = pos.length_squared() - boundary_radius * boundary_radius;
 
-    let discriminant = b * b - 4.0 * a * c;
+    let discriminant = b * b - 4.0 * c;
     if discriminant < 0.0 {
         return false;
     }
 
     let sqrt_d = discriminant.sqrt();
-    let t1 = (-b - sqrt_d) / (2.0 * a);
-    let t2 = (-b + sqrt_d) / (2.0 * a);
+    let t1 = (-b - sqrt_d) * 0.5;
+    let t2 = (-b + sqrt_d) * 0.5;
 
-    // We want t > 0 (ahead of us) and t <= range
+    // We want t > 0 (ahead of us) and t <= ray_length
     let t = if t1 > 0.0 { t1 } else { t2 };
-    t > 0.0 && t <= range
+    t > 0.0 && t <= ray_length
 }
 
 /// Propagate signal emissions through adhesion connections using BFS.

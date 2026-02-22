@@ -132,7 +132,7 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oculocyte_signal_hops: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub oculocyte_sense_range: Option<f32>,
+    pub oculocyte_ray_length: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -280,7 +280,7 @@ fn mode_to_serializable(
         oculocyte_signal_channel: diff_i32(mode.oculocyte_signal_channel, default.oculocyte_signal_channel),
         oculocyte_signal_value: diff_f32(mode.oculocyte_signal_value, default.oculocyte_signal_value),
         oculocyte_signal_hops: diff_i32(mode.oculocyte_signal_hops, default.oculocyte_signal_hops),
-        oculocyte_sense_range: diff_f32(mode.oculocyte_sense_range, default.oculocyte_sense_range),
+        oculocyte_ray_length: diff_f32(mode.oculocyte_ray_length, default.oculocyte_ray_length),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(&mode.adhesion_settings, &default.adhesion_settings),
@@ -328,7 +328,7 @@ impl SerializableModeSettings {
             || self.oculocyte_signal_channel.is_some()
             || self.oculocyte_signal_value.is_some()
             || self.oculocyte_signal_hops.is_some()
-            || self.oculocyte_sense_range.is_some()
+            || self.oculocyte_ray_length.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -492,8 +492,8 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(hops) = ser.oculocyte_signal_hops {
         mode.oculocyte_signal_hops = hops;
     }
-    if let Some(range) = ser.oculocyte_sense_range {
-        mode.oculocyte_sense_range = range;
+    if let Some(len) = ser.oculocyte_ray_length {
+        mode.oculocyte_ray_length = len;
     }
     if let Some(ref child_a) = ser.child_a {
         apply_child_settings(&mut mode.child_a, child_a);

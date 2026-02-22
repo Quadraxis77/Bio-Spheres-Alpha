@@ -1439,7 +1439,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     oculocyte_signal_channel: 0,
                     oculocyte_signal_value: 10.0,
                     oculocyte_signal_hops: 3,
-                    oculocyte_sense_range: 25.0,
+                    oculocyte_ray_length: 20.0,
                     membrane_stiffness: 50.0, // Default: moderate membrane stiffness
                     child_a: crate::genome::ChildSettings {
                         mode_number: selected_index as i32,
@@ -1946,14 +1946,14 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_hops).speed(0.1).range(1..=20));
                     });
 
-                    // Sense Range
-                    ui.label("Sense Range:");
+                    // Ray Length
+                    ui.label("Ray Length:");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.oculocyte_sense_range, 25.0..=50.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.oculocyte_sense_range).speed(0.1).range(25.0..=50.0));
+                        ui.add(egui::Slider::new(&mut mode.oculocyte_ray_length, 1.0..=100.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.oculocyte_ray_length).speed(0.1).range(1.0..=100.0));
                     });
                 });
             }

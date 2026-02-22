@@ -350,14 +350,12 @@ impl Scene for PreviewScene {
                 if let Some(selected_mode) = self.selected_mode_index {
                     if let Some(mode) = self.genome.modes.get(selected_mode) {
                         if mode.cell_type == 7 { // Oculocyte
-                            let sense_range = mode.oculocyte_sense_range.clamp(25.0, 50.0);
-                            let t = (sense_range / 50.0).clamp(0.0, 0.998);
-                            let cos_half_fov = t * t;
+                            let ray_length = mode.oculocyte_ray_length.clamp(1.0, 100.0);
                             for i in 0..self.state.display_state.cell_count {
                                 if self.state.display_state.mode_indices[i] == selected_mode {
                                     let cell_pos = self.state.display_state.positions[i];
                                     let cell_rot = self.state.display_state.rotations[i];
-                                    self.fov_cone_renderer.queue_cone(cell_pos, cell_rot, sense_range, cos_half_fov);
+                                    self.fov_cone_renderer.queue_ray(cell_pos, cell_rot, ray_length);
                                 }
                             }
                         }

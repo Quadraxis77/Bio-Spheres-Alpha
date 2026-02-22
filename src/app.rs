@@ -808,7 +808,7 @@ impl App {
                             0.0
                         };
                         let sense_drain = if is_oculocyte {
-                            mode.map(|m| m.oculocyte_sense_range * OCULOCYTE_SENSE_CONSUMPTION_RATE).unwrap_or(0.0)
+                            mode.map(|m| m.oculocyte_ray_length * OCULOCYTE_SENSE_CONSUMPTION_RATE).unwrap_or(0.0)
                         } else {
                             0.0
                         };

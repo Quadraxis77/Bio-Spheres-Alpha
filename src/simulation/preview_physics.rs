@@ -428,7 +428,7 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
                 let base_loss = BASE_METABOLISM_RATE * dt;
                 // Oculocytes have additional sense range consumption
                 let sense_loss = if is_oculocyte {
-                    mode.oculocyte_sense_range * OCULOCYTE_SENSE_CONSUMPTION_RATE * dt
+                    mode.oculocyte_ray_length * OCULOCYTE_SENSE_CONSUMPTION_RATE * dt
                 } else {
                     0.0
                 };

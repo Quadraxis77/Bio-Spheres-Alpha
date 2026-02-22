@@ -365,7 +365,7 @@ pub struct GpuTripleBufferSystem {
     /// Per-mode glueocyte environment adhesion flags (one u32 per mode)
     pub glueocyte_env_adhesion_flags: wgpu::Buffer,
 
-    /// Per-mode oculocyte parameters: [sense_type(u32), sense_range(f32), signal_hops(u32), padding(u32)] = 16 bytes per mode
+    /// Per-mode oculocyte parameters: [sense_type(u32), ray_length(f32), signal_hops(u32), padding(u32)] = 16 bytes per mode
     pub oculocyte_params: wgpu::Buffer,
     
     /// Indirect dispatch buffer for GPU-driven workgroup counts
@@ -1072,7 +1072,7 @@ impl GpuTripleBufferSystem {
     }
 
     /// Sync oculocyte parameters for all modes across all genomes
-    /// Layout per mode: [sense_type(u32), sense_range_bits(u32), signal_hops(u32), padding(u32)]
+    /// Layout per mode: [sense_type(u32), ray_length_bits(u32), signal_hops(u32), padding(u32)]
     pub fn sync_oculocyte_params(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
         let params: Vec<[u32; 4]> = genomes
             .iter()
@@ -1080,7 +1080,7 @@ impl GpuTripleBufferSystem {
                 genome.modes.iter().map(|mode| {
                     [
                         mode.oculocyte_sense_type as u32,
-                        mode.oculocyte_sense_range.to_bits(),
+                        mode.oculocyte_ray_length.to_bits(),
                         mode.oculocyte_signal_hops as u32,
                         0u32, // padding
                     ]
