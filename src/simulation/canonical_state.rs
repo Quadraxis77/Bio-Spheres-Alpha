@@ -67,7 +67,7 @@
 //! ### Division System
 //! - `birth_times` - When each cell was created
 //! - `split_intervals` - How often cells divide
-//! - `split_masses` - Mass threshold for division
+//! - `split_nutrient_thresholds` - Nutrient threshold for division
 //! - `split_counts` - Number of times each cell has divided
 //! 
 //! ### Adhesion System
@@ -231,15 +231,22 @@ pub struct CanonicalState {
     // === Cell Properties (SoA) ===
     // These define the biological and physical characteristics of each cell
     
-    /// Cell masses (affects division timing and collision response)
+    /// Cell nutrients (0-100 normal cells, 0-200 Lipocytes)
     /// 
-    /// Cells accumulate mass over time and divide when reaching `split_masses[i]`.
-    /// Higher mass cells are harder to push around in collisions.
+    /// Nutrients are the primary resource for cells. Death occurs when nutrients < 1.0.
+    /// Division occurs when nutrients >= split_nutrient_threshold.
+    /// Lipocytes (cell_type 4) can store up to 200 nutrients.
+    pub nutrients: Vec<f32>,
+    
+    /// Cell masses (derived from nutrients: mass = 1.0 + nutrients / 100.0)
+    /// 
+    /// This is a derived value, not independent. Higher mass cells are harder
+    /// to push around in collisions.
     pub masses: Vec<f32>,
     
-    /// Visual and collision radii
+    /// Visual and collision radii (derived from mass)
     /// 
-    /// Typically derived from mass via cube root relationship (volume ∝ mass).
+    /// Derived from mass: radius = mass.clamp(0.5, 2.0).
     /// Used for rendering billboard size and collision detection.
     pub radii: Vec<f32>,
     
@@ -321,11 +328,14 @@ pub struct CanonicalState {
     /// Prevents unrealistic rapid division.
     pub split_intervals: Vec<f32>,
     
-    /// Mass threshold required for division
+    /// Nutrient threshold required for division
     /// 
-    /// Cells accumulate mass over time and divide when reaching this threshold
+    /// Cells accumulate nutrients over time and divide when reaching this threshold
     /// (and meeting the time interval requirement).
-    pub split_masses: Vec<f32>,
+    /// Value 0-100 for normal cells, can be up to 200 for Lipocytes.
+    /// UI shows 1-101, where >100 means "never split".
+    /// Derived from split_mass: threshold = (split_mass - 1.0) * 100.0
+    pub split_nutrient_thresholds: Vec<f32>,
     
     /// Number of times each cell has divided
     /// 
@@ -484,8 +494,9 @@ impl CanonicalState {
             velocities: vec![Vec3::ZERO; capacity],
             
             // Cell properties - reasonable defaults
-            masses: vec![1.0; capacity],           // 1.0 unit mass
-            radii: vec![1.0; capacity],            // 1.0 unit radius
+            nutrients: vec![100.0; capacity],      // Start with full nutrients (100.0)
+            masses: vec![2.0; capacity],           // Derived: 1.0 + 100.0/100.0 = 2.0
+            radii: vec![1.0; capacity],             // Derived from mass
             genome_ids: vec![0; capacity],         // All use genome 0 initially
             mode_indices: vec![0; capacity],       // All start in mode 0
             
@@ -504,7 +515,7 @@ impl CanonicalState {
             // Division parameters - reasonable biological defaults
             birth_times: vec![0.0; capacity],      // All born at time 0
             split_intervals: vec![10.0; capacity], // Divide every 10 time units
-            split_masses: vec![1.5; capacity],     // Divide at 1.5x base mass
+            split_nutrient_thresholds: vec![50.0; capacity], // Divide at 50 nutrients (split_mass 1.5 -> 50)
             split_counts: vec![0; capacity],       // No divisions yet
             
             // Adhesion system - pre-allocated for performance
@@ -552,13 +563,12 @@ impl CanonicalState {
     /// * `rotation` - Initial physics-based rotation
     /// * `genome_orientation` - Initial genome-space orientation (for adhesion zones)
     /// * `angular_velocity` - Initial rotational velocity
-    /// * `mass` - Initial mass (affects division timing and physics)
-    /// * `radius` - Visual and collision radius
+    /// * `nutrients` - Initial nutrients (0-100 normal, 0-200 Lipocytes)
     /// * `genome_id` - Which genome this cell uses
     /// * `mode_index` - Initial behavior mode within the genome
     /// * `birth_time` - Simulation time when cell was created
     /// * `split_interval` - Minimum time between divisions
-    /// * `split_mass` - Mass threshold for division
+    /// * `split_nutrient_threshold` - Nutrient threshold for division
     /// * `stiffness` - Membrane stiffness for collision response
     /// 
     /// # Returns
@@ -575,13 +585,12 @@ impl CanonicalState {
         rotation: Quat,
         genome_orientation: Quat,
         angular_velocity: Vec3,
-        mass: f32,
-        radius: f32,
+        nutrients: f32,
         genome_id: usize,
         mode_index: usize,
         birth_time: f32,
         split_interval: f32,
-        split_mass: f32,
+        split_nutrient_threshold: f32,
         stiffness: f32,
     ) -> Option<usize> {
         // Check capacity - cannot add more cells than allocated
@@ -601,9 +610,11 @@ impl CanonicalState {
         self.prev_positions[index] = position;  // Start with same position for Verlet
         self.velocities[index] = velocity;
         
-        // Cell properties
+        // Cell properties - mass and radius derived from nutrients
+        self.nutrients[index] = nutrients;
+        let mass = 1.0 + nutrients / 100.0;
         self.masses[index] = mass;
-        self.radii[index] = radius;
+        self.radii[index] = mass.clamp(0.5, 2.0);
         self.genome_ids[index] = genome_id;
         self.mode_indices[index] = mode_index;
         
@@ -622,7 +633,7 @@ impl CanonicalState {
         // Division parameters
         self.birth_times[index] = birth_time;
         self.split_intervals[index] = split_interval;
-        self.split_masses[index] = split_mass;
+        self.split_nutrient_thresholds[index] = split_nutrient_threshold;
         self.split_counts[index] = 0;  // New cell hasn't divided yet
         
         // Update counters
@@ -662,13 +673,12 @@ impl CanonicalState {
     /// * `rotation` - Initial orientation quaternion
     /// * `genome_orientation` - Genome-space orientation for adhesion zones
     /// * `angular_velocity` - Initial rotational velocity
-    /// * `mass` - Initial cell mass
-    /// * `radius` - Visual and collision radius
+    /// * `nutrients` - Initial nutrients (0-100 normal, 0-200 Lipocytes)
     /// * `genome_id` - Which genome this cell uses
     /// * `mode_index` - Current behavior mode within the genome
     /// * `birth_time` - Simulation time when cell was created
     /// * `split_interval` - Time between divisions
-    /// * `split_mass` - Mass threshold for division
+    /// * `split_nutrient_threshold` - Nutrient threshold for division
     /// * `stiffness` - Membrane stiffness for collision response
     /// * `cell_id` - Specific cell ID to assign (for GPU sync)
     /// 
@@ -687,13 +697,12 @@ impl CanonicalState {
         rotation: Quat,
         genome_orientation: Quat,
         angular_velocity: Vec3,
-        mass: f32,
-        radius: f32,
+        nutrients: f32,
         genome_id: usize,
         mode_index: usize,
         birth_time: f32,
         split_interval: f32,
-        split_mass: f32,
+        split_nutrient_threshold: f32,
         stiffness: f32,
         cell_id: u32,
     ) -> Option<usize> {
@@ -721,9 +730,11 @@ impl CanonicalState {
         self.prev_positions[slot_index] = position;  // Start with same position for Verlet
         self.velocities[slot_index] = velocity;
         
-        // Cell properties
+        // Cell properties - mass and radius derived from nutrients
+        self.nutrients[slot_index] = nutrients;
+        let mass = 1.0 + nutrients / 100.0;
         self.masses[slot_index] = mass;
-        self.radii[slot_index] = radius;
+        self.radii[slot_index] = mass.clamp(0.5, 2.0);
         self.genome_ids[slot_index] = genome_id;
         self.mode_indices[slot_index] = mode_index;
         
@@ -742,7 +753,7 @@ impl CanonicalState {
         // Division parameters
         self.birth_times[slot_index] = birth_time;
         self.split_intervals[slot_index] = split_interval;
-        self.split_masses[slot_index] = split_mass;
+        self.split_nutrient_thresholds[slot_index] = split_nutrient_threshold;
         self.split_counts[slot_index] = 0;  // New cell hasn't divided yet
         
         // Initialize adhesion system for this cell
@@ -801,6 +812,7 @@ impl CanonicalState {
             self.positions[cell_index] = self.positions[last_index];
             self.prev_positions[cell_index] = self.prev_positions[last_index];
             self.velocities[cell_index] = self.velocities[last_index];
+            self.nutrients[cell_index] = self.nutrients[last_index];
             self.masses[cell_index] = self.masses[last_index];
             self.radii[cell_index] = self.radii[last_index];
             self.genome_ids[cell_index] = self.genome_ids[last_index];
@@ -815,7 +827,7 @@ impl CanonicalState {
             self.stiffnesses[cell_index] = self.stiffnesses[last_index];
             self.birth_times[cell_index] = self.birth_times[last_index];
             self.split_intervals[cell_index] = self.split_intervals[last_index];
-            self.split_masses[cell_index] = self.split_masses[last_index];
+            self.split_nutrient_thresholds[cell_index] = self.split_nutrient_thresholds[last_index];
             self.split_counts[cell_index] = self.split_counts[last_index];
             self.sister_cell_id[cell_index] = self.sister_cell_id[last_index];
             self.sister_expiry[cell_index] = self.sister_expiry[last_index];

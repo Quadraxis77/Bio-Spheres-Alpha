@@ -95,7 +95,14 @@ var<storage, read> split_ready_frame: array<i32>;
 @group(3) @binding(4)
 var<storage, read> mode_cell_types: array<u32>;
 
-// Adhesion connection structure (exactly 104 bytes, matching Rust GpuAdhesionConnection)
+// Nutrients buffer: fixed-point i32 with scale 1000 (100.0 nutrients = 100000)
+@group(3) @binding(5)
+var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
+
+// Split nutrient thresholds (derived from split_mass: threshold = (split_mass - 1.0) * 100.0)
+@group(3) @binding(6)
+var<storage, read> split_nutrient_thresholds: array<f32>;
+
 struct AdhesionConnection {
     cell_a_index: u32,
     cell_b_index: u32,
@@ -135,11 +142,13 @@ struct ModeProperties {
 
 // Constants matching reference implementation
 const MIN_CELL_MASS: f32 = 0.5;
+const MIN_NUTRIENTS: f32 = 1.0;  // Death threshold: nutrients < 1.0
 const DANGER_THRESHOLD: f32 = 0.6;
+const DANGER_NUTRIENTS: f32 = 60.0;  // nutrients = (mass - 1.0) * 100.0 -> (0.6 - 1.0) * 100 = -40, but we use 60 for safety
 const PRIORITY_BOOST: f32 = 10.0;
 const TRANSPORT_RATE: f32 = 2.0;
-const BASE_METABOLISM_RATE: f32 = 0.025;  // Base metabolic cost per second for all cells (reduced from 0.05 for 2x longevity)
-const SWIM_CONSUMPTION_RATE: f32 = 0.1;  // Additional 0.1 mass per second at full swim force (reduced from 0.2 for 2x longevity)
+const BASE_METABOLISM_RATE: f32 = 2.5;  // Base metabolic cost in nutrients/sec for non-auto-gain cells
+const SWIM_CONSUMPTION_RATE: f32 = 10.0;  // 10 nutrients/sec at full swim force (matches 0.1 mass/sec * 100)
 const DEFER_FRAMES: i32 = 6;  // ~0.1 seconds at 64 FPS = 6 frames
 
 // Fixed-point conversion for atomic operations (matching other shaders)
@@ -151,6 +160,16 @@ fn float_to_fixed(value: f32) -> i32 {
 
 fn fixed_to_float(value: i32) -> f32 {
     return f32(value) / FIXED_POINT_SCALE;
+}
+
+// Derive mass from nutrients: mass = 1.0 + nutrients / 100.0
+fn nutrients_to_mass(nutrients: f32) -> f32 {
+    return 1.0 + nutrients / 100.0;
+}
+
+// Derive nutrients from mass: nutrients = (mass - 1.0) * 100.0
+fn mass_to_nutrients(mass: f32) -> f32 {
+    return (mass - 1.0) * 100.0;
 }
 
 // Check if a cell should be blocked from nutrient transfer due to split attempt delay
@@ -181,8 +200,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // NOTE: mass_deltas is cleared by CPU before this shader runs (encoder.clear_buffer)
     // This prevents a race condition where atomicStore would overwrite transfers from other cells
     
-    // Read current mass from positions buffer
-    let current_mass = positions_out[cell_idx].w;
+    // Read current nutrients from nutrients_buffer (fixed-point i32)
+    let current_nutrients_fixed = atomicLoad(&nutrients_buffer[cell_idx]);
+    let current_nutrients = fixed_to_float(current_nutrients_fixed);
     
     // Step 1: Nutrient consumption - all cells except Test cells have base metabolism
     let mode_idx = mode_indices[cell_idx];
@@ -194,12 +214,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Test cells (cell_type 0) have no metabolism - they auto-gain from nutrient_gain_rate
+    // Phagocytes (cell_type 2) and Photocytes (cell_type 3) use specialized shaders for gain
+    // but still need base metabolism to starve when not consuming/absorbing
     // All other cells have base metabolism
-    if (cell_type != 0u && mode_idx < arrayLength(&mode_properties)) {
+    let auto_gain_cell = cell_type == 0u;
+    if (!auto_gain_cell && mode_idx < arrayLength(&mode_properties)) {
         let mode = mode_properties[mode_idx];
 
-        // Base metabolism: consume nutrients to stay alive
-        var mass_loss = BASE_METABOLISM_RATE * params.delta_time;
+        // Base metabolism: consume nutrients to stay alive (2.5 nutrients/sec)
+        var nutrient_loss = BASE_METABOLISM_RATE * params.delta_time;
 
         // Additional consumption from swim force (Flagellocytes only)
         var effective_swim_speed = 0.0;
@@ -210,11 +233,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             effective_swim_speed = mode.swim_force;
         }
         if (effective_swim_speed > 0.0) {
-            mass_loss += effective_swim_speed * SWIM_CONSUMPTION_RATE * params.delta_time;
+            nutrient_loss += effective_swim_speed * SWIM_CONSUMPTION_RATE * params.delta_time;
         }
 
-        let consumption_fixed = float_to_fixed(-mass_loss);
-        atomicAdd(&mass_deltas[cell_idx], consumption_fixed);
+        // Apply nutrient consumption directly to nutrients_buffer
+        let new_nutrients = max(current_nutrients - nutrient_loss, 0.0);
+        atomicStore(&nutrients_buffer[cell_idx], float_to_fixed(new_nutrients));
     }
     
     // NOTE: No early death check here - we must let transport happen first
@@ -250,9 +274,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue; // Skip nutrient transfer for blocked cells
         }
         
-        // Get masses (use original mass for both cells since we'll apply deltas atomically)
-        let mass_a = current_mass;
-        let mass_b = positions_out[cell_b_idx].w;
+        // Get nutrients for both cells (use atomic load for thread-safety)
+        let nutrients_a = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
+        let nutrients_b = fixed_to_float(atomicLoad(&nutrients_buffer[cell_b_idx]));
         
         // Get mode properties for both cells
         let mode_a_idx = mode_indices[cell_idx];
@@ -275,41 +299,38 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let prioritize_b = mode_b.prioritize_when_low > 0.5;
         
         let priority_a = select(base_priority_a, base_priority_a * PRIORITY_BOOST, 
-                               prioritize_a && mass_a < DANGER_THRESHOLD);
+                               prioritize_a && nutrients_a < DANGER_NUTRIENTS);
         let priority_b = select(base_priority_b, base_priority_b * PRIORITY_BOOST,
-                               prioritize_b && mass_b < DANGER_THRESHOLD);
+                               prioritize_b && nutrients_b < DANGER_NUTRIENTS);
         
         // Calculate equilibrium-based nutrient flow
-        // At equilibrium: mass_a / mass_b = priority_a / priority_b
-        // Flow is driven by "pressure" difference: pressure = mass / priority
-        let pressure_a = mass_a / priority_a;
-        let pressure_b = mass_b / priority_b;
+        // At equilibrium: nutrients_a / nutrients_b = priority_a / priority_b
+        // Flow is driven by "pressure" difference: pressure = nutrients / priority
+        let pressure_a = nutrients_a / priority_a;
+        let pressure_b = nutrients_b / priority_b;
         let pressure_diff = pressure_a - pressure_b;
         
-        // Calculate mass transfer (positive = A -> B, negative = B -> A)
-        let mass_transfer = pressure_diff * TRANSPORT_RATE * params.delta_time;
+        // Calculate nutrient transfer (positive = A -> B, negative = B -> A)
+        let nutrient_transfer = pressure_diff * TRANSPORT_RATE * params.delta_time;
         
         // Apply transfer with minimum thresholds
-        let min_mass_a = select(0.0, 0.1, prioritize_a);
-        let min_mass_b = select(0.0, 0.1, prioritize_b);
+        let min_nutrients_a = select(0.0, 10.0, prioritize_a);
+        let min_nutrients_b = select(0.0, 10.0, prioritize_b);
         
         let actual_transfer = select(
-            max(mass_transfer, -(mass_b - min_mass_b)),  // B -> A: limit by B's mass
-            min(mass_transfer, mass_a - min_mass_a),     // A -> B: limit by A's mass
-            mass_transfer > 0.0
+            max(nutrient_transfer, -(nutrients_b - min_nutrients_b)),  // B -> A: limit by B's nutrients
+            min(nutrient_transfer, nutrients_a - min_nutrients_a),     // A -> B: limit by A's nutrients
+            nutrient_transfer > 0.0
         );
         
         // Apply transfer using atomic operations (thread-safe)
         let transfer_fixed = float_to_fixed(actual_transfer);
         
         // Atomically subtract from cell A and add to cell B
-        atomicAdd(&mass_deltas[cell_idx], -transfer_fixed);
-        atomicAdd(&mass_deltas[cell_b_idx], transfer_fixed);
+        atomicAdd(&nutrients_buffer[cell_idx], -transfer_fixed);
+        atomicAdd(&nutrients_buffer[cell_b_idx], transfer_fixed);
     }
     
-    // NOTE: Mass deltas are applied by the separate nutrient_apply shader dispatch.
-    // This ensures all atomic accumulations complete across ALL workgroups before
-    // any thread reads the final delta. Without this separation, cell_b's workgroup
-    // could apply its delta before cell_a's workgroup writes the transport to it,
-    // causing asymmetric nutrient flow and uneven cell splitting.
+    // NOTE: Death detection is handled by a separate shader that checks nutrients < MIN_NUTRIENTS
+    // and sets death_flags accordingly.
 }

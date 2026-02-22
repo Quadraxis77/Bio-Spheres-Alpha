@@ -36,7 +36,7 @@
 //! |---------|------|--------|
 //! | 0 | Storage (read/write) | birth_times |
 //! | 1 | Storage (read/write) | split_intervals |
-//! | 2 | Storage (read/write) | split_masses |
+//! | 2 | Storage (read/write) | split_nutrient_thresholds |
 //! | 3 | Storage (read/write) | split_counts |
 //! | 4 | Storage (read/write) | max_splits |
 //! | 5 | Storage (read/write) | genome_ids |
@@ -906,7 +906,7 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: buffers.split_masses.as_entire_binding(),
+                    resource: buffers.split_nutrient_thresholds.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -936,6 +936,10 @@ impl GpuPhysicsPipelines {
                     binding: 9,
                     resource: buffers.behavior_flags.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: buffers.nutrients_buffer.as_entire_binding(),
+                },
             ],
         })
     }
@@ -962,7 +966,7 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: buffers.split_masses.as_entire_binding(),
+                    resource: buffers.split_nutrient_thresholds.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -1044,11 +1048,15 @@ impl GpuPhysicsPipelines {
                     binding: 22,
                     resource: buffers.child_b_keep_adhesion_flags.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 23,
+                    resource: buffers.nutrients_buffer.as_entire_binding(),
+                },
             ],
         })
     }
     
-    /// Create mass accumulation bind group (nutrient gain rates and split masses per cell)
+    /// Create mass accumulation bind group (nutrient gain rates and split nutrient thresholds per cell)
     pub fn create_mass_accum_bind_group(
         &self,
         device: &wgpu::Device,
@@ -1064,11 +1072,23 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buffers.split_masses.as_entire_binding(),
+                    resource: buffers.split_nutrient_thresholds.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: buffers.death_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffers.mode_cell_types.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.mode_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.nutrients_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -1818,6 +1838,17 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
+                    // Binding 10: Nutrients buffer (read-only for division scan)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 10,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             })
         } else {
@@ -2078,12 +2109,23 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
+                    // Nutrients buffer (read-write, fixed-point i32 atomic)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 23,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             })
         }
     }
     
-    /// Create mass accumulation bind group layout (nutrient gain rates and split masses per cell)
+    /// Create mass accumulation bind group layout (nutrient gain rates and split nutrient thresholds per cell)
     fn create_mass_accum_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Mass Accumulation Bind Group Layout"),
@@ -2099,7 +2141,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Split masses (read-only) - mass cap = 2x split_mass
+                // Split nutrient thresholds (read-only) - derived from split_mass
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -2116,6 +2158,39 @@ impl GpuPhysicsPipelines {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Mode cell types (read-only) - to check if auto-gain cell
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Mode indices (read-only) - to get cell type
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Nutrients buffer (read-write) - fixed-point i32, atomic
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -3269,6 +3344,28 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 5: Nutrients buffer (read-write, fixed-point i32 atomic)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 6: Split nutrient thresholds (read-only, derived from split_mass)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -3333,6 +3430,14 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: buffers.mode_cell_types.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.nutrients_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: buffers.split_nutrient_thresholds.as_entire_binding(),
                 },
             ],
         })
@@ -3738,6 +3843,17 @@ impl GpuPhysicsPipelines {
                 // Binding 15: Cell types
                 wgpu::BindGroupLayoutEntry {
                     binding: 15,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 16: Nutrients buffer (atomic i32, fixed-point scale 1000)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 16,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },

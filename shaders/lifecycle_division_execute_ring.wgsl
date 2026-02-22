@@ -103,10 +103,30 @@ var<storage, read_write> birth_times: array<f32>;
 var<storage, read_write> split_intervals: array<f32>;
 
 @group(2) @binding(2)
-var<storage, read_write> split_masses: array<f32>;
+var<storage, read_write> split_nutrient_thresholds: array<f32>;
 
 @group(2) @binding(3)
 var<storage, read_write> split_counts: array<u32>;
+
+// Nutrients buffer: fixed-point i32 with scale 1000 (100.0 nutrients = 100000)
+@group(2) @binding(23)
+var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
+
+// Fixed-point conversion
+const FIXED_POINT_SCALE: f32 = 1000.0;
+
+fn float_to_fixed(value: f32) -> i32 {
+    return i32(value * FIXED_POINT_SCALE);
+}
+
+fn fixed_to_float(value: i32) -> f32 {
+    return f32(value) / FIXED_POINT_SCALE;
+}
+
+// Derive mass from nutrients: mass = 1.0 + nutrients / 100.0
+fn nutrients_to_mass(nutrients: f32) -> f32 {
+    return 1.0 + nutrients / 100.0;
+}
 
 @group(2) @binding(4)
 var<storage, read_write> split_ready_frame: array<i32>;
@@ -376,10 +396,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Parent state - read from OUTPUT buffer (physics results)
     let parent_pos = positions_out[cell_idx].xyz;
-    let parent_mass = positions_out[cell_idx].w;
-    let parent_vel = velocities_out[cell_idx].xyz;
     let parent_rotation = rotations_in[cell_idx];
     let parent_split_count = split_counts[cell_idx];
+    
+    // Get parent's nutrients from nutrients_buffer
+    let parent_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
     
     // Get parent's mode index for looking up child orientations and split direction
     let parent_mode_idx = mode_indices[cell_idx];
@@ -405,13 +426,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_a_rotation = quat_multiply(parent_rotation, quat_multiply(split_rotation_quat, child_a_orientation));
     let child_b_rotation = quat_multiply(parent_rotation, quat_multiply(split_rotation_quat, child_b_orientation));
     
-    // Calculate parent radius for offset calculation
+    // Calculate parent radius for offset calculation (derive mass from nutrients)
+    let parent_mass = nutrients_to_mass(parent_nutrients);
     let parent_radius = calculate_radius_from_mass(parent_mass);
     
-    // Split mass using split_ratio from mode (matching CPU)
+    // Split nutrients using split_ratio from mode (matching CPU)
     let split_ratio = clamp(parent_split_ratio, 0.0, 1.0);
-    let child_a_mass = parent_mass * split_ratio;
-    let child_b_mass = parent_mass * (1.0 - split_ratio);
+    let child_a_nutrients = parent_nutrients * split_ratio;
+    let child_b_nutrients = parent_nutrients * (1.0 - split_ratio);
+    
+    // Derive child masses from nutrients
+    let child_a_mass = nutrients_to_mass(child_a_nutrients);
+    let child_b_mass = nutrients_to_mass(child_b_nutrients);
     
     // Transform split direction from local to world space
     let split_dir = normalize(rotate_vector_by_quat(split_dir_local, parent_rotation));
@@ -428,7 +454,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // === Create Child A (overwrites parent slot) ===
     positions_out[cell_idx] = vec4<f32>(child_a_pos, child_a_mass);
-    velocities_out[cell_idx] = vec4<f32>(parent_vel, 0.0);
+    velocities_out[cell_idx] = vec4<f32>(vec3<f32>(0.0, 0.0, 0.0), 0.0);
     
     // Assign cell ID first so we can use it for pseudo-random rotation
     let child_a_id = atomicAdd(&next_cell_id[0], 1u);
@@ -462,12 +488,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     max_cell_sizes[cell_idx] = child_a_props_0.y;
     stiffnesses[cell_idx] = child_a_props_0.z;
     split_intervals[cell_idx] = child_a_props_0.w;
-    split_masses[cell_idx] = child_a_props_1.x;
+    // Convert split_mass to nutrient threshold: (split_mass - 1.0) * 100.0
+    let child_a_split_mass = child_a_props_1.x;
+    split_nutrient_thresholds[cell_idx] = (child_a_split_mass - 1.0) * 100.0;
     max_splits[cell_idx] = select(u32(child_a_props_2.x), 0xFFFFFFFFu, child_a_props_2.x < 0.0);
+    
+    // Set child A nutrients
+    atomicStore(&nutrients_buffer[cell_idx], float_to_fixed(child_a_nutrients));
     
     // === Create Child B (in assigned slot) ===
     positions_out[child_b_slot] = vec4<f32>(child_b_pos, child_b_mass);
-    velocities_out[child_b_slot] = vec4<f32>(parent_vel, 0.0);
+    velocities_out[child_b_slot] = vec4<f32>(vec3<f32>(0.0, 0.0, 0.0), 0.0);
     
     // Assign cell ID first so we can use it for pseudo-random rotation
     let child_b_id = atomicAdd(&next_cell_id[0], 1u);
@@ -483,7 +514,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     birth_times[child_b_slot] = params.current_time;
     split_intervals[child_b_slot] = child_b_props_0.w;
-    split_masses[child_b_slot] = child_b_props_1.x;
+    // Convert split_mass to nutrient threshold: (split_mass - 1.0) * 100.0
+    let child_b_split_mass = child_b_props_1.x;
+    split_nutrient_thresholds[child_b_slot] = (child_b_split_mass - 1.0) * 100.0;
     
     if (child_b_mode_idx != parent_mode_idx) {
         split_counts[child_b_slot] = 0u;
@@ -502,6 +535,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     cell_types[child_b_slot] = child_b_cell_type;
     max_cell_sizes[child_b_slot] = child_b_props_0.y;
     stiffnesses[child_b_slot] = child_b_props_0.z;
+    
+    // Set child B nutrients
+    atomicStore(&nutrients_buffer[child_b_slot], float_to_fixed(child_b_nutrients));
     
     // Clear death flag for the new slot
     death_flags[child_b_slot] = 0u;

@@ -55,13 +55,36 @@ var<storage, read_write> cell_count_buffer: array<u32>;
 @group(1) @binding(0)
 var<storage, read> nutrient_gain_rates: array<f32>;
 
-// Split mass thresholds per cell (mass cap = 2x split_mass)
+// Split nutrient thresholds per cell (derived from split_mass)
 @group(1) @binding(1)
-var<storage, read> split_masses: array<f32>;
+var<storage, read> split_nutrient_thresholds: array<f32>;
 
 // Death flags to skip dead cells
 @group(1) @binding(2)
 var<storage, read> death_flags: array<u32>;
+
+// Cell types per mode
+@group(1) @binding(3)
+var<storage, read> mode_cell_types: array<u32>;
+
+// Mode indices per cell
+@group(1) @binding(4)
+var<storage, read> mode_indices: array<u32>;
+
+// Nutrients buffer: fixed-point i32 with scale 1000 (100.0 nutrients = 100000)
+@group(1) @binding(5)
+var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
+
+// Fixed-point conversion
+const FIXED_POINT_SCALE: f32 = 1000.0;
+
+fn float_to_fixed(value: f32) -> i32 {
+    return i32(value * FIXED_POINT_SCALE);
+}
+
+fn fixed_to_float(value: i32) -> f32 {
+    return f32(value) / FIXED_POINT_SCALE;
+}
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -77,25 +100,38 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Read current position and mass from output buffer (after physics integration)
-    let pos_mass = positions_out[cell_idx];
-    let current_mass = pos_mass.w;
-    
-    // Read per-cell nutrient gain rate and split mass from genome mode
-    let nutrient_gain_rate = nutrient_gain_rates[cell_idx];
-    let split_mass = split_masses[cell_idx];
-    
-    // Mass cap: 2x split_mass (allows storage for division plus buffer)
-    let max_mass = split_mass * 2.0;
-    
-    // Only grow if below mass cap
-    var new_mass = current_mass;
-    if (current_mass < max_mass) {
-        // Calculate mass increase: mass += nutrient_gain_rate * delta_time
-        let mass_increase = nutrient_gain_rate * params.delta_time;
-        new_mass = min(current_mass + mass_increase, max_mass);
+    // Get cell type from mode
+    let mode_idx = mode_indices[cell_idx];
+    var cell_type = 0u;
+    if (mode_idx < arrayLength(&mode_cell_types)) {
+        cell_type = mode_cell_types[mode_idx];
     }
     
-    // Write updated mass back (position unchanged)
-    positions_out[cell_idx] = vec4<f32>(pos_mass.xyz, new_mass);
+    // Only Test cells (cell_type == 0) auto-gain nutrients on GPU
+    // Phagocytes and Photocytes use specialized shaders (phagocyte_consume, photocyte_light)
+    let auto_gain_cell = cell_type == 0u;
+    if (!auto_gain_cell) {
+        return;
+    }
+    
+    // Read current nutrients from nutrients_buffer (fixed-point i32)
+    let current_nutrients_fixed = atomicLoad(&nutrients_buffer[cell_idx]);
+    let current_nutrients = fixed_to_float(current_nutrients_fixed);
+    
+    // Read per-cell nutrient gain rate and split threshold
+    let nutrient_gain_rate = nutrient_gain_rates[cell_idx];
+    let split_nutrient_threshold = split_nutrient_thresholds[cell_idx];
+    
+    // Nutrient cap: 2x split_nutrient_threshold (allows storage for division plus buffer)
+    let max_nutrients = split_nutrient_threshold * 2.0;
+    
+    // Only grow if below nutrient cap
+    if (current_nutrients < max_nutrients) {
+        // Calculate nutrient increase: nutrients += nutrient_gain_rate * delta_time
+        let nutrient_increase = nutrient_gain_rate * params.delta_time;
+        let new_nutrients = min(current_nutrients + nutrient_increase, max_nutrients);
+        
+        // Write back to nutrients_buffer
+        atomicStore(&nutrients_buffer[cell_idx], float_to_fixed(new_nutrients));
+    }
 }

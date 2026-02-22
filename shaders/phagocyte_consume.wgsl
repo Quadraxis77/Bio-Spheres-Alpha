@@ -56,12 +56,31 @@ var<storage, read_write> nutrient_voxels: array<atomic<u32>>;
 @group(1) @binding(3)
 var<storage, read> cell_types: array<u32>;
 
-// Split mass thresholds per cell (mass cap = 2x split_mass) - group 1, binding 4
+// Nutrients buffer (read-write, fixed-point i32)
 @group(1) @binding(4)
-var<storage, read> split_masses: array<f32>;
+var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
+
+// Split nutrient thresholds per cell (nutrient cap = 2x threshold)
+@group(1) @binding(5)
+var<storage, read> split_nutrient_thresholds: array<f32>;
+
+// Death flags to skip dead cells
+@group(1) @binding(6)
+var<storage, read> death_flags: array<u32>;
 
 // Phagocyte cell type constant
 const PHAGOCYTE_TYPE: u32 = 2u;
+
+// Fixed-point conversion
+const FIXED_POINT_SCALE: f32 = 1000.0;
+
+fn fixed_to_float(value: i32) -> f32 {
+    return f32(value) / FIXED_POINT_SCALE;
+}
+
+fn float_to_fixed(value: f32) -> i32 {
+    return i32(value * FIXED_POINT_SCALE);
+}
 
 // Convert world position to voxel grid index
 fn world_to_voxel_index(world_pos: vec3<f32>) -> u32 {
@@ -131,21 +150,27 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Get cell position and current mass
-    let pos_mass = positions[cell_idx];
-    let pos = pos_mass.xyz;
-    let current_mass = pos_mass.w;
-
-    // Skip dead/dying cells - do not resurrect cells that death_scan should remove
-    if (current_mass < 0.5) {
+    // Skip dead cells
+    if (death_flags[cell_idx] == 1u) {
         return;
     }
     
-    // Mass cap: 2x split_mass
-    let max_mass = split_masses[cell_idx] * 2.0;
+    // Get cell position
+    let pos = positions[cell_idx].xyz;
+
+    // Read current nutrients from nutrients_buffer (fixed-point i32)
+    let current_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
     
-    // Don't consume if already at max mass
-    if (current_mass >= max_mass) {
+    // Skip cells with very low nutrients (would be marked dead)
+    if (current_nutrients < 1.0) {
+        return;
+    }
+    
+    // Nutrient cap: 2x split_nutrient_threshold
+    let max_nutrients = split_nutrient_thresholds[cell_idx] * 2.0;
+    
+    // Don't consume if already at max nutrients
+    if (current_nutrients >= max_nutrients) {
         return;
     }
     
@@ -159,8 +184,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Try to consume the nutrient (atomic operation)
     if (try_consume_nutrient(voxel_index)) {
-        // Successfully consumed nutrient - add mass
-        let new_mass = min(current_mass + nutrient_params.mass_per_nutrient, max_mass);
-        positions[cell_idx] = vec4<f32>(pos, new_mass);
+        // Successfully consumed nutrient - add nutrients
+        let nutrient_gain = nutrient_params.mass_per_nutrient * 100.0;  // Convert mass gain to nutrients
+        let new_nutrients = min(current_nutrients + nutrient_gain, max_nutrients);
+        atomicStore(&nutrients_buffer[cell_idx], float_to_fixed(new_nutrients));
     }
 }

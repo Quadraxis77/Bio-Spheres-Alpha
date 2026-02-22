@@ -137,7 +137,7 @@ impl GpuCellInsertion {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: buffers.split_masses.as_entire_binding(),
+                    resource: buffers.split_nutrient_thresholds.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -190,6 +190,10 @@ impl GpuCellInsertion {
                 wgpu::BindGroupEntry {
                     binding: 15,
                     resource: buffers.cell_types.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: buffers.nutrients_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -245,6 +249,9 @@ impl GpuCellInsertion {
                 (10.0, 2.0, 50.0, 0.2, 2.0, u32::MAX, 0) // Default values (Test cell type)
             };
         
+        // Convert split_mass to nutrient threshold: (split_mass - 1.0) * 100.0
+        let split_nutrient_threshold = (split_mass - 1.0) * 100.0;
+        
         // Calculate radius from mass
         let radius = (mass * 3.0 / (4.0 * std::f32::consts::PI)).powf(1.0 / 3.0);
         
@@ -275,7 +282,7 @@ impl GpuCellInsertion {
             birth_time,
             _pad1: 0.0,
             split_interval,
-            split_mass,
+            split_mass: split_nutrient_threshold, // Pass nutrient threshold, not raw split_mass
             stiffness,
             radius,
             nutrient_gain_rate,
@@ -347,6 +354,9 @@ impl GpuCellInsertion {
                 (10.0, 2.0, 50.0, 0.2, 2.0, u32::MAX, 0) // Default values (Test cell type)
             };
         
+        // Convert split_mass to nutrient threshold: (split_mass - 1.0) * 100.0
+        let split_nutrient_threshold = (split_mass - 1.0) * 100.0;
+        
         // Calculate radius from mass
         let radius = (mass * 3.0 / (4.0 * std::f32::consts::PI)).powf(1.0 / 3.0);
         
@@ -377,7 +387,7 @@ impl GpuCellInsertion {
             birth_time,
             _pad1: 0.0,
             split_interval,
-            split_mass,
+            split_mass: split_nutrient_threshold, // Pass nutrient threshold, not raw split_mass
             stiffness,
             radius,
             nutrient_gain_rate,

@@ -114,15 +114,14 @@ impl DeterministicSlotAllocator {
 pub struct CellAdditionRequest {
     pub position: glam::Vec3,
     pub velocity: glam::Vec3,
-    pub mass: f32,
+    pub nutrients: f32,
     pub rotation: glam::Quat,
     pub genome_id: usize,
     pub mode_index: usize,
     pub birth_time: f32,
     pub split_interval: f32,
-    pub split_mass: f32,
+    pub split_nutrient_threshold: f32,
     pub stiffness: f32,
-    pub radius: f32,
     pub genome_orientation: glam::Quat,
     pub angular_velocity: glam::Vec3,
 }
@@ -215,6 +214,10 @@ pub struct GpuTripleBufferSystem {
     /// Death flags: 1 = dead (free slot), 0 = alive
     pub death_flags: wgpu::Buffer,
     
+    /// Nutrients buffer: fixed-point i32 with scale 1000 (100.0 nutrients = 100000 i32)
+    /// Stored as atomic for safe concurrent updates from multiple shaders
+    pub nutrients_buffer: wgpu::Buffer,
+    
     /// Mass deltas for nutrient transport (accumulates mass changes)
     pub mass_deltas_buffer: wgpu::Buffer,
     
@@ -245,8 +248,8 @@ pub struct GpuTripleBufferSystem {
     /// Split intervals (time between divisions)
     pub split_intervals: wgpu::Buffer,
     
-    /// Split mass thresholds
-    pub split_masses: wgpu::Buffer,
+    /// Split nutrient thresholds (nutrient level required for division)
+    pub split_nutrient_thresholds: wgpu::Buffer,
     
     /// Current split counts
     pub split_counts: wgpu::Buffer,
@@ -431,11 +434,17 @@ impl GpuTripleBufferSystem {
         
         // === Lifecycle buffers for cell division ===
         let u32_per_cell = capacity as u64 * 4; // u32 = 4 bytes
+        let i32_per_cell = capacity as u64 * 4; // i32 = 4 bytes
         let f32_per_cell = capacity as u64 * 4; // f32 = 4 bytes
 
         // death_flags must be zero-initialized to prevent cell_insertion shader from
         // finding false "dead" slots in uninitialized memory
         let death_flags = Self::create_zero_initialized_storage_buffer(device, u32_per_cell, "Death Flags");
+        
+        // Nutrients buffer: i32 with fixed-point scale 1000 (100.0 nutrients = 100000)
+        // Pre-initialized to 100000 (full nutrients) for all slots
+        let nutrients_buffer = Self::create_zero_initialized_storage_buffer(device, i32_per_cell, "Nutrients Buffer");
+        
         let mass_deltas_buffer = Self::create_storage_buffer(device, f32_per_cell, "Mass Deltas Buffer"); // i32 = 4 bytes, same as f32
         let division_flags = Self::create_storage_buffer(device, u32_per_cell, "Division Flags");
         let free_slot_indices = Self::create_storage_buffer(device, u32_per_cell, "Free Slot Indices");
@@ -456,7 +465,7 @@ impl GpuTripleBufferSystem {
         // Cell state buffers
         let birth_times = Self::create_storage_buffer(device, f32_per_cell, "Birth Times");
         let split_intervals = Self::create_storage_buffer(device, f32_per_cell, "Split Intervals");
-        let split_masses = Self::create_storage_buffer(device, f32_per_cell, "Split Masses");
+        let split_nutrient_thresholds = Self::create_storage_buffer(device, f32_per_cell, "Split Nutrient Thresholds");
         let split_counts = Self::create_storage_buffer(device, u32_per_cell, "Split Counts");
         let split_ready_frame = Self::create_storage_buffer(device, u32_per_cell, "Split Ready Frame");
         let max_splits = Self::create_storage_buffer(device, u32_per_cell, "Max Splits");
@@ -538,6 +547,7 @@ impl GpuTripleBufferSystem {
             cell_grid_indices,
             physics_params,
             death_flags,
+            nutrients_buffer,
             mass_deltas_buffer,
             division_flags,
             free_slot_indices,
@@ -547,7 +557,7 @@ impl GpuTripleBufferSystem {
             ring_state,
             birth_times,
             split_intervals,
-            split_masses,
+            split_nutrient_thresholds,
             split_counts,
             split_ready_frame,
             max_splits,
@@ -700,9 +710,16 @@ impl GpuTripleBufferSystem {
         let split_intervals: Vec<f32> = state.split_intervals[..state.cell_count].to_vec();
         queue.write_buffer(&self.split_intervals, 0, bytemuck::cast_slice(&split_intervals));
         
-        // Split masses
-        let split_masses: Vec<f32> = state.split_masses[..state.cell_count].to_vec();
-        queue.write_buffer(&self.split_masses, 0, bytemuck::cast_slice(&split_masses));
+        // Split nutrient thresholds
+        let split_nutrient_thresholds: Vec<f32> = state.split_nutrient_thresholds[..state.cell_count].to_vec();
+        queue.write_buffer(&self.split_nutrient_thresholds, 0, bytemuck::cast_slice(&split_nutrient_thresholds));
+        
+        // Nutrients - convert f32 to i32 fixed-point (scale 1000: 100.0 nutrients = 100000)
+        let nutrients: Vec<i32> = state.nutrients[..state.cell_count]
+            .iter()
+            .map(|&n| (n * 1000.0) as i32)
+            .collect();
+        queue.write_buffer(&self.nutrients_buffer, 0, bytemuck::cast_slice(&nutrients));
         
         // Split counts
         let split_counts: Vec<u32> = state.split_counts[..state.cell_count].iter().map(|&x| x as u32).collect();
@@ -728,8 +745,8 @@ impl GpuTripleBufferSystem {
                     let mode = &genome.modes[mode_idx];
                     let ms = mode.max_splits;
                     max_splits_data.push(if ms < 0 { u32::MAX } else { ms as u32 });
-                    // Only Test cells (cell_type == 0) auto-generate nutrients
-                    // All other cells rely on specialized functions or nutrient transport
+                    // Only Test cells (cell_type == 0) auto-gain nutrients on GPU
+                    // Phagocytes and Photocytes use specialized shaders (phagocyte_consume, photocyte_light)
                     let nutrient_rate = if mode.cell_type == 0 {
                         mode.nutrient_gain_rate
                     } else {
@@ -740,13 +757,13 @@ impl GpuTripleBufferSystem {
                     stiffnesses_data.push(mode.membrane_stiffness);
                 } else {
                     max_splits_data.push(u32::MAX); // Unlimited if mode not found
-                    nutrient_gain_rates_data.push(0.3); // Default nutrient gain rate (increased from 0.2)
+                    nutrient_gain_rates_data.push(20.0); // Default nutrient gain rate (20 nutrients/sec)
                     max_cell_sizes_data.push(2.0); // Default max cell size
                     stiffnesses_data.push(50.0); // Default membrane stiffness
                 }
             } else {
                 max_splits_data.push(u32::MAX); // Unlimited if genome not found
-                nutrient_gain_rates_data.push(0.3); // Default nutrient gain rate (increased from 0.2)
+                nutrient_gain_rates_data.push(20.0); // Default nutrient gain rate (20 nutrients/sec)
                 max_cell_sizes_data.push(2.0); // Default max cell size
                 stiffnesses_data.push(50.0); // Default membrane stiffness
             }
@@ -1151,7 +1168,7 @@ impl GpuTripleBufferSystem {
         cell_idx: usize,
         birth_time: f32,
         split_interval: f32,
-        split_mass: f32,
+        split_nutrient_threshold: f32,
         genome_id: usize,
         mode_index: usize,
         cell_id: usize,
@@ -1165,7 +1182,7 @@ impl GpuTripleBufferSystem {
         
         queue.write_buffer(&self.birth_times, offset, bytemuck::bytes_of(&birth_time));
         queue.write_buffer(&self.split_intervals, offset, bytemuck::bytes_of(&split_interval));
-        queue.write_buffer(&self.split_masses, offset, bytemuck::bytes_of(&split_mass));
+        queue.write_buffer(&self.split_nutrient_thresholds, offset, bytemuck::bytes_of(&split_nutrient_threshold));
         queue.write_buffer(&self.split_counts, offset, bytemuck::bytes_of(&0u32));
         
         // Convert max_splits: -1 (infinite) -> 0xFFFFFFFF (unlimited in GPU), 0+ stay as-is
@@ -1181,6 +1198,10 @@ impl GpuTripleBufferSystem {
         queue.write_buffer(&self.cell_ids, offset, bytemuck::bytes_of(&(cell_id as u32)));
         queue.write_buffer(&self.death_flags, offset, bytemuck::bytes_of(&0u32)); // Alive
         queue.write_buffer(&self.division_flags, offset, bytemuck::bytes_of(&0u32)); // Not dividing
+        
+        // Initialize nutrients to 100.0 (full) = 100000 in fixed-point scale
+        let initial_nutrients: i32 = 100_000;
+        queue.write_buffer(&self.nutrients_buffer, offset, bytemuck::bytes_of(&initial_nutrients));
     }
     
     /// Add cell with deterministic slot assignment
@@ -1195,12 +1216,14 @@ impl GpuTripleBufferSystem {
         let (slot, cell_id) = self.slot_allocator.allocate_slot()?;
         
         // Sync position/velocity/rotation to all buffer sets
+        // Derive mass from nutrients: mass = 1.0 + nutrients / 100.0
+        let mass = 1.0 + request.nutrients / 100.0;
         self.sync_single_cell(
             queue,
             slot as usize,
             request.position,
             request.velocity,
-            request.mass,
+            mass,
             request.rotation,
         );
         
@@ -1236,7 +1259,7 @@ impl GpuTripleBufferSystem {
             slot as usize,
             request.birth_time,
             request.split_interval,
-            request.split_mass,
+            request.split_nutrient_threshold,
             request.genome_id,
             absolute_mode_idx,
             cell_id as usize,
@@ -1488,13 +1511,12 @@ impl GpuTripleBufferSystem {
                     request.rotation,
                     request.genome_orientation,
                     request.angular_velocity,
-                    request.mass,
-                    request.radius,
+                    request.nutrients,
                     request.genome_id,
                     request.mode_index,
                     request.birth_time,
                     request.split_interval,
-                    request.split_mass,
+                    request.split_nutrient_threshold,
                     request.stiffness,
                     cell_id,
                 ) {
@@ -1523,7 +1545,7 @@ impl GpuTripleBufferSystem {
     pub fn create_cell_addition_request(
         position: glam::Vec3,
         velocity: glam::Vec3,
-        mass: f32,
+        nutrients: f32,
         rotation: glam::Quat,
         genome_id: usize,
         mode_index: usize,
@@ -1543,21 +1565,20 @@ impl GpuTripleBufferSystem {
             (10.0, 2.0, 50.0) // Default values
         };
         
-        // Calculate radius from mass
-        let radius = (mass * 3.0 / (4.0 * std::f32::consts::PI)).powf(1.0 / 3.0);
+        // Convert split_mass to nutrient threshold
+        let split_nutrient_threshold = (split_mass - 1.0) * 100.0;
         
         CellAdditionRequest {
             position,
             velocity,
-            mass,
+            nutrients,
             rotation,
             genome_id,
             mode_index,
             birth_time,
             split_interval,
-            split_mass,
+            split_nutrient_threshold,
             stiffness,
-            radius,
             genome_orientation: rotation, // Use same as physics rotation initially
             angular_velocity: glam::Vec3::ZERO,
         }
@@ -1636,7 +1657,7 @@ impl GpuTripleBufferSystem {
                     cell_idx,
                     state.birth_times[cell_idx],
                     state.split_intervals[cell_idx],
-                    state.split_masses[cell_idx],
+                    state.split_nutrient_thresholds[cell_idx],
                     state.genome_ids[cell_idx],
                     absolute_mode_idx, // Use absolute mode index
                     state.cell_ids[cell_idx] as usize,
@@ -1865,15 +1886,14 @@ mod tests {
         let request1 = CellAdditionRequest {
             position: Vec3::new(1.0, 2.0, 3.0),
             velocity: Vec3::ZERO,
-            mass: 1.0,
+            nutrients: 100.0,
             rotation: Quat::IDENTITY,
             genome_id: 0,
             mode_index: 0,
             birth_time: 0.0,
             split_interval: 10.0,
-            split_mass: 2.0,
+            split_nutrient_threshold: 50.0,
             stiffness: 50.0,
-            radius: 1.0,
             genome_orientation: Quat::IDENTITY,
             angular_velocity: Vec3::ZERO,
         };
@@ -1881,15 +1901,14 @@ mod tests {
         let request2 = CellAdditionRequest {
             position: Vec3::new(1.0, 2.0, 3.0), // Same position
             velocity: Vec3::new(1.0, 0.0, 0.0), // Different velocity (shouldn't affect hash)
-            mass: 2.0,                           // Different mass (shouldn't affect hash)
+            nutrients: 50.0,                     // Different nutrients (shouldn't affect hash)
             rotation: Quat::IDENTITY,
             genome_id: 0,                        // Same genome/mode
             mode_index: 0,
             birth_time: 5.0,                     // Different time (shouldn't affect hash)
             split_interval: 15.0,
-            split_mass: 3.0,
+            split_nutrient_threshold: 75.0,
             stiffness: 75.0,
-            radius: 1.2,
             genome_orientation: Quat::IDENTITY,
             angular_velocity: Vec3::ZERO,
         };
@@ -1897,15 +1916,14 @@ mod tests {
         let request3 = CellAdditionRequest {
             position: Vec3::new(1.0, 2.0, 3.0), // Same position
             velocity: Vec3::ZERO,
-            mass: 1.0,
+            nutrients: 100.0,
             rotation: Quat::IDENTITY,
             genome_id: 1,                        // Different genome (should affect hash)
             mode_index: 0,
             birth_time: 0.0,
             split_interval: 10.0,
-            split_mass: 2.0,
+            split_nutrient_threshold: 50.0,
             stiffness: 50.0,
-            radius: 1.0,
             genome_orientation: Quat::IDENTITY,
             angular_velocity: Vec3::ZERO,
         };
@@ -1925,15 +1943,14 @@ mod tests {
         let request_high_hash = CellAdditionRequest {
             position: Vec3::new(10.0, 10.0, 10.0), // High coordinates = high hash
             velocity: Vec3::ZERO,
-            mass: 1.0,
+            nutrients: 100.0,
             rotation: Quat::IDENTITY,
             genome_id: 1,
             mode_index: 1,
             birth_time: 0.0,
             split_interval: 10.0,
-            split_mass: 2.0,
+            split_nutrient_threshold: 50.0,
             stiffness: 50.0,
-            radius: 1.0,
             genome_orientation: Quat::IDENTITY,
             angular_velocity: Vec3::ZERO,
         };
@@ -1941,15 +1958,14 @@ mod tests {
         let request_low_hash = CellAdditionRequest {
             position: Vec3::new(1.0, 1.0, 1.0), // Low coordinates = low hash
             velocity: Vec3::ZERO,
-            mass: 1.0,
+            nutrients: 100.0,
             rotation: Quat::IDENTITY,
             genome_id: 0,
             mode_index: 0,
             birth_time: 0.0,
             split_interval: 10.0,
-            split_mass: 2.0,
+            split_nutrient_threshold: 50.0,
             stiffness: 50.0,
-            radius: 1.0,
             genome_orientation: Quat::IDENTITY,
             angular_velocity: Vec3::ZERO,
         };

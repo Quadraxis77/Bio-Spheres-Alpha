@@ -141,9 +141,31 @@ impl PhagocyteConsumptionSystem {
                     },
                     count: None,
                 },
-                // Binding 4: split_masses (read)
+                // Binding 4: nutrients_buffer (read-write for atomic)
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: split_nutrient_thresholds (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 6: death_flags (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -243,7 +265,9 @@ impl PhagocyteConsumptionSystem {
         fluid_state_buffer: &wgpu::Buffer,
         nutrient_voxels_buffer: &wgpu::Buffer,
         cell_types_buffer: &wgpu::Buffer,
-        split_masses_buffer: &wgpu::Buffer,
+        nutrients_buffer: &wgpu::Buffer,
+        split_nutrient_thresholds_buffer: &wgpu::Buffer,
+        death_flags_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Phagocyte Consumption Nutrient Bind Group"),
@@ -267,7 +291,15 @@ impl PhagocyteConsumptionSystem {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: split_masses_buffer.as_entire_binding(),
+                    resource: nutrients_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: split_nutrient_thresholds_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: death_flags_buffer.as_entire_binding(),
                 },
             ],
         })

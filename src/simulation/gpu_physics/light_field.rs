@@ -444,9 +444,31 @@ impl LightFieldSystem {
                         },
                         count: None,
                     },
-                    // Binding 3: split_masses (read-only storage)
+                    // Binding 3: nutrients_buffer (read-write for atomic)
                     wgpu::BindGroupLayoutEntry {
                         binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 4: split_nutrient_thresholds (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 5: death_flags (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -586,8 +608,8 @@ impl LightFieldSystem {
             absorption_solid: 8.0,
             absorption_cell: 10.0,
             ambient_floor: 0.02,
-            scattering_coefficient: 0.3,
-            mass_per_second_full_light: 0.3,
+            scattering_coefficient: 0.2,
+            mass_per_second_full_light: 0.2,
             min_light_threshold: 0.05,
             shadow_strength: 0.7,
             shadow_enabled: true,
@@ -964,7 +986,9 @@ impl LightFieldSystem {
         &self,
         device: &wgpu::Device,
         cell_types_buffer: &wgpu::Buffer,
-        split_masses_buffer: &wgpu::Buffer,
+        nutrients_buffer: &wgpu::Buffer,
+        split_nutrient_thresholds_buffer: &wgpu::Buffer,
+        death_flags_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Photocyte System Bind Group"),
@@ -984,7 +1008,15 @@ impl LightFieldSystem {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: split_masses_buffer.as_entire_binding(),
+                    resource: nutrients_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: split_nutrient_thresholds_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: death_flags_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -1005,7 +1037,9 @@ impl LightFieldSystem {
         cell_count_buffer: &wgpu::Buffer,
         physics_params_buffer: &wgpu::Buffer,
         cell_types_buffer: &wgpu::Buffer,
-        split_masses_buffer: &wgpu::Buffer,
+        nutrients_buffer: &wgpu::Buffer,
+        split_nutrient_thresholds_buffer: &wgpu::Buffer,
+        death_flags_buffer: &wgpu::Buffer,
         cell_count: u32,
         time: f32,
     ) {
@@ -1030,7 +1064,9 @@ impl LightFieldSystem {
         let photocyte_system_bg = self.create_photocyte_system_bind_group(
             device,
             cell_types_buffer,
-            split_masses_buffer,
+            nutrients_buffer,
+            split_nutrient_thresholds_buffer,
+            death_flags_buffer,
         );
 
         // Step 1: Clear occupancy grid using DMA (faster than compute dispatch)
@@ -1074,7 +1110,7 @@ impl LightFieldSystem {
     }
 
     /// Run only the photocyte light consumption step.
-    /// Call this inside each physics step so photocytes gain/lose mass at the same rate as other cells.
+    /// Call this inside each physics step so photocytes gain/lose nutrients at the same rate as other cells.
     /// Requires the light field to have been computed already this frame.
     pub fn run_photocyte_only(
         &self,
@@ -1085,7 +1121,9 @@ impl LightFieldSystem {
         cell_count_buffer: &wgpu::Buffer,
         physics_params_buffer: &wgpu::Buffer,
         cell_types_buffer: &wgpu::Buffer,
-        split_masses_buffer: &wgpu::Buffer,
+        nutrients_buffer: &wgpu::Buffer,
+        split_nutrient_thresholds_buffer: &wgpu::Buffer,
+        death_flags_buffer: &wgpu::Buffer,
         cell_count: u32,
     ) {
         // Note: Don't early-out on cell_count == 0. The caller passes capacity
@@ -1102,7 +1140,9 @@ impl LightFieldSystem {
         let photocyte_system_bg = self.create_photocyte_system_bind_group(
             device,
             cell_types_buffer,
-            split_masses_buffer,
+            nutrients_buffer,
+            split_nutrient_thresholds_buffer,
+            death_flags_buffer,
         );
 
         let cell_workgroups = (cell_count + 255) / 256;

@@ -124,7 +124,7 @@ var<storage, read_write> birth_times: array<f32>;
 var<storage, read_write> split_intervals: array<f32>;
 
 @group(2) @binding(2)
-var<storage, read_write> split_masses: array<f32>;
+var<storage, read_write> split_nutrient_thresholds: array<f32>;
 
 @group(2) @binding(3)
 var<storage, read_write> split_counts: array<u32>;
@@ -164,6 +164,10 @@ var<storage, read_write> division_flags: array<u32>;
 
 @group(2) @binding(15)
 var<storage, read_write> cell_types: array<u32>;
+
+// Nutrients buffer: fixed-point i32 with scale 1000 (100.0 nutrients = 100000)
+@group(2) @binding(16)
+var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
 
 @compute @workgroup_size(1, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -249,7 +253,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Initialize cell state for division system (single buffers)
     birth_times[slot] = insertion_params.birth_time;
     split_intervals[slot] = insertion_params.split_interval;
-    split_masses[slot] = insertion_params.split_mass;
+    split_nutrient_thresholds[slot] = insertion_params.split_mass; // split_mass param holds converted nutrient threshold
     split_counts[slot] = 0u; // New cell hasn't split yet
     
     // Convert max_splits: -1 (infinite) -> 0 (unlimited in GPU)
@@ -282,6 +286,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Initialize lifecycle flags
     death_flags[slot] = 0u; // Alive
     division_flags[slot] = 0u; // Not dividing
+    
+    // Initialize nutrients to 100.0 (full) = 100000 in fixed-point scale
+    atomicStore(&nutrients_buffer[slot], 100000i);
     
     // Initialize cell type (0 = Test, 1 = Flagellocyte, etc.)
     cell_types[slot] = insertion_params.cell_type;

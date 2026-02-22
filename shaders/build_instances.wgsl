@@ -202,6 +202,9 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
 // Cell type behavior flags (one per type, up to MAX_TYPES=30)
 @group(0) @binding(16) var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
 
+// Death flags - cells marked for removal by lifecycle system
+@group(0) @binding(17) var<storage, read> death_flags: array<u32>;
+
 // ============================================================================
 // Random Number Generation
 // ============================================================================
@@ -371,10 +374,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let position = pos_and_mass.xyz;
     let mass = pos_and_mass.w;
     
-    // Skip dead cells (mass below death threshold)
-    // This handles cells marked for removal before the lifecycle pipeline runs
-    const DEATH_MASS_THRESHOLD: f32 = 0.5;
-    if (mass < DEATH_MASS_THRESHOLD) {
+    // Skip dead cells (check death_flags set by lifecycle system)
+    // Death flags are set when nutrients < 1.0 (DEATH_NUTRIENT_THRESHOLD)
+    if (death_flags[idx] == 1u) {
         return;
     }
     

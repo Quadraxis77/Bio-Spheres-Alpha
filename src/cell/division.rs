@@ -85,19 +85,23 @@ pub fn division_step(
             // Skip adhesion checks since we're not implementing adhesions
             let can_split_by_adhesions = true;
             
-            // Check mass threshold - cells must have enough mass to split (using per-cell split_mass)
-            // Values > 3.0 mean "never split" (UI sentinel)
-            let can_split_by_mass = state.split_masses[i] <= 3.0 && state.masses[i] >= state.split_masses[i];
+            // Check nutrient threshold - cells must have enough nutrients to split
+            // Values > 100 mean "never split" (UI sentinel: split_mass > 2.0 -> threshold > 100)
+            // Lipocytes (cell_type 4) can have threshold up to 200
+            let is_lipocyte = mode.map(|m| m.cell_type == 4).unwrap_or(false);
+            let max_threshold = if is_lipocyte { 200.0 } else { 100.0 };
+            let can_split_by_nutrients = state.split_nutrient_thresholds[i] <= max_threshold 
+                && state.nutrients[i] >= state.split_nutrient_thresholds[i];
             
             // Check time threshold - cells must be old enough to split
-            // Flagellocytes (cell_type == 1) split based on mass only, ignore split_interval
+            // Flagellocytes (cell_type == 1) split based on nutrients only, ignore split_interval
             let is_flagellocyte = mode.map(|m| m.cell_type == 1).unwrap_or(false);
             let can_split_by_time = is_flagellocyte || cell_age >= state.split_intervals[i];
             
             // Cell can split if ALL conditions are met
             // Note: split_intervals[i] <= 59.0 check only applies to non-Flagellocytes
             let split_interval_valid = is_flagellocyte || state.split_intervals[i] <= 59.0;
-            if can_split_by_count && can_split_by_adhesions && can_split_by_mass && can_split_by_time && split_interval_valid {
+            if can_split_by_count && can_split_by_adhesions && can_split_by_nutrients && can_split_by_time && split_interval_valid {
                 state.divisions_to_process_buffer.push(i);
             }
         }
@@ -128,6 +132,8 @@ pub fn division_step(
             #[allow(dead_code)]
             parent_split_count: i32,
             parent_genome_orientation: Quat,
+            #[allow(dead_code)]
+            parent_nutrients: f32,
             child_a_pos: Vec3,
             child_b_pos: Vec3,
             child_a_orientation: Quat,
@@ -136,14 +142,12 @@ pub fn division_step(
             child_b_genome_orientation: Quat,
             child_a_mode_idx: usize,
             child_b_mode_idx: usize,
-            child_a_mass: f32,
-            child_b_mass: f32,
-            child_a_radius: f32,
-            child_b_radius: f32,
+            child_a_nutrients: f32,
+            child_b_nutrients: f32,
             child_a_split_interval: f32,
             child_b_split_interval: f32,
-            child_a_split_mass_threshold: f32,
-            child_b_split_mass_threshold: f32,
+            child_a_split_nutrient_threshold: f32,
+            child_b_split_nutrient_threshold: f32,
             child_a_split_count: i32,
             child_b_split_count: i32,
         }
@@ -181,7 +185,7 @@ pub fn division_step(
                 let parent_rotation = state.rotations[parent_idx];
                 let parent_genome_orientation = state.genome_orientations[parent_idx];
                 let parent_radius = state.radii[parent_idx];
-                let parent_mass = state.masses[parent_idx];
+                let parent_nutrients = state.nutrients[parent_idx];
                 let parent_genome_id = state.genome_ids[parent_idx];
                 let parent_stiffness = state.stiffnesses[parent_idx];
                 let parent_split_count = state.split_counts[parent_idx];
@@ -234,24 +238,11 @@ pub fn division_step(
                 let child_a_mode = genome.modes.get(child_a_mode_idx);
                 let child_b_mode = genome.modes.get(child_b_mode_idx);
                 
-                // Split parent's mass according to split_ratio
+                // Split parent's nutrients according to split_ratio
                 // split_ratio determines what fraction goes to Child A (0.0 to 1.0)
                 let split_ratio = mode.split_ratio.clamp(0.0, 1.0);
-                let child_a_mass = parent_mass * split_ratio;
-                let child_b_mass = parent_mass * (1.0 - split_ratio);
-                
-                // Calculate child radii based on their masses
-                let child_a_radius = if let Some(m) = child_a_mode {
-                    child_a_mass.min(m.max_cell_size).clamp(0.5, 2.0)
-                } else {
-                    child_a_mass.clamp(0.5, 2.0)
-                };
-                
-                let child_b_radius = if let Some(m) = child_b_mode {
-                    child_b_mass.min(m.max_cell_size).clamp(0.5, 2.0)
-                } else {
-                    child_b_mass.clamp(0.5, 2.0)
-                };
+                let child_a_nutrients = parent_nutrients * split_ratio;
+                let child_b_nutrients = parent_nutrients * (1.0 - split_ratio);
                 
                 // Get split intervals (potentially randomized from range)
                 // Use parent cell_id + tick for deterministic randomness
@@ -270,17 +261,20 @@ pub fn division_step(
                     5.0
                 };
                 
-                // Get split mass thresholds (potentially randomized from range)
-                let child_a_split_mass_threshold = if let Some(m) = child_a_mode {
-                    m.get_split_mass(parent_cell_id, tick, rng_seed)
+                // Get split mass thresholds and convert to nutrient thresholds
+                // nutrient_threshold = (split_mass - 1.0) * 100.0
+                let child_a_split_nutrient_threshold = if let Some(m) = child_a_mode {
+                    let split_mass = m.get_split_mass(parent_cell_id, tick, rng_seed);
+                    (split_mass - 1.0) * 100.0
                 } else {
-                    1.5
+                    50.0 // Default: split_mass 1.5 -> 50 nutrients
                 };
                 
-                let child_b_split_mass_threshold = if let Some(m) = child_b_mode {
-                    m.get_split_mass(parent_cell_id + 1, tick, rng_seed)
+                let child_b_split_nutrient_threshold = if let Some(m) = child_b_mode {
+                    let split_mass = m.get_split_mass(parent_cell_id + 1, tick, rng_seed);
+                    (split_mass - 1.0) * 100.0
                 } else {
-                    1.5
+                    50.0
                 };
                 
                 // Calculate split rotation for both physics and genome orientations
@@ -307,6 +301,7 @@ pub fn division_step(
                     parent_stiffness,
                     parent_split_count,
                     parent_genome_orientation,
+                    parent_nutrients,
                     child_a_pos,
                     child_b_pos,
                     child_a_orientation,
@@ -315,14 +310,12 @@ pub fn division_step(
                     child_b_genome_orientation,
                     child_a_mode_idx,
                     child_b_mode_idx,
-                    child_a_mass,
-                    child_b_mass,
-                    child_a_radius,
-                    child_b_radius,
+                    child_a_nutrients,
+                    child_b_nutrients,
                     child_a_split_interval,
                     child_b_split_interval,
-                    child_a_split_mass_threshold,
-                    child_b_split_mass_threshold,
+                    child_a_split_nutrient_threshold,
+                    child_b_split_nutrient_threshold,
                     child_a_split_count,
                     child_b_split_count,
                 });
@@ -342,8 +335,13 @@ pub fn division_step(
                 state.positions[data.child_a_slot] = data.child_a_pos;
                 state.prev_positions[data.child_a_slot] = data.child_a_pos;
                 state.velocities[data.child_a_slot] = data.parent_velocity;
-                state.masses[data.child_a_slot] = data.child_a_mass;
-                state.radii[data.child_a_slot] = data.child_a_radius;
+                
+                // Derive mass and radius from nutrients
+                state.nutrients[data.child_a_slot] = data.child_a_nutrients;
+                let child_a_mass = 1.0 + data.child_a_nutrients / 100.0;
+                state.masses[data.child_a_slot] = child_a_mass;
+                state.radii[data.child_a_slot] = child_a_mass.clamp(0.5, 2.0);
+                
                 state.genome_ids[data.child_a_slot] = data.parent_genome_id;
                 state.mode_indices[data.child_a_slot] = data.child_a_mode_idx;
 
@@ -360,7 +358,7 @@ pub fn division_step(
                 state.stiffnesses[data.child_a_slot] = data.parent_stiffness;
                 state.birth_times[data.child_a_slot] = child_birth_time;
                 state.split_intervals[data.child_a_slot] = data.child_a_split_interval;
-                state.split_masses[data.child_a_slot] = data.child_a_split_mass_threshold;
+                state.split_nutrient_thresholds[data.child_a_slot] = data.child_a_split_nutrient_threshold;
                 state.split_counts[data.child_a_slot] = data.child_a_split_count;
             }
 
@@ -372,8 +370,13 @@ pub fn division_step(
                 state.positions[data.child_b_slot] = data.child_b_pos;
                 state.prev_positions[data.child_b_slot] = data.child_b_pos;
                 state.velocities[data.child_b_slot] = data.parent_velocity;
-                state.masses[data.child_b_slot] = data.child_b_mass;
-                state.radii[data.child_b_slot] = data.child_b_radius;
+                
+                // Derive mass and radius from nutrients
+                state.nutrients[data.child_b_slot] = data.child_b_nutrients;
+                let child_b_mass = 1.0 + data.child_b_nutrients / 100.0;
+                state.masses[data.child_b_slot] = child_b_mass;
+                state.radii[data.child_b_slot] = child_b_mass.clamp(0.5, 2.0);
+                
                 state.genome_ids[data.child_b_slot] = data.parent_genome_id;
                 state.mode_indices[data.child_b_slot] = data.child_b_mode_idx;
 
@@ -390,7 +393,7 @@ pub fn division_step(
                 state.stiffnesses[data.child_b_slot] = data.parent_stiffness;
                 state.birth_times[data.child_b_slot] = child_birth_time;
                 state.split_intervals[data.child_b_slot] = data.child_b_split_interval;
-                state.split_masses[data.child_b_slot] = data.child_b_split_mass_threshold;
+                state.split_nutrient_thresholds[data.child_b_slot] = data.child_b_split_nutrient_threshold;
                 state.split_counts[data.child_b_slot] = data.child_b_split_count;
             }
             
@@ -499,14 +502,14 @@ pub fn division_step(
         let new_cell_count = state.cell_count + division_data_list.len();
         state.cell_count = new_cell_count;
         
-        // Kill children born under minimum mass (0.5) due to extreme split ratios
-        const MIN_CELL_MASS: f32 = 0.5;
+        // Kill children born under minimum nutrients (1.0 = death threshold)
+        const MIN_NUTRIENTS: f32 = 1.0;
         let mut dead_on_arrival = Vec::new();
         for data in &division_data_list {
-            if data.child_b_mass < MIN_CELL_MASS && data.child_b_slot < state.cell_count {
+            if data.child_b_nutrients < MIN_NUTRIENTS && data.child_b_slot < state.cell_count {
                 dead_on_arrival.push(data.child_b_slot);
             }
-            if data.child_a_mass < MIN_CELL_MASS && data.child_a_slot < state.cell_count {
+            if data.child_a_nutrients < MIN_NUTRIENTS && data.child_a_slot < state.cell_count {
                 dead_on_arrival.push(data.child_a_slot);
             }
         }
@@ -596,16 +599,21 @@ pub fn division_step_multi(
             };
             
             let can_split_by_adhesions = true;
-            // Values > 3.0 mean "never split" (UI sentinel)
-            let can_split_by_mass = state.split_masses[i] <= 3.0 && state.masses[i] >= state.split_masses[i];
+            // Check nutrient threshold - cells must have enough nutrients to split
+            // Values > 100 mean "never split" (UI sentinel: split_mass > 2.0 -> threshold > 100)
+            // Lipocytes (cell_type 4) can have threshold up to 200
+            let is_lipocyte = mode.map(|m| m.cell_type == 4).unwrap_or(false);
+            let max_threshold = if is_lipocyte { 200.0 } else { 100.0 };
+            let can_split_by_nutrients = state.split_nutrient_thresholds[i] <= max_threshold 
+                && state.nutrients[i] >= state.split_nutrient_thresholds[i];
             
-            // Flagellocytes (cell_type == 1) split based on mass only, ignore split_interval
+            // Flagellocytes (cell_type == 1) split based on nutrients only, ignore split_interval
             let is_flagellocyte = mode.map(|m| m.cell_type == 1).unwrap_or(false);
             let can_split_by_time = is_flagellocyte || cell_age >= state.split_intervals[i];
             
             // Note: split_intervals[i] <= 59.0 check only applies to non-Flagellocytes
             let split_interval_valid = is_flagellocyte || state.split_intervals[i] <= 59.0;
-            if can_split_by_count && can_split_by_adhesions && can_split_by_mass && can_split_by_time && split_interval_valid {
+            if can_split_by_count && can_split_by_adhesions && can_split_by_nutrients && can_split_by_time && split_interval_valid {
                 state.divisions_to_process_buffer.push(i);
             }
         }
@@ -632,6 +640,8 @@ pub fn division_step_multi(
             #[allow(dead_code)]
             parent_split_count: i32,
             parent_genome_orientation: Quat,
+            #[allow(dead_code)]
+            parent_nutrients: f32,
             child_a_pos: Vec3,
             child_b_pos: Vec3,
             child_a_orientation: Quat,
@@ -640,14 +650,12 @@ pub fn division_step_multi(
             child_b_genome_orientation: Quat,
             child_a_mode_idx: usize,
             child_b_mode_idx: usize,
-            child_a_mass: f32,
-            child_b_mass: f32,
-            child_a_radius: f32,
-            child_b_radius: f32,
+            child_a_nutrients: f32,
+            child_b_nutrients: f32,
             child_a_split_interval: f32,
             child_b_split_interval: f32,
-            child_a_split_mass_threshold: f32,
-            child_b_split_mass_threshold: f32,
+            child_a_split_nutrient_threshold: f32,
+            child_b_split_nutrient_threshold: f32,
             child_a_split_count: i32,
             child_b_split_count: i32,
             split_direction_local: Vec3,
@@ -686,7 +694,7 @@ pub fn division_step_multi(
             let parent_rotation = state.rotations[parent_idx];
             let parent_genome_orientation = state.genome_orientations[parent_idx];
             let parent_radius = state.radii[parent_idx];
-            let parent_mass = state.masses[parent_idx];
+            let parent_nutrients = state.nutrients[parent_idx];
             let parent_stiffness = state.stiffnesses[parent_idx];
             let parent_split_count = state.split_counts[parent_idx];
             
@@ -719,21 +727,10 @@ pub fn division_step_multi(
             let child_a_mode = genome.modes.get(child_a_mode_idx);
             let child_b_mode = genome.modes.get(child_b_mode_idx);
             
+            // Split parent's nutrients according to split_ratio
             let split_ratio = mode.split_ratio.clamp(0.0, 1.0);
-            let child_a_mass = parent_mass * split_ratio;
-            let child_b_mass = parent_mass * (1.0 - split_ratio);
-            
-            let child_a_radius = if let Some(m) = child_a_mode {
-                child_a_mass.min(m.max_cell_size).clamp(0.5, 2.0)
-            } else {
-                child_a_mass.clamp(0.5, 2.0)
-            };
-            
-            let child_b_radius = if let Some(m) = child_b_mode {
-                child_b_mass.min(m.max_cell_size).clamp(0.5, 2.0)
-            } else {
-                child_b_mass.clamp(0.5, 2.0)
-            };
+            let child_a_nutrients = parent_nutrients * split_ratio;
+            let child_b_nutrients = parent_nutrients * (1.0 - split_ratio);
             
             let parent_cell_id = state.cell_ids[parent_idx];
             let tick = (current_time * 60.0) as u64;
@@ -746,13 +743,16 @@ pub fn division_step_multi(
                 m.get_split_interval(parent_cell_id + 1, tick, rng_seed)
             } else { 5.0 };
             
-            let child_a_split_mass_threshold = if let Some(m) = child_a_mode {
-                m.get_split_mass(parent_cell_id, tick, rng_seed)
-            } else { 1.5 };
+            // Convert split_mass to nutrient threshold: (split_mass - 1.0) * 100.0
+            let child_a_split_nutrient_threshold = if let Some(m) = child_a_mode {
+                let split_mass = m.get_split_mass(parent_cell_id, tick, rng_seed);
+                (split_mass - 1.0) * 100.0
+            } else { 50.0 };
             
-            let child_b_split_mass_threshold = if let Some(m) = child_b_mode {
-                m.get_split_mass(parent_cell_id + 1, tick, rng_seed)
-            } else { 1.5 };
+            let child_b_split_nutrient_threshold = if let Some(m) = child_b_mode {
+                let split_mass = m.get_split_mass(parent_cell_id + 1, tick, rng_seed);
+                (split_mass - 1.0) * 100.0
+            } else { 50.0 };
             
             let child_a_genome_orientation = parent_genome_orientation * mode.child_a.orientation;
             let child_b_genome_orientation = parent_genome_orientation * mode.child_b.orientation;
@@ -769,6 +769,7 @@ pub fn division_step_multi(
                 parent_stiffness,
                 parent_split_count,
                 parent_genome_orientation,
+                parent_nutrients,
                 child_a_pos,
                 child_b_pos,
                 child_a_orientation,
@@ -777,14 +778,12 @@ pub fn division_step_multi(
                 child_b_genome_orientation,
                 child_a_mode_idx,
                 child_b_mode_idx,
-                child_a_mass,
-                child_b_mass,
-                child_a_radius,
-                child_b_radius,
+                child_a_nutrients,
+                child_b_nutrients,
                 child_a_split_interval,
                 child_b_split_interval,
-                child_a_split_mass_threshold,
-                child_b_split_mass_threshold,
+                child_a_split_nutrient_threshold,
+                child_b_split_nutrient_threshold,
                 child_a_split_count,
                 child_b_split_count,
                 split_direction_local: Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z,
@@ -803,8 +802,13 @@ pub fn division_step_multi(
                 state.positions[data.child_a_slot] = data.child_a_pos;
                 state.prev_positions[data.child_a_slot] = data.child_a_pos;
                 state.velocities[data.child_a_slot] = data.parent_velocity;
-                state.masses[data.child_a_slot] = data.child_a_mass;
-                state.radii[data.child_a_slot] = data.child_a_radius;
+                
+                // Derive mass and radius from nutrients
+                state.nutrients[data.child_a_slot] = data.child_a_nutrients;
+                let child_a_mass = 1.0 + data.child_a_nutrients / 100.0;
+                state.masses[data.child_a_slot] = child_a_mass;
+                state.radii[data.child_a_slot] = child_a_mass.clamp(0.5, 2.0);
+                
                 state.genome_ids[data.child_a_slot] = data.parent_genome_id;
                 state.mode_indices[data.child_a_slot] = data.child_a_mode_idx;
                 let random_rotation_a = pseudo_random_rotation(child_a_id, rng_seed);
@@ -818,7 +822,7 @@ pub fn division_step_multi(
                 state.stiffnesses[data.child_a_slot] = data.parent_stiffness;
                 state.birth_times[data.child_a_slot] = child_birth_time;
                 state.split_intervals[data.child_a_slot] = data.child_a_split_interval;
-                state.split_masses[data.child_a_slot] = data.child_a_split_mass_threshold;
+                state.split_nutrient_thresholds[data.child_a_slot] = data.child_a_split_nutrient_threshold;
                 state.split_counts[data.child_a_slot] = data.child_a_split_count;
             }
 
@@ -829,8 +833,13 @@ pub fn division_step_multi(
                 state.positions[data.child_b_slot] = data.child_b_pos;
                 state.prev_positions[data.child_b_slot] = data.child_b_pos;
                 state.velocities[data.child_b_slot] = data.parent_velocity;
-                state.masses[data.child_b_slot] = data.child_b_mass;
-                state.radii[data.child_b_slot] = data.child_b_radius;
+                
+                // Derive mass and radius from nutrients
+                state.nutrients[data.child_b_slot] = data.child_b_nutrients;
+                let child_b_mass = 1.0 + data.child_b_nutrients / 100.0;
+                state.masses[data.child_b_slot] = child_b_mass;
+                state.radii[data.child_b_slot] = child_b_mass.clamp(0.5, 2.0);
+                
                 state.genome_ids[data.child_b_slot] = data.parent_genome_id;
                 state.mode_indices[data.child_b_slot] = data.child_b_mode_idx;
                 let random_rotation_b = pseudo_random_rotation(child_b_id, rng_seed);
@@ -844,7 +853,7 @@ pub fn division_step_multi(
                 state.stiffnesses[data.child_b_slot] = data.parent_stiffness;
                 state.birth_times[data.child_b_slot] = child_birth_time;
                 state.split_intervals[data.child_b_slot] = data.child_b_split_interval;
-                state.split_masses[data.child_b_slot] = data.child_b_split_mass_threshold;
+                state.split_nutrient_thresholds[data.child_b_slot] = data.child_b_split_nutrient_threshold;
                 state.split_counts[data.child_b_slot] = data.child_b_split_count;
             }
             

@@ -790,7 +790,9 @@ impl GpuScene {
                 fluid_sim.current_state_buffer(),
                 fluid_sim.nutrient_voxels_buffer(),
                 &self.gpu_triple_buffers.cell_types,
-                &self.gpu_triple_buffers.split_masses,
+                &self.gpu_triple_buffers.nutrients_buffer,
+                &self.gpu_triple_buffers.split_nutrient_thresholds,
+                &self.gpu_triple_buffers.death_flags,
             ));
         }
         
@@ -847,7 +849,9 @@ impl GpuScene {
             &self.gpu_triple_buffers.cell_count_buffer,
             &self.gpu_triple_buffers.physics_params,
             &self.gpu_triple_buffers.cell_types,
-            &self.gpu_triple_buffers.split_masses,
+            &self.gpu_triple_buffers.nutrients_buffer,
+            &self.gpu_triple_buffers.split_nutrient_thresholds,
+            &self.gpu_triple_buffers.death_flags,
             self.gpu_triple_buffers.capacity,
         );
     }
@@ -3717,6 +3721,7 @@ impl Scene for GpuScene {
             self.renderer.width,
             self.renderer.height,
             &self.gpu_triple_buffers.cell_count_buffer,
+            &self.gpu_triple_buffers.death_flags,
             self.lod_scale_factor,
             self.lod_threshold_low,
             self.lod_threshold_medium,

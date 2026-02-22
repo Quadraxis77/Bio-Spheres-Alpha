@@ -217,7 +217,7 @@ impl GpuCellDataExtraction {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: buffers.split_masses.as_entire_binding(),
+                    resource: buffers.split_nutrient_thresholds.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,

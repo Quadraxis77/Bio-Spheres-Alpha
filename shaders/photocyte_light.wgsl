@@ -55,11 +55,31 @@ var<storage, read> light_field: array<f32>;  // Per-voxel light intensity (0.0-1
 @group(1) @binding(2)
 var<storage, read> cell_types: array<u32>;  // Per-cell type ID
 
+// Nutrients buffer (read-write, fixed-point i32)
 @group(1) @binding(3)
-var<storage, read> split_masses: array<f32>;  // Per-cell split mass threshold (mass cap = 2x)
+var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
+
+// Split nutrient thresholds per cell (nutrient cap = 2x threshold)
+@group(1) @binding(4)
+var<storage, read> split_nutrient_thresholds: array<f32>;
+
+// Death flags to skip dead cells
+@group(1) @binding(5)
+var<storage, read> death_flags: array<u32>;
 
 // Photocyte cell type constant
 const PHOTOCYTE_TYPE: u32 = 3u;
+
+// Fixed-point conversion
+const FIXED_POINT_SCALE: f32 = 1000.0;
+
+fn fixed_to_float(value: i32) -> f32 {
+    return f32(value) / FIXED_POINT_SCALE;
+}
+
+fn float_to_fixed(value: f32) -> i32 {
+    return i32(value * FIXED_POINT_SCALE);
+}
 
 // Convert world position to voxel grid index
 fn world_to_voxel_index(world_pos: vec3<f32>) -> u32 {
@@ -119,45 +139,54 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Only photocytes gain mass from light
+    // Only photocytes gain nutrients from light
     let cell_type = cell_types[cell_idx];
     if (cell_type != PHOTOCYTE_TYPE) {
         return;
     }
     
-    // Get cell position and current mass
-    let pos_mass = positions[cell_idx];
-    let pos = pos_mass.xyz;
-    let current_mass = pos_mass.w;
-
-    // Skip dead/dying cells - do not resurrect cells that death_scan should remove
-    if (current_mass < 0.5) {
+    // Skip dead cells
+    if (death_flags[cell_idx] == 1u) {
         return;
     }
     
-    // Mass cap: 2x split_mass
-    let max_mass = split_masses[cell_idx] * 2.0;
+    // Get cell position
+    let pos = positions[cell_idx].xyz;
+
+    // Read current nutrients from nutrients_buffer (fixed-point i32)
+    let current_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
+    
+    // Skip cells with very low nutrients (would be marked dead)
+    if (current_nutrients < 1.0) {
+        return;
+    }
+    
+    // Nutrient cap: 2x split_nutrient_threshold
+    let max_nutrients = split_nutrient_thresholds[cell_idx] * 2.0;
     
     // Sample light intensity at cell position (trilinear interpolated)
     let light_intensity = sample_light(pos);
     
-    var new_mass = current_mass;
+    var new_nutrients = current_nutrients;
     
     if (light_intensity >= photocyte_params.min_light_threshold) {
-        // In light: gain mass proportional to light intensity
+        // In light: gain nutrients proportional to light intensity
         let effective_intensity = (light_intensity - photocyte_params.min_light_threshold) 
                                 / (1.0 - photocyte_params.min_light_threshold);
-        let mass_gain = photocyte_params.mass_per_second_full_light * effective_intensity * params.delta_time;
-        new_mass = min(current_mass + mass_gain, max_mass);
+        // Convert mass_per_second to nutrients per second (multiply by 100)
+        let nutrient_gain_rate = photocyte_params.mass_per_second_full_light * 100.0;
+        let nutrient_gain = nutrient_gain_rate * effective_intensity * params.delta_time;
+        new_nutrients = min(current_nutrients + nutrient_gain, max_nutrients);
     } else {
-        // In shadow: metabolic cost — photocytes slowly lose mass without light
+        // In shadow: metabolic cost — photocytes slowly lose nutrients without light
         // Loss rate is half of max gain rate
-        let mass_loss = photocyte_params.mass_per_second_full_light * 0.5 * params.delta_time;
-        new_mass = max(current_mass - mass_loss, 0.1);  // Don't go below minimum viable mass
+        let nutrient_loss_rate = photocyte_params.mass_per_second_full_light * 100.0 * 0.5;
+        let nutrient_loss = nutrient_loss_rate * params.delta_time;
+        new_nutrients = max(current_nutrients - nutrient_loss, 1.0);  // Don't go below death threshold
     }
     
-    // Only write if mass actually changed
-    if (new_mass != current_mass) {
-        positions[cell_idx] = vec4<f32>(pos, new_mass);
+    // Only write if nutrients actually changed
+    if (new_nutrients != current_nutrients) {
+        atomicStore(&nutrients_buffer[cell_idx], float_to_fixed(new_nutrients));
     }
 }

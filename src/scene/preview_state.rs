@@ -29,12 +29,11 @@ pub struct InitialCell {
     pub rotation: glam::Quat,
     pub genome_orientation: glam::Quat,
     pub angular_velocity: glam::Vec3,
-    pub mass: f32,
-    pub radius: f32,
+    pub nutrients: f32,
     pub genome_id: usize,
     pub mode_index: usize,
     pub split_interval: f32,
-    pub split_mass: f32,
+    pub split_nutrient_threshold: f32,
     pub stiffness: f32,
 }
 
@@ -51,8 +50,11 @@ impl InitialState {
             (5.0, 1.5, physics_config.default_stiffness)
         };
 
-        // All cells start with the same mass as Phagocyte
-        let initial_mass = (split_mass * 1.2_f32).max(2.0);
+        // Convert split_mass to nutrient threshold: (split_mass - 1.0) * 100.0
+        let split_nutrient_threshold = (split_mass - 1.0) * 100.0;
+        
+        // All cells start with full nutrients (100.0)
+        let initial_nutrients = 100.0;
 
         Self {
             initial_cells: vec![InitialCell {
@@ -61,12 +63,11 @@ impl InitialState {
                 rotation: genome.initial_orientation,
                 genome_orientation: genome.initial_orientation,
                 angular_velocity: glam::Vec3::ZERO,
-                mass: initial_mass,
-                radius: initial_mass.clamp(0.5, 2.0),
+                nutrients: initial_nutrients,
                 genome_id: 0,
                 mode_index: initial_mode_index,
                 split_interval,
-                split_mass,
+                split_nutrient_threshold,
                 stiffness: membrane_stiffness, // Use mode-specific membrane stiffness
             }],
             max_cells: capacity,
@@ -85,13 +86,12 @@ impl InitialState {
                 cell.rotation,
                 cell.genome_orientation,
                 cell.angular_velocity,
-                cell.mass,
-                cell.radius,
+                cell.nutrients,
                 cell.genome_id,
                 cell.mode_index,
                 0.0, // birth_time
                 cell.split_interval,
-                cell.split_mass,
+                cell.split_nutrient_threshold,
                 cell.stiffness,
             );
         }

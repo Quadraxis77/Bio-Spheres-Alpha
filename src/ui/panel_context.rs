@@ -970,7 +970,7 @@ impl GenomeEditorState {
             8.0,                // caustic_scale
             1.0,                // caustic_speed
             // Photocyte settings
-            0.3,                // photocyte_mass_per_second
+            0.2,                // photocyte_mass_per_second (20 nutrients/sec at full light)
             0.05,               // photocyte_min_light_threshold
         )
     }

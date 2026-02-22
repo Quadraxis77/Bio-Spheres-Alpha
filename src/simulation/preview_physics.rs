@@ -313,19 +313,20 @@ pub fn apply_swim_forces(state: &mut CanonicalState, genome: &Genome) {
 /// These cells should be removed from the simulation.
 /// 
 /// # Physics
-/// - Consumption rate: swim_force * 0.2 * dt (0.2 mass per second at full swim force)
-/// - Death threshold: mass < 0.5
-/// - Radius is updated based on remaining mass (clamped to 0.5-2.0 range)
+/// - Consumption rate: swim_force * 10.0 * dt (10 nutrients per second at full swim force)
+/// - Death threshold: nutrients < 1.0
+/// - Mass and radius are derived from nutrients: mass = 1.0 + nutrients/100.0
 /// - Only applies to cells with cell_type == 1 (Flagellocyte) and swim_force > 0.0
 pub fn consume_swim_nutrients(
     state: &mut CanonicalState,
     genome: &Genome,
     dt: f32,
 ) -> Vec<usize> {
-    const MIN_CELL_MASS: f32 = 0.5;
+    const DEATH_NUTRIENT_THRESHOLD: f32 = 1.0;
     // Fixed consumption rate - NOT adjustable by user
     // This creates a direct tradeoff: faster swimming = higher nutrient cost
-    const CONSUMPTION_RATE: f32 = 0.1; // mass per second at full swim force (reduced from 0.2 for 2x longevity)
+    // Rate in nutrients/sec (was mass loss, converted: 0.1 mass * 100 = 10 nutrients)
+    const CONSUMPTION_RATE: f32 = 10.0; // nutrients per second at full swim force
     
     let mut cells_to_remove = Vec::new();
     
@@ -348,20 +349,23 @@ pub fn consume_swim_nutrients(
                 };
                 if effective_speed <= 0.0 { continue; }
 
-                // Consume mass proportional to effective speed (automatic, not adjustable)
-                let mass_loss = effective_speed * CONSUMPTION_RATE * dt;
-                state.masses[i] -= mass_loss;
+                // Consume nutrients proportional to effective speed
+                let nutrient_loss = effective_speed * CONSUMPTION_RATE * dt;
+                state.nutrients[i] = (state.nutrients[i] - nutrient_loss).max(0.0);
                 
-                // Check if cell has died (below minimum mass threshold)
-                if state.masses[i] < MIN_CELL_MASS {
+                // Check if cell has died (below death nutrient threshold)
+                if state.nutrients[i] < DEATH_NUTRIENT_THRESHOLD {
                     cells_to_remove.push(i);
                     continue;
                 }
                 
-                // Update radius based on new mass
-                let max_size = mode.max_cell_size;
-                let target_radius = state.masses[i].min(max_size);
-                let new_radius = target_radius.clamp(0.5, 2.0);
+                // Derive mass and radius from nutrients
+                let new_mass = 1.0 + state.nutrients[i] / 100.0;
+                let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
+                if new_mass != state.masses[i] {
+                    state.masses[i] = new_mass;
+                    state.masses_changed = true;
+                }
                 if new_radius != state.radii[i] {
                     state.radii[i] = new_radius;
                     state.masses_changed = true;
@@ -369,13 +373,18 @@ pub fn consume_swim_nutrients(
             }
         }
     }
+    
     cells_to_remove
 }
 
 /// Update nutrient growth
 /// Note: Flagellocytes (cell_type == 1) don't generate their own nutrients -
 /// they must receive nutrients through adhesion connections from other cells.
+/// Mass and radius are derived from nutrients: mass = 1.0 + nutrients/100.0
 pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f32) {
+    const BASE_METABOLISM_RATE: f32 = 2.5; // nutrients/sec drain for non-auto-gain cells
+    const AUTO_GAIN_RATE: f32 = 10.0; // nutrients/sec for Test, Phagocyte, Photocyte
+    
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
         if let Some(mode) = genome.modes.get(mode_index) {
@@ -383,31 +392,38 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
                              || mode.cell_type == 2  // Phagocyte
                              || mode.cell_type == 3; // Photocyte
 
-            let current_mass = state.masses[i];
+            let current_nutrients = state.nutrients[i];
+            let split_nutrient_threshold = state.split_nutrient_thresholds[i];
 
             if can_auto_gain {
-                let max_mass = mode.split_mass * 2.0;
-                if current_mass < max_mass {
-                    let mass_gain = mode.nutrient_gain_rate * dt;
-                    if mass_gain > 0.0 {
-                        let new_mass = (current_mass + mass_gain).min(max_mass);
-                        if new_mass != current_mass {
-                            state.masses[i] = new_mass;
-                            let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
-                            if new_radius != state.radii[i] {
-                                state.radii[i] = new_radius;
-                                state.masses_changed = true;
-                            }
+                // Auto-gain nutrients up to split threshold * 2
+                let max_nutrients = split_nutrient_threshold * 2.0;
+                if current_nutrients < max_nutrients {
+                    let nutrient_gain = AUTO_GAIN_RATE * dt;
+                    let new_nutrients = (current_nutrients + nutrient_gain).min(max_nutrients);
+                    if new_nutrients != current_nutrients {
+                        state.nutrients[i] = new_nutrients;
+                        // Derive mass and radius from nutrients
+                        let new_mass = 1.0 + new_nutrients / 100.0;
+                        let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
+                        state.masses[i] = new_mass;
+                        if new_radius != state.radii[i] {
+                            state.radii[i] = new_radius;
+                            state.masses_changed = true;
                         }
                     }
                 }
             } else {
-                const BASE_METABOLISM_RATE: f32 = 0.025;
-                let mass_loss = BASE_METABOLISM_RATE * dt;
-                let new_mass = (current_mass - mass_loss).max(0.0);
-                if new_mass != current_mass {
-                    state.masses[i] = new_mass;
+                // Non-auto-gain cells lose nutrients to metabolism
+                // (Flagellocyte, Oculocyte have dedicated consumption functions elsewhere)
+                let nutrient_loss = BASE_METABOLISM_RATE * dt;
+                let new_nutrients = (current_nutrients - nutrient_loss).max(0.0);
+                if new_nutrients != current_nutrients {
+                    state.nutrients[i] = new_nutrients;
+                    // Derive mass and radius from nutrients
+                    let new_mass = 1.0 + new_nutrients / 100.0;
                     let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
+                    state.masses[i] = new_mass;
                     if new_radius != state.radii[i] {
                         state.radii[i] = new_radius;
                         state.masses_changed = true;
@@ -684,12 +700,12 @@ pub fn physics_step_with_genome(
         state.remove_cells(&dead_cells);
     }
 
-    // Remove any cells that starved (mass < 0.5), matching GPU death threshold.
+    // Remove any cells that starved (nutrients < 1.0), matching GPU death threshold.
     // This catches non-auto-gain cells (Buoyocyte, Glueocyte, Lipocyte, Flagellocyte)
-    // that lost mass via passive drain and weren't rescued by nutrient transport.
-    const DEATH_MASS_THRESHOLD: f32 = 0.5;
+    // that lost nutrients via passive drain and weren't rescued by nutrient transport.
+    const DEATH_NUTRIENT_THRESHOLD: f32 = 1.0;
     let starved: Vec<usize> = (0..state.cell_count)
-        .filter(|&i| state.masses[i] < DEATH_MASS_THRESHOLD)
+        .filter(|&i| state.nutrients[i] < DEATH_NUTRIENT_THRESHOLD)
         .collect();
     if !starved.is_empty() {
         state.remove_cells(&starved);

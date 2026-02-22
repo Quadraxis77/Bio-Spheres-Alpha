@@ -90,7 +90,7 @@ var<storage, read> birth_times: array<f32>;
 var<storage, read> split_intervals: array<f32>;
 
 @group(2) @binding(2)
-var<storage, read> split_masses: array<f32>;
+var<storage, read> split_nutrient_thresholds: array<f32>;
 
 @group(2) @binding(3)
 var<storage, read> split_counts: array<u32>;
@@ -112,6 +112,10 @@ var<storage, read> mode_cell_types: array<u32>;
 
 @group(2) @binding(9)
 var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
+
+// Nutrients buffer for division checks (read_write for atomic operations)
+@group(2) @binding(10)
+var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
 
 // Adhesion bind group (group 3) - read-only for neighbor deferral check in division_scan
 @group(3) @binding(0)
@@ -140,8 +144,15 @@ struct AdhesionConnection {
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 
 // Constants
-const DEATH_MASS_THRESHOLD: f32 = 0.5;
+const DEATH_NUTRIENT_THRESHOLD: f32 = 1.0;  // Death when nutrients < 1.0
 const RING_BUFFER_CAPACITY: u32 = 262144u; // 256K slots, must match Rust side (supports 200K cells)
+
+// Fixed-point conversion
+const FIXED_POINT_SCALE: f32 = 1000.0;
+
+fn fixed_to_float(value: i32) -> f32 {
+    return f32(value) / FIXED_POINT_SCALE;
+}
 
 // Push a free slot onto the ring buffer tail
 // Returns true if successful, false if ring buffer is full
@@ -217,9 +228,10 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // === DEATH DETECTION ===
-    let mass = positions_out[cell_idx].w;
+    // Read nutrients from nutrients_buffer (fixed-point i32)
+    let nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
     let was_dead = death_flags[cell_idx] == 1u;
-    let is_dead = mass < DEATH_MASS_THRESHOLD;
+    let is_dead = nutrients < DEATH_NUTRIENT_THRESHOLD;
     
     if (is_dead && !was_dead) {
         // Newly dead cell - push slot to ring buffer for recycling
@@ -255,15 +267,16 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // === DIVISION DETECTION ===
-    let mass = positions_out[cell_idx].w;
+    // Read nutrients from nutrients_buffer (fixed-point i32)
+    let nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
     let birth_time = birth_times[cell_idx];
     let split_interval = split_intervals[cell_idx];
-    let split_mass = split_masses[cell_idx];
+    let split_nutrient_threshold = split_nutrient_thresholds[cell_idx];
     let current_splits = split_counts[cell_idx];
     let max_split = max_splits[cell_idx];
     
-    // Check for "never split" condition
-    if (split_mass > 3.0) {
+    // Check for "never split" condition (threshold > 100 means never split)
+    if (split_nutrient_threshold > 100.0) {
         division_flags[cell_idx] = 0u;
         return;
     }
@@ -275,11 +288,11 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Check division criteria
     let age = params.current_time - birth_time;
-    let mass_ready = mass >= split_mass;
+    let nutrients_ready = nutrients >= split_nutrient_threshold;
     let time_ready = (behavior.ignores_split_interval != 0u) || (age >= split_interval);
     let splits_remaining = max_split >= 0xFFFFFFFFu || current_splits < max_split;
     
-    let wants_to_divide = mass_ready && time_ready && splits_remaining;
+    let wants_to_divide = nutrients_ready && time_ready && splits_remaining;
     
     if (!wants_to_divide) {
         division_flags[cell_idx] = 0u;
@@ -346,11 +359,11 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         
         // Re-evaluate ALL division criteria for the neighbor
         // (can't trust flags - they haven't been written yet by other threads)
-        let neighbor_mass = positions_out[neighbor_idx].w;
-        let neighbor_split_mass = split_masses[neighbor_idx];
+        let neighbor_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[neighbor_idx]));
+        let neighbor_split_nutrient_threshold = split_nutrient_thresholds[neighbor_idx];
         
-        // Quick check: neighbor set to "never split"
-        if (neighbor_split_mass > 3.0) {
+        // Quick check: neighbor set to "never split" (threshold > 100)
+        if (neighbor_split_nutrient_threshold > 100.0) {
             continue;
         }
         
@@ -365,11 +378,11 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let neighbor_cell_type = mode_cell_types[neighbor_mode_idx];
         let neighbor_behavior = type_behaviors[neighbor_cell_type];
         
-        let neighbor_mass_ready = neighbor_mass >= neighbor_split_mass;
+        let neighbor_nutrients_ready = neighbor_nutrients >= neighbor_split_nutrient_threshold;
         let neighbor_time_ready = (neighbor_behavior.ignores_split_interval != 0u) || (neighbor_age >= neighbor_split_interval);
         let neighbor_splits_remaining = neighbor_max_splits >= 0xFFFFFFFFu || neighbor_current_splits < neighbor_max_splits;
         
-        let neighbor_wants_to_divide = neighbor_mass_ready && neighbor_time_ready && neighbor_splits_remaining;
+        let neighbor_wants_to_divide = neighbor_nutrients_ready && neighbor_time_ready && neighbor_splits_remaining;
         
         if (!neighbor_wants_to_divide) {
             continue;

@@ -1414,7 +1414,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     parent_make_adhesion: false, // Default to no adhesion
                     split_mass: 1.5,
                     split_interval: 1.0,
-                    nutrient_gain_rate: 0.3,
+                    nutrient_gain_rate: 20.0,  // 20 nutrients/sec for auto-gain cells (Phagocyte, Photocyte, Test)
                     max_cell_size: 2.0,
                     split_ratio: 0.5,
                     nutrient_priority: 1.0,
@@ -1960,24 +1960,29 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
             // Division Settings Group (Yellow)
             group_container(ui, "Division Settings", egui::Color32::from_rgb(200, 180, 80), |ui| {
-                ui.label("Split Mass:");
+                // Display nutrient threshold: nutrients = (split_mass - 1.0) * 100.0
+                // split_mass 1.0-2.0 -> nutrients 0-100, split_mass > 2.0 -> nutrients > 100 (Never)
+                let mut nutrient_threshold = ((mode.split_mass - 1.0) * 100.0).clamp(1.0, 101.0);
+                ui.label("Split Nutrients:");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                     ui.style_mut().spacing.slider_width = slider_width;
-                    // Range 1.0-3.1, values > 3.0 = never split
-                    ui.add(egui::Slider::new(&mut mode.split_mass, 1.0..=3.1)
+                    // Range 1-101, values > 100 = never split
+                    ui.add(egui::Slider::new(&mut nutrient_threshold, 1.0..=101.0)
                         .show_value(false)
                         .custom_formatter(|v, _| {
-                            if v > 3.0 { "Never".to_string() } else { format!("{:.2}", v) }
+                            if v > 100.0 { "Never".to_string() } else { format!("{:.0}", v) }
                         }));
                     // Show "Never" or the drag value
-                    if mode.split_mass > 3.0 {
+                    if nutrient_threshold > 100.0 {
                         ui.label("Never");
                     } else {
-                        ui.add(egui::DragValue::new(&mut mode.split_mass).speed(0.01).range(1.0..=3.0));
+                        ui.add(egui::DragValue::new(&mut nutrient_threshold).speed(1.0).range(1.0..=100.0));
                     }
                 });
+                // Convert back to split_mass
+                mode.split_mass = 1.0 + nutrient_threshold / 100.0;
 
                 ui.add_space(4.0);
                 ui.label("Split Ratio:");

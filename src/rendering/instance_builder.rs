@@ -476,6 +476,17 @@ impl InstanceBuilder {
                     },
                     count: None,
                 },
+                // Binding 17: Death flags - cells marked for removal
+                wgpu::BindGroupLayoutEntry {
+                    binding: 17,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         
@@ -1094,7 +1105,7 @@ impl InstanceBuilder {
         (texture, view)
     }
 
-    fn recreate_bind_group(&mut self, device: &wgpu::Device, cell_count_buffer: &wgpu::Buffer) {
+    fn recreate_bind_group(&mut self, device: &wgpu::Device, cell_count_buffer: &wgpu::Buffer, death_flags_buffer: &wgpu::Buffer) {
         // Create a dummy 1x1 texture for binding 11 (Hi-Z removed)
         let (_dummy_texture, dummy_view) = Self::create_dummy_hiz_texture(device);
         let hiz_view = &dummy_view;
@@ -1171,6 +1182,10 @@ impl InstanceBuilder {
                     binding: 16,
                     resource: self.behavior_flags_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 17,
+                    resource: death_flags_buffer.as_entire_binding(),
+                },
             ],
         }));
     }
@@ -1222,6 +1237,7 @@ impl InstanceBuilder {
         screen_width: u32,
         screen_height: u32,
         cell_count_buffer: &wgpu::Buffer,
+        death_flags_buffer: &wgpu::Buffer,
         lod_scale_factor: f32,
         lod_threshold_low: f32,
         lod_threshold_medium: f32,
@@ -1295,9 +1311,9 @@ impl InstanceBuilder {
             queue.write_buffer(indirect_buffer, 0, bytemuck::cast_slice(&indirect_init));
         }
 
-        // Ensure bind group exists with cell_count_buffer
+        // Ensure bind group exists with cell_count_buffer and death_flags_buffer
         if self.bind_group.is_none() {
-            self.recreate_bind_group(device, cell_count_buffer);
+            self.recreate_bind_group(device, cell_count_buffer, death_flags_buffer);
         }
         
         let bind_group = self.bind_group.as_ref().unwrap();
@@ -1375,6 +1391,7 @@ impl InstanceBuilder {
         screen_width: u32,
         screen_height: u32,
         cell_count_buffer: &wgpu::Buffer,
+        death_flags_buffer: &wgpu::Buffer,
         lod_scale_factor: f32,
         lod_threshold_low: f32,
         lod_threshold_medium: f32,
@@ -1383,7 +1400,7 @@ impl InstanceBuilder {
     ) {
         // Ensure bind group exists before creating encoder
         if self.bind_group.is_none() {
-            self.recreate_bind_group(device, cell_count_buffer);
+            self.recreate_bind_group(device, cell_count_buffer, death_flags_buffer);
         }
         
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1402,6 +1419,7 @@ impl InstanceBuilder {
             screen_width,
             screen_height,
             cell_count_buffer,
+            death_flags_buffer,
             lod_scale_factor,
             lod_threshold_low,
             lod_threshold_medium,
