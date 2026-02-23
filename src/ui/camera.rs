@@ -183,13 +183,12 @@ impl CameraController {
         let new_up = if gravity.abs() < 0.001 {
             Vec3::Y // no gravity → default Y up
         } else {
-            // For axial modes, up points opposite to gravity direction
-            // so camera orbits "down" along gravity
-            let gravity_sign = if gravity > 0.0 { -1.0 } else { 1.0 };
+            // For axial modes, up points along the positive axis direction
+            // Camera doesn't flip when gravity magnitude changes sign
             match gravity_mode {
-                0 => Vec3::X * gravity_sign,
-                1 => Vec3::Y * gravity_sign,
-                2 => Vec3::Z * gravity_sign,
+                0 => Vec3::X,
+                1 => Vec3::Y,
+                2 => Vec3::Z,
                 3 => {
                     // Radial orbit: up = outward from origin to camera position
                     let cam_pos = self.rotation * Vec3::new(0.0, 0.0, self.distance) + self.center;
