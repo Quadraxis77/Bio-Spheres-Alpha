@@ -119,25 +119,28 @@ struct AdhesionConnection {
     _pad: u32,                        // offset 100-103
 }
 
-// Mode properties structure (64 bytes per mode)
-// Layout: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a, flagellocyte_speed_b, flagellocyte_threshold_c, pad x2]
+// Mode properties structure (80 bytes per mode = 20 floats)
 struct ModeProperties {
-    nutrient_gain_rate: f32,
-    max_cell_size: f32,
-    membrane_stiffness: f32,
-    split_interval: f32,
-    split_mass: f32,
-    nutrient_priority: f32,
-    swim_force: f32,
-    prioritize_when_low: f32,  // 1.0 = true, 0.0 = false
-    max_splits: f32,
-    split_ratio: f32,
-    flagellocyte_signal_channel: f32,
-    flagellocyte_speed_a: f32,
-    flagellocyte_speed_b: f32,
-    flagellocyte_threshold_c: f32,
-    flagellocyte_use_signal: f32,  // 1.0 = signal mode, 0.0 = fixed mode
-    _pad1: f32,
+    nutrient_gain_rate: f32,        // index 0
+    max_cell_size: f32,             // index 1
+    membrane_stiffness: f32,        // index 2
+    split_interval: f32,            // index 3
+    split_mass: f32,                // index 4
+    nutrient_priority: f32,         // index 5
+    swim_force: f32,                // index 6
+    prioritize_when_low: f32,       // index 7: 1.0 = true, 0.0 = false
+    max_splits: f32,                // index 8
+    split_ratio: f32,               // index 9
+    flagellocyte_signal_channel: f32, // index 10
+    flagellocyte_speed_a: f32,      // index 11
+    flagellocyte_speed_b: f32,      // index 12
+    flagellocyte_threshold_c: f32,  // index 13
+    flagellocyte_use_signal: f32,   // index 14: 1.0 = signal mode, 0.0 = fixed mode
+    min_adhesions: f32,             // index 15
+    max_adhesions: f32,             // index 16
+    _pad17: f32,                    // index 17
+    _pad18: f32,                    // index 18
+    _pad19: f32,                    // index 19
 }
 
 // Constants matching reference implementation
@@ -146,7 +149,8 @@ const MIN_NUTRIENTS: f32 = 1.0;  // Death threshold: nutrients < 1.0
 const DANGER_THRESHOLD: f32 = 0.6;
 const DANGER_NUTRIENTS: f32 = 60.0;  // 0.6 * 100 = 60 nutrients danger threshold
 const PRIORITY_BOOST: f32 = 10.0;
-const TRANSPORT_RATE: f32 = 20.0;
+const TRANSPORT_RATE: f32 = 20.0;  // Max nutrients/sec total outflow per cell across ALL connections
+const LERP_SPEED: f32 = 999.0;     // Smoothing factor (per second); lower = smoother, less oscillation
 const BASE_METABOLISM_RATE: f32 = 1.0;  // Base metabolic cost in nutrients/sec for non-auto-gain cells
 const SWIM_CONSUMPTION_RATE: f32 = 2.0;  // 2 nutrients/sec at swim_force=1, 6/sec at swim_force=3
 const DEFER_FRAMES: i32 = 6;  // ~0.1 seconds at 64 FPS = 6 frames
@@ -244,10 +248,41 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // NOTE: No early death check here - we must let transport happen first
     // so starving cells can receive nutrients from neighbors before dying
     
-    // Step 2: Nutrient transport between adhesion-connected cells
-    // Process adhesions where this cell is cell_a (to avoid double processing)
+    // Step 2: Nutrient transport between adhesion-connected cells.
+    // Total outflow is capped at TRANSPORT_RATE nutrients/sec across ALL connections.
+    // Transfer is lerp-smoothed to prevent oscillation.
+    //
+    // Strategy: count active outgoing connections first, then divide TRANSPORT_RATE
+    // equally among them so the total never exceeds the cap.
     let adhesion_list = adhesion_indices[cell_idx];
-    
+    let mode_a_idx = mode_indices[cell_idx];
+
+    // Count active connections where this cell is cell_a (we only process those)
+    var active_conn_count = 0u;
+    for (var i = 0; i < 20; i++) {
+        let adhesion_idx = adhesion_list[i];
+        if (adhesion_idx < 0 || adhesion_idx >= i32(arrayLength(&adhesion_connections))) {
+            continue;
+        }
+        let adhesion = adhesion_connections[adhesion_idx];
+        if (adhesion.is_active == 0u || adhesion.cell_a_index != cell_idx) {
+            continue;
+        }
+        let cell_b_idx = adhesion.cell_b_index;
+        if (cell_b_idx >= cell_count || death_flags[cell_b_idx] == 1u) {
+            continue;
+        }
+        if (is_cell_blocked_from_nutrients(cell_idx) || is_cell_blocked_from_nutrients(cell_b_idx)) {
+            continue;
+        }
+        active_conn_count++;
+    }
+
+    // Rate per connection: TRANSPORT_RATE / conn_count so total stays bounded
+    let rate_per_conn = select(TRANSPORT_RATE, TRANSPORT_RATE / f32(active_conn_count), active_conn_count > 1u);
+    // Lerp factor: fraction of the gap to close this step
+    let lerp_t = min(LERP_SPEED * params.delta_time, 1.0);
+
     for (var i = 0; i < 20; i++) {  // MAX_ADHESIONS_PER_CELL = 20
         let adhesion_idx = adhesion_list[i];
         if (adhesion_idx < 0 || adhesion_idx >= i32(arrayLength(&adhesion_connections))) {
@@ -273,13 +308,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (is_cell_blocked_from_nutrients(cell_idx) || is_cell_blocked_from_nutrients(cell_b_idx)) {
             continue; // Skip nutrient transfer for blocked cells
         }
+
+        if (death_flags[cell_b_idx] == 1u) {
+            continue;
+        }
         
         // Get nutrients for both cells (use atomic load for thread-safety)
         let nutrients_a = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
         let nutrients_b = fixed_to_float(atomicLoad(&nutrients_buffer[cell_b_idx]));
         
         // Get mode properties for both cells
-        let mode_a_idx = mode_indices[cell_idx];
         let mode_b_idx = mode_indices[cell_b_idx];
         
         if (mode_a_idx >= arrayLength(&mode_properties) || 
@@ -303,25 +341,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let priority_b = select(base_priority_b, base_priority_b * PRIORITY_BOOST,
                                prioritize_b && nutrients_b < DANGER_NUTRIENTS);
         
-        // Calculate equilibrium-based nutrient flow
-        // At equilibrium: nutrients_a / nutrients_b = priority_a / priority_b
-        // Flow is driven by "pressure" difference: pressure = nutrients / priority
-        let pressure_a = nutrients_a / priority_a;
-        let pressure_b = nutrients_b / priority_b;
-        let pressure_diff = pressure_a - pressure_b;
+        // Pressure difference drives flow: clamp to [-rate_per_conn, rate_per_conn] nutrients/sec.
+        // When priorities are equal, any nonzero difference drives full flow up to the cap.
+        let pressure_diff = nutrients_a / priority_a - nutrients_b / priority_b;
+        let desired_rate = clamp(pressure_diff, -rate_per_conn, rate_per_conn);
+
+        // Lerp-smoothed transfer this timestep
+        let nutrient_transfer = desired_rate * lerp_t * params.delta_time;
         
-        // Calculate nutrient transfer (positive = A -> B, negative = B -> A)
-        let nutrient_transfer = pressure_diff * TRANSPORT_RATE * params.delta_time;
-        
-        // Apply transfer with minimum thresholds
+        // Apply transfer with min/max thresholds
         let min_nutrients_a = select(0.0, 10.0, prioritize_a);
         let min_nutrients_b = select(0.0, 10.0, prioritize_b);
-        
-        let actual_transfer = select(
-            max(nutrient_transfer, -(nutrients_b - min_nutrients_b)),  // B -> A: limit by B's nutrients
-            min(nutrient_transfer, nutrients_a - min_nutrients_a),     // A -> B: limit by A's nutrients
-            nutrient_transfer > 0.0
-        );
+        let max_nutrients_a = split_nutrient_thresholds[cell_idx] * 2.0;
+        let max_nutrients_b = split_nutrient_thresholds[cell_b_idx] * 2.0;
+
+        var actual_transfer: f32;
+        if (nutrient_transfer > 0.0) {
+            let can_give = max(nutrients_a - min_nutrients_a, 0.0);
+            let can_recv = max(max_nutrients_b - nutrients_b, 0.0);
+            actual_transfer = min(nutrient_transfer, min(can_give, can_recv));
+        } else {
+            let can_give = max(nutrients_b - min_nutrients_b, 0.0);
+            let can_recv = max(max_nutrients_a - nutrients_a, 0.0);
+            actual_transfer = max(nutrient_transfer, -min(can_give, can_recv));
+        }
         
         // Apply transfer using atomic operations (thread-safe)
         let transfer_fixed = float_to_fixed(actual_transfer);

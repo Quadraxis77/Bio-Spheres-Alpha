@@ -35,6 +35,10 @@ pub struct AdhesionConnections {
     /// Simulation time when this connection was created (for break grace period)
     pub birth_time: Vec<f32>,
 
+    /// Actual nutrient flow rate for this connection (nutrients/sec), written each physics step.
+    /// Positive = nutrients flow from cell_a to cell_b, negative = cell_b to cell_a.
+    pub connection_flow_rates: Vec<f32>,
+
     /// Number of active connections
     pub active_count: usize,
 }
@@ -53,6 +57,7 @@ impl AdhesionConnections {
             twist_reference_a: vec![Quat::IDENTITY; capacity],
             twist_reference_b: vec![Quat::IDENTITY; capacity],
             birth_time: vec![0.0f32; capacity],
+            connection_flow_rates: vec![0.0f32; capacity],
             active_count: 0,
         }
     }

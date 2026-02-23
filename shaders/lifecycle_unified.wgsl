@@ -117,6 +117,11 @@ var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
 @group(2) @binding(10)
 var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
 
+// Mode properties (read-only) — used to check min_adhesions before allowing division
+// Layout per mode: 16 floats = 64 bytes. Index 15 = min_adhesions.
+@group(2) @binding(11)
+var<storage, read> mode_properties_lc: array<vec4<f32>>;
+
 // Adhesion bind group (group 3) - read-only for neighbor deferral check in division_scan
 @group(3) @binding(0)
 var<storage, read> adhesion_connections: array<AdhesionConnection>;
@@ -299,7 +304,7 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Check if cell has room for the new sibling adhesion (max adhesions check)
+    // Count active adhesions for this cell (used for both max and min checks)
     let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
     var adhesion_count = 0u;
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
@@ -307,7 +312,28 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             adhesion_count++;
         }
     }
-    if (adhesion_count >= MAX_ADHESIONS_PER_CELL) {
+
+    // mode_properties_lc is stored as vec4<f32> array, 5 vec4s per mode (20 floats total).
+    // vec4[3]: x=max_splits, y=split_ratio, z=flagellocyte_signal_channel, w=flagellocyte_speed_a
+    // vec4[3]: x=flagellocyte_speed_b, y=flagellocyte_threshold_c, z=flagellocyte_use_signal, w=min_adhesions
+    // Wait — layout is indices 0-3 in vec4[0], 4-7 in vec4[1], 8-11 in vec4[2], 12-15 in vec4[3], 16-19 in vec4[4]
+    // Index 15 = vec4[3].w = min_adhesions
+    // Index 16 = vec4[4].x = max_adhesions
+    let props_base = mode_idx * 5u;
+    let min_adh_raw = mode_properties_lc[props_base + 3u].w;
+    let max_adh_raw = mode_properties_lc[props_base + 4u].x;
+    let min_adh = u32(max(min_adh_raw, 0.0));
+    // max_adhesions: 0 or negative means use hardware cap (MAX_ADHESIONS_PER_CELL)
+    let max_adh = select(MAX_ADHESIONS_PER_CELL, u32(max_adh_raw), max_adh_raw > 0.0);
+
+    // Max adhesions check: must have room for the new sibling bond
+    if (adhesion_count >= max_adh) {
+        division_flags[cell_idx] = 0u;
+        return;
+    }
+
+    // Min adhesions check: cell must have at least min_adhesions active connections to divide
+    if (min_adh > 0u && adhesion_count < min_adh) {
         division_flags[cell_idx] = 0u;
         return;
     }

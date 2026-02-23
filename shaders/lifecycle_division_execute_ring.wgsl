@@ -406,7 +406,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let parent_mode_idx = mode_indices[cell_idx];
     
     // Read parent's split_ratio from mode_properties (third vec4, .y component)
-    let parent_split_ratio = mode_properties[parent_mode_idx * 4u + 2u].y;
+    // Buffer is now 5 vec4s per mode (20 floats = 80 bytes)
+    let parent_split_ratio = mode_properties[parent_mode_idx * 5u + 2u].y;
     
     // Read child orientations and split direction from genome mode data
     let child_a_orientation = genome_mode_data[parent_mode_idx * 3u];
@@ -475,9 +476,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Read Child A's properties from its mode
-    let child_a_props_0 = mode_properties[child_a_mode_idx * 4u];
-    let child_a_props_1 = mode_properties[child_a_mode_idx * 4u + 1u];
-    let child_a_props_2 = mode_properties[child_a_mode_idx * 4u + 2u];
+    let child_a_props_0 = mode_properties[child_a_mode_idx * 5u];
+    let child_a_props_1 = mode_properties[child_a_mode_idx * 5u + 1u];
+    let child_a_props_2 = mode_properties[child_a_mode_idx * 5u + 2u];
     
     // Only Test cells (cell_type == 0) auto-generate nutrients
     let child_a_cell_type = mode_cell_types[child_a_mode_idx];
@@ -508,9 +509,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let random_rotation_b = pseudo_random_rotation(child_b_id);
     rotations_out[child_b_slot] = quat_multiply(child_b_rotation, random_rotation_b);
     
-    let child_b_props_0 = mode_properties[child_b_mode_idx * 4u];
-    let child_b_props_1 = mode_properties[child_b_mode_idx * 4u + 1u];
-    let child_b_props_2 = mode_properties[child_b_mode_idx * 4u + 2u];
+    let child_b_props_0 = mode_properties[child_b_mode_idx * 5u];
+    let child_b_props_1 = mode_properties[child_b_mode_idx * 5u + 1u];
+    let child_b_props_2 = mode_properties[child_b_mode_idx * 5u + 2u];
     
     birth_times[child_b_slot] = params.current_time;
     split_intervals[child_b_slot] = child_b_props_0.w;
@@ -864,7 +865,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 
                 // Get neighbor's split_ratio for zone classification on their side
                 let neighbor_mode_idx = mode_indices[neighbor_idx];
-                let neighbor_split_ratio = mode_properties[neighbor_mode_idx * 4u + 2u].y;
+                let neighbor_split_ratio = mode_properties[neighbor_mode_idx * 5u + 2u].y;
                 
                 if (is_parent_cell_a) {
                     dup_conn.cell_a_index = child_b_slot;

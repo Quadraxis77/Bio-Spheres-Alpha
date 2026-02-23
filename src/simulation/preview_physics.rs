@@ -438,8 +438,8 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
                     state.nutrients[i] = new_nutrients;
                     // Derive mass and radius from nutrients
                     let new_mass = 1.0 + new_nutrients / 100.0;
-                    let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
                     state.masses[i] = new_mass;
+                    let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
                     if new_radius != state.radii[i] {
                         state.radii[i] = new_radius;
                         state.masses_changed = true;
@@ -451,34 +451,44 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
 }
 
 /// Transport nutrients between adhesion-connected cells based on priority ratios.
+/// Total outflow per cell is capped at TRANSPORT_RATE nutrients/sec regardless of connection count.
+/// Transfer is lerped (smoothed) to prevent oscillation.
 pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome: &Genome, dt: f32) {
     const DANGER_THRESHOLD: f32 = 0.6;
     const PRIORITY_BOOST: f32 = 10.0;
-    const TRANSPORT_RATE: f32 = 20.0; // Max ~20 nutrients/sec transfer
+    /// Max nutrients/sec a cell can send OR receive in total across all connections.
+    const TRANSPORT_RATE: f32 = 20.0;
+    /// Lerp factor: how quickly flow tracks the pressure-diff target (per second).
+    /// Lower = smoother/slower response, higher = faster but more oscillation risk.
+    const LERP_SPEED: f32 = 999.0;
 
-    let mut nutrient_deltas = vec![0.0f32; state.cell_count];
+    let n = state.cell_count;
+
+    // Pass 1: compute desired (uncapped) flow for each connection.
+    // Positive = nutrients flow from cell_a to cell_b.
+    struct ConnFlow {
+        conn_idx: usize,
+        cell_a: usize,
+        cell_b: usize,
+        desired: f32, // nutrients/sec, uncapped
+    }
+    let mut conn_flows: Vec<ConnFlow> = Vec::new();
 
     let connections = &state.adhesion_connections;
     for i in 0..connections.is_active.len() {
         if connections.is_active[i] == 0 {
             continue;
         }
-
         let cell_a = connections.cell_a_index[i];
         let cell_b = connections.cell_b_index[i];
-
-        if cell_a >= state.cell_count || cell_b >= state.cell_count {
+        if cell_a >= n || cell_b >= n {
             continue;
         }
-
-        let mode_a_idx = state.mode_indices[cell_a];
-        let mode_b_idx = state.mode_indices[cell_b];
-
-        let mode_a = match genome.modes.get(mode_a_idx) {
+        let mode_a = match genome.modes.get(state.mode_indices[cell_a]) {
             Some(m) => m,
             None => continue,
         };
-        let mode_b = match genome.modes.get(mode_b_idx) {
+        let mode_b = match genome.modes.get(state.mode_indices[cell_b]) {
             Some(m) => m,
             None => continue,
         };
@@ -497,25 +507,69 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
             mode_b.nutrient_priority
         };
 
-        // Pressure based on nutrients (higher nutrients = higher pressure = flows out)
-        let pressure_a = nutrients_a / priority_a;
-        let pressure_b = nutrients_b / priority_b;
-        let pressure_diff = pressure_a - pressure_b;
+        let pressure_diff = nutrients_a / priority_a - nutrients_b / priority_b;
+        let desired = pressure_diff.clamp(-TRANSPORT_RATE, TRANSPORT_RATE);
 
-        // Transfer nutrients directly
-        let nutrient_transfer = pressure_diff * TRANSPORT_RATE * dt;
+        conn_flows.push(ConnFlow { conn_idx: i, cell_a, cell_b, desired });
+    }
 
-        let min_nutrients_a = if mode_a.prioritize_when_low { 10.0 } else { 0.0 };
-        let min_nutrients_b = if mode_b.prioritize_when_low { 10.0 } else { 0.0 };
+    // Pass 2: sum total desired outflow per cell to compute scaling factors.
+    // Each cell's total outflow is capped at TRANSPORT_RATE nutrients/sec.
+    let mut total_out = vec![0.0f32; n];
+    for cf in &conn_flows {
+        if cf.desired > 0.0 {
+            total_out[cf.cell_a] += cf.desired;
+        } else if cf.desired < 0.0 {
+            total_out[cf.cell_b] += -cf.desired;
+        }
+    }
 
-        let actual_transfer = if nutrient_transfer > 0.0 {
-            nutrient_transfer.min(nutrients_a - min_nutrients_a)
+    // Pass 3: apply lerped, scaled transfers.
+    let mut nutrient_deltas = vec![0.0f32; n];
+    let lerp_t = (LERP_SPEED * dt).min(1.0);
+
+    for cf in &conn_flows {
+        let cell_a = cf.cell_a;
+        let cell_b = cf.cell_b;
+
+        // Scale outflow so the sending cell never exceeds TRANSPORT_RATE total
+        let scale = if cf.desired > 0.0 && total_out[cell_a] > TRANSPORT_RATE {
+            TRANSPORT_RATE / total_out[cell_a]
+        } else if cf.desired < 0.0 && total_out[cell_b] > TRANSPORT_RATE {
+            TRANSPORT_RATE / total_out[cell_b]
         } else {
-            nutrient_transfer.max(-(nutrients_b - min_nutrients_b))
+            1.0
         };
 
-        nutrient_deltas[cell_a] -= actual_transfer;
-        nutrient_deltas[cell_b] += actual_transfer;
+        // Target transfer this step (nutrients), lerped toward desired
+        let target_per_sec = cf.desired * scale;
+        let transfer = target_per_sec * lerp_t * dt;
+
+        // Clamp by available nutrients and receiver capacity
+        let mode_a = genome.modes.get(state.mode_indices[cell_a]).unwrap();
+        let mode_b = genome.modes.get(state.mode_indices[cell_b]).unwrap();
+        let min_a = if mode_a.prioritize_when_low { 10.0 } else { 0.0 };
+        let min_b = if mode_b.prioritize_when_low { 10.0 } else { 0.0 };
+        let max_a = state.split_nutrient_thresholds[cell_a] * 2.0;
+        let max_b = state.split_nutrient_thresholds[cell_b] * 2.0;
+
+        let actual = if transfer > 0.0 {
+            let can_give = (state.nutrients[cell_a] - min_a).max(0.0);
+            let can_recv = (max_b - state.nutrients[cell_b]).max(0.0);
+            transfer.min(can_give).min(can_recv)
+        } else {
+            let can_give = (state.nutrients[cell_b] - min_b).max(0.0);
+            let can_recv = (max_a - state.nutrients[cell_a]).max(0.0);
+            transfer.max(-(can_give.min(can_recv)))
+        };
+
+        nutrient_deltas[cell_a] -= actual;
+        nutrient_deltas[cell_b] += actual;
+
+        // Store actual flow rate (nutrients/sec, positive = A→B) for display
+        if dt > 0.0 {
+            state.adhesion_connections.connection_flow_rates[cf.conn_idx] = actual / dt;
+        }
     }
 
     for i in 0..state.cell_count {

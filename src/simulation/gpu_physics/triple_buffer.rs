@@ -517,8 +517,8 @@ impl GpuTripleBufferSystem {
         // Child B keep adhesion flags: one u32 per mode
         let child_b_keep_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Child B Keep Adhesion Flags");
         
-        // Mode properties: 16 floats per mode (64 bytes) - nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a, flagellocyte_speed_b, flagellocyte_threshold_c, pad x2
-        let mode_properties = Self::create_storage_buffer(device, max_modes * 64, "Mode Properties");
+        // Mode properties: 20 floats per mode (80 bytes) - includes min/max adhesions at indices 15/16
+        let mode_properties = Self::create_storage_buffer(device, max_modes * 80, "Mode Properties");
         
         // Mode cell types: one u32 per mode - lookup table for deriving cell_type from mode_index
         let mode_cell_types = Self::create_storage_buffer(device, max_modes * 4, "Mode Cell Types");
@@ -1006,8 +1006,8 @@ impl GpuTripleBufferSystem {
         //                  [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
         //                  [max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a] (vec4)
         //                  [flagellocyte_speed_b, flagellocyte_threshold_c, padding, padding] (vec4)
-        // Total: 16 floats = 64 bytes per mode
-        let mut properties_data: Vec<[f32; 16]> = Vec::new();
+        // Total: 20 floats = 80 bytes per mode (includes min/max adhesions)
+        let mut properties_data: Vec<[f32; 20]> = Vec::new();
         
         let mut global_mode_idx = 0usize;
         for (genome_idx, genome) in genomes.iter().enumerate() {
@@ -1033,7 +1033,11 @@ impl GpuTripleBufferSystem {
                     mode.flagellocyte_speed_b,
                     mode.flagellocyte_threshold_c,
                     if mode.flagellocyte_use_signal { 1.0 } else { 0.0 },
-                    0.0, // padding
+                    mode.min_adhesions as f32, // index 15: min_adhesions for division gate
+                    mode.max_adhesions as f32, // index 16: max_adhesions for division gate
+                    0.0, // index 17: padding
+                    0.0, // index 18: padding
+                    0.0, // index 19: padding
                 ]);
             }
         }
@@ -1111,8 +1115,8 @@ impl GpuTripleBufferSystem {
         //                  [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
         //                  [max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a] (vec4)
         //                  [flagellocyte_speed_b, flagellocyte_threshold_c, padding, padding] (vec4)
-        // Total: 16 floats = 64 bytes per mode
-        let mut properties_data: Vec<[f32; 16]> = Vec::new();
+        // Total: 20 floats = 80 bytes per mode (includes min/max adhesions)
+        let mut properties_data: Vec<[f32; 20]> = Vec::new();
         
         for mode in &genome.modes {
             let gpu_max_splits = if mode.max_splits < 0 { -1.0 } else { mode.max_splits as f32 };
@@ -1132,12 +1136,16 @@ impl GpuTripleBufferSystem {
                 mode.flagellocyte_speed_b,
                 mode.flagellocyte_threshold_c,
                 if mode.flagellocyte_use_signal { 1.0 } else { 0.0 },
-                0.0, // padding
+                mode.min_adhesions as f32, // index 15
+                mode.max_adhesions as f32, // index 16
+                0.0, // index 17: padding
+                0.0, // index 18: padding
+                0.0, // index 19: padding
             ]);
         }
         
         if !properties_data.is_empty() {
-            let offset = (global_start_index * 64) as u64; // 64 bytes per mode
+            let offset = (global_start_index * 80) as u64; // 80 bytes per mode
             queue.write_buffer(&self.mode_properties, offset, bytemuck::cast_slice(&properties_data));
         }
     }

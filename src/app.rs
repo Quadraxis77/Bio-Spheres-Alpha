@@ -822,52 +822,28 @@ impl App {
                         let nutrient_priority = mode.map(|m| m.nutrient_priority).unwrap_or(1.0);
                         let prioritize_when_low = mode.map(|m| m.prioritize_when_low).unwrap_or(false);
 
-                        // Calculate actual transport rate from adhesion connections.
-                        // pressure_diff = my_pressure - neighbor_pressure
-                        // positive pressure_diff => nutrients flow FROM this cell TO neighbor (out)
-                        // negative pressure_diff => nutrients flow FROM neighbor TO this cell (in)
-                        const DANGER_THRESHOLD_NUTRIENTS: f32 = 60.0;
-                        const PRIORITY_BOOST: f32 = 10.0;
-                        const TRANSPORT_RATE: f32 = 20.0;
-
-                        let mut transport_in_rate: f32 = 0.0;
+                        // Read actual flow rates recorded by the physics step.
+                        // connection_flow_rates[i] = nutrients/sec, positive = A→B, negative = B→A.
+                        // Sum up in/out for this cell from all its active connections.
                         let mut transport_out_rate: f32 = 0.0;
+                        let mut transport_in_rate: f32 = 0.0;
 
                         for (conn_idx, &active) in display_state.adhesion_connections.is_active.iter().enumerate() {
                             if active == 0 { continue; }
-
                             let cell_a = display_state.adhesion_connections.cell_a_index.get(conn_idx).copied().unwrap_or(0);
                             let cell_b = display_state.adhesion_connections.cell_b_index.get(conn_idx).copied().unwrap_or(0);
-
                             if cell_a != cell_idx && cell_b != cell_idx { continue; }
 
-                            let neighbor_idx = if cell_a == cell_idx { cell_b } else { cell_a };
-                            let neighbor_nutrients = display_state.nutrients.get(neighbor_idx).copied().unwrap_or(100.0);
-                            let neighbor_mode_idx = display_state.mode_indices.get(neighbor_idx).copied().unwrap_or(0);
-                            let neighbor_mode = genome.modes.get(neighbor_mode_idx);
+                            let flow = display_state.adhesion_connections.connection_flow_rates
+                                .get(conn_idx).copied().unwrap_or(0.0);
 
-                            let neighbor_priority = neighbor_mode.map(|m| {
-                                if m.prioritize_when_low && neighbor_nutrients < DANGER_THRESHOLD_NUTRIENTS {
-                                    m.nutrient_priority * PRIORITY_BOOST
-                                } else {
-                                    m.nutrient_priority
-                                }
-                            }).unwrap_or(1.0);
+                            // flow is positive = A→B. Flip sign if we are cell_b.
+                            let flow_from_my_perspective = if cell_a == cell_idx { flow } else { -flow };
 
-                            let my_priority = if prioritize_when_low && nutrients < DANGER_THRESHOLD_NUTRIENTS {
-                                nutrient_priority * PRIORITY_BOOST
+                            if flow_from_my_perspective > 0.0 {
+                                transport_out_rate += flow_from_my_perspective;
                             } else {
-                                nutrient_priority
-                            };
-
-                            // positive = flows out of this cell, negative = flows into this cell
-                            let pressure_diff = (nutrients / my_priority) - (neighbor_nutrients / neighbor_priority);
-                            let flow = pressure_diff * TRANSPORT_RATE;
-
-                            if flow > 0.0 {
-                                transport_out_rate += flow;
-                            } else {
-                                transport_in_rate += -flow;
+                                transport_in_rate += -flow_from_my_perspective;
                             }
                         }
 

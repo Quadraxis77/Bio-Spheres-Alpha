@@ -82,8 +82,19 @@ pub fn division_step(
                 true
             };
             
-            // Skip adhesion checks since we're not implementing adhesions
-            let can_split_by_adhesions = true;
+            // Check min/max adhesions against active connection count
+            let can_split_by_adhesions = if let Some(m) = mode {
+                let active = if m.min_adhesions > 0 || m.max_adhesions > 0 {
+                    state.adhesion_manager.count_active_adhesions(i)
+                } else {
+                    0
+                };
+                let min_ok = m.min_adhesions <= 0 || active >= m.min_adhesions as usize;
+                let max_ok = m.max_adhesions <= 0 || active < m.max_adhesions as usize;
+                min_ok && max_ok
+            } else {
+                true
+            };
             
             // Check nutrient threshold - cells must have enough nutrients to split
             // Values > 100 mean "never split" (UI sentinel: split_mass > 2.0 -> threshold > 100)

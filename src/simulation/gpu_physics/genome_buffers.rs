@@ -81,7 +81,7 @@ impl GenomeBufferGroup {
         let mode_count = genome.modes.len();
         
         // Calculate buffer sizes
-        let mode_properties_size = mode_count * 64; // 64 bytes per mode (16 floats)
+        let mode_properties_size = mode_count * 80; // 80 bytes per mode (20 floats, includes min/max adhesions)
         let mode_cell_types_size = mode_count * 4;  // 4 bytes per mode
         let child_mode_indices_size = mode_count * 8; // 8 bytes per mode (2 i32)
         let parent_flags_size = mode_count * 4;      // 4 bytes per mode
@@ -172,7 +172,7 @@ impl GenomeBufferGroup {
         }
         
         // Sync mode properties
-        let mode_properties_data: Vec<[f32; 16]> = genome.modes.iter().map(|mode| {
+        let mode_properties_data: Vec<[f32; 20]> = genome.modes.iter().map(|mode| {
             [
                 mode.nutrient_gain_rate,
                 mode.max_cell_size,
@@ -189,7 +189,11 @@ impl GenomeBufferGroup {
                 mode.flagellocyte_speed_b,               // index 12
                 mode.flagellocyte_threshold_c,           // index 13
                 if mode.flagellocyte_use_signal { 1.0 } else { 0.0 }, // index 14
-                0.0, // padding
+                mode.min_adhesions as f32, // index 15: min_adhesions for division gate
+                mode.max_adhesions as f32, // index 16: max_adhesions for division gate
+                0.0, // index 17: padding
+                0.0, // index 18: padding
+                0.0, // index 19: padding
             ]
         }).collect();
         

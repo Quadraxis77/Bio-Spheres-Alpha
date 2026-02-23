@@ -940,6 +940,10 @@ impl GpuPhysicsPipelines {
                     binding: 10,
                     resource: buffers.nutrients_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: buffers.mode_properties.as_entire_binding(),
+                },
             ],
         })
     }
@@ -1838,12 +1842,23 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Binding 10: Nutrients buffer (read-only for division scan)
+                    // Binding 10: Nutrients buffer (read-write for atomic ops in division scan)
                     wgpu::BindGroupLayoutEntry {
                         binding: 10,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 11: Mode properties (read-only) — for min_adhesions division gate
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
