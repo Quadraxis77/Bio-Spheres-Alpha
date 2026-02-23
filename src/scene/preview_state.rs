@@ -194,6 +194,15 @@ impl PreviewState {
             mode.max_splits.hash(&mut hasher);
             mode.mode_a_after_splits.hash(&mut hasher);
             mode.mode_b_after_splits.hash(&mut hasher);
+            // Hash child split angle orientations
+            mode.child_a_after_split_orientation.x.to_bits().hash(&mut hasher);
+            mode.child_a_after_split_orientation.y.to_bits().hash(&mut hasher);
+            mode.child_a_after_split_orientation.z.to_bits().hash(&mut hasher);
+            mode.child_a_after_split_orientation.w.to_bits().hash(&mut hasher);
+            mode.child_b_after_split_orientation.x.to_bits().hash(&mut hasher);
+            mode.child_b_after_split_orientation.y.to_bits().hash(&mut hasher);
+            mode.child_b_after_split_orientation.z.to_bits().hash(&mut hasher);
+            mode.child_b_after_split_orientation.w.to_bits().hash(&mut hasher);
             mode.max_adhesions.hash(&mut hasher);
             mode.min_adhesions.hash(&mut hasher);
             mode.enable_parent_angle_snapping.hash(&mut hasher);

@@ -110,6 +110,10 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode_b_after_splits: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_a_after_split_orientation: Option<[f32; 4]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_b_after_split_orientation: Option<[f32; 4]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub swim_force: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flagellocyte_use_signal: Option<bool>,
@@ -269,6 +273,8 @@ fn mode_to_serializable(
         max_splits: diff_i32(mode.max_splits, default.max_splits),
         mode_a_after_splits: diff_i32(mode.mode_a_after_splits, default.mode_a_after_splits),
         mode_b_after_splits: diff_i32(mode.mode_b_after_splits, default.mode_b_after_splits),
+        child_a_after_split_orientation: diff_quat(&mode.child_a_after_split_orientation, &default.child_a_after_split_orientation),
+        child_b_after_split_orientation: diff_quat(&mode.child_b_after_split_orientation, &default.child_b_after_split_orientation),
         swim_force: diff_f32(mode.swim_force, default.swim_force),
         flagellocyte_use_signal: diff_bool(mode.flagellocyte_use_signal, default.flagellocyte_use_signal),
         flagellocyte_signal_channel: diff_i32(mode.flagellocyte_signal_channel, default.flagellocyte_signal_channel),
@@ -317,6 +323,8 @@ impl SerializableModeSettings {
             || self.max_splits.is_some()
             || self.mode_a_after_splits.is_some()
             || self.mode_b_after_splits.is_some()
+            || self.child_a_after_split_orientation.is_some()
+            || self.child_b_after_split_orientation.is_some()
             || self.swim_force.is_some()
             || self.flagellocyte_use_signal.is_some()
             || self.flagellocyte_signal_channel.is_some()
@@ -458,6 +466,12 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(mode_b) = ser.mode_b_after_splits {
         mode.mode_b_after_splits = mode_b;
+    }
+    if let Some(orientation) = ser.child_a_after_split_orientation {
+        mode.child_a_after_split_orientation = Quat::from_array(orientation);
+    }
+    if let Some(orientation) = ser.child_b_after_split_orientation {
+        mode.child_b_after_split_orientation = Quat::from_array(orientation);
     }
     if let Some(swim_force) = ser.swim_force {
         mode.swim_force = swim_force;

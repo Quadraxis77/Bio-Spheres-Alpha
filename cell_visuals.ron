@@ -3,7 +3,7 @@
         (
             specular_strength: 0.3,
             specular_power: 32.0,
-            fresnel_strength: 0.2,
+            fresnel_strength: 0.07,
             membrane_noise_scale: 0.0,
             membrane_noise_strength: 0.0,
             membrane_noise_speed: 0.0,

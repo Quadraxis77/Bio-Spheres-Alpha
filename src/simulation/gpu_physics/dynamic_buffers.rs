@@ -163,7 +163,7 @@ pub struct DynamicGenomeBufferManager {
 impl DynamicGenomeBufferManager {
     /// Create a new dynamic genome buffer manager
     pub fn new(device: &wgpu::Device, max_modes: usize) -> Self {
-        let initial_size = (max_modes * 48) as u64; // 48 bytes per mode for worst case
+        let initial_size = (max_modes * 80) as u64; // 80 bytes per mode for worst case
         
         Self {
             mode_properties: DynamicBuffer::new(
@@ -204,7 +204,7 @@ impl DynamicGenomeBufferManager {
             ),
             genome_mode_data: DynamicBuffer::new(
                 device,
-                (max_modes * 48) as u64,
+                (max_modes * 80) as u64,
                 wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 "Dynamic Genome Mode Data Buffer",
             ),
@@ -231,12 +231,12 @@ impl DynamicGenomeBufferManager {
         let mut resized = false;
         
         // Calculate required sizes
-        let mode_properties_size = (new_total_modes * 48) as u64;
+        let mode_properties_size = (new_total_modes * 80) as u64;
         let mode_cell_types_size = (new_total_modes * 4) as u64;
         let child_mode_indices_size = (new_total_modes * 8) as u64;
         let parent_flags_size = (new_total_modes * 4) as u64;
         let child_flags_size = (new_total_modes * 4) as u64;
-        let genome_mode_data_size = (new_total_modes * 48) as u64;
+        let genome_mode_data_size = (new_total_modes * 80) as u64;
         
         // Resize buffers if needed
         resized |= self.mode_properties.ensure_size(device, queue, mode_properties_size);

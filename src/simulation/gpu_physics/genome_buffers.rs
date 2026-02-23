@@ -86,7 +86,7 @@ impl GenomeBufferGroup {
         let child_mode_indices_size = mode_count * 8; // 8 bytes per mode (2 i32)
         let parent_flags_size = mode_count * 4;      // 4 bytes per mode
         let child_flags_size = mode_count * 4;       // 4 bytes per mode
-        let genome_mode_data_size = mode_count * 48; // 48 bytes per mode (3 vec4)
+        let genome_mode_data_size = mode_count * 80; // 80 bytes per mode (5 vec4)
         
         // Create buffers
         let mode_properties = create_aligned_buffer(
@@ -253,10 +253,12 @@ impl GenomeBufferGroup {
             queue.write_buffer(&self.glueocyte_env_adhesion_flags, 0, bytemuck::cast_slice(&env_adhesion_flags_data));
         }
         
-        // Sync genome mode data (child orientations, split directions)
-        let genome_mode_data: Vec<[f32; 12]> = genome.modes.iter().map(|mode| {
+        // Sync genome mode data (child orientations, split orientations, split directions)
+        let genome_mode_data: Vec<[f32; 20]> = genome.modes.iter().map(|mode| {
             let child_a_orientation = mode.child_a.orientation;
             let child_b_orientation = mode.child_b.orientation;
+            let child_a_split_orientation = mode.child_a_after_split_orientation;
+            let child_b_split_orientation = mode.child_b_after_split_orientation;
             
             // Calculate split direction from pitch/yaw (same as preview scene and triple_buffer.rs)
             let pitch = mode.parent_split_direction.x.to_radians();
@@ -264,8 +266,13 @@ impl GenomeBufferGroup {
             let split_dir = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z;
             
             [
+                // Regular child orientations (8 floats)
                 child_a_orientation.x, child_a_orientation.y, child_a_orientation.z, child_a_orientation.w,
                 child_b_orientation.x, child_b_orientation.y, child_b_orientation.z, child_b_orientation.w,
+                // Split orientations (8 floats)  
+                child_a_split_orientation.x, child_a_split_orientation.y, child_a_split_orientation.z, child_a_split_orientation.w,
+                child_b_split_orientation.x, child_b_split_orientation.y, child_b_split_orientation.z, child_b_split_orientation.w,
+                // Split direction (4 floats)
                 split_dir.x, split_dir.y, split_dir.z, 0.0, // Vec3 -> Vec4 with padding
             ]
         }).collect();

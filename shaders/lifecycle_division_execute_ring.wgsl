@@ -409,10 +409,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Buffer is now 5 vec4s per mode (20 floats = 80 bytes)
     let parent_split_ratio = mode_properties[parent_mode_idx * 5u + 2u].y;
     
-    // Read child orientations and split direction from genome mode data
-    let child_a_orientation = genome_mode_data[parent_mode_idx * 3u];
-    let child_b_orientation = genome_mode_data[parent_mode_idx * 3u + 1u];
-    let split_direction_local = genome_mode_data[parent_mode_idx * 3u + 2u].xyz;
+    // Read child orientations and split orientations from genome mode data
+    // genome_mode_data now has 20 floats per mode: [child_a, child_b, child_a_split, child_b_split, split_dir]
+    let child_a_orientation = genome_mode_data[parent_mode_idx * 5u];
+    let child_b_orientation = genome_mode_data[parent_mode_idx * 5u + 1u];
+    let child_a_split_orientation = genome_mode_data[parent_mode_idx * 5u + 2u];
+    let child_b_split_orientation = genome_mode_data[parent_mode_idx * 5u + 3u];
+    let split_direction_local = genome_mode_data[parent_mode_idx * 5u + 4u].xyz;
+    
+    // Check if max_splits is reached and use split orientations if so
+    let will_reach_max_splits = (max_splits[cell_idx] != 0xFFFFFFFFu) && ((parent_split_count + 1u) >= max_splits[cell_idx]);
+    
+    let child_a_orientation_final = select(child_a_orientation, child_a_split_orientation, will_reach_max_splits);
+    let child_b_orientation_final = select(child_b_orientation, child_b_split_orientation, will_reach_max_splits);
     
     // Compute split rotation quaternion from split direction vector
     // split_direction_local = split_rotation * Z, so reconstruct the quaternion
@@ -422,10 +431,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     let split_rotation_quat = quat_from_z_to_dir(normalize(split_dir_local));
     
-    // Calculate child rotations: parent * split_rotation * child_orientation
+    // Calculate child rotations: parent * split_rotation * child_orientation_final
     // This compounds the split angle each generation (matching CPU)
-    let child_a_rotation = quat_multiply(parent_rotation, quat_multiply(split_rotation_quat, child_a_orientation));
-    let child_b_rotation = quat_multiply(parent_rotation, quat_multiply(split_rotation_quat, child_b_orientation));
+    let child_a_rotation = quat_multiply(parent_rotation, quat_multiply(split_rotation_quat, child_a_orientation_final));
+    let child_b_rotation = quat_multiply(parent_rotation, quat_multiply(split_rotation_quat, child_b_orientation_final));
     
     // Calculate parent radius for offset calculation (derive mass from nutrients)
     let parent_mass = nutrients_to_mass(parent_nutrients);
@@ -568,8 +577,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // in the child's local frame is just child.orientation.inverse() * Z
             // Child A is at +split, points toward B: use -Z
             // Child B is at -split, points toward A: use +Z
-            let anchor_a_local = normalize(rotate_vector_by_quat_inverse(vec3<f32>(0.0, 0.0, -1.0), child_a_orientation));
-            let anchor_b_local = normalize(rotate_vector_by_quat_inverse(vec3<f32>(0.0, 0.0, 1.0), child_b_orientation));
+            let anchor_a_local = normalize(rotate_vector_by_quat_inverse(vec3<f32>(0.0, 0.0, -1.0), child_a_orientation_final));
+            let anchor_b_local = normalize(rotate_vector_by_quat_inverse(vec3<f32>(0.0, 0.0, 1.0), child_b_orientation_final));
             
             // Classify zones based on anchor direction vs split direction (matching CPU)
             // Each cell's zone uses its own split_ratio for dynamic equatorial zone
@@ -754,8 +763,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let relative_rotation = quat_multiply(quat_conjugate(neighbor_rotation), parent_rotation);
         
         // Pre-compute orientation deltas including split_rotation (matching CPU)
-        let child_a_orientation_delta = quat_multiply(split_rotation_quat, child_a_orientation);
-        let child_b_orientation_delta = quat_multiply(split_rotation_quat, child_b_orientation);
+        let child_a_orientation_delta = quat_multiply(split_rotation_quat, child_a_orientation_final);
+        let child_b_orientation_delta = quat_multiply(split_rotation_quat, child_b_orientation_final);
         
         if (give_to_child_a && !give_to_child_b) {
             // Only Child A inherits

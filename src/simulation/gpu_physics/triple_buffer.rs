@@ -294,9 +294,10 @@ pub struct GpuTripleBufferSystem {
     
 
     
-    /// Genome mode data buffer for division (child orientations, split direction)
-    /// Layout per mode: [child_a_orientation (vec4), child_b_orientation (vec4), split_direction (vec4)]
-    /// Total size: num_modes * 48 bytes
+    /// Genome mode data buffer for division (child orientations, split orientations, split direction)
+    /// Layout per mode: [child_a_orientation (vec4), child_b_orientation (vec4), 
+    ///                  child_a_split_orientation (vec4), child_b_split_orientation (vec4), split_direction (vec4)]
+    /// Total size: num_modes * 80 bytes
     pub genome_mode_data: wgpu::Buffer,
     
     /// Child mode indices buffer (two i32 per mode: child_a_mode, child_b_mode)
@@ -500,10 +501,10 @@ impl GpuTripleBufferSystem {
 
         
         // Genome mode data: 40 modes per genome * 20,000 genomes max = 800,000 modes
-        // Each mode: child_a_orientation (16 bytes) + child_b_orientation (16 bytes) + split_direction (16 bytes) = 48 bytes
+        // Each mode: 5 vec4s * 4 floats * 4 bytes = 80 bytes
         // Increased to support 20,000 genomes
         let max_modes = 40 * 20_000; // Support for 20,000 genomes
-        let genome_mode_data = Self::create_storage_buffer(device, max_modes * 48, "Genome Mode Data");
+        let genome_mode_data = Self::create_storage_buffer(device, max_modes * 80, "Genome Mode Data");
         
         // Child mode indices: two i32 per mode (child_a_mode, child_b_mode)
         let child_mode_indices = Self::create_storage_buffer(device, max_modes * 8, "Child Mode Indices");
@@ -918,15 +919,18 @@ impl GpuTripleBufferSystem {
         queue.write_buffer(&self.cell_types, 0, bytemuck::cast_slice(&cell_types_data));
     }
     
-    /// Sync genome mode data (child orientations) for division shader
+    /// Sync genome mode data (child orientations and split orientations) for division shader
     pub fn sync_genome_mode_data(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
-        // Layout per mode: [child_a_orientation (vec4), child_b_orientation (vec4), split_direction (vec4)] = 48 bytes
-        let mut mode_data: Vec<[f32; 12]> = Vec::new();
+        // Layout per mode: [child_a_orientation (vec4), child_b_orientation (vec4), 
+        //                  child_a_split_orientation (vec4), child_b_split_orientation (vec4), split_direction (vec4)] = 80 bytes
+        let mut mode_data: Vec<[f32; 20]> = Vec::new();
         
         for genome in genomes {
             for mode in &genome.modes {
                 let qa = mode.child_a.orientation;
                 let qb = mode.child_b.orientation;
+                let qa_split = mode.child_a_after_split_orientation;
+                let qb_split = mode.child_b_after_split_orientation;
                 
                 // Calculate split direction from pitch/yaw (same as preview scene)
                 let pitch = mode.parent_split_direction.x.to_radians();
@@ -934,8 +938,13 @@ impl GpuTripleBufferSystem {
                 let split_dir = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z;
                 
                 mode_data.push([
+                    // Regular child orientations (8 floats)
                     qa.x, qa.y, qa.z, qa.w,
                     qb.x, qb.y, qb.z, qb.w,
+                    // Split orientations (8 floats)
+                    qa_split.x, qa_split.y, qa_split.z, qa_split.w,
+                    qb_split.x, qb_split.y, qb_split.z, qb_split.w,
+                    // Split direction (4 floats)
                     split_dir.x, split_dir.y, split_dir.z, 0.0,
                 ]);
             }

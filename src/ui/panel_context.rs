@@ -114,6 +114,32 @@ pub struct GenomeEditorState {
     pub child_b_y_axis_lon: f32,
     pub child_b_z_axis_lat: f32,
     pub child_b_z_axis_lon: f32,
+    
+    // Quaternion ball state for child split angles
+    /// Locked axis for Child A split angle quaternion ball
+    pub child_a_split_locked_axis: i32,
+    /// Initial distance for Child A split angle quaternion ball
+    pub child_a_split_initial_distance: f32,
+    /// Locked axis for Child B split angle quaternion ball
+    pub child_b_split_locked_axis: i32,
+    /// Initial distance for Child B split angle quaternion ball
+    pub child_b_split_initial_distance: f32,
+    
+    // Axis tracking for Child A split angle quaternion ball (UI feedback only)
+    pub child_a_split_x_axis_lat: f32,
+    pub child_a_split_x_axis_lon: f32,
+    pub child_a_split_y_axis_lat: f32,
+    pub child_a_split_y_axis_lon: f32,
+    pub child_a_split_z_axis_lat: f32,
+    pub child_a_split_z_axis_lon: f32,
+    
+    // Axis tracking for Child B split angle quaternion ball (UI feedback only)
+    pub child_b_split_x_axis_lat: f32,
+    pub child_b_split_x_axis_lon: f32,
+    pub child_b_split_y_axis_lat: f32,
+    pub child_b_split_y_axis_lon: f32,
+    pub child_b_split_z_axis_lat: f32,
+    pub child_b_split_z_axis_lon: f32,
 
     // Quaternion ball manual-input context menu state
     /// Which ball has the context menu open: 0 = none, 1 = Child A, 2 = Child B
@@ -387,6 +413,28 @@ impl GenomeEditorState {
             child_b_y_axis_lon: 0.0,
             child_b_z_axis_lat: 0.0,
             child_b_z_axis_lon: 0.0,
+            
+            // Quaternion ball state for child split angles
+            child_a_split_locked_axis: -1,
+            child_a_split_initial_distance: 1.0,
+            child_b_split_locked_axis: -1,
+            child_b_split_initial_distance: 1.0,
+            
+            // Axis tracking for Child A split angle quaternion ball (UI feedback only)
+            child_a_split_x_axis_lat: 0.0,
+            child_a_split_x_axis_lon: 0.0,
+            child_a_split_y_axis_lat: 0.0,
+            child_a_split_y_axis_lon: 0.0,
+            child_a_split_z_axis_lat: 0.0,
+            child_a_split_z_axis_lon: 0.0,
+            
+            // Axis tracking for Child B split angle quaternion ball (UI feedback only)
+            child_b_split_x_axis_lat: 0.0,
+            child_b_split_x_axis_lon: 0.0,
+            child_b_split_y_axis_lat: 0.0,
+            child_b_split_y_axis_lon: 0.0,
+            child_b_split_z_axis_lat: 0.0,
+            child_b_split_z_axis_lon: 0.0,
             qball_context_menu_open: 0,
             qball_manual_xyzw: [0.0, 0.0, 0.0, 1.0],
             child_a_keep_adhesion: false,

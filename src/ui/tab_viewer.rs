@@ -1426,6 +1426,8 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     max_splits: -1, // -1 means infinite
                     mode_a_after_splits: -1,
                     mode_b_after_splits: -1,
+                    child_a_after_split_orientation: glam::Quat::IDENTITY,
+                    child_b_after_split_orientation: glam::Quat::IDENTITY,
                     glueocyte_cell_adhesion: true,
                     glueocyte_env_adhesion: false,
                     swim_force: 0.5,
@@ -2177,6 +2179,52 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     if let Some(new_val) = new_mode_b {
                         mode.mode_b_after_splits = new_val;
                     }
+                    
+                    // Quaternion ball controls for child angles after max splits
+                    ui.add_space(8.0);
+                    ui.label("Child Split Angles:");
+                    
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label("Child A Angle:");
+                            ui.add_space(4.0);
+                            quaternion_ball(
+                                ui,
+                                &mut mode.child_a_after_split_orientation,
+                                &mut context.editor_state.child_a_split_x_axis_lat,
+                                &mut context.editor_state.child_a_split_x_axis_lon,
+                                &mut context.editor_state.child_a_split_y_axis_lat,
+                                &mut context.editor_state.child_a_split_y_axis_lon,
+                                &mut context.editor_state.child_a_split_z_axis_lat,
+                                &mut context.editor_state.child_a_split_z_axis_lon,
+                                40.0,
+                                context.editor_state.qball_snapping,
+                                &mut context.editor_state.child_a_split_locked_axis,
+                                &mut context.editor_state.child_a_split_initial_distance,
+                            );
+                        });
+                        
+                        ui.add_space(10.0);
+                        
+                        ui.vertical(|ui| {
+                            ui.label("Child B Angle:");
+                            ui.add_space(4.0);
+                            quaternion_ball(
+                                ui,
+                                &mut mode.child_b_after_split_orientation,
+                                &mut context.editor_state.child_b_split_x_axis_lat,
+                                &mut context.editor_state.child_b_split_x_axis_lon,
+                                &mut context.editor_state.child_b_split_y_axis_lat,
+                                &mut context.editor_state.child_b_split_y_axis_lon,
+                                &mut context.editor_state.child_b_split_z_axis_lat,
+                                &mut context.editor_state.child_b_split_z_axis_lon,
+                                40.0,
+                                context.editor_state.qball_snapping,
+                                &mut context.editor_state.child_b_split_locked_axis,
+                                &mut context.editor_state.child_b_split_initial_distance,
+                            );
+                        });
+                    });
                 }
             });
 

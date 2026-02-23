@@ -294,13 +294,25 @@ pub fn division_step(
                 
                 // Genome orientations also inherit split angle compounding for proper adhesion anchor positioning
                 // This ensures adhesion angles are correctly calculated through generations
-                let child_a_genome_orientation = parent_genome_orientation * split_rotation * mode.child_a.orientation;
-                let child_b_genome_orientation = parent_genome_orientation * split_rotation * mode.child_b.orientation;
+                // Use split orientations if max_splits is reached, otherwise use regular child orientations
+                let child_a_orientation_for_genome = if will_reach_max_splits {
+                    mode.child_a_after_split_orientation
+                } else {
+                    mode.child_a.orientation
+                };
+                let child_b_orientation_for_genome = if will_reach_max_splits {
+                    mode.child_b_after_split_orientation
+                } else {
+                    mode.child_b.orientation
+                };
+                
+                let child_a_genome_orientation = parent_genome_orientation * split_rotation * child_a_orientation_for_genome;
+                let child_b_genome_orientation = parent_genome_orientation * split_rotation * child_b_orientation_for_genome;
                 
                 // Physics rotations inherit from parent's physics rotation + split angle + child orientation delta
                 // This compounds the rotation each generation and applies genome-specified orientation
-                let child_a_orientation = parent_rotation * split_rotation * mode.child_a.orientation;
-                let child_b_orientation = parent_rotation * split_rotation * mode.child_b.orientation;
+                let child_a_orientation = parent_rotation * split_rotation * child_a_orientation_for_genome;
+                let child_b_orientation = parent_rotation * split_rotation * child_b_orientation_for_genome;
                 
                 division_data_list.push(DivisionData {
                     parent_idx,

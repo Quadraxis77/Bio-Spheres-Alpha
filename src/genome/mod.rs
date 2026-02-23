@@ -107,6 +107,8 @@ pub struct ModeSettings {
     pub max_splits: i32, // Maximum number of times a cell can split (1-20, or -1 for infinite). Split count resets to 0 when switching modes
     pub mode_a_after_splits: i32, // Mode that Child A transitions to when max_splits is reached (-1 = use normal child_a mode)
     pub mode_b_after_splits: i32, // Mode that Child B transitions to when max_splits is reached (-1 = use normal child_b mode)
+    pub child_a_after_split_orientation: Quat, // Orientation for Child A when max_splits is reached
+    pub child_b_after_split_orientation: Quat, // Orientation for Child B when max_splits is reached
     
     // Glueocyte settings
     pub glueocyte_cell_adhesion: bool, // Whether this Glueocyte bonds to other cells on contact
@@ -179,6 +181,8 @@ impl Default for ModeSettings {
             max_splits: -1, // Infinite by default
             mode_a_after_splits: -1, // Use normal child_a mode by default
             mode_b_after_splits: -1, // Use normal child_b mode by default
+            child_a_after_split_orientation: Quat::IDENTITY, // Default orientation for Child A after max splits
+            child_b_after_split_orientation: Quat::IDENTITY, // Default orientation for Child B after max splits
             glueocyte_cell_adhesion: true,  // Default: cell adhesion enabled
             glueocyte_env_adhesion: false,     // Default: environment adhesion disabled
             swim_force: 0.5, // Default swim force for flagellocytes

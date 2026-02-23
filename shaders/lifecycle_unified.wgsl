@@ -118,7 +118,7 @@ var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
 var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
 
 // Mode properties (read-only) — used to check min_adhesions before allowing division
-// Layout per mode: 16 floats = 64 bytes. Index 15 = min_adhesions.
+// Layout per mode: 20 floats = 80 bytes. 5 vec4s per mode.
 @group(2) @binding(11)
 var<storage, read> mode_properties_lc: array<vec4<f32>>;
 
