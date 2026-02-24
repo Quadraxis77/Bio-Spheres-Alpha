@@ -60,20 +60,23 @@ impl AdhesionConnectionManager {
         true
     }
     
-    /// Remove adhesion index from a cell
+    /// Remove adhesion index from a cell.
+    /// Clears ALL slots matching connection_index, not just the first, to prevent
+    /// stale duplicate entries surviving after removal and pointing to reused slots.
     pub fn remove_adhesion_index(&mut self, cell_index: usize, connection_index: i32) -> bool {
         if cell_index >= self.cell_adhesion_indices.len() {
             return false;
         }
-        
+
+        let mut removed = false;
         for slot in &mut self.cell_adhesion_indices[cell_index] {
             if *slot == connection_index {
                 *slot = -1;
-                return true;
+                removed = true;
             }
         }
-        
-        false
+
+        removed
     }
 
     /// Add adhesion connection with proper slot management and zone classification
@@ -252,20 +255,27 @@ impl AdhesionConnectionManager {
     /// Get connections for a cell
     pub fn get_connections_for_cell(&self, connections: &AdhesionConnections, cell_index: usize) -> Vec<usize> {
         let mut result = Vec::new();
-        
+
         if cell_index >= self.cell_adhesion_indices.len() {
             return result;
         }
-        
+
         for &connection_idx in &self.cell_adhesion_indices[cell_index] {
             if connection_idx >= 0 {
                 let idx = connection_idx as usize;
                 if idx < connections.active_count && connections.is_active[idx] == 1 {
-                    result.push(idx);
+                    // Validate that this connection actually involves cell_index.
+                    // Stale slot entries can survive remove_adhesion if duplicates existed,
+                    // and may point to a reused slot that now belongs to different cells entirely.
+                    let cell_a = connections.cell_a_index[idx];
+                    let cell_b = connections.cell_b_index[idx];
+                    if cell_a == cell_index || cell_b == cell_index {
+                        result.push(idx);
+                    }
                 }
             }
         }
-        
+
         result
     }
     

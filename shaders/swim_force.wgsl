@@ -117,7 +117,7 @@ var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
 
 // Signal flags buffer (read-only) - for flagellocyte signal-responsive speed
 @group(2) @binding(5)
-var<storage, read> signal_flags: array<u32>;
+var<storage, read> signal_flags: array<atomic<u32>>;
 
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const SWIM_FORCE_MULTIPLIER: f32 = 50.0; // Scale swim_force (0-1) to actual force magnitude
@@ -171,7 +171,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var effective_speed: f32;
     if (mode.flagellocyte_use_signal >= 0.5) {
         // Signal-based mode
-        let signal_value = f32(signal_flags[cell_idx]);
+        let raw_signal = atomicLoad(&signal_flags[cell_idx]);
+        let signal_value = f32(raw_signal & 2047u); // Extract value component
         if (signal_value >= mode.flagellocyte_threshold_c) {
             effective_speed = mode.flagellocyte_speed_b;
         } else {

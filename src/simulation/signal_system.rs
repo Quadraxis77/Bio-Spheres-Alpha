@@ -17,7 +17,7 @@ use std::collections::VecDeque;
 /// Number of signal channels (0-15)
 pub const SIGNAL_CHANNELS: usize = 16;
 /// Signal attenuation factor per hop (signals lose this fraction per hop)
-pub const SIGNAL_ATTENUATION_PER_HOP: f32 = 0.8; // 80% signal strength retained per hop
+pub const SIGNAL_ATTENUATION_PER_HOP: f32 = 0.5; // 50% signal strength retained per hop
 
 /// Oculocyte sense types
 pub const SENSE_CELL: i32 = 0;
@@ -28,13 +28,15 @@ pub const SENSE_BARRIER: i32 = 3;
 /// Oculocyte cell type index
 const OCULOCYTE_TYPE: i32 = 7;
 
-/// Clear all signal channels to null for all cells.
-/// Called at the start of each frame before sensing.
+/// Clear all signal channels and flow tracking.
 pub fn clear_all_signals(state: &mut CanonicalState) {
-    for i in 0..(state.cell_count * SIGNAL_CHANNELS) {
-        state.signal_channels[i] = None;
+    for channel in state.signal_channels.iter_mut() {
+        *channel = None;
     }
     state.has_any_signal = false;
+    
+    // Clear signal flow tracking as well
+    state.signal_flow_tracker.clear();
 }
 
 /// A pending signal emission from an oculocyte or test button.
@@ -73,7 +75,7 @@ pub fn sense_oculocytes(
 
         let sense_type = mode.oculocyte_sense_type;
         let channel = mode.oculocyte_signal_channel.clamp(0, 15) as usize;
-        let signal_value = mode.oculocyte_signal_value.clamp(-50.0, 50.0);
+        let signal_value = mode.oculocyte_signal_value.clamp(-100.0, 100.0);
         let hops = mode.oculocyte_signal_hops.clamp(1, 20) as usize;
         let ray_length = mode.oculocyte_ray_length.clamp(1.0, 100.0);
 
@@ -186,56 +188,135 @@ pub fn propagate_signals(
         if emission.source_cell >= state.cell_count {
             continue;
         }
-        
+
+        let debug_target = 6usize; // Cell we're investigating
+        let debug_source = 1usize; // Suspected emission source
+        let is_debug_emission = emission.source_cell == debug_source;
+
         // Write signal to source cell first (full strength)
         add_signal(state, emission.source_cell, emission.channel, emission.value);
 
-        // BFS from source
-        // Clear visited for this emission
+        // BFS from source.
+        // Cells are written when enqueued, not when dequeued, so the signal strength
+        // and visited marking are both set at the correct hop distance.
+        // remaining_hops = how many more hops can spread FROM this cell.
+        // hops=1 means: spread to direct neighbours (write them at full strength), then stop.
         for v in visited.iter_mut().take(state.cell_count) {
             *v = false;
         }
-        // Check bounds before accessing visited array
         if emission.source_cell < state.cell_count {
             visited[emission.source_cell] = true;
         } else {
-            continue; // Skip this emission
+            continue;
         }
         queue.clear();
 
-        // Seed BFS with neighbors of source (first hop gets attenuated signal)
-        let attenuated_strength = emission.value * SIGNAL_ATTENUATION_PER_HOP;
-        let neighbors = get_adhesion_neighbors(state, emission.source_cell);
-        for neighbor in neighbors {
-            if neighbor < state.cell_count && !visited[neighbor] {
-                // Skip signal senders - they are immune to receiving signals
-                if !is_signal_sender(state, genome, neighbor, emissions) {
+        if is_debug_emission {
+            println!(
+                "[SIGNAL DEBUG] Emission from cell {} | channel={} value={} hops={}",
+                emission.source_cell, emission.channel, emission.value, emission.hops
+            );
+            // Print all adhesion neighbours of the source
+            let src_neighbors = get_adhesion_neighbors(state, emission.source_cell);
+            println!(
+                "[SIGNAL DEBUG]   Direct neighbours of source {}: {:?}",
+                emission.source_cell, src_neighbors
+            );
+            // Print all adhesion neighbours of the target cell
+            let tgt_neighbors = get_adhesion_neighbors(state, debug_target);
+            println!(
+                "[SIGNAL DEBUG]   Direct neighbours of target {}: {:?}",
+                debug_target, tgt_neighbors
+            );
+        }
+
+        // Seed with direct neighbours of source at full strength.
+        // Signal senders are marked visited (to block loops) but not written to and not
+        // enqueued for further spreading — they are a hard stop in the BFS.
+        if emission.hops > 0 {
+            let neighbors = get_adhesion_neighbors(state, emission.source_cell);
+            for neighbor in neighbors {
+                if neighbor < state.cell_count && !visited[neighbor] {
                     visited[neighbor] = true;
-                    queue.push_back((neighbor, emission.hops - 1, attenuated_strength));
+                    if is_signal_sender(state, genome, neighbor, emissions) {
+                        if is_debug_emission {
+                            println!(
+                                "[SIGNAL DEBUG]   Hop-1 neighbour {} is a signal sender — hard stop",
+                                neighbor
+                            );
+                        }
+                        continue;
+                    }
+                    if is_debug_emission && neighbor == debug_target {
+                        println!(
+                            "[SIGNAL DEBUG]   *** Writing signal to target {} at HOP 1 (full strength={}) — source {} IS a direct neighbour!",
+                            debug_target, emission.value, emission.source_cell
+                        );
+                    }
+                    add_signal(state, neighbor, emission.channel, emission.value);
+                    state.signal_flow_tracker.add_flow(emission.source_cell, neighbor);
+                    if emission.hops > 1 {
+                        if is_debug_emission {
+                            println!(
+                                "[SIGNAL DEBUG]   Enqueuing hop-1 neighbour {} for further spread (remaining_hops={})",
+                                neighbor, emission.hops - 1
+                            );
+                        }
+                        queue.push_back((neighbor, emission.hops - 1, emission.value));
+                    }
                 }
             }
         }
 
         while let Some((cell_idx, remaining_hops, signal_strength)) = queue.pop_front() {
-            // Write attenuated signal to this cell (skip if signal sender)
-            if !is_signal_sender(state, genome, cell_idx, emissions) {
-                add_signal(state, cell_idx, emission.channel, signal_strength);
+            // Apply attenuation for this hop's outgoing neighbours
+            let next_strength = signal_strength * SIGNAL_ATTENUATION_PER_HOP;
+            let neighbors = get_adhesion_neighbors(state, cell_idx);
+            if is_debug_emission {
+                println!(
+                    "[SIGNAL DEBUG]   Queue pop: cell={} remaining_hops={} strength={:.4} | neighbours={:?}",
+                    cell_idx, remaining_hops, signal_strength, neighbors
+                );
             }
-
-            // Continue BFS if hops remain
-            if remaining_hops > 0 {
-                let next_strength = signal_strength * SIGNAL_ATTENUATION_PER_HOP;
-                let neighbors = get_adhesion_neighbors(state, cell_idx);
-                for neighbor in neighbors {
-                    if neighbor < state.cell_count && !visited[neighbor] {
-                        // Skip signal senders - they are immune to receiving signals
-                        if !is_signal_sender(state, genome, neighbor, emissions) {
-                            visited[neighbor] = true;
-                            queue.push_back((neighbor, remaining_hops - 1, next_strength));
+            for neighbor in neighbors {
+                if neighbor < state.cell_count && !visited[neighbor] {
+                    visited[neighbor] = true;
+                    if is_signal_sender(state, genome, neighbor, emissions) {
+                        if is_debug_emission {
+                            println!(
+                                "[SIGNAL DEBUG]     Neighbour {} is a signal sender — hard stop",
+                                neighbor
+                            );
                         }
+                        continue;
                     }
+                    if is_debug_emission && neighbor == debug_target {
+                        println!(
+                            "[SIGNAL DEBUG]   *** Writing signal to target {} via cell {} at strength={:.4} remaining_hops={}",
+                            debug_target, cell_idx, next_strength, remaining_hops
+                        );
+                    }
+                    add_signal(state, neighbor, emission.channel, next_strength);
+                    state.signal_flow_tracker.add_flow(emission.source_cell, neighbor);
+                    if remaining_hops > 1 {
+                        queue.push_back((neighbor, remaining_hops - 1, next_strength));
+                    }
+                } else if is_debug_emission && neighbor == debug_target {
+                    println!(
+                        "[SIGNAL DEBUG]     Target {} already visited or out of bounds (visited={})",
+                        debug_target,
+                        if neighbor < state.cell_count { visited[neighbor].to_string() } else { "OOB".to_string() }
+                    );
                 }
             }
+        }
+
+        if is_debug_emission {
+            let target_signal = state.signal_channels.get(debug_target * SIGNAL_CHANNELS + emission.channel).copied().flatten();
+            println!(
+                "[SIGNAL DEBUG] After BFS: cell {} channel {} signal = {:?}",
+                debug_target, emission.channel, target_signal
+            );
         }
     }
 
@@ -287,6 +368,33 @@ fn get_adhesion_neighbors(state: &CanonicalState, cell_idx: usize) -> Vec<usize>
     neighbors
 }
 
+/// Track actual signal flow paths for visualization
+/// Maps (source_cell, target_cell) -> true if signal flowed from source to target
+#[derive(Clone, Debug)]
+pub struct SignalFlowTracker {
+    flows: std::collections::HashSet<(usize, usize)>,
+}
+
+impl SignalFlowTracker {
+    pub fn new() -> Self {
+        Self {
+            flows: std::collections::HashSet::new(),
+        }
+    }
+    
+    pub fn add_flow(&mut self, source: usize, target: usize) {
+        self.flows.insert((source, target));
+    }
+    
+    pub fn has_flow(&self, source: usize, target: usize) -> bool {
+        self.flows.contains(&(source, target)) || self.flows.contains(&(target, source))
+    }
+    
+    pub fn clear(&mut self) {
+        self.flows.clear();
+    }
+}
+
 /// Check if a cell has any active signal on any channel.
 pub fn cell_has_any_signal(state: &CanonicalState, cell_idx: usize) -> bool {
     let base = cell_idx * SIGNAL_CHANNELS;
@@ -299,15 +407,13 @@ pub fn cell_has_any_signal(state: &CanonicalState, cell_idx: usize) -> bool {
 }
 
 /// Check if an adhesion connection has signal flowing through it.
-/// A bond glows only when both endpoints share signal on the same channel,
-/// meaning the signal actually propagated through the bond rather than terminating at one end.
+/// A connection is considered active if both endpoints have signal on the same channel.
+/// This correctly handles multi-hop propagation without misattributing relay cells as senders.
 pub fn adhesion_has_signal(state: &CanonicalState, cell_a: usize, cell_b: usize) -> bool {
     let base_a = cell_a * SIGNAL_CHANNELS;
     let base_b = cell_b * SIGNAL_CHANNELS;
     for ch in 0..SIGNAL_CHANNELS {
-        if state.signal_channels.get(base_a + ch).copied().flatten().is_some()
-            && state.signal_channels.get(base_b + ch).copied().flatten().is_some()
-        {
+        if state.signal_channels[base_a + ch].is_some() && state.signal_channels[base_b + ch].is_some() {
             return true;
         }
     }

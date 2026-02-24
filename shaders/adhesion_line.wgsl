@@ -40,7 +40,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // abs(edge_factor): 0.0 at center, 1.0 at edges
     let t = abs(in.edge_factor);
-    // Outer ~35% is outline (signal color), inner ~65% is zone color
-    let blend = smoothstep(0.5, 0.8, t);
+    // Outer ~50% is outline (signal color), inner ~50% is zone color
+    // This makes the yellow outline much thicker
+    let blend = smoothstep(0.3, 0.8, t);
     return mix(in.zone_color, in.signal_color, blend);
 }

@@ -438,6 +438,10 @@ pub struct CanonicalState {
 
     /// Whether any cell has an active signal (optimization flag to skip rendering checks)
     pub has_any_signal: bool,
+
+    /// Track actual signal flow paths for visualization
+    /// Maps (source_cell, target_cell) -> true if signal flowed from source to target
+    pub signal_flow_tracker: crate::simulation::signal_system::SignalFlowTracker,
 }
 
 impl CanonicalState {
@@ -549,6 +553,7 @@ impl CanonicalState {
             // Signal system — all channels null by default
             signal_channels: vec![None; capacity * 16],
             has_any_signal: false,
+            signal_flow_tracker: crate::simulation::signal_system::SignalFlowTracker::new(),
         }
     }
     

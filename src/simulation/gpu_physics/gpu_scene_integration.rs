@@ -644,7 +644,7 @@ pub fn execute_signal_system(
     }
 
     // Step 3: Pull-based propagation (one hop per dispatch, 10 iterations max)
-    // Reduced from 20 to 10 to cut dispatch count in half
+    // Hop limits are now encoded in the signal values themselves
     for _ in 0..10u32 {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Signal Propagate"),

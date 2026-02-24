@@ -4560,7 +4560,7 @@ impl GpuPhysicsPipelines {
     }
 
     /// Signal sense cell data bind group layout (Group 1 for signal_sense)
-    /// binding 0: positions, binding 1: rotations, binding 2: mode_indices, binding 3: mode_cell_types, binding 4: oculocyte_params
+    /// binding 0: positions, binding 1: rotations, binding 2: mode_indices, binding 3: mode_cell_types, binding 4: oculocyte_params, binding 5: mode_properties
     fn create_signal_sense_cell_data_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Signal Sense Cell Data Bind Group Layout"),

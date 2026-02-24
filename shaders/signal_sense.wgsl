@@ -11,7 +11,7 @@ const OCULOCYTE_TYPE: u32 = 7u;
 const LIGHT_THRESHOLD: f32 = 0.1;
 
 @group(0) @binding(0)
-var<storage, read_write> signal_flags: array<u32>;
+var<storage, read_write> signal_flags: array<atomic<u32>>;
 
 @group(0) @binding(1)
 var<storage, read> cell_count_buffer: array<u32>;
@@ -272,9 +272,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     if (detected) {
-        // Accumulate signal value: add (hops + 1) to existing signal
-        // This allows multiple oculocytes of the same mode to stack their signals
-        let signal_value = signal_hops + 1u;
+        // Write signal value with flow direction encoded
+        // Format: DDDDDHHHHHVVVVVVVVVVVV (5 bits direction flag, 5 bits hops, 11 bits value)
+        // Direction flag: 1 = signal source, 0 = propagated signal
+        let signal_value = (1u << 16u) | (signal_hops << 11u) | 20u; // Source flag + hops + base value
         atomicAdd(&signal_flags[idx], signal_value);
     }
 }

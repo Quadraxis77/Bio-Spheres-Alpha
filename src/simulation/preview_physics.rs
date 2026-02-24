@@ -797,6 +797,8 @@ pub fn physics_step_with_genome(
     // Apply persistent test signals (if any) after normal signal system
     if let Some(test_signals) = test_signals {
         if !test_signals.is_empty() {
+            // Clear signals before applying test signals to avoid accumulation
+            crate::simulation::signal_system::clear_all_signals(state);
             crate::simulation::signal_system::propagate_test_signals(state, genome, test_signals.to_vec());
         }
     }

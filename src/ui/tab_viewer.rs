@@ -1814,8 +1814,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.nutrient_gain_rate, 0.0..=2.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.nutrient_gain_rate).speed(0.01).range(0.0..=2.0).suffix("/s"));
+                        ui.add(egui::Slider::new(&mut mode.nutrient_gain_rate, 0.0..=20.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.nutrient_gain_rate).speed(0.01).range(0.0..=20.0).suffix("/s"));
                     });
                     
                     ui.add_space(4.0);
@@ -1888,13 +1888,13 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                             ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.flagellocyte_threshold_c, -50.0..=50.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.flagellocyte_threshold_c).speed(0.1).range(-50.0..=50.0));
+                            ui.add(egui::Slider::new(&mut mode.flagellocyte_threshold_c, -100.0..=100.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.flagellocyte_threshold_c).speed(0.1).range(-100.0..=100.0));
                         });
                     }
                 });
             } else if mode.cell_type == 5 { // Buoyocyte (cell_type == 5)
-                group_container(ui, "Buoyocyte Functions", egui::Color32::from_rgb(140, 200, 180), |ui| {
+                group_container(ui, "Buoyocyte Functions", egui::Color32::from_rgb(140, 200, 140), |ui| {
                     ui.label("Buoyancy Force:");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
@@ -1934,8 +1934,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_value, -50.0..=50.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_value).speed(0.1).range(-50.0..=50.0));
+                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_value, -100.0..=100.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_value).speed(0.1).range(-100.0..=100.0));
                     });
 
                     // Signal Hops

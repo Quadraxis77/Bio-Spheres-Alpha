@@ -297,8 +297,11 @@ impl AdhesionLineRenderer {
             let zone_color_a = get_zone_color(zone_a);
             let zone_color_b = get_zone_color(zone_b);
 
-            // Signal outline color: yellow if signal, black otherwise
-            let has_signal = signal_system::adhesion_has_signal(state, cell_a_idx, cell_b_idx);
+            // Signal outline color: yellow if signal actually flowed along this connection,
+            // black otherwise. Use the flow tracker rather than checking whether both
+            // endpoints happen to have signal (which would falsely light up connections
+            // between two 1-hop neighbours that never relayed signal to each other).
+            let has_signal = state.signal_flow_tracker.has_flow(cell_a_idx, cell_b_idx);
             let signal_color = if has_signal {
                 [1.0, 0.9, 0.0, 0.9] // Yellow
             } else {

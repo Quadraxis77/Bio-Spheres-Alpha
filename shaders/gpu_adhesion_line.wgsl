@@ -46,7 +46,7 @@ var<storage, read> adhesion_counts: array<u32>;
 var<storage, read> cell_count_buffer: array<u32>;
 
 @group(1) @binding(4)
-var<storage, read> signal_flags: array<u32>;
+var<storage, read> signal_flags: array<atomic<u32>>;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -112,14 +112,21 @@ fn vs_main(
     let pos_b = positions[connection.cell_b_index].xyz;
     let midpoint = (pos_a + pos_b) * 0.5;
     
-    // Signal outline color: yellow only when both endpoints have signal,
-    // meaning the signal actually flowed through this bond (not just terminated at one end)
-    let has_signal_a = signal_flags[connection.cell_a_index];
-    let has_signal_b = signal_flags[connection.cell_b_index];
-    let has_signal = (has_signal_a != 0u) && (has_signal_b != 0u);
+    // Signal outline color: yellow only when signal actually flowed through this bond
+    // This happens when one cell is a signal source (direction flag = 1) and the other is propagated (direction flag = 0)
+    let signal_a = atomicLoad(&signal_flags[connection.cell_a_index]);
+    let signal_b = atomicLoad(&signal_flags[connection.cell_b_index]);
+    
+    // Decode signal values — check lower 11 bits for non-zero value
+    let value_a = signal_a & 2047u;
+    let value_b = signal_b & 2047u;
+    
+    // Signal passed through this bond if both endpoints have signal values.
+    let signal_flowed_through = (value_a != 0u) && (value_b != 0u);
+    
     var sig_color: vec4<f32>;
-    if (has_signal) {
-        sig_color = vec4<f32>(1.0, 0.9, 0.0, 0.9); // Yellow
+    if (signal_flowed_through) {
+        sig_color = vec4<f32>(1.0, 1.0, 0.0, 1.0); // Bright yellow
     } else {
         sig_color = vec4<f32>(0.0, 0.0, 0.0, 0.6); // Black
     }
@@ -203,7 +210,8 @@ fn vs_main(
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // abs(edge_factor): 0.0 at center, 1.0 at edges
     let t = abs(in.edge_factor);
-    // Outer ~35% is outline (signal color), inner ~65% is zone color
-    let blend = smoothstep(0.5, 0.8, t);
+    // Outer 50% is outline (signal color), inner 50% is zone color
+    // This makes signal visualization much more prominent
+    let blend = smoothstep(0.25, 0.75, t);
     return mix(in.zone_color, in.signal_color, blend);
 }

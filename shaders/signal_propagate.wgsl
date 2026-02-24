@@ -23,7 +23,7 @@ const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const SIGNAL_ATTENUATION_PER_HOP: f32 = 0.8; // 80% signal strength retained per hop
 
 @group(0) @binding(0)
-var<storage, read_write> signal_flags: array<u32>;
+var<storage, read_write> signal_flags: array<atomic<u32>>;
 
 @group(0) @binding(1)
 var<storage, read> cell_count_buffer: array<u32>;
@@ -53,8 +53,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_type = mode_cell_types[mode_idx];
     if (cell_type == OCULOCYTE_TYPE) { return; }
 
-    // Find maximum signal value among adhesion neighbors
-    var max_neighbor_signal = 0u;
+    // Only propagate to cells that have not yet received a signal this frame.
+    // This prevents accumulation across multiple dispatches — each cell is written exactly once.
+    let current_signal = atomicLoad(&signal_flags[idx]);
+    if (current_signal != 0u) { return; }
+
+    // Find the best neighbor: highest remaining hops (most propagation power).
+    // Track hops and value together so they stay consistent from the same source.
+    var best_hops = 0u;
+    var best_value = 0u;
     let adhesion_base = idx * MAX_ADHESIONS_PER_CELL;
 
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
@@ -74,19 +81,31 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         if (neighbor >= cell_count) { continue; }
 
-        let neighbor_signal = signal_flags[neighbor];
-        max_neighbor_signal = max(max_neighbor_signal, neighbor_signal);
+        let neighbor_signal = atomicLoad(&signal_flags[neighbor]);
+
+        // Decode hop count and value from signal
+        // Format: DDDDDHHHHHVVVVVVVVVVVV (5 bits direction flag, 5 bits hops, 11 bits value)
+        let neighbor_hops = (neighbor_signal >> 11u) & 31u; // 5 bits for hops
+        let neighbor_value = neighbor_signal & 2047u; // 11 bits for value
+
+        // Keep hops and value from the same neighbor so they stay semantically paired.
+        // Prefer the neighbor with more remaining hops; break ties by higher value.
+        if (neighbor_hops > 0u && neighbor_value > 0u) {
+            if (neighbor_hops > best_hops || (neighbor_hops == best_hops && neighbor_value > best_value)) {
+                best_hops = neighbor_hops;
+                best_value = neighbor_value;
+            }
+        }
     }
 
-    // If any neighbor has a propagatable signal (> 0), update this cell
-    // Apply attenuation per hop
-    if (max_neighbor_signal > 0u) {
-        // Convert to float, apply attenuation, then back to integer
-        let neighbor_signal_f = f32(max_neighbor_signal);
-        let attenuated_f = neighbor_signal_f * SIGNAL_ATTENUATION_PER_HOP;
-        let attenuated = u32(max(1u, u32(attenuated_f))); // Ensure at least 1 for propagation
-        
-        // Add to current signal instead of replacing to allow accumulation from multiple paths
-        atomicAdd(&signal_flags[idx], attenuated);
+    // If a propagatable neighbor was found, write signal to this cell (once only).
+    if (best_value > 0u && best_hops > 0u) {
+        let attenuated_value = best_value * u32(SIGNAL_ATTENUATION_PER_HOP * 1000.0) / 1000u;
+        let attenuated = max(1u, attenuated_value);
+
+        let new_hops = best_hops - 1u;
+        let encoded_signal = (new_hops << 11u) | attenuated;
+
+        atomicStore(&signal_flags[idx], encoded_signal);
     }
 }
