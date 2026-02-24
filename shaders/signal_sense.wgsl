@@ -5,7 +5,7 @@
 // sense_type 0 = Cell (ray-vs-sphere test against each cell)
 // sense_type 1 = Food (DDA ray march through nutrient voxels)
 // sense_type 2 = Light (DDA ray march through light voxels)
-// sense_type 3 = Barrier (ray-sphere vs world boundary + DDA for solid voxels)
+// sense_type 3 = Barrier (ray-sphere vs world boundary + DDA for solid voxels + water surface isosurface)
 
 const OCULOCYTE_TYPE: u32 = 7u;
 const LIGHT_THRESHOLD: f32 = 0.1;
@@ -58,6 +58,11 @@ var<storage, read> light_field: array<f32>;
 
 @group(2) @binding(3)
 var<storage, read> solid_mask: array<u32>;
+
+// binding 4: density field from surface nets — used for water surface detection
+// Values are fluid density per voxel (f32); the isosurface threshold is 0.5
+@group(2) @binding(4)
+var<storage, read> density_field: array<f32>;
 
 // Rotate vector by quaternion: q * v * q^-1
 fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
@@ -175,6 +180,9 @@ fn dda_march_light(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> bo
 }
 
 // sense_type 3: ray-sphere intersection against world boundary, then DDA for solid voxels
+// and water surface isosurface — all physical barriers an organism would bump into.
+const WATER_ISO_LEVEL: f32 = 0.5;
+
 fn sense_barrier(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> bool {
     // Check world boundary sphere
     let r = world_params.boundary_radius;
@@ -192,7 +200,9 @@ fn sense_barrier(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> bool
         }
     }
 
-    // DDA march for solid cave voxels
+    // DDA march for solid cave voxels and water surface isosurface.
+    // The water surface sits at the density iso-level (density >= WATER_ISO_LEVEL).
+    // We detect the first voxel that is either solid rock or crosses the air/water boundary.
     let res = i32(world_params.grid_resolution);
     if (res <= 0) { return false; }
     let grid_origin = vec3<f32>(world_params.grid_origin_x, world_params.grid_origin_y, world_params.grid_origin_z);
@@ -216,13 +226,28 @@ fn sense_barrier(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> bool
 
     let t_delta = abs(vec3(cs) / forward);
 
+    // Record whether the starting voxel is inside fluid so we can detect
+    // crossing the surface in either direction (from above or below).
+    var in_fluid = false;
+    if (all(cell_i >= vec3<i32>(0)) && all(cell_i < vec3<i32>(res))) {
+        let vi0 = u32(cell_i.x + cell_i.y * res + cell_i.z * res * res);
+        in_fluid = density_field[vi0] >= WATER_ISO_LEVEL;
+    }
+
     var t = 0.0;
     for (var iter = 0; iter < 512; iter++) {
         if (t > ray_length) { break; }
         if (any(cell_i < vec3<i32>(0)) || any(cell_i >= vec3<i32>(res))) { break; }
 
         let vi = u32(cell_i.x + cell_i.y * res + cell_i.z * res * res);
+
+        // Solid cave wall
         if (solid_mask[vi] != 0u) { return true; }
+
+        // Water surface: detect the phase transition (entering or exiting fluid)
+        let d = density_field[vi];
+        if (!in_fluid && d >= WATER_ISO_LEVEL) { return true; }
+        if (in_fluid && d < WATER_ISO_LEVEL) { return true; }
 
         if (t_max.x < t_max.y && t_max.x < t_max.z) {
             t = t_max.x; t_max.x += t_delta.x; cell_i.x += step.x;

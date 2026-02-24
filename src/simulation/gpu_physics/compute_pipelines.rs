@@ -1167,6 +1167,7 @@ impl GpuPhysicsPipelines {
         signal_sense_nutrient_buffer: &wgpu::Buffer,
         signal_sense_light_field_buffer: &wgpu::Buffer,
         signal_sense_solid_mask_buffer: &wgpu::Buffer,
+        signal_sense_density_field_buffer: &wgpu::Buffer,
     ) -> CachedBindGroups {
         // Create physics bind groups for all 3 buffer indices
         let physics = [
@@ -1284,6 +1285,7 @@ impl GpuPhysicsPipelines {
             signal_sense_nutrient_buffer,
             signal_sense_light_field_buffer,
             signal_sense_solid_mask_buffer,
+            signal_sense_density_field_buffer,
         );
 
         CachedBindGroups {
@@ -4624,6 +4626,7 @@ impl GpuPhysicsPipelines {
     /// binding 1: nutrient_voxels (storage, read) - food detection
     /// binding 2: light_field (storage, read) - light detection
     /// binding 3: solid_mask (storage, read) - cave/barrier detection
+    /// binding 4: density_field (storage, read) - water surface detection via surface nets isosurface
     fn create_signal_sense_world_data_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Signal Sense World Data Bind Group Layout"),
@@ -4668,12 +4671,23 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
 
     /// Create signal sense world data bind group (Group 2)
-    /// binding 0: world params uniform, binding 1: nutrient_voxels, binding 2: light_field, binding 3: solid_mask
+    /// binding 0: world params uniform, binding 1: nutrient_voxels, binding 2: light_field,
+    /// binding 3: solid_mask, binding 4: density_field (water surface isosurface)
     pub fn create_signal_sense_world_data_bind_group(
         &self,
         device: &wgpu::Device,
@@ -4681,6 +4695,7 @@ impl GpuPhysicsPipelines {
         nutrient_voxels_buffer: &wgpu::Buffer,
         light_field_buffer: &wgpu::Buffer,
         solid_mask_buffer: &wgpu::Buffer,
+        density_field_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Signal Sense World Data Bind Group"),
@@ -4701,6 +4716,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: solid_mask_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: density_field_buffer.as_entire_binding(),
                 },
             ],
         })

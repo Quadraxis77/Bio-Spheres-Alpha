@@ -258,6 +258,9 @@ pub struct GpuScene {
     /// Dummy solid mask buffer (used when fluid simulator is not yet initialized)
     #[allow(dead_code)]
     signal_sense_dummy_solid_buffer: wgpu::Buffer,
+    /// Dummy density field buffer (used when surface nets is not yet initialized)
+    #[allow(dead_code)]
+    signal_sense_dummy_density_buffer: wgpu::Buffer,
 }
 
 impl GpuScene {
@@ -339,6 +342,12 @@ impl GpuScene {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
+        let signal_sense_dummy_density_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Signal Sense Dummy Density Buffer"),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
 
         // Create cached bind groups (once, not per-frame!)
         let cached_bind_groups = gpu_physics_pipelines.create_cached_bind_groups(
@@ -349,6 +358,7 @@ impl GpuScene {
             &signal_sense_dummy_nutrient_buffer,
             &signal_sense_dummy_light_buffer,
             &signal_sense_dummy_solid_buffer,
+            &signal_sense_dummy_density_buffer,
         );
 
         // Create GPU cell inspector system (will be initialized later with device)
@@ -473,6 +483,7 @@ impl GpuScene {
             signal_sense_dummy_nutrient_buffer,
             signal_sense_dummy_light_buffer,
             signal_sense_dummy_solid_buffer,
+            signal_sense_dummy_density_buffer,
         }
     }
 
@@ -2285,6 +2296,9 @@ impl GpuScene {
             let solid_buf = self.fluid_simulator.as_ref()
                 .map(|fs| fs.solid_mask_buffer())
                 .unwrap_or(&self.signal_sense_dummy_solid_buffer);
+            let density_buf = self.gpu_surface_nets.as_ref()
+                .map(|sn| sn.density_buffer())
+                .unwrap_or(&self.signal_sense_dummy_density_buffer);
             self.cached_bind_groups.signal_sense_world_data = self.gpu_physics_pipelines
                 .create_signal_sense_world_data_bind_group(
                     device,
@@ -2292,6 +2306,7 @@ impl GpuScene {
                     nutrient_buf,
                     light_field_system.light_field_buffer(),
                     solid_buf,
+                    density_buf,
                 );
         }
 
@@ -2780,6 +2795,9 @@ impl GpuScene {
             let light_buf = self.light_field_system.as_ref()
                 .map(|lfs| lfs.light_field_buffer())
                 .unwrap_or(&self.signal_sense_dummy_light_buffer);
+            let density_buf = self.gpu_surface_nets.as_ref()
+                .map(|sn| sn.density_buffer())
+                .unwrap_or(&self.signal_sense_dummy_density_buffer);
             self.cached_bind_groups.signal_sense_world_data = self.gpu_physics_pipelines
                 .create_signal_sense_world_data_bind_group(
                     device,
@@ -2787,6 +2805,7 @@ impl GpuScene {
                     simulator.nutrient_voxels_buffer(),
                     light_buf,
                     simulator.solid_mask_buffer(),
+                    density_buf,
                 );
         }
 
