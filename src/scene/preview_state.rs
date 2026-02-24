@@ -202,6 +202,9 @@ impl PreviewState {
             mode.child_b_after_split_orientation.y.to_bits().hash(&mut hasher);
             mode.child_b_after_split_orientation.z.to_bits().hash(&mut hasher);
             mode.child_b_after_split_orientation.w.to_bits().hash(&mut hasher);
+            // Hash child split keep adhesion settings
+            mode.child_a_after_split_keep_adhesion.hash(&mut hasher);
+            mode.child_b_after_split_keep_adhesion.hash(&mut hasher);
             mode.max_adhesions.hash(&mut hasher);
             mode.min_adhesions.hash(&mut hasher);
             mode.enable_parent_angle_snapping.hash(&mut hasher);

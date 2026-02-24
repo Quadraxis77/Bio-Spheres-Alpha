@@ -778,7 +778,7 @@ impl App {
                         // Matches preview_physics.rs logic
                         const BASE_METABOLISM_RATE: f32 = 1.0;
                         const AUTO_GAIN_RATE: f32 = 20.0;
-                        const SWIM_CONSUMPTION_RATE: f32 = 2.0;
+                        const SWIM_CONSUMPTION_RATE: f32 = 1.0; // Must match CONSUMPTION_RATE in preview_physics.rs::consume_swim_nutrients
                         const OCULOCYTE_SENSE_CONSUMPTION_RATE: f32 = 0.08;
                         let is_test_cell = cell_type_idx == 0;
                         let can_auto_gain = is_test_cell

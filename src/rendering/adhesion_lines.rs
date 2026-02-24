@@ -6,7 +6,6 @@
 
 use crate::cell::adhesion_zones::{AdhesionZone, get_zone_color};
 use crate::simulation::CanonicalState;
-use crate::simulation::signal_system;
 use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 

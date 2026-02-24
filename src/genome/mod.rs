@@ -109,6 +109,8 @@ pub struct ModeSettings {
     pub mode_b_after_splits: i32, // Mode that Child B transitions to when max_splits is reached (-1 = use normal child_b mode)
     pub child_a_after_split_orientation: Quat, // Orientation for Child A when max_splits is reached
     pub child_b_after_split_orientation: Quat, // Orientation for Child B when max_splits is reached
+    pub child_a_after_split_keep_adhesion: bool, // Whether Child A keeps adhesion when max_splits is reached
+    pub child_b_after_split_keep_adhesion: bool, // Whether Child B keeps adhesion when max_splits is reached
     
     // Glueocyte settings
     pub glueocyte_cell_adhesion: bool, // Whether this Glueocyte bonds to other cells on contact
@@ -183,6 +185,8 @@ impl Default for ModeSettings {
             mode_b_after_splits: -1, // Use normal child_b mode by default
             child_a_after_split_orientation: Quat::IDENTITY, // Default orientation for Child A after max splits
             child_b_after_split_orientation: Quat::IDENTITY, // Default orientation for Child B after max splits
+            child_a_after_split_keep_adhesion: true, // Default: keep adhesion for Child A after max splits
+            child_b_after_split_keep_adhesion: true, // Default: keep adhesion for Child B after max splits
             glueocyte_cell_adhesion: true,  // Default: cell adhesion enabled
             glueocyte_env_adhesion: false,     // Default: environment adhesion disabled
             swim_force: 0.5, // Default swim force for flagellocytes

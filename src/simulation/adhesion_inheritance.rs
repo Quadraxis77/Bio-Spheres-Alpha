@@ -23,6 +23,7 @@ pub fn inherit_adhesions_on_division(
     child_b_idx: usize,
     parent_genome_orientation: Quat,
     current_time: f32,
+    parent_split_count: i32,
 ) {
     // Get parent mode settings
     let parent_mode = match genome.modes.get(parent_mode_idx) {
@@ -31,8 +32,18 @@ pub fn inherit_adhesions_on_division(
     };
     
     // Check if children keep adhesions
-    let child_a_keep = parent_mode.child_a.keep_adhesion;
-    let child_b_keep = parent_mode.child_b.keep_adhesion;
+    // Use after splits settings when max splits is reached
+    let will_reach_max_splits = parent_mode.max_splits >= 0 && (parent_split_count + 1) >= parent_mode.max_splits;
+    let child_a_keep = if will_reach_max_splits {
+        parent_mode.child_a_after_split_keep_adhesion
+    } else {
+        parent_mode.child_a.keep_adhesion
+    };
+    let child_b_keep = if will_reach_max_splits {
+        parent_mode.child_b_after_split_keep_adhesion
+    } else {
+        parent_mode.child_b.keep_adhesion
+    };
     
     log::debug!(
         "inherit_adhesions_on_division: parent_mode={}, child_a_idx={}, child_b_idx={}, child_a_keep={}, child_b_keep={}",

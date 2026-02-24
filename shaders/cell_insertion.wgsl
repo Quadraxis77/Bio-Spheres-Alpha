@@ -197,31 +197,35 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let ring_idx = head % 262144u; // RING_BUFFER_CAPACITY
         slot = free_slot_ring[ring_idx];
         used_free_slot = true;
-        
+
         // Mark this slot as alive again
         death_flags[slot] = 0u;
     } else {
         // Ring buffer empty, undo the head increment
         atomicSub(&ring_state[0], 1u);
-        
+
         // Allocate new slot using ring_state[2] (next_slot_id)
         slot = atomicAdd(&ring_state[2], 1u);
-        
+
         // Check capacity
         if (slot >= params.cell_capacity) {
             // Rollback and fail
             atomicSub(&ring_state[2], 1u);
             return;
         }
-        
-        // Update total cell count (high water mark)
-        atomicMax(&cell_count_buffer[0], slot + 1u);
     }
-    
+
     // Ensure slot is within bounds
     if (slot >= params.cell_capacity) {
         return;
     }
+
+    // Update total cell count (high water mark) unconditionally.
+    // This is critical for recycled slots: after a GPU reset (cell_count_buffer zeroed),
+    // a recycled slot's index may exceed the current high-water mark of 0.
+    // Without this, lifecycle shaders (death_scan, division_scan) would iterate
+    // 0 cells and never process the newly inserted cell.
+    atomicMax(&cell_count_buffer[0], slot + 1u);
     
     // Initialize position and mass in ALL THREE triple buffer sets
     let position_mass = vec4<f32>(

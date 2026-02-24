@@ -432,7 +432,7 @@ impl CellType {
                 _padding: [0; 9],
             },
             CellType::Flagellocyte => GpuCellTypeBehaviorFlags {
-                ignores_split_interval: 1,
+                ignores_split_interval: 0,  // Respect split interval
                 applies_swim_force: 1,
                 uses_texture_atlas: 0,
                 has_procedural_tail: 1,

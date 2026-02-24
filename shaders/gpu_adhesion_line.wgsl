@@ -112,17 +112,25 @@ fn vs_main(
     let pos_b = positions[connection.cell_b_index].xyz;
     let midpoint = (pos_a + pos_b) * 0.5;
     
-    // Signal outline color: yellow only when signal actually flowed through this bond
-    // This happens when one cell is a signal source (direction flag = 1) and the other is propagated (direction flag = 0)
+    // Signal outline color: yellow only when signal actually flowed through this bond.
+    // Both endpoints having signal is not sufficient — two 1-hop neighbours of the same
+    // source both have signal but the connection between them was never traversed.
+    // Instead, signal flowed along this bond only if the hop counts differ by exactly 1
+    // (the upstream cell has one more remaining hop than the downstream cell).
     let signal_a = atomicLoad(&signal_flags[connection.cell_a_index]);
     let signal_b = atomicLoad(&signal_flags[connection.cell_b_index]);
-    
-    // Decode signal values — check lower 11 bits for non-zero value
+
+    // Decode hop counts (bits 11-15) and values (bits 0-10)
+    let hops_a = (signal_a >> 11u) & 31u;
+    let hops_b = (signal_b >> 11u) & 31u;
     let value_a = signal_a & 2047u;
     let value_b = signal_b & 2047u;
-    
-    // Signal passed through this bond if both endpoints have signal values.
-    let signal_flowed_through = (value_a != 0u) && (value_b != 0u);
+
+    // Signal flowed along this bond if both ends have signal and their hop counts
+    // differ by exactly 1 (one is exactly one step upstream of the other).
+    let both_have_signal = (value_a != 0u) && (value_b != 0u);
+    let hops_differ_by_one = (hops_a == hops_b + 1u) || (hops_b == hops_a + 1u);
+    let signal_flowed_through = both_have_signal && hops_differ_by_one;
     
     var sig_color: vec4<f32>;
     if (signal_flowed_through) {

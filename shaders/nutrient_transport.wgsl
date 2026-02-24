@@ -272,7 +272,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (cell_b_idx >= cell_count || death_flags[cell_b_idx] == 1u) {
             continue;
         }
-        if (is_cell_blocked_from_nutrients(cell_idx) || is_cell_blocked_from_nutrients(cell_b_idx)) {
+        // Only block the sending cell (cell_a = cell_idx) if it is split-deferred.
+        // Never block a cell from *receiving* — a starving receiver must always be reachable.
+        if (is_cell_blocked_from_nutrients(cell_idx)) {
             continue;
         }
         active_conn_count++;
@@ -304,9 +306,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
         
-        // Check if either cell should be blocked from nutrient transfer due to split attempt delay
-        if (is_cell_blocked_from_nutrients(cell_idx) || is_cell_blocked_from_nutrients(cell_b_idx)) {
-            continue; // Skip nutrient transfer for blocked cells
+        // Only block the sending cell (cell_a = cell_idx) if it is split-deferred.
+        // cell_b may be split-deferred and still legitimately receive nutrients.
+        if (is_cell_blocked_from_nutrients(cell_idx)) {
+            continue;
         }
 
         if (death_flags[cell_b_idx] == 1u) {

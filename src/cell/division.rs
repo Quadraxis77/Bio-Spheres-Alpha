@@ -437,15 +437,29 @@ pub fn division_step(
                 data.child_b_slot,
                 data.parent_genome_orientation,
                 current_time,
+                data.parent_split_count,
             );
             
             // Create adhesion between children if parent_make_adhesion is enabled
-            // keep_adhesion only affects inheritance from parent, NOT child-to-child adhesion
+            // AND both children have keep_adhesion set. If either child has keep_adhesion
+            // disabled, the child-to-child bond must not form even if parent_make_adhesion is on.
             let parent_mode = genome.modes.get(data.parent_mode_idx);
-            
+
             if let Some(mode) = parent_mode {
-                // Only parent_make_adhesion controls child-to-child adhesion creation
-                if mode.parent_make_adhesion {
+                let will_reach_max_splits = mode.max_splits >= 0
+                    && (data.parent_split_count + 1) >= mode.max_splits;
+                let child_a_keep = if will_reach_max_splits {
+                    mode.child_a_after_split_keep_adhesion
+                } else {
+                    mode.child_a.keep_adhesion
+                };
+                let child_b_keep = if will_reach_max_splits {
+                    mode.child_b_after_split_keep_adhesion
+                } else {
+                    mode.child_b.keep_adhesion
+                };
+
+                if mode.parent_make_adhesion && child_a_keep && child_b_keep {
                         // Calculate anchor directions based on compounded genome orientations (matches Python reference)
                         // Python: angle1_relative = (spawn_direction + math.pi) - daughter1.arrow_direction
                         // Python: angle2_relative = spawn_direction - daughter2.arrow_direction
@@ -895,13 +909,28 @@ pub fn division_step_multi(
                 data.child_b_slot,
                 data.parent_genome_orientation,
                 current_time,
+                data.parent_split_count,
             );
             
             // Create adhesion between children if parent_make_adhesion is enabled
+            // AND both children have keep_adhesion set.
             let parent_mode = genome.modes.get(data.parent_mode_idx);
-            
+
             if let Some(mode) = parent_mode {
-                if mode.parent_make_adhesion {
+                let will_reach_max_splits = mode.max_splits >= 0
+                    && (data.parent_split_count + 1) >= mode.max_splits;
+                let child_a_keep = if will_reach_max_splits {
+                    mode.child_a_after_split_keep_adhesion
+                } else {
+                    mode.child_a.keep_adhesion
+                };
+                let child_b_keep = if will_reach_max_splits {
+                    mode.child_b_after_split_keep_adhesion
+                } else {
+                    mode.child_b.keep_adhesion
+                };
+
+                if mode.parent_make_adhesion && child_a_keep && child_b_keep {
                     let direction_a_to_b_parent_local = -data.split_direction_local;
                     let direction_b_to_a_parent_local = data.split_direction_local;
                     

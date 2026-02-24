@@ -313,7 +313,7 @@ pub fn apply_swim_forces(state: &mut CanonicalState, genome: &Genome) {
 /// These cells should be removed from the simulation.
 /// 
 /// # Physics
-/// - Consumption rate: swim_force * 10.0 * dt (10 nutrients per second at full swim force)
+/// - Consumption rate: swim_force * 5.0 * dt (5 nutrients per second at full swim force)
 /// - Death threshold: nutrients < 1.0
 /// - Mass and radius are derived from nutrients: mass = 1.0 + nutrients/100.0
 /// - Only applies to cells with cell_type == 1 (Flagellocyte) and swim_force > 0.0
@@ -325,8 +325,8 @@ pub fn consume_swim_nutrients(
     const DEATH_NUTRIENT_THRESHOLD: f32 = 1.0;
     // Fixed consumption rate - NOT adjustable by user
     // This creates a direct tradeoff: faster swimming = higher nutrient cost
-    // Rate: 2.0 nutrients/sec at swim_force=1.0, 6.0/sec at swim_force=3.0
-    const CONSUMPTION_RATE: f32 = 2.0;
+    // Rate: 1.0 nutrients/sec at swim_force=1.0, 3.0/sec at swim_force=3.0
+    const CONSUMPTION_RATE: f32 = 1.0;
     
     let mut cells_to_remove = Vec::new();
     
@@ -457,7 +457,7 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
     const DANGER_THRESHOLD: f32 = 0.6;
     const PRIORITY_BOOST: f32 = 10.0;
     /// Max nutrients/sec a cell can send OR receive in total across all connections.
-    const TRANSPORT_RATE: f32 = 20.0;
+    const TRANSPORT_RATE: f32 = 30.0;
     /// Lerp factor: how quickly flow tracks the pressure-diff target (per second).
     /// Lower = smoother/slower response, higher = faster but more oscillation risk.
     const LERP_SPEED: f32 = 999.0;
@@ -496,12 +496,12 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         let nutrients_a = state.nutrients[cell_a];
         let nutrients_b = state.nutrients[cell_b];
 
-        let priority_a = if mode_a.prioritize_when_low && nutrients_a < DANGER_THRESHOLD * 100.0 {
+        let priority_a = if mode_a.prioritize_when_low && nutrients_a < 10.0 {
             mode_a.nutrient_priority * PRIORITY_BOOST
         } else {
             mode_a.nutrient_priority
         };
-        let priority_b = if mode_b.prioritize_when_low && nutrients_b < DANGER_THRESHOLD * 100.0 {
+        let priority_b = if mode_b.prioritize_when_low && nutrients_b < 10.0 {
             mode_b.nutrient_priority * PRIORITY_BOOST
         } else {
             mode_b.nutrient_priority
@@ -524,7 +524,7 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         }
     }
 
-    // Pass 3: apply lerped, scaled transfers.
+    // Pass 3: apply lerped, scaled transfers with transport-rate-adjusted pressure.
     let mut nutrient_deltas = vec![0.0f32; n];
     let lerp_t = (LERP_SPEED * dt).min(1.0);
 
@@ -532,7 +532,11 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         let cell_a = cf.cell_a;
         let cell_b = cf.cell_b;
 
-        // Scale outflow so the sending cell never exceeds TRANSPORT_RATE total
+        // Scale outflow so the sending cell never exceeds TRANSPORT_RATE total.
+        // This proportionally reduces each connection's flow so that the sender's
+        // combined outflow across all connections stays within TRANSPORT_RATE.
+        // No separate saturation factor is applied — that would double-throttle and
+        // zero out flow entirely when total_out >= TRANSPORT_RATE, starving receivers.
         let scale = if cf.desired > 0.0 && total_out[cell_a] > TRANSPORT_RATE {
             TRANSPORT_RATE / total_out[cell_a]
         } else if cf.desired < 0.0 && total_out[cell_b] > TRANSPORT_RATE {

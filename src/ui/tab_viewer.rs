@@ -1428,6 +1428,8 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     mode_b_after_splits: -1,
                     child_a_after_split_orientation: glam::Quat::IDENTITY,
                     child_b_after_split_orientation: glam::Quat::IDENTITY,
+                    child_a_after_split_keep_adhesion: true,
+                    child_b_after_split_keep_adhesion: true,
                     glueocyte_cell_adhesion: true,
                     glueocyte_env_adhesion: false,
                     swim_force: 0.5,
@@ -1817,16 +1819,6 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::Slider::new(&mut mode.nutrient_gain_rate, 0.0..=20.0).show_value(false));
                         ui.add(egui::DragValue::new(&mut mode.nutrient_gain_rate).speed(0.01).range(0.0..=20.0).suffix("/s"));
                     });
-                    
-                    ui.add_space(4.0);
-                    ui.label("Split Interval:");
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.split_interval, 1.0..=60.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.split_interval).speed(0.1).range(1.0..=60.0).suffix("s"));
-                    });
                 });
             } else if mode.cell_type == 6 { // Glueocyte (cell_type == 6)
                 group_container(ui, "Glueocyte Functions", egui::Color32::from_rgb(140, 200, 140), |ui| {
@@ -1996,6 +1988,16 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.style_mut().spacing.slider_width = slider_width;
                     ui.add(egui::Slider::new(&mut mode.split_ratio, 0.0..=1.0).show_value(false));
                     ui.add(egui::DragValue::new(&mut mode.split_ratio).speed(0.01).range(0.0..=1.0));
+                });
+
+                ui.add_space(4.0);
+                ui.label("Split Interval:");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.split_interval, 1.0..=60.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.split_interval).speed(0.1).range(1.0..=60.0).suffix("s"));
                 });
 
                 ui.add_space(4.0);
@@ -2223,6 +2225,17 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                 &mut context.editor_state.child_b_split_locked_axis,
                                 &mut context.editor_state.child_b_split_initial_distance,
                             );
+                        });
+                    });
+                    
+                    // Keep adhesion toggles under quaternion balls
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.checkbox(&mut mode.child_a_after_split_keep_adhesion, "Keep Adhesion");
+                        });
+                        ui.vertical(|ui| {
+                            ui.checkbox(&mut mode.child_b_after_split_keep_adhesion, "Keep Adhesion");
                         });
                     });
                 }
