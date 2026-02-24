@@ -691,6 +691,7 @@ pub fn physics_step_with_genome(
     genome: &Genome,
     config: &PhysicsConfig,
     current_time: f32,
+    test_signals: Option<&[crate::simulation::signal_system::SignalEmission]>,
 ) -> Vec<DivisionEvent> {
     let dt = config.fixed_timestep;
 
@@ -792,6 +793,13 @@ pub fn physics_step_with_genome(
     // Run signal system (oculocyte sensing + BFS propagation)
     let boundary_radius = config.sphere_radius;
     crate::simulation::signal_system::run_signal_system(state, genome, boundary_radius);
+
+    // Apply persistent test signals (if any) after normal signal system
+    if let Some(test_signals) = test_signals {
+        if !test_signals.is_empty() {
+            crate::simulation::signal_system::propagate_test_signals(state, genome, test_signals.to_vec());
+        }
+    }
 
     let max_cells = state.capacity;
     let rng_seed = 12345;

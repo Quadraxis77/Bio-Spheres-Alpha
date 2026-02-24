@@ -74,6 +74,10 @@ pub struct App {
     performance: PerformanceMetrics,
     /// Next frame time for 60fps limiting
     next_frame_time: std::time::Instant,
+    /// Active test signal emissions (toggleable)
+    test_signal_emissions: Vec<crate::simulation::signal_system::SignalEmission>,
+    /// Flag to trigger resimulation when test signals change
+    test_signals_changed: bool,
     device: wgpu::Device,
     surface: wgpu::Surface<'static>,
 }
@@ -104,6 +108,8 @@ impl App {
             working_genome: crate::genome::Genome::default(),
             performance: PerformanceMetrics::new(),
             next_frame_time: std::time::Instant::now(),
+            test_signal_emissions: Vec::new(),
+            test_signals_changed: false,
             device,
             surface,
         }
@@ -1022,8 +1028,26 @@ impl App {
                                     ui.separator();
 
                                     if is_oculocyte {
-                                        if ui.button("Send Test Signal").clicked() {
-                                            send_test_signal = true;
+                                        // Check if this cell already has an active test signal
+                                        let has_active_signal = self.test_signal_emissions.iter()
+                                            .any(|emission| emission.source_cell == cell_idx);
+                                        
+                                        let button_text = if has_active_signal { 
+                                            "Stop Test Signal" 
+                                        } else { 
+                                            "Send Test Signal" 
+                                        };
+                                        
+                                        if ui.button(button_text).clicked() {
+                                            if has_active_signal {
+                                                // Remove the signal (toggle off)
+                                                self.test_signal_emissions.retain(|emission| emission.source_cell != cell_idx);
+                                                log::info!("Stopped test signal from cell {}", cell_idx);
+                                                self.test_signals_changed = true;
+                                            } else {
+                                                // Add the signal (toggle on)
+                                                send_test_signal = true;
+                                            }
                                             close_menu = true;
                                         }
                                     }
@@ -1064,13 +1088,11 @@ impl App {
                                 value: signal_value,
                                 hops: signal_hops,
                             };
-                            crate::simulation::signal_system::clear_all_signals(&mut preview_scene.state.display_state);
-                            crate::simulation::signal_system::propagate_test_signals(
-                                &mut preview_scene.state.display_state,
-                                vec![emission],
-                            );
-                            log::info!("Sent test signal from cell {} on channel {} (value={}, hops={})",
+                            // Add to persistent test signal emissions
+                            self.test_signal_emissions.push(emission);
+                            log::info!("Started test signal from cell {} on channel {} (value={}, hops={})",
                                 cell_idx, signal_channel, signal_value, signal_hops);
+                            self.test_signals_changed = true;
                         }
 
                         if close_menu {
@@ -1104,6 +1126,16 @@ impl App {
                     
                     // Bidirectional sync: genome panel selection → preview highlight
                     preview_scene.selected_mode_index = Some(self.editor_state.selected_mode_index);
+                    
+                    // Sync test signals to preview scene (must happen before resimulation trigger)
+                    preview_scene.test_signals = self.test_signal_emissions.clone();
+                    
+                    // Trigger resimulation if test signals changed
+                    if self.test_signals_changed {
+                        let current_time = preview_scene.state.display_time;
+                        preview_scene.state.seek_to_time(current_time);
+                        self.test_signals_changed = false;
+                    }
                 }
             }
             

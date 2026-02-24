@@ -5,7 +5,6 @@
 
 use crate::genome::Genome;
 use crate::simulation::CanonicalState;
-use crate::simulation::PhysicsConfig;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -300,10 +299,12 @@ impl PreviewState {
     /// while `work_state` catches up. When complete, work is promoted to display.
     ///
     /// Returns true when resim is complete, false when more work remains.
-    pub fn run_resimulation(
+    pub fn step_to(
         &mut self,
+        _target_time: f32,
         genome: &Genome,
-        config: &PhysicsConfig,
+        config: &crate::simulation::physics_config::PhysicsConfig,
+        test_signals: &[crate::simulation::signal_system::SignalEmission],
     ) -> bool {
         let Some(target_time) = self.target_time else {
             self.is_resimulating = false;
@@ -361,7 +362,9 @@ impl PreviewState {
                 genome,
                 config,
                 sim_time,
+                Some(test_signals),
             );
+            
             steps_run += 1;
             
             // Checkpoint at intervals
@@ -387,5 +390,13 @@ impl PreviewState {
         self.target_time = None;
         self.is_resimulating = false;
         true
+    }
+
+    /// Run incremental resimulation toward target time.
+    /// This is a convenience method that calls step_to with the current target time.
+    pub fn run_resimulation(&mut self, genome: &Genome, config: &crate::simulation::physics_config::PhysicsConfig, test_signals: &[crate::simulation::signal_system::SignalEmission]) {
+        if let Some(target_time) = self.target_time {
+            self.step_to(target_time, genome, config, test_signals);
+        }
     }
 }

@@ -43,6 +43,8 @@ pub struct PreviewScene {
     pub selected_mode_index: Option<usize>,
     /// Right-click context menu: cell index that was right-clicked (None = menu closed)
     pub context_menu_cell: Option<usize>,
+    /// Active test signal emissions (toggleable)
+    pub test_signals: Vec<crate::simulation::signal_system::SignalEmission>,
     /// Screen position where right-click occurred (for egui popup placement, in logical points)
     pub context_menu_screen_pos: (f32, f32),
     /// Time when context menu was opened (to avoid closing on same click)
@@ -89,6 +91,7 @@ impl PreviewScene {
             show_adhesion_lines: true,
             selected_mode_index: None,
             context_menu_cell: None,
+            test_signals: Vec::new(),
             context_menu_screen_pos: (0.0, 0.0),
             context_menu_open_time: std::time::Instant::now(),
         }
@@ -150,7 +153,7 @@ impl Scene for PreviewScene {
         
         // Run incremental resimulation if there's a pending seek or ongoing work
         if self.state.target_time.is_some() || self.state.is_resimulating {
-            self.state.run_resimulation(&self.genome, &self.config);
+            self.state.run_resimulation(&self.genome, &self.config, &self.test_signals);
         }
     }
 

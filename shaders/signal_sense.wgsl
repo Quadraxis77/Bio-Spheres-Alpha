@@ -272,7 +272,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     if (detected) {
-        // Write signal value: hops + 1 (value > 0 means "has signal", value > 1 means "propagates further")
-        signal_flags[idx] = signal_hops + 1u;
+        // Accumulate signal value: add (hops + 1) to existing signal
+        // This allows multiple oculocytes of the same mode to stack their signals
+        let signal_value = signal_hops + 1u;
+        atomicAdd(&signal_flags[idx], signal_value);
     }
 }

@@ -1277,7 +1277,7 @@ impl GpuPhysicsPipelines {
             self.create_signal_sense_cell_data_bind_group(device, buffers, 1),
             self.create_signal_sense_cell_data_bind_group(device, buffers, 2),
         ];
-        let signal_propagate_adhesion = self.create_signal_propagate_adhesion_bind_group(device, adhesion_buffers);
+        let signal_propagate_adhesion = self.create_signal_propagate_adhesion_bind_group(device, adhesion_buffers, buffers);
         let signal_sense_world_data = self.create_signal_sense_world_data_bind_group(
             device,
             signal_sense_world_params_buffer,
@@ -4708,6 +4708,7 @@ impl GpuPhysicsPipelines {
 
     /// Signal propagate adhesion bind group layout (Group 1 for signal_propagate)
     /// binding 0: adhesion_connections (read), binding 1: cell_adhesion_indices (read)
+    /// binding 2: mode_indices (read), binding 3: mode_cell_types (read)
     fn create_signal_propagate_adhesion_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Signal Propagate Adhesion Bind Group Layout"),
@@ -4724,6 +4725,26 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -4802,6 +4823,7 @@ impl GpuPhysicsPipelines {
         &self,
         device: &wgpu::Device,
         adhesion_buffers: &super::AdhesionBuffers,
+        buffers: &super::GpuTripleBufferSystem,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Signal Propagate Adhesion Bind Group"),
@@ -4814,6 +4836,14 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: adhesion_buffers.cell_adhesion_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.mode_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffers.mode_cell_types.as_entire_binding(),
                 },
             ],
         })

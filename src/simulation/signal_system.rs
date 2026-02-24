@@ -14,8 +14,10 @@ use crate::genome::Genome;
 use crate::simulation::canonical_state::CanonicalState;
 use std::collections::VecDeque;
 
-/// Number of signal channels per cell
+/// Number of signal channels (0-15)
 pub const SIGNAL_CHANNELS: usize = 16;
+/// Signal attenuation factor per hop (signals lose this fraction per hop)
+pub const SIGNAL_ATTENUATION_PER_HOP: f32 = 0.8; // 80% signal strength retained per hop
 
 /// Oculocyte sense types
 pub const SENSE_CELL: i32 = 0;
@@ -36,6 +38,7 @@ pub fn clear_all_signals(state: &mut CanonicalState) {
 }
 
 /// A pending signal emission from an oculocyte or test button.
+#[derive(Clone)]
 pub struct SignalEmission {
     /// Cell index of the emitter
     pub source_cell: usize,
@@ -163,21 +166,28 @@ fn sense_barrier_ray(
 /// Propagate signal emissions through adhesion connections using BFS.
 /// Each emission starts at the source cell and floods outward for `hops` steps.
 /// Signals are additive — multiple sources on the same channel sum their values.
+/// Signal senders (oculocytes) are immune to receiving signals that would alter their output.
 pub fn propagate_signals(
     state: &mut CanonicalState,
+    genome: &Genome,
     emissions: &[SignalEmission],
 ) {
     if emissions.is_empty() {
         return;
     }
 
-    // BFS queue: (cell_index, remaining_hops)
-    let mut queue: VecDeque<(usize, usize)> = VecDeque::new();
+    // BFS queue: (cell_index, remaining_hops, signal_strength)
+    let mut queue: VecDeque<(usize, usize, f32)> = VecDeque::new();
     // Track visited cells per emission to avoid re-visiting in the same BFS
     let mut visited: Vec<bool> = vec![false; state.cell_count];
 
     for emission in emissions {
-        // Write signal to source cell first
+        // Check bounds before writing signal to source cell
+        if emission.source_cell >= state.cell_count {
+            continue;
+        }
+        
+        // Write signal to source cell first (full strength)
         add_signal(state, emission.source_cell, emission.channel, emission.value);
 
         // BFS from source
@@ -185,29 +195,44 @@ pub fn propagate_signals(
         for v in visited.iter_mut().take(state.cell_count) {
             *v = false;
         }
-        visited[emission.source_cell] = true;
+        // Check bounds before accessing visited array
+        if emission.source_cell < state.cell_count {
+            visited[emission.source_cell] = true;
+        } else {
+            continue; // Skip this emission
+        }
         queue.clear();
 
-        // Seed BFS with neighbors of source
+        // Seed BFS with neighbors of source (first hop gets attenuated signal)
+        let attenuated_strength = emission.value * SIGNAL_ATTENUATION_PER_HOP;
         let neighbors = get_adhesion_neighbors(state, emission.source_cell);
         for neighbor in neighbors {
             if neighbor < state.cell_count && !visited[neighbor] {
-                visited[neighbor] = true;
-                queue.push_back((neighbor, emission.hops - 1));
+                // Skip signal senders - they are immune to receiving signals
+                if !is_signal_sender(state, genome, neighbor, emissions) {
+                    visited[neighbor] = true;
+                    queue.push_back((neighbor, emission.hops - 1, attenuated_strength));
+                }
             }
         }
 
-        while let Some((cell_idx, remaining_hops)) = queue.pop_front() {
-            // Write signal to this cell
-            add_signal(state, cell_idx, emission.channel, emission.value);
+        while let Some((cell_idx, remaining_hops, signal_strength)) = queue.pop_front() {
+            // Write attenuated signal to this cell (skip if signal sender)
+            if !is_signal_sender(state, genome, cell_idx, emissions) {
+                add_signal(state, cell_idx, emission.channel, signal_strength);
+            }
 
             // Continue BFS if hops remain
             if remaining_hops > 0 {
+                let next_strength = signal_strength * SIGNAL_ATTENUATION_PER_HOP;
                 let neighbors = get_adhesion_neighbors(state, cell_idx);
                 for neighbor in neighbors {
                     if neighbor < state.cell_count && !visited[neighbor] {
-                        visited[neighbor] = true;
-                        queue.push_back((neighbor, remaining_hops - 1));
+                        // Skip signal senders - they are immune to receiving signals
+                        if !is_signal_sender(state, genome, neighbor, emissions) {
+                            visited[neighbor] = true;
+                            queue.push_back((neighbor, remaining_hops - 1, next_strength));
+                        }
                     }
                 }
             }
@@ -215,6 +240,21 @@ pub fn propagate_signals(
     }
 
     state.has_any_signal = true;
+}
+
+/// Check if a cell is a signal sender (oculocyte or test signal source).
+/// Signal senders are immune to receiving signals that would alter their own output.
+fn is_signal_sender(state: &CanonicalState, genome: &Genome, cell_idx: usize, test_emissions: &[SignalEmission]) -> bool {
+    // Check if this cell is an oculocyte
+    let mode_idx = state.mode_indices[cell_idx];
+    if let Some(mode) = genome.modes.get(mode_idx) {
+        if mode.cell_type == OCULOCYTE_TYPE {
+            return true;
+        }
+    }
+    
+    // Check if this cell is a test signal source
+    test_emissions.iter().any(|emission| emission.source_cell == cell_idx)
 }
 
 /// Add a signal value to a cell's channel (additive).
@@ -285,14 +325,15 @@ pub fn run_signal_system(
 ) {
     clear_all_signals(state);
     let emissions = sense_oculocytes(state, genome, boundary_radius);
-    propagate_signals(state, &emissions);
+    propagate_signals(state, genome, &emissions);
 }
 
 /// Run signal propagation with manually-provided emissions (for test buttons).
 /// Does NOT clear signals first — call clear_all_signals() separately if needed.
 pub fn propagate_test_signals(
     state: &mut CanonicalState,
+    genome: &Genome,
     emissions: Vec<SignalEmission>,
 ) {
-    propagate_signals(state, &emissions);
+    propagate_signals(state, genome, &emissions);
 }
