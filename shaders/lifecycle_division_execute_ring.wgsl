@@ -409,47 +409,46 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Buffer is now 5 vec4s per mode (20 floats = 80 bytes)
     let parent_split_ratio = mode_properties[parent_mode_idx * 5u + 2u].y;
     
-    // Read child orientations and split orientations from genome mode data
-    // genome_mode_data now has 20 floats per mode: [child_a, child_b, child_a_split, child_b_split, split_dir]
+    // Read child orientations and split orientations from genome mode data.
+    // Layout: [child_a (vec4), child_b (vec4), child_a_split (vec4), child_b_split (vec4),
+    //          split_rotation_quat (vec4 XYZW)]
+    // Slot 4 is the pre-computed split rotation quaternion from_euler(YXZ, yaw, pitch, 0).
+    // It is NOT a direction vector — do not reconstruct via quat_from_z_to_dir().
     let child_a_orientation = genome_mode_data[parent_mode_idx * 5u];
     let child_b_orientation = genome_mode_data[parent_mode_idx * 5u + 1u];
     let child_a_split_orientation = genome_mode_data[parent_mode_idx * 5u + 2u];
     let child_b_split_orientation = genome_mode_data[parent_mode_idx * 5u + 3u];
-    let split_direction_local = genome_mode_data[parent_mode_idx * 5u + 4u].xyz;
-    
+    let split_rotation_quat = genome_mode_data[parent_mode_idx * 5u + 4u]; // full quaternion, XYZW
+
+    // Derive the local-space split direction from the quaternion (rotate Z by split_rotation).
+    // This is used only for child positioning and zone classification.
+    let split_dir_local = rotate_vector_by_quat(vec3<f32>(0.0, 0.0, 1.0), split_rotation_quat);
+
     // Check if max_splits is reached and use split orientations if so
     let will_reach_max_splits = (max_splits[cell_idx] != 0xFFFFFFFFu) && ((parent_split_count + 1u) >= max_splits[cell_idx]);
-    
+
     let child_a_orientation_final = select(child_a_orientation, child_a_split_orientation, will_reach_max_splits);
     let child_b_orientation_final = select(child_b_orientation, child_b_split_orientation, will_reach_max_splits);
-    
-    // Compute split rotation quaternion from split direction vector
-    // split_direction_local = split_rotation * Z, so reconstruct the quaternion
-    var split_dir_local = split_direction_local;
-    if (length(split_dir_local) < 0.0001) {
-        split_dir_local = vec3<f32>(0.0, 0.0, 1.0);
-    }
-    let split_rotation_quat = quat_from_z_to_dir(normalize(split_dir_local));
-    
+
     // Calculate child rotations: parent * split_rotation * child_orientation_final
-    // This compounds the split angle each generation (matching CPU)
+    // Uses the exact quaternion, not a reconstructed approximation.
     let child_a_rotation = quat_multiply(parent_rotation, quat_multiply(split_rotation_quat, child_a_orientation_final));
     let child_b_rotation = quat_multiply(parent_rotation, quat_multiply(split_rotation_quat, child_b_orientation_final));
-    
+
     // Calculate parent radius for offset calculation (derive mass from nutrients)
     let parent_mass = nutrients_to_mass(parent_nutrients);
     let parent_radius = calculate_radius_from_mass(parent_mass);
-    
+
     // Split nutrients using split_ratio from mode (matching CPU)
     let split_ratio = clamp(parent_split_ratio, 0.0, 1.0);
     let child_a_nutrients = parent_nutrients * split_ratio;
     let child_b_nutrients = parent_nutrients * (1.0 - split_ratio);
-    
+
     // Derive child masses from nutrients
     let child_a_mass = nutrients_to_mass(child_a_nutrients);
     let child_b_mass = nutrients_to_mass(child_b_nutrients);
-    
-    // Transform split direction from local to world space
+
+    // Transform split direction from local to world space for child positioning
     let split_dir = normalize(rotate_vector_by_quat(split_dir_local, parent_rotation));
     
     // 75% overlap: offset_distance = parent_radius * 0.25
@@ -637,16 +636,27 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_b_keep = child_b_keep_adhesion_flags[parent_mode_idx] == 1u;
     
     // If neither child keeps adhesions, clear parent's old inherited connections
-    // but preserve the sibling adhesion that was just created
+    // but always preserve the sibling adhesion (if parent_make_adhesion is set).
+    // Also clear child_b's stale indices and rebuild with just the sibling bond.
     if (!child_a_keep && !child_b_keep) {
-        let clear_base = cell_idx * MAX_ADHESIONS_PER_CELL;
+        // Clear child_a (parent slot): deactivate old inherited connections, skip sibling
+        let clear_base_a = cell_idx * MAX_ADHESIONS_PER_CELL;
         for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
-            let adh_idx_signed = cell_adhesion_indices[clear_base + i];
+            let adh_idx_signed = cell_adhesion_indices[clear_base_a + i];
             if (adh_idx_signed >= 0 && u32(adh_idx_signed) != sibling_adhesion_slot) {
                 // Deactivate old inherited connection (not the sibling)
                 adhesion_connections[u32(adh_idx_signed)].is_active = 0u;
-                cell_adhesion_indices[clear_base + i] = -1;
+                cell_adhesion_indices[clear_base_a + i] = -1;
             }
+        }
+        // Clear child_b's stale old indices and repopulate with just the sibling bond.
+        // parent_make_adhesion creates the sibling regardless of keep_adhesion settings.
+        let clear_base_b = child_b_slot * MAX_ADHESIONS_PER_CELL;
+        for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+            cell_adhesion_indices[clear_base_b + i] = -1;
+        }
+        if (sibling_adhesion_slot != 0xFFFFFFFFu) {
+            cell_adhesion_indices[clear_base_b] = i32(sibling_adhesion_slot);
         }
         return;
     }

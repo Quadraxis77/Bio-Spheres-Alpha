@@ -260,20 +260,26 @@ impl GenomeBufferGroup {
             let child_a_split_orientation = mode.child_a_after_split_orientation;
             let child_b_split_orientation = mode.child_b_after_split_orientation;
             
-            // Calculate split direction from pitch/yaw (same as preview scene and triple_buffer.rs)
+            // Compute the exact split rotation quaternion from pitch/yaw using YXZ Euler order.
+            // We send the full quaternion rather than just the direction vector so the GPU
+            // shader can use it directly. Previously the shader reconstructed a quaternion
+            // from the direction vector via quat_from_z_to_dir(), which produces the
+            // shortest-arc rotation (zero roll) — a different quaternion from the YXZ Euler
+            // one even though both map Z to the same direction. That difference caused 20°+
+            // errors in child orientations and adhesion anchor directions.
             let pitch = mode.parent_split_direction.x.to_radians();
             let yaw = mode.parent_split_direction.y.to_radians();
-            let split_dir = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z;
-            
+            let split_quat = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0);
+
             [
                 // Regular child orientations (8 floats)
                 child_a_orientation.x, child_a_orientation.y, child_a_orientation.z, child_a_orientation.w,
                 child_b_orientation.x, child_b_orientation.y, child_b_orientation.z, child_b_orientation.w,
-                // Split orientations (8 floats)  
+                // Split orientations (8 floats)
                 child_a_split_orientation.x, child_a_split_orientation.y, child_a_split_orientation.z, child_a_split_orientation.w,
                 child_b_split_orientation.x, child_b_split_orientation.y, child_b_split_orientation.z, child_b_split_orientation.w,
-                // Split direction (4 floats)
-                split_dir.x, split_dir.y, split_dir.z, 0.0, // Vec3 -> Vec4 with padding
+                // Split rotation quaternion (4 floats) — XYZW order matching glam convention
+                split_quat.x, split_quat.y, split_quat.z, split_quat.w,
             ]
         }).collect();
         

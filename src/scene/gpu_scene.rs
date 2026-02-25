@@ -1103,7 +1103,7 @@ impl GpuScene {
         let mode_count = self.genomes[genome_id].modes.len();
         
         // Update adhesion settings for this genome's modes only
-        self.incremental_sync_adhesion_settings(genome_id, global_start_index, mode_count);
+        self.incremental_sync_adhesion_settings(queue, genome_id, global_start_index, mode_count);
         
         // Clone genome to avoid borrow conflicts
         let genome = self.genomes[genome_id].clone();
@@ -1140,7 +1140,7 @@ impl GpuScene {
     }
     
     /// Incremental sync of adhesion settings for a single genome
-    fn incremental_sync_adhesion_settings(&mut self, genome_id: usize, global_start_index: usize, mode_count: usize) {
+    fn incremental_sync_adhesion_settings(&mut self, queue: &wgpu::Queue, genome_id: usize, global_start_index: usize, mode_count: usize) {
         let genome = &self.genomes[genome_id];
         
         // Create adhesion settings for just this genome's modes
@@ -1166,10 +1166,11 @@ impl GpuScene {
         
         // Update only this genome's portion of the adhesion settings buffer
         if !settings_data.is_empty() {
-            // We need to get the queue from somewhere - this is a limitation of the current design
-            // For now, we'll skip the actual buffer update and just log
-            log::info!("Would update adhesion settings for genome {} at offset {} ({} modes)", 
-                genome_id, global_start_index, mode_count);
+            // Calculate byte offset for this genome's settings
+            let byte_offset = (global_start_index * std::mem::size_of::<crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings>()) as u64;
+            
+            // Write this genome's settings to the appropriate offset in the buffer
+            queue.write_buffer(&self.adhesion_buffers.adhesion_settings, byte_offset, bytemuck::cast_slice(&settings_data));
         }
     }
     

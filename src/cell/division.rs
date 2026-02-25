@@ -459,32 +459,39 @@ pub fn division_step(
                     mode.child_b.keep_adhesion
                 };
 
-                if mode.parent_make_adhesion && child_a_keep && child_b_keep {
+                println!(
+                    "[DIVISION preview] parent={} mode={} make_adhesion={} child_a_keep={} child_b_keep={} will_reach_max_splits={}",
+                    data.parent_idx, data.parent_mode_idx, mode.parent_make_adhesion,
+                    child_a_keep, child_b_keep, will_reach_max_splits
+                );
+
+                // parent_make_adhesion always creates a sibling bond, regardless of keep_adhesion
+                if mode.parent_make_adhesion {
                         // Calculate anchor directions based on compounded genome orientations (matches Python reference)
                         // Python: angle1_relative = (spawn_direction + math.pi) - daughter1.arrow_direction
                         // Python: angle2_relative = spawn_direction - daughter2.arrow_direction
-                        
+
                         // Get the spawn direction from parent's genome orientation + split angle
                         let pitch = mode.parent_split_direction.x.to_radians();
                         let yaw = mode.parent_split_direction.y.to_radians();
                         let split_rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
                         let spawn_direction_quat = data.parent_genome_orientation * split_rotation;
                         let spawn_direction_vec = spawn_direction_quat * Vec3::Z;
-                        
+
                         // Daughter A anchor: points toward Daughter B (opposite spawn direction)
                         let direction_a_to_b = -spawn_direction_vec;
                         // Transform to Daughter A's local genome space
                         let anchor_direction_a = (data.child_a_genome_orientation.inverse() * direction_a_to_b).normalize();
-                        
-                        // Daughter B anchor: points toward Daughter A (same as spawn direction)  
+
+                        // Daughter B anchor: points toward Daughter A (same as spawn direction)
                         let direction_b_to_a = spawn_direction_vec;
                         // Transform to Daughter B's local genome space
                         let anchor_direction_b = (data.child_b_genome_orientation.inverse() * direction_b_to_a).normalize();
-                        
+
                         // Get split directions for zone classification
                         let child_a_mode = genome.modes.get(data.child_a_mode_idx);
                         let child_b_mode = genome.modes.get(data.child_b_mode_idx);
-                        
+
                         let child_a_split_dir = if let Some(m) = child_a_mode {
                             let pitch = m.parent_split_direction.x.to_radians();
                             let yaw = m.parent_split_direction.y.to_radians();
@@ -492,7 +499,7 @@ pub fn division_step(
                         } else {
                             Vec3::Z
                         };
-                        
+
                         let child_b_split_dir = if let Some(m) = child_b_mode {
                             let pitch = m.parent_split_direction.x.to_radians();
                             let yaw = m.parent_split_direction.y.to_radians();
@@ -500,13 +507,19 @@ pub fn division_step(
                         } else {
                             Vec3::Z
                         };
-                        
+
                         // Get split ratios for zone classification
                         let child_a_split_ratio = child_a_mode.map(|m| m.split_ratio).unwrap_or(0.5);
                         let child_b_split_ratio = child_b_mode.map(|m| m.split_ratio).unwrap_or(0.5);
-                        
+
+                        println!(
+                            "[DIVISION preview] -> creating sibling adhesion: child_a={} child_b={} anchor_a={:?} anchor_b={:?}",
+                            data.child_a_slot, data.child_b_slot,
+                            anchor_direction_a, anchor_direction_b
+                        );
+
                         // Create child-to-child connection with parent's mode index
-                        let _ = state.adhesion_manager.add_adhesion_with_directions(
+                        let result = state.adhesion_manager.add_adhesion_with_directions(
                             &mut state.adhesion_connections,
                             data.child_a_slot,
                             data.child_b_slot,
@@ -521,6 +534,11 @@ pub fn division_step(
                             child_b_split_ratio,
                             current_time,
                         );
+                        println!(
+                            "[DIVISION preview] -> adhesion result: {:?}  total_adhesions={}",
+                            result,
+                            state.adhesion_manager.count_active_adhesions(data.child_a_slot)
+                        );
                 } else {
                     // parent_make_adhesion is off: grant 1-second sister immunity so
                     // Glueocyte children don't immediately bond to each other on contact.
@@ -531,6 +549,10 @@ pub fn division_step(
                     state.sister_expiry[data.child_a_slot] = expiry;
                     state.sister_cell_id[data.child_b_slot] = id_a;
                     state.sister_expiry[data.child_b_slot] = expiry;
+                    println!(
+                        "[DIVISION preview] -> make_adhesion=false, sister immunity granted child_a={} child_b={}",
+                        data.child_a_slot, data.child_b_slot
+                    );
                 }
             }
         }

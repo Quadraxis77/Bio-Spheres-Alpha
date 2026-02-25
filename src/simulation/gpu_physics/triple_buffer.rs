@@ -294,9 +294,10 @@ pub struct GpuTripleBufferSystem {
     
 
     
-    /// Genome mode data buffer for division (child orientations, split orientations, split direction)
-    /// Layout per mode: [child_a_orientation (vec4), child_b_orientation (vec4), 
-    ///                  child_a_split_orientation (vec4), child_b_split_orientation (vec4), split_direction (vec4)]
+    /// Genome mode data buffer for division (child orientations, split quaternion)
+    /// Layout per mode: [child_a_orientation (vec4), child_b_orientation (vec4),
+    ///                  child_a_split_orientation (vec4), child_b_split_orientation (vec4),
+    ///                  split_rotation_quat (vec4 XYZW)]
     /// Total size: num_modes * 80 bytes
     pub genome_mode_data: wgpu::Buffer,
     
@@ -921,22 +922,28 @@ impl GpuTripleBufferSystem {
     
     /// Sync genome mode data (child orientations and split orientations) for division shader
     pub fn sync_genome_mode_data(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
-        // Layout per mode: [child_a_orientation (vec4), child_b_orientation (vec4), 
-        //                  child_a_split_orientation (vec4), child_b_split_orientation (vec4), split_direction (vec4)] = 80 bytes
+        // Layout per mode: [child_a_orientation (vec4), child_b_orientation (vec4),
+        //                  child_a_split_orientation (vec4), child_b_split_orientation (vec4),
+        //                  split_rotation_quat (vec4)] = 80 bytes
+        //
+        // NOTE: slot 4 stores the full split *rotation quaternion* (XYZW), NOT a direction vector.
+        // Previously this stored `split_dir = quat * Z` (a direction), and the shader
+        // reconstructed a quaternion via quat_from_z_to_dir(). That reconstruction always
+        // produces the shortest-arc (zero-roll) rotation, which differs from the original
+        // YXZ Euler quaternion and caused 20°+ errors in child orientation and anchors.
         let mut mode_data: Vec<[f32; 20]> = Vec::new();
-        
+
         for genome in genomes {
             for mode in &genome.modes {
                 let qa = mode.child_a.orientation;
                 let qb = mode.child_b.orientation;
                 let qa_split = mode.child_a_after_split_orientation;
                 let qb_split = mode.child_b_after_split_orientation;
-                
-                // Calculate split direction from pitch/yaw (same as preview scene)
+
                 let pitch = mode.parent_split_direction.x.to_radians();
                 let yaw = mode.parent_split_direction.y.to_radians();
-                let split_dir = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z;
-                
+                let split_quat = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0);
+
                 mode_data.push([
                     // Regular child orientations (8 floats)
                     qa.x, qa.y, qa.z, qa.w,
@@ -944,12 +951,12 @@ impl GpuTripleBufferSystem {
                     // Split orientations (8 floats)
                     qa_split.x, qa_split.y, qa_split.z, qa_split.w,
                     qb_split.x, qb_split.y, qb_split.z, qb_split.w,
-                    // Split direction (4 floats)
-                    split_dir.x, split_dir.y, split_dir.z, 0.0,
+                    // Split rotation quaternion (4 floats) — XYZW
+                    split_quat.x, split_quat.y, split_quat.z, split_quat.w,
                 ]);
             }
         }
-        
+
         if !mode_data.is_empty() {
             queue.write_buffer(&self.genome_mode_data, 0, bytemuck::cast_slice(&mode_data));
         }
