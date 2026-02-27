@@ -933,7 +933,7 @@ pub fn division_step_multi(
                 current_time,
                 data.parent_split_count,
             );
-            
+
             // Create adhesion between children if parent_make_adhesion is enabled
             // AND both children have keep_adhesion set.
             let parent_mode = genome.modes.get(data.parent_mode_idx);

@@ -4,17 +4,18 @@ use crate::simulation::canonical_state::CanonicalState;
 use crate::genome::Genome;
 
 /// Handle adhesion inheritance during cell division
-/// 
+///
 /// This function processes all adhesions from the parent cell and determines
 /// which child(ren) should inherit each connection based on zone classification.
-/// 
+///
 /// Zone inheritance rules:
 /// - Zone A: Inherit to child B (adhesions pointing opposite to split direction)
 /// - Zone B: Inherit to child A (adhesions pointing same as split direction)
 /// - Zone C: Inherit to both children (adhesions in equatorial band)
-/// 
+///
 /// CRITICAL: parent_genome_orientation must be the parent's orientation BEFORE division,
 /// since child A overwrites the parent's slot and changes the genome orientation.
+/// parent_genome_orientation is purely genome-derived (state.genome_orientations), never physics.
 pub fn inherit_adhesions_on_division(
     state: &mut CanonicalState,
     genome: &Genome,
@@ -30,7 +31,7 @@ pub fn inherit_adhesions_on_division(
         Some(mode) => mode,
         None => return, // Invalid mode
     };
-    
+
     // Check if children keep adhesions
     // Use after splits settings when max splits is reached
     let will_reach_max_splits = parent_mode.max_splits >= 0 && (parent_split_count + 1) >= parent_mode.max_splits;
@@ -44,12 +45,12 @@ pub fn inherit_adhesions_on_division(
     } else {
         parent_mode.child_b.keep_adhesion
     };
-    
+
     log::debug!(
         "inherit_adhesions_on_division: parent_mode={}, child_a_idx={}, child_b_idx={}, child_a_keep={}, child_b_keep={}",
         parent_mode_idx, child_a_idx, child_b_idx, child_a_keep, child_b_keep
     );
-    
+
     // CRITICAL: Collect parent's adhesion connections BEFORE initializing child indices
     // (since child A reuses parent index, initializing would clear the connections)
     let mut parent_connections = Vec::new();
@@ -59,48 +60,38 @@ pub fn inherit_adhesions_on_division(
             parent_connections.push(connection_idx as usize);
         }
     }
-    
+
     // Initialize adhesion indices for child cells (matches C++ Requirement 10.4)
     // This clears the parent's old adhesion indices
     // MUST happen AFTER collecting parent connections
     state.adhesion_manager.init_cell_adhesion_indices(child_a_idx);
     state.adhesion_manager.init_cell_adhesion_indices(child_b_idx);
-    
-    // Get parent properties
-    let parent_radius = state.radii[child_a_idx];
-    
-    // Calculate split direction from parent mode (in local space)
+
+    // Calculate split rotation from genome only — no physics rotation involved.
     let pitch = parent_mode.parent_split_direction.x.to_radians();
     let yaw = parent_mode.parent_split_direction.y.to_radians();
     let split_rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+    // split_direction_local is in the parent's local genome frame (pure genome data).
     let split_direction_local = split_rotation * Vec3::Z;
-    
-    // Extract split direction and offset for geometric calculations (matching C++)
-    let split_magnitude = split_direction_local.length();
-    let split_dir_parent = if split_magnitude < 0.0001 {
-        Vec3::Z
-    } else {
-        split_direction_local / split_magnitude
-    };
-    let split_offset_magnitude = if split_magnitude < 0.0001 {
-        0.0
-    } else {
-        split_magnitude * 0.5
-    };
-    
+
+    // Split offset: genome-derived direction, fixed magnitude (no physics radius).
+    let split_dir_parent = split_direction_local.normalize_or_zero();
+    // Use 0.5 as a fixed canonical offset (not from state.radii).
+    let split_offset_magnitude = 0.5_f32;
+
     // Process each parent connection
     for &connection_idx in &parent_connections {
         if connection_idx >= state.adhesion_connections.active_count {
             continue;
         }
-        
+
         if state.adhesion_connections.is_active[connection_idx] == 0 {
             continue;
         }
-        
+
         let cell_a_idx = state.adhesion_connections.cell_a_index[connection_idx];
         let cell_b_idx_conn = state.adhesion_connections.cell_b_index[connection_idx];
-        
+
         let (neighbor_idx, parent_is_a) = if cell_a_idx == child_a_idx {
             (cell_b_idx_conn, true)
         } else if cell_b_idx_conn == child_a_idx {
@@ -108,7 +99,7 @@ pub fn inherit_adhesions_on_division(
         } else {
             continue;
         };
-        
+
         let (parent_anchor_direction, neighbor_anchor_direction) = if parent_is_a {
             (
                 state.adhesion_connections.anchor_direction_a[connection_idx],
@@ -120,15 +111,15 @@ pub fn inherit_adhesions_on_division(
                 state.adhesion_connections.anchor_direction_a[connection_idx],
             )
         };
-        
+
         let parent_split_ratio = parent_mode.split_ratio;
         let zone = classify_bond_direction(parent_anchor_direction, split_direction_local, parent_split_ratio);
-        
+
         log::debug!(
             "  Connection {}: neighbor={}, zone={:?}, parent_anchor={:?}, split_dir={:?}",
             connection_idx, neighbor_idx, zone, parent_anchor_direction, split_direction_local
         );
-        
+
         match zone {
             AdhesionZone::ZoneA if child_b_keep => {
                 log::debug!("    -> Inheriting to child B (idx {})", child_b_idx);
@@ -137,17 +128,14 @@ pub fn inherit_adhesions_on_division(
                     genome,
                     child_b_idx,
                     neighbor_idx,
-                    parent_mode_idx,
                     parent_is_a,
                     parent_genome_orientation,
                     parent_anchor_direction,
                     neighbor_anchor_direction,
-                    parent_radius,
-                    state.radii[neighbor_idx],
                     split_rotation * parent_mode.child_b.orientation,
                     split_offset_magnitude,
                     split_dir_parent,
-                    false,
+                    false, // child_b is at -split
                     current_time,
                 );
             }
@@ -158,17 +146,14 @@ pub fn inherit_adhesions_on_division(
                     genome,
                     child_a_idx,
                     neighbor_idx,
-                    parent_mode_idx,
                     parent_is_a,
                     parent_genome_orientation,
                     parent_anchor_direction,
                     neighbor_anchor_direction,
-                    parent_radius,
-                    state.radii[neighbor_idx],
                     split_rotation * parent_mode.child_a.orientation,
                     split_offset_magnitude,
                     split_dir_parent,
-                    true,
+                    true, // child_a is at +split
                     current_time,
                 );
             }
@@ -181,13 +166,10 @@ pub fn inherit_adhesions_on_division(
                         genome,
                         child_b_idx,
                         neighbor_idx,
-                        parent_mode_idx,
                         parent_is_a,
                         parent_genome_orientation,
                         parent_anchor_direction,
                         neighbor_anchor_direction,
-                        parent_radius,
-                        state.radii[neighbor_idx],
                         split_rotation * parent_mode.child_b.orientation,
                         split_offset_magnitude,
                         split_dir_parent,
@@ -202,13 +184,10 @@ pub fn inherit_adhesions_on_division(
                         genome,
                         child_a_idx,
                         neighbor_idx,
-                        parent_mode_idx,
                         parent_is_a,
                         parent_genome_orientation,
                         parent_anchor_direction,
                         neighbor_anchor_direction,
-                        parent_radius,
-                        state.radii[neighbor_idx],
                         split_rotation * parent_mode.child_a.orientation,
                         split_offset_magnitude,
                         split_dir_parent,
@@ -224,99 +203,97 @@ pub fn inherit_adhesions_on_division(
                 log::debug!("    -> Zone B but child_a_keep=false, skipping inheritance");
             }
         }
-        
+
         state.adhesion_connections.is_active[connection_idx] = 0;
     }
 }
 
-/// Create an inherited adhesion connection from parent to child
+/// Create an inherited adhesion connection from parent to child.
+///
+/// Anchor directions are computed geometrically in the parent's local genome frame,
+/// using only genome-derived data (no physics rotations, positions, or radii).
+///
+/// child_orientation_delta: split_rotation * child_x.orientation (genome-only)
+/// parent_genome_orientation: state.genome_orientations[parent] captured before division (genome-only)
+/// split_dir_parent / split_offset_magnitude: from genome mode, fixed constants (no physics)
 #[allow(clippy::too_many_arguments)]
 fn create_inherited_adhesion(
     state: &mut CanonicalState,
     genome: &Genome,
     child_idx: usize,
     neighbor_idx: usize,
-    _mode_index: usize,
     parent_was_a: bool,
     parent_genome_orientation: Quat,
     parent_anchor_direction: Vec3,
-    _neighbor_anchor_direction: Vec3,
-    _parent_radius: f32,
-    _neighbor_radius: f32,
+    _neighbor_anchor_direction_stored: Vec3,
     child_orientation_delta: Quat,
     split_offset_magnitude: f32,
     split_dir_parent: Vec3,
     is_child_a: bool,
     current_time: f32,
 ) {
-    // Get child mode to use its adhesion settings (not parent's)
+    // Get child mode for adhesion rest_length
     let child_mode_idx = state.mode_indices[child_idx];
     let child_mode = match genome.modes.get(child_mode_idx) {
         Some(mode) => mode,
-        None => return, // Invalid mode
+        None => return,
     };
-    
-    // Get rest length from child's mode (not parent's)
     let rest_length = child_mode.adhesion_settings.rest_length;
-    
-    // HARDCODED RADIUS: Use fixed radius value (1.0) to ensure adhesion is completely independent of cell growth
+
+    // Use a fixed canonical radius (not from state.radii) so geometry is physics-independent.
     const FIXED_RADIUS: f32 = 1.0;
     let center_to_center_dist = rest_length + FIXED_RADIUS + FIXED_RADIUS;
-    
-    // Calculate positions in parent frame for geometric anchor placement (MATCHES C++)
+
+    // Child position in parent's local genome frame (genome-derived offset, fixed radius).
     let child_pos_parent_frame = if is_child_a {
-        split_dir_parent * split_offset_magnitude  // Child A at +offset
+        split_dir_parent * split_offset_magnitude
     } else {
-        -split_dir_parent * split_offset_magnitude  // Child B at -offset
+        -split_dir_parent * split_offset_magnitude
     };
+
+    // Neighbor position approximated from the stored anchor direction and fixed distance.
+    // parent_anchor_direction is in the parent's local genome frame.
     let neighbor_pos_parent_frame = parent_anchor_direction * center_to_center_dist;
-    
-    // Child anchor: direction from child to neighbor, transformed by genome orientation
-    let direction_to_neighbor_parent_frame = (neighbor_pos_parent_frame - child_pos_parent_frame).normalize();
-    let child_anchor_direction = (child_orientation_delta.inverse() * direction_to_neighbor_parent_frame).normalize();
-    
-    // Neighbor anchor: direction from neighbor to child, transformed to neighbor's frame
-    let direction_to_child_parent_frame = (child_pos_parent_frame - neighbor_pos_parent_frame).normalize();
+
+    // Child anchor: direction from child toward neighbor, in child's local genome frame.
+    let dir_to_neighbor = (neighbor_pos_parent_frame - child_pos_parent_frame).normalize_or_zero();
+    let child_anchor_direction = (child_orientation_delta.inverse() * dir_to_neighbor).normalize();
+
+    // Neighbor anchor: direction from neighbor toward child, transformed from parent frame
+    // into the neighbor's local genome frame using the genome-relative rotation.
+    // Uses genome orientations only — no physics rotations involved.
+    let dir_to_child = (child_pos_parent_frame - neighbor_pos_parent_frame).normalize_or_zero();
     let neighbor_genome_orientation = state.genome_orientations[neighbor_idx];
+    // relative_rotation converts vectors from parent-genome-local to neighbor-genome-local
     let relative_rotation = neighbor_genome_orientation.inverse() * parent_genome_orientation;
-    let neighbor_anchor_direction = (relative_rotation * direction_to_child_parent_frame).normalize();
-    
-    // Get child and neighbor mode indices for zone classification
-    let child_mode_idx = state.mode_indices[child_idx];
+    let neighbor_anchor_direction = (relative_rotation * dir_to_child).normalize();
+
+    // Mode indices for zone classification
     let neighbor_mode_idx = state.mode_indices[neighbor_idx];
-    
-    // Get split directions from each cell's mode
     let child_mode = genome.modes.get(child_mode_idx);
     let neighbor_mode = genome.modes.get(neighbor_mode_idx);
-    
-    let child_split_dir = if let Some(mode) = child_mode {
-        let pitch = mode.parent_split_direction.x.to_radians();
-        let yaw = mode.parent_split_direction.y.to_radians();
+
+    let child_split_dir = child_mode.map(|m| {
+        let pitch = m.parent_split_direction.x.to_radians();
+        let yaw = m.parent_split_direction.y.to_radians();
         Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z
-    } else {
-        Vec3::Z
-    };
-    
-    let neighbor_split_dir = if let Some(mode) = neighbor_mode {
-        let pitch = mode.parent_split_direction.x.to_radians();
-        let yaw = mode.parent_split_direction.y.to_radians();
+    }).unwrap_or(Vec3::Z);
+
+    let neighbor_split_dir = neighbor_mode.map(|m| {
+        let pitch = m.parent_split_direction.x.to_radians();
+        let yaw = m.parent_split_direction.y.to_radians();
         Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z
-    } else {
-        Vec3::Z
-    };
-    
-    // Get genome orientations for twist references
+    }).unwrap_or(Vec3::Z);
+
+    // Twist references: genome orientations only — never mutated by physics.
     let child_genome_orientation = state.genome_orientations[child_idx];
     let neighbor_genome_orientation_for_twist = state.genome_orientations[neighbor_idx];
-    
-    // Preserve original side assignment: if neighbor was originally cellA, keep them as cellA
-    // Get split ratios for zone classification
+
     let child_split_ratio = child_mode.map(|m| m.split_ratio).unwrap_or(0.5);
     let neighbor_split_ratio = neighbor_mode.map(|m| m.split_ratio).unwrap_or(0.5);
-    
-    // Use child's mode index for the new adhesion (not parent's)
+
     let result = if parent_was_a {
-        // Parent was cellA, neighbor was cellB, so neighbor becomes cellB
+        // Parent was cellA, neighbor was cellB → child becomes cellA
         state.adhesion_manager.add_adhesion_with_directions(
             &mut state.adhesion_connections,
             child_idx,
@@ -333,7 +310,7 @@ fn create_inherited_adhesion(
             current_time,
         )
     } else {
-        // Parent was cellB, neighbor was cellA, so neighbor becomes cellA
+        // Parent was cellB, neighbor was cellA → child becomes cellB
         state.adhesion_manager.add_adhesion_with_directions(
             &mut state.adhesion_connections,
             neighbor_idx,
@@ -350,6 +327,6 @@ fn create_inherited_adhesion(
             current_time,
         )
     };
-    
-    let _ = result; // Suppress unused warning
+
+    let _ = result;
 }
