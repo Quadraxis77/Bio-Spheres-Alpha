@@ -144,6 +144,8 @@ pub struct GpuScene {
     pub gravity: f32,
     /// Gravity mode: 0=X axis, 1=Y axis, 2=Z axis, 3=radial (toward origin)
     pub gravity_mode: u32,
+    /// Number of additional adhesion constraint solver iterations (0 = default single-pass)
+    pub constraint_iterations: u32,
     /// Surface pressure: tangential smoothing strength for radial fluid mode (0.0-1.0)
     pub surface_pressure: f32,
     /// Per-fluid-type lateral flow probabilities for fluid simulation (0.0 to 1.0)
@@ -428,6 +430,7 @@ impl GpuScene {
             lod_debug_colors: false,
             gravity: 0.0,
             gravity_mode: 1, // default Y axis
+            constraint_iterations: 4,
             surface_pressure: 0.5,
             lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
             condensation_probability: 0.1,
@@ -716,6 +719,7 @@ impl GpuScene {
             self.cave_physics_bind_groups.as_ref(),
             &self.adhesion_buffers,
             self.current_cell_count,
+            self.constraint_iterations,
         );
         
         // Increment frame counter for time-based shader logic
@@ -764,6 +768,7 @@ impl GpuScene {
             self.cave_physics_bind_groups.as_ref(),
             &self.adhesion_buffers,
             self.current_cell_count,
+            self.constraint_iterations,
         );
         
         // Copy GPU physics output to instance builder's buffers

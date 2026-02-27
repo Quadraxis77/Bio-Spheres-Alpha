@@ -3242,6 +3242,13 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.label(egui::RichText::new("Pulls fluid toward origin; world boundary is the shell").small());
         ui.add(egui::Slider::new(&mut world.surface_pressure, 0.0..=1.0).text("Surface Pressure"));
     }
+    
+    ui.add_space(8.0);
+    
+    // Adhesion constraint solver iterations
+    ui.label("Constraint Iterations:");
+    ui.add(egui::Slider::new(&mut world.constraint_iterations, 0..=16).text("iterations"));
+    ui.label(egui::RichText::new("Extra adhesion solver passes (higher = stiffer joints, more GPU cost)").small());
 }
 
 /// Render the Help panel showing context-specific controls and shortcuts.

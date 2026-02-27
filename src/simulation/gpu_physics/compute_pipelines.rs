@@ -286,6 +286,9 @@ pub struct GpuPhysicsPipelines {
     // Adhesion physics pipeline
     pub adhesion_physics: wgpu::ComputePipeline,
     
+    // Adhesion constraint sub-step pipeline (iterative stiffening, no force accumulators)
+    pub adhesion_substep: wgpu::ComputePipeline,
+    
     // Lifecycle pipelines (3-stage with ring buffer for slot allocation)
     // Stage 1: Death scan - detects dead cells and pushes slots to ring buffer
     pub lifecycle_death_scan: wgpu::ComputePipeline,
@@ -626,6 +629,16 @@ impl GpuPhysicsPipelines {
             "Adhesion Physics",
         );
         
+        // Adhesion constraint sub-step pipeline (iterative stiffening)
+        // Reuses physics, adhesion, and rotations layouts — no force accum needed
+        let adhesion_substep = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/adhesion_substep.wgsl"),
+            "main",
+            &[&physics_layout, &adhesion_layout, &rotations_layout],
+            "Adhesion Substep",
+        );
+        
         // Lifecycle pipelines (3-stage with ring buffer for slot allocation)
         // Stage 1: Death scan - detects dead cells, pushes slots to ring buffer
         let lifecycle_death_scan = Self::create_compute_pipeline(
@@ -730,6 +743,7 @@ impl GpuPhysicsPipelines {
             nutrient_transport,
             nutrient_apply,
             adhesion_physics,
+            adhesion_substep,
             lifecycle_death_scan,
             lifecycle_division_scan,
             lifecycle_division_execute,

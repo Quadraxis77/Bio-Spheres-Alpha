@@ -185,6 +185,10 @@ pub struct WorldSettings {
     /// Surface pressure: tangential smoothing strength for radial fluid mode (0.0-1.0)
     #[serde(default = "default_surface_pressure")]
     pub surface_pressure: f32,
+
+    /// Number of additional adhesion constraint solver iterations (0 = single-pass, higher = stiffer)
+    #[serde(default = "default_constraint_iterations")]
+    pub constraint_iterations: u32,
 }
 
 impl Default for WorldSettings {
@@ -194,6 +198,7 @@ impl Default for WorldSettings {
             gravity: 0.0,
             gravity_mode: 1, // default Y axis
             surface_pressure: 0.5,
+            constraint_iterations: 4,
         }
     }
 }
@@ -204,6 +209,10 @@ fn default_mip_override() -> i32 {
 
 fn default_occlusion_bias() -> f32 {
     0.005 // Small positive bias to prevent self-occlusion from temporal jitter
+}
+
+fn default_constraint_iterations() -> u32 {
+    4
 }
 
 fn default_cell_capacity() -> u32 {

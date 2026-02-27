@@ -98,6 +98,7 @@ pub fn execute_gpu_physics_step(
     cave_physics_bind_groups: Option<&[wgpu::BindGroup; 3]>,
     adhesion_buffers: &super::AdhesionBuffers,
     _cell_count_hint: u32,
+    constraint_iterations: u32,
 ) {
     // Rotate to next buffer set
     let current_index = triple_buffers.rotate_buffers();
@@ -237,6 +238,18 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(1, &cached_bind_groups.velocity_update_angular, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
+        // Stage 7.5: Adhesion constraint sub-stepping (N additional iterations)
+        // Each iteration re-evaluates adhesion forces against latest positions and
+        // applies corrections directly to output buffers. Dramatically increases
+        // effective joint stiffness without changing spring constants.
+        for _ in 0..constraint_iterations {
+            compute_pass.set_pipeline(&pipelines.adhesion_substep);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
+            compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
+        
         // Stage 8: Mass accumulation (256 threads) - nutrient growth only
         compute_pass.set_pipeline(&pipelines.mass_accum);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
@@ -298,6 +311,7 @@ pub fn execute_gpu_mechanics_step(
     cave_physics_bind_groups: Option<&[wgpu::BindGroup; 3]>,
     adhesion_buffers: &super::AdhesionBuffers,
     _cell_count_hint: u32,
+    constraint_iterations: u32,
 ) {
     // Rotate to next buffer set
     let current_index = triple_buffers.rotate_buffers();
@@ -412,6 +426,15 @@ pub fn execute_gpu_mechanics_step(
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, &cached_bind_groups.velocity_update_angular, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        // Stage 7.5: Adhesion constraint sub-stepping (N additional iterations)
+        for _ in 0..constraint_iterations {
+            compute_pass.set_pipeline(&pipelines.adhesion_substep);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
+            compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
 
         // SKIP Stage 8: Mass accumulation (nutrient growth)
         // SKIP Stage 9: Nutrient transport (consumption, transport, death detection)

@@ -646,6 +646,7 @@ impl App {
             gpu_scene.gravity = self.ui.state.world_settings.gravity;
             gpu_scene.gravity_mode = self.ui.state.world_settings.gravity_mode;
             gpu_scene.surface_pressure = self.ui.state.world_settings.surface_pressure;
+            gpu_scene.constraint_iterations = self.ui.state.world_settings.constraint_iterations;
 
             // Apply fluid settings from UI
             gpu_scene.lateral_flow_probabilities = self.editor_state.fluid_lateral_flow_probabilities;
