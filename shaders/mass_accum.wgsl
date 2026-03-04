@@ -129,9 +129,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (current_nutrients < max_nutrients) {
         // Calculate nutrient increase: nutrients += nutrient_gain_rate * delta_time
         let nutrient_increase = nutrient_gain_rate * params.delta_time;
-        let new_nutrients = min(current_nutrients + nutrient_increase, max_nutrients);
+        // Cap the increase so we don't exceed max_nutrients
+        let capped_increase = min(nutrient_increase, max(max_nutrients - current_nutrients, 0.0));
         
-        // Write back to nutrients_buffer
-        atomicStore(&nutrients_buffer[cell_idx], float_to_fixed(new_nutrients));
+        // Use atomicAdd (not atomicStore) to avoid overwriting concurrent writes
+        atomicAdd(&nutrients_buffer[cell_idx], float_to_fixed(capped_increase));
     }
 }

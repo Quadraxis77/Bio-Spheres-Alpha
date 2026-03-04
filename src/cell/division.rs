@@ -105,13 +105,10 @@ pub fn division_step(
                 && state.nutrients[i] >= state.split_nutrient_thresholds[i];
             
             // Check time threshold - cells must be old enough to split
-            // Flagellocytes (cell_type == 1) split based on nutrients only, ignore split_interval
-            let is_flagellocyte = mode.map(|m| m.cell_type == 1).unwrap_or(false);
-            let can_split_by_time = is_flagellocyte || cell_age >= state.split_intervals[i];
+            let can_split_by_time = cell_age >= state.split_intervals[i];
             
             // Cell can split if ALL conditions are met
-            // Note: split_intervals[i] <= 59.0 check only applies to non-Flagellocytes
-            let split_interval_valid = is_flagellocyte || state.split_intervals[i] <= 59.0;
+            let split_interval_valid = state.split_intervals[i] <= 59.0;
             if can_split_by_count && can_split_by_adhesions && can_split_by_nutrients && can_split_by_time && split_interval_valid {
                 state.divisions_to_process_buffer.push(i);
             }
@@ -666,12 +663,10 @@ pub fn division_step_multi(
             let can_split_by_nutrients = state.split_nutrient_thresholds[i] <= max_threshold 
                 && state.nutrients[i] >= state.split_nutrient_thresholds[i];
             
-            // Flagellocytes (cell_type == 1) split based on nutrients only, ignore split_interval
-            let is_flagellocyte = mode.map(|m| m.cell_type == 1).unwrap_or(false);
-            let can_split_by_time = is_flagellocyte || cell_age >= state.split_intervals[i];
+            // Check time threshold - cells must be old enough to split
+            let can_split_by_time = cell_age >= state.split_intervals[i];
             
-            // Note: split_intervals[i] <= 59.0 check only applies to non-Flagellocytes
-            let split_interval_valid = is_flagellocyte || state.split_intervals[i] <= 59.0;
+            let split_interval_valid = state.split_intervals[i] <= 59.0;
             if can_split_by_count && can_split_by_adhesions && can_split_by_nutrients && can_split_by_time && split_interval_valid {
                 state.divisions_to_process_buffer.push(i);
             }

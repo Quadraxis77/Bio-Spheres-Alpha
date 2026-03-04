@@ -1,15 +1,16 @@
 // Nutrient Apply Shader
-// Phase 6: Chemical & Nutrient Systems - mass delta application stage
+// Phase 6: Chemical & Nutrient Systems - nutrients-to-mass synchronization stage
 // Workgroup size: 256 threads for optimal GPU occupancy
 //
-// This shader applies the accumulated mass deltas from the nutrient_transport shader.
-// It runs as a SEPARATE dispatch to guarantee all atomic accumulations from
-// nutrient_transport have completed across ALL workgroups before any thread
-// reads the final delta value.
+// This shader derives cell mass from the authoritative nutrients_buffer:
+//   mass = 1.0 + nutrients / 100.0
 //
-// Without this separation, a race condition exists: cell_b's workgroup could
-// read and apply its mass_delta before cell_a's workgroup writes the transport
-// delta to mass_deltas[cell_b], causing asymmetric nutrient flow.
+// It runs as a SEPARATE dispatch after nutrient_transport to guarantee all
+// atomic nutrient operations (consumption + transport) have completed across
+// ALL workgroups before any thread reads the final nutrient value.
+//
+// Without this synchronization, cell mass (positions.w) would be stale
+// between divisions, causing incorrect collision radii and gravity forces.
 
 struct PhysicsParams {
     delta_time: f32,
@@ -57,11 +58,19 @@ var<storage, read_write> mass_deltas: array<atomic<i32>>;
 @group(1) @binding(1)
 var<storage, read> death_flags: array<u32>;
 
+@group(1) @binding(2)
+var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
+
 // Fixed-point conversion (matching nutrient_transport.wgsl)
 const FIXED_POINT_SCALE: f32 = 1000.0;
 
 fn fixed_to_float(value: i32) -> f32 {
     return f32(value) / FIXED_POINT_SCALE;
+}
+
+// Derive mass from nutrients: mass = 1.0 + nutrients / 100.0
+fn nutrients_to_mass(nutrients: f32) -> f32 {
+    return 1.0 + nutrients / 100.0;
 }
 
 @compute @workgroup_size(256)
@@ -78,19 +87,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Read final accumulated mass delta from atomic buffer
-    // All nutrient_transport workgroups have completed by now (separate dispatch)
-    let final_mass_delta = fixed_to_float(atomicLoad(&mass_deltas[cell_idx]));
+    // Read final nutrients (all transport/consumption atomics have completed)
+    let nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
     
-    // Skip if no change
-    if (final_mass_delta == 0.0) {
-        return;
+    // Clamp nutrients to >= 0 (atomicAdd could cause brief underflow)
+    let safe_nutrients = max(nutrients, 0.0);
+    if (nutrients < 0.0) {
+        atomicStore(&nutrients_buffer[cell_idx], 0i);
     }
     
-    // Apply delta to mass
-    let pos_mass = positions_out[cell_idx];
-    let final_mass = pos_mass.w + final_mass_delta;
-    
-    // Update mass in positions buffer (clamp to >= 0)
-    positions_out[cell_idx] = vec4<f32>(pos_mass.xyz, max(final_mass, 0.0));
+    // Derive mass from nutrients and update positions buffer
+    let new_mass = nutrients_to_mass(safe_nutrients);
+    let pos = positions_out[cell_idx];
+    positions_out[cell_idx] = vec4<f32>(pos.xyz, new_mass);
 }

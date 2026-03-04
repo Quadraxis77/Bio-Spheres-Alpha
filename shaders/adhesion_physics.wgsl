@@ -247,6 +247,19 @@ fn compute_adhesion_forces_for_cell(
         anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, genome_rot_b);
     }
     
+    // Compute physics-based anchors for orientation/twist constraints.
+    // These track the cell's ACTUAL physical rotation so springs can detect
+    // and correct misalignment. Genome anchors above are fixed and can't detect rotation.
+    var phys_anchor_a: vec3<f32>;
+    var phys_anchor_b: vec3<f32>;
+    if (length(connection.anchor_direction_a.xyz) < 0.001 && length(connection.anchor_direction_b.xyz) < 0.001) {
+        phys_anchor_a = vec3<f32>(1.0, 0.0, 0.0);
+        phys_anchor_b = vec3<f32>(-1.0, 0.0, 0.0);
+    } else {
+        phys_anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
+        phys_anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
+    }
+    
     // Geometric spring force: use anchor-defined target positions
     // instead of the raw physical direction between cells.
     // This makes genome-defined angles the authority for cell placement,
@@ -260,7 +273,7 @@ fn compute_adhesion_forces_for_cell(
     let geo_force_on_a = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness;
     *spring_force_mag_out = length(geo_force_on_a);
     
-    // Linear damping (unchanged)
+    // Linear damping
     let rel_vel = vel_b - vel_a;
     let damp_mag = 1.0 - settings.linear_spring_damping * dot(rel_vel, adhesion_dir);
     let damping_force = -adhesion_dir * damp_mag;
@@ -276,10 +289,11 @@ fn compute_adhesion_forces_for_cell(
     var torque_a = vec3<f32>(0.0);
     var torque_b = vec3<f32>(0.0);
     
-    // Orientation spring for cell A
-    let axis_a = cross(anchor_a, adhesion_dir);
+    // Orientation spring for cell A - uses PHYSICS rotation anchors
+    // to detect actual misalignment (genome anchors are fixed, can't detect rotation)
+    let axis_a = cross(phys_anchor_a, adhesion_dir);
     let sin_a = length(axis_a);
-    let cos_a = dot(anchor_a, adhesion_dir);
+    let cos_a = dot(phys_anchor_a, adhesion_dir);
     let angle_a = atan2(sin_a, cos_a);
     if (sin_a > 0.0001) {
         let norm_axis_a = normalize(axis_a);
@@ -289,9 +303,9 @@ fn compute_adhesion_forces_for_cell(
     }
     
     // Orientation spring for cell B
-    let axis_b = cross(anchor_b, -adhesion_dir);
+    let axis_b = cross(phys_anchor_b, -adhesion_dir);
     let sin_b = length(axis_b);
-    let cos_b = dot(anchor_b, -adhesion_dir);
+    let cos_b = dot(phys_anchor_b, -adhesion_dir);
     let angle_b = atan2(sin_b, cos_b);
     if (sin_b > 0.0001) {
         let norm_axis_b = normalize(axis_b);
@@ -300,16 +314,16 @@ fn compute_adhesion_forces_for_cell(
         torque_b += spring_torque_b + damping_torque_b;
     }
     
-    // Twist constraints (matching reference: 0.3 stiffness, 0.4 damping multipliers)
-    // Use genome orientations for twist reference calculations (genome-pure)
+    // Twist constraints - uses physics rotations for current anchor detection,
+    // twist references from bond creation for target orientation
     if (settings.enable_twist_constraint != 0 &&
         length(connection.twist_reference_a) > 0.001 &&
         length(connection.twist_reference_b) > 0.001) {
         
         let adhesion_axis = normalize(delta_pos);
         
-        let current_anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, genome_rot_a);
-        let current_anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, genome_rot_b);
+        let current_anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
+        let current_anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
         
         let target_anchor_a = adhesion_axis;
         let target_anchor_b = -adhesion_axis;
@@ -332,33 +346,37 @@ fn compute_adhesion_forces_for_cell(
         twist_correction_a = clamp(twist_correction_a, -1.57, 1.57);
         twist_correction_b = clamp(twist_correction_b, -1.57, 1.57);
         
-        let twist_torque_a = adhesion_axis * twist_correction_a * settings.twist_constraint_stiffness * 0.3;
-        let twist_torque_b = adhesion_axis * twist_correction_b * settings.twist_constraint_stiffness * 0.3;
+        let twist_torque_a = adhesion_axis * twist_correction_a * settings.twist_constraint_stiffness;
+        let twist_torque_b = adhesion_axis * twist_correction_b * settings.twist_constraint_stiffness;
         
         let angular_vel_a_proj = dot(ang_vel_a, adhesion_axis);
         let angular_vel_b_proj = dot(ang_vel_b, adhesion_axis);
         let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
         
-        let twist_damping_a = -adhesion_axis * relative_angular_vel * settings.twist_constraint_damping * 0.4;
-        let twist_damping_b = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping * 0.4;
+        let twist_damping_a = -adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
+        let twist_damping_b = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
         
         torque_a += twist_torque_a + twist_damping_a;
         torque_b += twist_torque_b + twist_damping_b;
     }
     
-    // Apply tangential forces from torques
-    // For Newton's third law: force on A must equal -force on B
-    // The reference applies asymmetric forces which violates this
-    // We compute symmetric forces by averaging the torque effects
-    let avg_torque = (torque_a + torque_b) * 0.5;
-    let tangential_force = cross(delta_pos, avg_torque);
+    // Apply tangential forces from torques to maintain organism shape.
+    // F_tangential = total_torque × delta_pos / |delta_pos|²
+    // Equal and opposite on both cells to conserve momentum (matches CPU reference).
+    let total_torque_val = torque_a + torque_b;
+    let r_squared = dot(delta_pos, delta_pos);
+    if (r_squared > 0.0001) {
+        let tangential_force = cross(total_torque_val, delta_pos) / r_squared;
+        if (is_cell_a) {
+            force += tangential_force;
+        } else {
+            force -= tangential_force;
+        }
+    }
     
-    // Cell A gets positive force, Cell B gets negative (equal and opposite)
     if (is_cell_a) {
-        force -= tangential_force;
         torque = torque_a;
     } else {
-        force += tangential_force;
         torque = torque_b;
     }
     

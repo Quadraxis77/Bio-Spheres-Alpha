@@ -240,9 +240,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             nutrient_loss += effective_swim_speed * SWIM_CONSUMPTION_RATE * params.delta_time;
         }
 
-        // Apply nutrient consumption directly to nutrients_buffer
-        let new_nutrients = max(current_nutrients - nutrient_loss, 0.0);
-        atomicStore(&nutrients_buffer[cell_idx], float_to_fixed(new_nutrients));
+        // Apply nutrient consumption as an atomic delta (NOT atomicStore!)
+        // atomicStore here would race with atomicAdd from neighbor transport threads,
+        // overwriting any nutrients transferred to this cell during the same dispatch.
+        let safe_loss = min(nutrient_loss, max(current_nutrients, 0.0));
+        atomicAdd(&nutrients_buffer[cell_idx], -float_to_fixed(safe_loss));
     }
     
     // NOTE: No early death check here - we must let transport happen first
