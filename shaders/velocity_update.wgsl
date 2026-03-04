@@ -117,8 +117,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Read current angular velocity
     let ang_vel = angular_velocities[cell_idx].xyz;
     
-    // Apply angular damping (matching CPU: damping^(dt*100))
-    let angular_damping_factor = pow(params.acceleration_damping, params.delta_time * 100.0);
+    // Apply angular damping: damping^dt gives frame-rate-independent damping
+    // where acceleration_damping = fraction of angular velocity retained per second
+    let angular_damping_factor = pow(params.acceleration_damping, params.delta_time);
     let new_ang_vel = (ang_vel + angular_acceleration * params.delta_time) * angular_damping_factor;
     
     // Write updated angular velocity

@@ -94,6 +94,7 @@ pub fn execute_gpu_physics_step(
     world_diameter: f32,
     gravity: f32,
     gravity_mode: u32,
+    acceleration_damping: f32,
     cave_renderer: Option<&crate::rendering::CaveSystemRenderer>,
     cave_physics_bind_groups: Option<&[wgpu::BindGroup; 3]>,
     adhesion_buffers: &super::AdhesionBuffers,
@@ -115,7 +116,7 @@ pub fn execute_gpu_physics_step(
         world_size,
         boundary_stiffness: 500.0,
         gravity,
-        acceleration_damping: 0.98,
+        acceleration_damping,
         grid_resolution: GRID_RESOLUTION as i32,
         grid_cell_size: world_size / GRID_RESOLUTION as f32,
         max_cells_per_grid: 16,
@@ -242,12 +243,24 @@ pub fn execute_gpu_physics_step(
         // Each iteration re-evaluates adhesion forces against latest positions and
         // applies corrections directly to output buffers. Dramatically increases
         // effective joint stiffness without changing spring constants.
+        // Cave collision is re-applied after each substep to prevent adhesion forces
+        // from pulling cells through cave walls.
         for _ in 0..constraint_iterations {
             compute_pass.set_pipeline(&pipelines.adhesion_substep);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
             compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
             compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+            
+            // Re-apply cave collision after each substep to enforce cave boundaries
+            if let (Some(cave_renderer), Some(cave_bind_groups)) = (cave_renderer, cave_physics_bind_groups) {
+                if cave_renderer.params().collision_enabled != 0 {
+                    compute_pass.set_pipeline(cave_renderer.collision_pipeline());
+                    compute_pass.set_bind_group(0, &cave_bind_groups[current_index], &[]);
+                    compute_pass.set_bind_group(1, cave_renderer.collision_bind_group(), &[]);
+                    compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+                }
+            }
         }
         
         // Stage 8: Mass accumulation (256 threads) - nutrient growth only
@@ -307,6 +320,7 @@ pub fn execute_gpu_mechanics_step(
     world_diameter: f32,
     gravity: f32,
     gravity_mode: u32,
+    acceleration_damping: f32,
     cave_renderer: Option<&crate::rendering::CaveSystemRenderer>,
     cave_physics_bind_groups: Option<&[wgpu::BindGroup; 3]>,
     adhesion_buffers: &super::AdhesionBuffers,
@@ -325,7 +339,7 @@ pub fn execute_gpu_mechanics_step(
         world_size,
         boundary_stiffness: 500.0,
         gravity,
-        acceleration_damping: 0.98,
+        acceleration_damping,
         grid_resolution: GRID_RESOLUTION as i32,
         grid_cell_size: world_size / GRID_RESOLUTION as f32,
         max_cells_per_grid: 16,
@@ -428,12 +442,24 @@ pub fn execute_gpu_mechanics_step(
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 7.5: Adhesion constraint sub-stepping (N additional iterations)
+        // Cave collision is re-applied after each substep to prevent adhesion forces
+        // from pulling cells through cave walls.
         for _ in 0..constraint_iterations {
             compute_pass.set_pipeline(&pipelines.adhesion_substep);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
             compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
             compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+            
+            // Re-apply cave collision after each substep to enforce cave boundaries
+            if let (Some(cave_renderer), Some(cave_bind_groups)) = (cave_renderer, cave_physics_bind_groups) {
+                if cave_renderer.params().collision_enabled != 0 {
+                    compute_pass.set_pipeline(cave_renderer.collision_pipeline());
+                    compute_pass.set_bind_group(0, &cave_bind_groups[current_index], &[]);
+                    compute_pass.set_bind_group(1, cave_renderer.collision_bind_group(), &[]);
+                    compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+                }
+            }
         }
 
         // SKIP Stage 8: Mass accumulation (nutrient growth)

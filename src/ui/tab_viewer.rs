@@ -3249,6 +3249,13 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.label("Constraint Iterations:");
     ui.add(egui::Slider::new(&mut world.constraint_iterations, 0..=16).text("iterations"));
     ui.label(egui::RichText::new("Extra adhesion solver passes (higher = stiffer joints, more GPU cost)").small());
+    
+    ui.add_space(8.0);
+    
+    // Global velocity damping
+    ui.label("Velocity Damping:");
+    ui.add(egui::Slider::new(&mut world.acceleration_damping, 0.8..=1.0).text("damping"));
+    ui.label(egui::RichText::new("Global drag on cell movement (lower = more drag, higher = less damping)").small());
 }
 
 /// Render the Help panel showing context-specific controls and shortcuts.

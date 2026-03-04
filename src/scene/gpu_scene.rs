@@ -148,6 +148,8 @@ pub struct GpuScene {
     pub constraint_iterations: u32,
     /// Surface pressure: tangential smoothing strength for radial fluid mode (0.0-1.0)
     pub surface_pressure: f32,
+    /// Global velocity damping factor (0.0-1.0, higher = less damping, lower = more drag)
+    pub acceleration_damping: f32,
     /// Per-fluid-type lateral flow probabilities for fluid simulation (0.0 to 1.0)
     /// Index: 0=Empty (unused), 1=Water, 2=Lava, 3=Steam
     pub lateral_flow_probabilities: [f32; 4],
@@ -432,6 +434,7 @@ impl GpuScene {
             gravity_mode: 1, // default Y axis
             constraint_iterations: 4,
             surface_pressure: 0.5,
+            acceleration_damping: 0.98,
             lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
             condensation_probability: 0.1,
             vaporization_probability: 0.1,
@@ -715,6 +718,7 @@ impl GpuScene {
             world_diameter,
             self.gravity,
             self.gravity_mode,
+            self.acceleration_damping,
             self.cave_renderer.as_ref(),
             self.cave_physics_bind_groups.as_ref(),
             &self.adhesion_buffers,
@@ -764,6 +768,7 @@ impl GpuScene {
             world_diameter,
             self.gravity,
             self.gravity_mode,
+            self.acceleration_damping,
             self.cave_renderer.as_ref(),
             self.cave_physics_bind_groups.as_ref(),
             &self.adhesion_buffers,

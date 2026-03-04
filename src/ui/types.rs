@@ -189,6 +189,10 @@ pub struct WorldSettings {
     /// Number of additional adhesion constraint solver iterations (0 = single-pass, higher = stiffer)
     #[serde(default = "default_constraint_iterations")]
     pub constraint_iterations: u32,
+
+    /// Global velocity damping factor (0.0-1.0, higher = less damping, lower = more drag)
+    #[serde(default = "default_acceleration_damping")]
+    pub acceleration_damping: f32,
 }
 
 impl Default for WorldSettings {
@@ -199,6 +203,7 @@ impl Default for WorldSettings {
             gravity_mode: 1, // default Y axis
             surface_pressure: 0.5,
             constraint_iterations: 4,
+            acceleration_damping: 0.98,
         }
     }
 }
@@ -249,6 +254,10 @@ fn default_gravity_mode() -> u32 {
 
 fn default_surface_pressure() -> f32 {
     0.5
+}
+
+fn default_acceleration_damping() -> f32 {
+    0.98
 }
 
 /// Global UI state shared across all UI components.

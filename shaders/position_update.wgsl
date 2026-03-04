@@ -204,14 +204,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // velocity_change = 0.5 * (old_acceleration + new_acceleration) * dt
     let velocity_change = 0.5 * (old_acceleration + new_acceleration) * params.delta_time;
     
-    // Apply velocity damping (matching CPU: damping^(dt*100))
-    let damping_factor = pow(params.acceleration_damping, params.delta_time * 100.0);
+    // Apply velocity damping: damping^dt gives frame-rate-independent damping
+    // where acceleration_damping = fraction of velocity retained per second
+    let damping_factor = pow(params.acceleration_damping, params.delta_time);
     var new_vel = (vel + velocity_change) * damping_factor;
     
-    // Clamp velocity to max 10 units/second
+    // Clamp velocity to max 500 units/second (safety cap)
     let speed = length(new_vel);
-    if (speed > 10.0) {
-        new_vel = (new_vel / speed) * 10.0;
+    if (speed > 500.0) {
+        new_vel = (new_vel / speed) * 500.0;
     }
     
     // Simple position update

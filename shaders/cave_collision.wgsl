@@ -255,7 +255,8 @@ fn compute_sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {
     return grad / len;
 }
 
-// Apply force-based collision - pushes cells out of solid rock into cave tunnels
+// Apply position-based collision - directly moves cells out of solid rock into cave tunnels
+// Uses XPBD-style position correction so adhesion substeps can't pull cells through walls
 // Optimized: only check cells near cave walls, skip cells safely in open space
 fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: f32, dt: f32) {
     if (cave_params.collision_enabled == 0u) {
@@ -275,43 +276,34 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
     }
     
     // Cell might be near a cave wall - perform detailed collision check
-    // Use fixed threshold for collision detection regardless of cell size
     let radius_threshold = cave_params.threshold;
     
-    // If center density > adjusted threshold, we're colliding with cave wall
+    // If center density > threshold, we're inside solid rock
     if (center_density > radius_threshold) {
-        // Compute gradient pointing toward lower density (into cave)
-        let gradient_step = max(cave_params.scale * 0.1, radius * 0.5); // Ensure gradient step is meaningful
-        let normal = -compute_sdf_gradient(pos, gradient_step);  // Invert normal to point into cave
+        // Compute gradient pointing toward lower density (into open cave space)
+        let gradient_step = max(cave_params.scale * 0.1, radius * 0.5);
+        let normal = -compute_sdf_gradient(pos, gradient_step);  // Points into cave (away from wall)
 
-        // Penetration depth - how far into solid rock we are, accounting for radius
+        // Penetration depth - how far into solid rock we are
         let penetration = (center_density - radius_threshold) * cave_params.scale;
 
         if (penetration > 0.0) {
-            // Force proportional to penetration depth (Hooke's law)
-            // Divide by substeps to maintain stability with multiple substeps
-            let force_magnitude = penetration * cave_params.collision_stiffness / f32(cave_params.substeps);
-            let force = normal * force_magnitude;
+            // XPBD-style: directly correct position out of wall
+            // Move cell along normal by penetration distance + small margin
+            let correction = normal * (penetration + radius * 0.1);
+            let corrected_pos = pos + correction;
+            positions[cell_idx] = vec4<f32>(corrected_pos, positions[cell_idx].w);
 
-            // F = ma, so a = F/m, and dv = a * dt
-            // Use dt/substeps for each substep to maintain physics accuracy
-            let velocity_change = force * dt / f32(cave_params.substeps) / mass;
-
-            // Update velocity with force response
+            // Remove velocity component going into the wall
             var vel = velocities[cell_idx].xyz;
-            vel = vel + velocity_change;
-
-            // Critical damping to prevent oscillation: damping = 2 * sqrt(stiffness * mass)
-            // Simplified: use high damping to eliminate bouncing
-            let vel_normal_mag = dot(vel, normal);
-            if (vel_normal_mag < 0.0) {
-                vel = vel - normal * vel_normal_mag * 0.95;
+            let vel_into_wall = dot(vel, -normal);
+            if (vel_into_wall > 0.0) {
+                // Remove inward velocity and apply damping
+                vel = vel + normal * vel_into_wall * cave_params.collision_damping;
             }
-
             velocities[cell_idx] = vec4<f32>(vel, velocities[cell_idx].w);
         }
     }
-    // If density <= adjusted threshold, cell is safely in cave tunnel - no collision forces needed
 }
 
 @compute @workgroup_size(256)
