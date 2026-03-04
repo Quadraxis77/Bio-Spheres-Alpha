@@ -1145,7 +1145,7 @@ impl GpuScene {
     }
     
     /// Incremental sync of adhesion settings for a single genome
-    fn incremental_sync_adhesion_settings(&mut self, queue: &wgpu::Queue, genome_id: usize, global_start_index: usize, mode_count: usize) {
+    fn incremental_sync_adhesion_settings(&mut self, queue: &wgpu::Queue, genome_id: usize, global_start_index: usize, _mode_count: usize) {
         let genome = &self.genomes[genome_id];
         
         // Create adhesion settings for just this genome's modes

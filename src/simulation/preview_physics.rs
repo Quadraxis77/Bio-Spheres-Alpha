@@ -454,8 +454,7 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
 /// Total outflow per cell is capped at TRANSPORT_RATE nutrients/sec regardless of connection count.
 /// Transfer is lerped (smoothed) to prevent oscillation.
 pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome: &Genome, dt: f32) {
-    const DANGER_THRESHOLD: f32 = 0.6;
-    const PRIORITY_BOOST: f32 = 10.0;
+        const PRIORITY_BOOST: f32 = 10.0;
     /// Max nutrients/sec a cell can send OR receive in total across all connections.
     const TRANSPORT_RATE: f32 = 30.0;
     /// Lerp factor: how quickly flow tracks the pressure-diff target (per second).
