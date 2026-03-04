@@ -1070,6 +1070,10 @@ impl GpuPhysicsPipelines {
                     binding: 23,
                     resource: buffers.nutrients_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 24,
+                    resource: buffers.genome_orientations.as_entire_binding(),
+                },
             ],
         })
     }
@@ -1141,6 +1145,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: adhesion_buffers.angular_velocities[output_index].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.genome_orientations.as_entire_binding(),
                 },
             ],
         })
@@ -2151,6 +2159,17 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
+                    // Genome orientations (read-write) - pure genome-derived orientations per cell
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 24,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             })
         }
@@ -2276,6 +2295,17 @@ impl GpuPhysicsPipelines {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 4: Genome orientations (read-only) - pure genome-derived orientations for adhesion
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -3885,6 +3915,17 @@ impl GpuPhysicsPipelines {
                 // Binding 16: Nutrients buffer (atomic i32, fixed-point scale 1000)
                 wgpu::BindGroupLayoutEntry {
                     binding: 16,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 17: Genome orientations (read-write) - pure genome-derived orientations per cell
+                wgpu::BindGroupLayoutEntry {
+                    binding: 17,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },

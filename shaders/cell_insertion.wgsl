@@ -169,6 +169,10 @@ var<storage, read_write> cell_types: array<u32>;
 @group(2) @binding(16)
 var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
 
+// Per-cell genome orientation: pure genome-derived orientation (no physics perturbation)
+@group(2) @binding(17)
+var<storage, read_write> genome_orientations: array<vec4<f32>>;
+
 @compute @workgroup_size(1, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Only thread 0 should execute (single workgroup dispatch)
@@ -253,6 +257,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     rotations_0[slot] = insertion_params.rotation;
     rotations_1[slot] = insertion_params.rotation;
     rotations_2[slot] = insertion_params.rotation;
+    
+    // Initialize genome orientation (same as initial rotation for newly inserted cells)
+    genome_orientations[slot] = insertion_params.rotation;
     
     // Initialize cell state for division system (single buffers)
     birth_times[slot] = insertion_params.birth_time;

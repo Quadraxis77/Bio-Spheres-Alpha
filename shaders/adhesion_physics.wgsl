@@ -101,6 +101,11 @@ var<storage, read_write> rotations_out: array<vec4<f32>>;
 @group(2) @binding(3)
 var<storage, read_write> angular_velocities_out: array<vec4<f32>>;
 
+// Genome orientations - pure genome-derived orientations (no physics perturbation)
+// Used for anchor direction transformation so structures are genome-pure
+@group(2) @binding(4)
+var<storage, read> genome_orientations: array<vec4<f32>>;
+
 // Force accumulation buffers (group 3) - atomic i32 for multi-adhesion accumulation
 @group(3) @binding(0)
 var<storage, read_write> force_accum_x: array<atomic<i32>>;
@@ -225,8 +230,12 @@ fn compute_adhesion_forces_for_cell(
     let adhesion_dir = delta_pos / dist;
     let rest_length = settings.rest_length;
     
-    // Transform anchor directions to world space BEFORE spring force
-    // so we can use genome-defined geometry for the spring target
+    // Transform anchor directions to world space using GENOME orientations
+    // (not physics rotations) so structures are defined purely by genome data.
+    // This prevents physics perturbations from distorting ideal geometry.
+    let genome_rot_a = genome_orientations[connection.cell_a_index];
+    let genome_rot_b = genome_orientations[connection.cell_b_index];
+    
     var anchor_a: vec3<f32>;
     var anchor_b: vec3<f32>;
     
@@ -234,8 +243,8 @@ fn compute_adhesion_forces_for_cell(
         anchor_a = vec3<f32>(1.0, 0.0, 0.0);
         anchor_b = vec3<f32>(-1.0, 0.0, 0.0);
     } else {
-        anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
-        anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
+        anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, genome_rot_a);
+        anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, genome_rot_b);
     }
     
     // Geometric spring force: use anchor-defined target positions
@@ -292,14 +301,15 @@ fn compute_adhesion_forces_for_cell(
     }
     
     // Twist constraints (matching reference: 0.3 stiffness, 0.4 damping multipliers)
+    // Use genome orientations for twist reference calculations (genome-pure)
     if (settings.enable_twist_constraint != 0 &&
         length(connection.twist_reference_a) > 0.001 &&
         length(connection.twist_reference_b) > 0.001) {
         
         let adhesion_axis = normalize(delta_pos);
         
-        let current_anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
-        let current_anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
+        let current_anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, genome_rot_a);
+        let current_anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, genome_rot_b);
         
         let target_anchor_a = adhesion_axis;
         let target_anchor_b = -adhesion_axis;

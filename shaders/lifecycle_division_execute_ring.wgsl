@@ -187,6 +187,12 @@ var<storage, read> child_a_keep_adhesion_flags: array<u32>;
 @group(2) @binding(22)
 var<storage, read> child_b_keep_adhesion_flags: array<u32>;
 
+// Per-cell genome orientation: pure genome-derived orientation chain
+// (parent_genome * split_rotation * child_orientation) without physics perturbation.
+// Used by adhesion shaders so structures are defined purely by genome data.
+@group(2) @binding(24)
+var<storage, read_write> genome_orientations: array<vec4<f32>>;
+
 // Adhesion bind group (group 3)
 @group(3) @binding(0)
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
@@ -430,10 +436,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_a_orientation_final = select(child_a_orientation, child_a_split_orientation, will_reach_max_splits);
     let child_b_orientation_final = select(child_b_orientation, child_b_split_orientation, will_reach_max_splits);
 
-    // Calculate child rotations: parent * split_rotation * child_orientation_final
+    // Calculate child PHYSICS rotations: parent * split_rotation * child_orientation_final
     // Uses the exact quaternion, not a reconstructed approximation.
     let child_a_rotation = quat_multiply(parent_rotation, quat_multiply(split_rotation_quat, child_a_orientation_final));
     let child_b_rotation = quat_multiply(parent_rotation, quat_multiply(split_rotation_quat, child_b_orientation_final));
+
+    // Calculate child GENOME orientations: parent_genome * split_rotation * child_orientation_final
+    // These are pure genome-derived orientations without any physics perturbation.
+    // Used by adhesion shaders for anchor transformation and twist constraints.
+    let parent_genome_orientation = genome_orientations[cell_idx];
+    let child_a_genome_orientation = quat_multiply(parent_genome_orientation, quat_multiply(split_rotation_quat, child_a_orientation_final));
+    let child_b_genome_orientation = quat_multiply(parent_genome_orientation, quat_multiply(split_rotation_quat, child_b_orientation_final));
 
     // Calculate parent radius for offset calculation (derive mass from nutrients)
     let parent_mass = nutrients_to_mass(parent_nutrients);
@@ -469,9 +482,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_a_id = atomicAdd(&next_cell_id[0], 1u);
     cell_ids[cell_idx] = child_a_id;
     
-    // Apply pseudo-random rotation perturbation (matching CPU)
+    // Apply pseudo-random rotation perturbation to PHYSICS rotation only (matching CPU)
+    // Genome orientation stays pure (no random perturbation)
     let random_rotation_a = pseudo_random_rotation(child_a_id);
     rotations_out[cell_idx] = quat_multiply(child_a_rotation, random_rotation_a);
+    genome_orientations[cell_idx] = child_a_genome_orientation;
     
     birth_times[cell_idx] = params.current_time;
     mode_indices[cell_idx] = child_a_mode_idx;
@@ -513,9 +528,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_b_id = atomicAdd(&next_cell_id[0], 1u);
     cell_ids[child_b_slot] = child_b_id;
     
-    // Apply pseudo-random rotation perturbation (matching CPU)
+    // Apply pseudo-random rotation perturbation to PHYSICS rotation only (matching CPU)
+    // Genome orientation stays pure (no random perturbation)
     let random_rotation_b = pseudo_random_rotation(child_b_id);
     rotations_out[child_b_slot] = quat_multiply(child_b_rotation, random_rotation_b);
+    genome_orientations[child_b_slot] = child_b_genome_orientation;
     
     let child_b_props_0 = mode_properties[child_b_mode_idx * 5u];
     let child_b_props_1 = mode_properties[child_b_mode_idx * 5u + 1u];
@@ -597,9 +614,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             connection._align_pad = vec2<u32>(0u, 0u);
             connection.anchor_direction_a = vec4<f32>(anchor_a_local, 0.0);
             connection.anchor_direction_b = vec4<f32>(anchor_b_local, 0.0);
-            // Set twist references to child rotations (parent_rotation * child_orientation)
-            connection.twist_reference_a = child_a_rotation;
-            connection.twist_reference_b = child_b_rotation;
+            // Set twist references to child GENOME orientations (genome-pure, no physics)
+            connection.twist_reference_a = child_a_genome_orientation;
+            connection.twist_reference_b = child_b_genome_orientation;
             connection.birth_time = params.current_time;
             connection._pad = 0u;
             adhesion_connections[adhesion_id] = connection;
@@ -768,9 +785,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let center_to_center_dist = rest_length + FIXED_RADIUS + FIXED_RADIUS;
         let neighbor_pos_parent_frame = parent_anchor_dir_local * center_to_center_dist;
         
-        // Get neighbor rotation for anchor calculation
-        let neighbor_rotation = rotations_in[neighbor_idx];
-        let relative_rotation = quat_multiply(quat_conjugate(neighbor_rotation), parent_rotation);
+        // Get neighbor GENOME orientation for anchor calculation (genome-pure)
+        let neighbor_genome_orientation = genome_orientations[neighbor_idx];
+        let relative_rotation = quat_multiply(quat_conjugate(neighbor_genome_orientation), parent_genome_orientation);
         
         // Pre-compute orientation deltas including split_rotation (matching CPU)
         let child_a_orientation_delta = quat_multiply(split_rotation_quat, child_a_orientation_final);
@@ -790,12 +807,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (is_parent_cell_a) {
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_anchor, 0.0);
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(neighbor_anchor, 0.0);
-                adhesion_connections[adh_idx].twist_reference_a = child_a_rotation;
+                adhesion_connections[adh_idx].twist_reference_a = child_a_genome_orientation;
                 adhesion_connections[adh_idx].zone_a = classify_zone(child_anchor, split_dir_local, child_a_props_2.y);
             } else {
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_anchor, 0.0);
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(neighbor_anchor, 0.0);
-                adhesion_connections[adh_idx].twist_reference_b = child_a_rotation;
+                adhesion_connections[adh_idx].twist_reference_b = child_a_genome_orientation;
                 adhesion_connections[adh_idx].zone_b = classify_zone(child_anchor, split_dir_local, child_a_props_2.y);
             }
             
@@ -819,13 +836,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 adhesion_connections[adh_idx].cell_a_index = child_b_slot;
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_anchor, 0.0);
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(neighbor_anchor, 0.0);
-                adhesion_connections[adh_idx].twist_reference_a = child_b_rotation;
+                adhesion_connections[adh_idx].twist_reference_a = child_b_genome_orientation;
                 adhesion_connections[adh_idx].zone_a = classify_zone(child_anchor, split_dir_local, child_b_props_2.y);
             } else {
                 adhesion_connections[adh_idx].cell_b_index = child_b_slot;
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_anchor, 0.0);
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(neighbor_anchor, 0.0);
-                adhesion_connections[adh_idx].twist_reference_b = child_b_rotation;
+                adhesion_connections[adh_idx].twist_reference_b = child_b_genome_orientation;
                 adhesion_connections[adh_idx].zone_b = classify_zone(child_anchor, split_dir_local, child_b_props_2.y);
             }
             
@@ -849,12 +866,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (is_parent_cell_a) {
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(child_a_anchor, 0.0);
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(neighbor_anchor_to_a, 0.0);
-                adhesion_connections[adh_idx].twist_reference_a = child_a_rotation;
+                adhesion_connections[adh_idx].twist_reference_a = child_a_genome_orientation;
                 adhesion_connections[adh_idx].zone_a = classify_zone(child_a_anchor, split_dir_local, child_a_props_2.y);
             } else {
                 adhesion_connections[adh_idx].anchor_direction_b = vec4<f32>(child_a_anchor, 0.0);
                 adhesion_connections[adh_idx].anchor_direction_a = vec4<f32>(neighbor_anchor_to_a, 0.0);
-                adhesion_connections[adh_idx].twist_reference_b = child_a_rotation;
+                adhesion_connections[adh_idx].twist_reference_b = child_a_genome_orientation;
                 adhesion_connections[adh_idx].zone_b = classify_zone(child_a_anchor, split_dir_local, child_a_props_2.y);
             }
             
@@ -891,8 +908,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     dup_conn.cell_b_index = neighbor_idx;
                     dup_conn.anchor_direction_a = vec4<f32>(child_b_anchor, 0.0);
                     dup_conn.anchor_direction_b = vec4<f32>(neighbor_anchor_to_b, 0.0);
-                    dup_conn.twist_reference_a = child_b_rotation;
-                    dup_conn.twist_reference_b = neighbor_rotation;
+                    dup_conn.twist_reference_a = child_b_genome_orientation;
+                    dup_conn.twist_reference_b = neighbor_genome_orientation;
                     dup_conn.zone_a = classify_zone(child_b_anchor, split_dir_local, child_b_props_2.y);
                     dup_conn.zone_b = classify_zone(neighbor_anchor_to_b, split_dir_local, neighbor_split_ratio);
                 } else {
@@ -900,8 +917,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     dup_conn.cell_b_index = child_b_slot;
                     dup_conn.anchor_direction_a = vec4<f32>(neighbor_anchor_to_b, 0.0);
                     dup_conn.anchor_direction_b = vec4<f32>(child_b_anchor, 0.0);
-                    dup_conn.twist_reference_a = neighbor_rotation;
-                    dup_conn.twist_reference_b = child_b_rotation;
+                    dup_conn.twist_reference_a = neighbor_genome_orientation;
+                    dup_conn.twist_reference_b = child_b_genome_orientation;
                     dup_conn.zone_a = classify_zone(neighbor_anchor_to_b, split_dir_local, neighbor_split_ratio);
                     dup_conn.zone_b = classify_zone(child_b_anchor, split_dir_local, child_b_props_2.y);
                 }

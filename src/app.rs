@@ -1387,8 +1387,8 @@ impl ApplicationHandler for AppState {
                 label: Some("Bio-Spheres Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits {
-                    // Cell state write bind group uses 18 storage buffers (rotations, genome_mode_data, max_cell_sizes, mode_properties, etc.)
-                    max_storage_buffers_per_shader_stage: 24,
+                    // Cell state write bind group uses 25 storage buffers (rotations, genome_mode_data, genome_orientations, etc.)
+                    max_storage_buffers_per_shader_stage: 32,
                     ..wgpu::Limits::default()
                 },
                 memory_hints: Default::default(),

@@ -369,6 +369,12 @@ pub struct GpuTripleBufferSystem {
 
     /// Per-mode oculocyte parameters: [sense_type(u32), ray_length(f32), signal_hops(u32), padding(u32)] = 16 bytes per mode
     pub oculocyte_params: wgpu::Buffer,
+
+    /// Per-cell genome orientation: Vec4(x, y, z, w) quaternion
+    /// Tracks the pure genome-derived orientation chain (parent * split_rotation * child_orientation)
+    /// without any physics perturbation. Used by adhesion shaders for anchor transformation
+    /// so that structures are defined purely by genome data.
+    pub genome_orientations: wgpu::Buffer,
     
     /// Indirect dispatch buffer for GPU-driven workgroup counts
     /// Layout: [workgroup_count_x, workgroup_count_y, workgroup_count_z, padding]
@@ -542,6 +548,10 @@ impl GpuTripleBufferSystem {
 
         // Per-mode oculocyte parameters: vec4<u32> per mode (sense_type, sense_range_bits, signal_hops, padding)
         let oculocyte_params = Self::create_storage_buffer(device, max_modes * 16, "Oculocyte Params");
+
+        // Per-cell genome orientation: vec4<f32> quaternion (identity = 0,0,0,1)
+        // Tracks pure genome-derived orientation without physics perturbation
+        let genome_orientations = Self::create_storage_buffer(device, buffer_size, "Genome Orientations");
         
         // Indirect dispatch buffer: 3 x u32 for workgroup counts + padding
         // Used for GPU-driven dispatch that scales with actual cell count
@@ -597,6 +607,7 @@ impl GpuTripleBufferSystem {
             env_anchor_buffer,
             glueocyte_env_adhesion_flags,
             oculocyte_params,
+            genome_orientations,
             indirect_dispatch_buffer,
             current_index: AtomicUsize::new(0),
             capacity,
@@ -696,6 +707,13 @@ impl GpuTripleBufferSystem {
             rotation_data.push([q.x, q.y, q.z, q.w]);
         }
         
+        // Build genome orientation data: Vec4(x, y, z, w) quaternion
+        let mut genome_orientation_data: Vec<[f32; 4]> = Vec::with_capacity(state.cell_count);
+        for i in 0..state.cell_count {
+            let q = state.genome_orientations[i];
+            genome_orientation_data.push([q.x, q.y, q.z, q.w]);
+        }
+        
         // Upload to all three buffer sets
         let position_bytes = bytemuck::cast_slice(&position_mass_data);
         let velocity_bytes = bytemuck::cast_slice(&velocity_data);
@@ -706,6 +724,9 @@ impl GpuTripleBufferSystem {
             queue.write_buffer(&self.velocity[i], 0, velocity_bytes);
             queue.write_buffer(&self.rotations[i], 0, rotation_bytes);
         }
+        
+        // Upload genome orientations (single buffer, not triple-buffered)
+        queue.write_buffer(&self.genome_orientations, 0, bytemuck::cast_slice(&genome_orientation_data));
         
         // Sync cell state buffers for division system
         self.sync_cell_state_buffers(queue, state, genomes);
@@ -1198,6 +1219,9 @@ impl GpuTripleBufferSystem {
             queue.write_buffer(&self.velocity[i], offset, bytemuck::bytes_of(&velocity_data));
             queue.write_buffer(&self.rotations[i], offset, bytemuck::bytes_of(&rotation_data));
         }
+        
+        // Also write genome orientation (same as initial rotation for new cells)
+        queue.write_buffer(&self.genome_orientations, offset, bytemuck::bytes_of(&rotation_data));
     }
     
     /// Sync a single cell's state data (for cell insertion during simulation)

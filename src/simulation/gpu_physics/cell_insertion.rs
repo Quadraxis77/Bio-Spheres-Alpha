@@ -195,6 +195,10 @@ impl GpuCellInsertion {
                     binding: 16,
                     resource: buffers.nutrients_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 17,
+                    resource: buffers.genome_orientations.as_entire_binding(),
+                },
             ],
         });
         
