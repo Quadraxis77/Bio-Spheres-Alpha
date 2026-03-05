@@ -435,26 +435,18 @@ pub fn division_step(
                 data.parent_genome_orientation,
                 current_time,
                 data.parent_split_count,
+                state.radii[data.child_a_slot].max(state.radii[data.child_b_slot]),
             );
             
-            // Create adhesion between children if parent_make_adhesion is enabled
-            // AND both children have keep_adhesion set. If either child has keep_adhesion
-            // disabled, the child-to-child bond must not form even if parent_make_adhesion is on.
+            // Create sibling adhesion between children if parent_make_adhesion is enabled.
+            // keep_adhesion flags only affect INHERITANCE of existing bonds, not sibling creation.
             let parent_mode = genome.modes.get(data.parent_mode_idx);
 
             if let Some(mode) = parent_mode {
+                let child_a_keep = mode.child_a.keep_adhesion;
+                let child_b_keep = mode.child_b.keep_adhesion;
                 let will_reach_max_splits = mode.max_splits >= 0
                     && (data.parent_split_count + 1) >= mode.max_splits;
-                let child_a_keep = if will_reach_max_splits {
-                    mode.child_a_after_split_keep_adhesion
-                } else {
-                    mode.child_a.keep_adhesion
-                };
-                let child_b_keep = if will_reach_max_splits {
-                    mode.child_b_after_split_keep_adhesion
-                } else {
-                    mode.child_b.keep_adhesion
-                };
 
                 println!(
                     "[DIVISION preview] parent={} mode={} make_adhesion={} child_a_keep={} child_b_keep={} will_reach_max_splits={}",
@@ -463,6 +455,7 @@ pub fn division_step(
                 );
 
                 // parent_make_adhesion always creates a sibling bond, regardless of keep_adhesion
+                // (matches GPU line 588: only checks make_adhesion flag)
                 if mode.parent_make_adhesion {
                         // Calculate anchor directions based on compounded genome orientations (matches Python reference)
                         // Python: angle1_relative = (spawn_direction + math.pi) - daughter1.arrow_direction
@@ -489,21 +482,9 @@ pub fn division_step(
                         let child_a_mode = genome.modes.get(data.child_a_mode_idx);
                         let child_b_mode = genome.modes.get(data.child_b_mode_idx);
 
-                        let child_a_split_dir = if let Some(m) = child_a_mode {
-                            let pitch = m.parent_split_direction.x.to_radians();
-                            let yaw = m.parent_split_direction.y.to_radians();
-                            Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z
-                        } else {
-                            Vec3::Z
-                        };
-
-                        let child_b_split_dir = if let Some(m) = child_b_mode {
-                            let pitch = m.parent_split_direction.x.to_radians();
-                            let yaw = m.parent_split_direction.y.to_radians();
-                            Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z
-                        } else {
-                            Vec3::Z
-                        };
+                        // Match GPU: use parent's split direction for sibling zone classification
+                        let child_a_split_dir = split_rotation * Vec3::Z;
+                        let child_b_split_dir = split_rotation * Vec3::Z;
 
                         // Get split ratios for zone classification
                         let child_a_split_ratio = child_a_mode.map(|m| m.split_ratio).unwrap_or(0.5);
@@ -713,6 +694,7 @@ pub fn division_step_multi(
             child_a_split_count: i32,
             child_b_split_count: i32,
             split_direction_local: Vec3,
+            parent_radius: f32,
         }
         
         let mut division_data_list = Vec::new();
@@ -841,6 +823,7 @@ pub fn division_step_multi(
                 child_a_split_count,
                 child_b_split_count,
                 split_direction_local: Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z,
+                parent_radius,
             });
         }
         
@@ -927,6 +910,7 @@ pub fn division_step_multi(
                 data.parent_genome_orientation,
                 current_time,
                 data.parent_split_count,
+                data.parent_radius,
             );
 
             // Create adhesion between children if parent_make_adhesion is enabled
@@ -934,20 +918,9 @@ pub fn division_step_multi(
             let parent_mode = genome.modes.get(data.parent_mode_idx);
 
             if let Some(mode) = parent_mode {
-                let will_reach_max_splits = mode.max_splits >= 0
-                    && (data.parent_split_count + 1) >= mode.max_splits;
-                let child_a_keep = if will_reach_max_splits {
-                    mode.child_a_after_split_keep_adhesion
-                } else {
-                    mode.child_a.keep_adhesion
-                };
-                let child_b_keep = if will_reach_max_splits {
-                    mode.child_b_after_split_keep_adhesion
-                } else {
-                    mode.child_b.keep_adhesion
-                };
-
-                if mode.parent_make_adhesion && child_a_keep && child_b_keep {
+                // parent_make_adhesion always creates a sibling bond, regardless of keep_adhesion
+                // (matches GPU line 588: only checks make_adhesion flag, not keep flags)
+                if mode.parent_make_adhesion {
                     let direction_a_to_b_parent_local = -data.split_direction_local;
                     let direction_b_to_a_parent_local = data.split_direction_local;
                     
@@ -957,17 +930,9 @@ pub fn division_step_multi(
                     let child_a_mode = genome.modes.get(data.child_a_mode_idx);
                     let child_b_mode = genome.modes.get(data.child_b_mode_idx);
                     
-                    let child_a_split_dir = if let Some(m) = child_a_mode {
-                        let pitch = m.parent_split_direction.x.to_radians();
-                        let yaw = m.parent_split_direction.y.to_radians();
-                        Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z
-                    } else { Vec3::Z };
-                    
-                    let child_b_split_dir = if let Some(m) = child_b_mode {
-                        let pitch = m.parent_split_direction.x.to_radians();
-                        let yaw = m.parent_split_direction.y.to_radians();
-                        Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z
-                    } else { Vec3::Z };
+                    // Match GPU: use parent's split direction for sibling zone classification
+                    let child_a_split_dir = data.split_direction_local;
+                    let child_b_split_dir = data.split_direction_local;
                     
                     // Get split ratios for zone classification
                     let child_a_split_ratio = child_a_mode.map(|m| m.split_ratio).unwrap_or(0.5);

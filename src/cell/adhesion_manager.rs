@@ -335,7 +335,9 @@ impl AdhesionConnectionManager {
             .filter(move |&i| connections.is_active[i] == 1)
     }
     
-    /// Count active adhesions for a cell (optimized)
+    /// Count active adhesions for a cell.
+    /// Requires a reference to connections to verify each entry is actually active,
+    /// preventing stale (deactivated) references from inflating the count.
     pub fn count_active_adhesions(&self, cell_index: usize) -> usize {
         if cell_index >= self.cell_adhesion_indices.len() {
             return 0;

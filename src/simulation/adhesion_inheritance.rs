@@ -3,19 +3,19 @@ use crate::cell::{AdhesionZone, classify_bond_direction, MAX_ADHESIONS_PER_CELL}
 use crate::simulation::canonical_state::CanonicalState;
 use crate::genome::Genome;
 
-/// Handle adhesion inheritance during cell division
+/// Handle adhesion inheritance during cell division.
 ///
-/// This function processes all adhesions from the parent cell and determines
-/// which child(ren) should inherit each connection based on zone classification.
+/// Matches GPU `lifecycle_division_execute_ring.wgsl` exactly:
+/// - Connections are modified IN-PLACE for single-child inheritance (Zone A/B)
+/// - Only Zone C (both children) allocates a duplicate connection
+/// - Neighbor adhesion indices are never polluted with stale references
+/// - Original mode_index is preserved (not changed to child's mode)
+/// - Keep flags always use normal child_a/b.keep_adhesion (not after_split variants)
 ///
 /// Zone inheritance rules:
 /// - Zone A: Inherit to child B (adhesions pointing opposite to split direction)
 /// - Zone B: Inherit to child A (adhesions pointing same as split direction)
-/// - Zone C: Inherit to both children (adhesions in equatorial band)
-///
-/// CRITICAL: parent_genome_orientation must be the parent's orientation BEFORE division,
-/// since child A overwrites the parent's slot and changes the genome orientation.
-/// parent_genome_orientation is purely genome-derived (state.genome_orientations), never physics.
+/// - Zone C: Inherit to both children (modify original for A, duplicate for B)
 pub fn inherit_adhesions_on_division(
     state: &mut CanonicalState,
     genome: &Genome,
@@ -25,34 +25,20 @@ pub fn inherit_adhesions_on_division(
     parent_genome_orientation: Quat,
     current_time: f32,
     parent_split_count: i32,
+    parent_radius: f32,
 ) {
-    // Get parent mode settings
     let parent_mode = match genome.modes.get(parent_mode_idx) {
         Some(mode) => mode,
-        None => return, // Invalid mode
+        None => return,
     };
 
-    // Check if children keep adhesions
-    // Use after splits settings when max splits is reached
-    let will_reach_max_splits = parent_mode.max_splits >= 0 && (parent_split_count + 1) >= parent_mode.max_splits;
-    let child_a_keep = if will_reach_max_splits {
-        parent_mode.child_a_after_split_keep_adhesion
-    } else {
-        parent_mode.child_a.keep_adhesion
-    };
-    let child_b_keep = if will_reach_max_splits {
-        parent_mode.child_b_after_split_keep_adhesion
-    } else {
-        parent_mode.child_b.keep_adhesion
-    };
+    // Match GPU: always use normal keep flags (GPU buffer is static per-mode,
+    // never switches to after_split variants based on will_reach_max_splits).
+    let child_a_keep = parent_mode.child_a.keep_adhesion;
+    let child_b_keep = parent_mode.child_b.keep_adhesion;
 
-    log::debug!(
-        "inherit_adhesions_on_division: parent_mode={}, child_a_idx={}, child_b_idx={}, child_a_keep={}, child_b_keep={}",
-        parent_mode_idx, child_a_idx, child_b_idx, child_a_keep, child_b_keep
-    );
-
-    // CRITICAL: Collect parent's adhesion connections BEFORE initializing child indices
-    // (since child A reuses parent index, initializing would clear the connections)
+    // CRITICAL: Collect parent's adhesion connections BEFORE clearing indices
+    // (child A reuses parent index, so clearing would lose the references)
     let mut parent_connections = Vec::new();
     for slot_idx in 0..MAX_ADHESIONS_PER_CELL {
         let connection_idx = state.adhesion_manager.cell_adhesion_indices[child_a_idx][slot_idx];
@@ -61,272 +47,303 @@ pub fn inherit_adhesions_on_division(
         }
     }
 
-    // Initialize adhesion indices for child cells (matches C++ Requirement 10.4)
-    // This clears the parent's old adhesion indices
-    // MUST happen AFTER collecting parent connections
+    // Clear adhesion indices for both children (rebuilt below)
     state.adhesion_manager.init_cell_adhesion_indices(child_a_idx);
     state.adhesion_manager.init_cell_adhesion_indices(child_b_idx);
 
-    // Calculate split rotation from genome only — no physics rotation involved.
+    // If neither child keeps adhesions, deactivate all old connections,
+    // clean up neighbor references, and return early (matches GPU lines 658-679).
+    if !child_a_keep && !child_b_keep {
+        for &connection_idx in &parent_connections {
+            if connection_idx >= state.adhesion_connections.active_count {
+                continue;
+            }
+            if state.adhesion_connections.is_active[connection_idx] == 0 {
+                continue;
+            }
+            let cell_a = state.adhesion_connections.cell_a_index[connection_idx];
+            let cell_b = state.adhesion_connections.cell_b_index[connection_idx];
+            let neighbor_idx = if cell_a == child_a_idx { cell_b }
+                else if cell_b == child_a_idx { cell_a }
+                else { continue };
+
+            state.adhesion_connections.is_active[connection_idx] = 0;
+            state.adhesion_manager.remove_adhesion_index(neighbor_idx, connection_idx as i32);
+        }
+        return;
+    }
+
+    // Geometric parameters from genome
     let pitch = parent_mode.parent_split_direction.x.to_radians();
     let yaw = parent_mode.parent_split_direction.y.to_radians();
     let split_rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
-    // split_direction_local is in the parent's local genome frame (pure genome data).
-    let split_direction_local = split_rotation * Vec3::Z;
+    let split_dir_local = split_rotation * Vec3::Z;
+    let split_dir_normalized = split_dir_local.normalize_or_zero();
+    let child_offset = parent_radius * 0.25;
+    let child_a_pos_parent_frame = split_dir_normalized * child_offset;
+    let child_b_pos_parent_frame = -split_dir_normalized * child_offset;
 
-    // Split offset: genome-derived direction, fixed magnitude (no physics radius).
-    let split_dir_parent = split_direction_local.normalize_or_zero();
-    // Use 0.5 as a fixed canonical offset (not from state.radii).
-    let split_offset_magnitude = 0.5_f32;
+    // Match GPU: use will_reach_max_splits for orientation selection
+    let will_reach_max_splits = parent_mode.max_splits >= 0
+        && (parent_split_count + 1) >= parent_mode.max_splits;
+    let child_a_orientation_final = if will_reach_max_splits {
+        parent_mode.child_a_after_split_orientation
+    } else {
+        parent_mode.child_a.orientation
+    };
+    let child_b_orientation_final = if will_reach_max_splits {
+        parent_mode.child_b_after_split_orientation
+    } else {
+        parent_mode.child_b.orientation
+    };
+    let child_a_orientation_delta = split_rotation * child_a_orientation_final;
+    let child_b_orientation_delta = split_rotation * child_b_orientation_final;
 
-    // Process each parent connection
+    // Child genome orientations (for twist references)
+    let child_a_genome_orientation = state.genome_orientations[child_a_idx];
+    let child_b_genome_orientation = state.genome_orientations[child_b_idx];
+
+    // Split ratios for zone classification on child side
+    let child_a_mode_idx = state.mode_indices[child_a_idx];
+    let child_b_mode_idx = state.mode_indices[child_b_idx];
+    let child_a_split_ratio = genome.modes.get(child_a_mode_idx)
+        .map(|m| m.split_ratio).unwrap_or(0.5);
+    let child_b_split_ratio = genome.modes.get(child_b_mode_idx)
+        .map(|m| m.split_ratio).unwrap_or(0.5);
+    let parent_split_ratio = parent_mode.split_ratio;
+
+    // Fixed geometry constants
+    const FIXED_RADIUS: f32 = 1.0;
+    let rest_length = 1.0_f32;
+    let center_to_center_dist = rest_length + FIXED_RADIUS + FIXED_RADIUS;
+
+    // Track adhesion counts for each child
+    let mut child_a_adhesion_count: usize = 0;
+    let mut child_b_adhesion_count: usize = 0;
+
+    // Process inherited adhesions (matches GPU lines 722-943)
     for &connection_idx in &parent_connections {
         if connection_idx >= state.adhesion_connections.active_count {
             continue;
         }
-
         if state.adhesion_connections.is_active[connection_idx] == 0 {
             continue;
         }
 
-        let cell_a_idx = state.adhesion_connections.cell_a_index[connection_idx];
-        let cell_b_idx_conn = state.adhesion_connections.cell_b_index[connection_idx];
-
-        let (neighbor_idx, parent_is_a) = if cell_a_idx == child_a_idx {
-            (cell_b_idx_conn, true)
-        } else if cell_b_idx_conn == child_a_idx {
-            (cell_a_idx, false)
+        let cell_a = state.adhesion_connections.cell_a_index[connection_idx];
+        let cell_b = state.adhesion_connections.cell_b_index[connection_idx];
+        let (neighbor_idx, parent_is_a) = if cell_a == child_a_idx {
+            (cell_b, true)
+        } else if cell_b == child_a_idx {
+            (cell_a, false)
         } else {
             continue;
         };
 
-        let (parent_anchor_direction, neighbor_anchor_direction) = if parent_is_a {
-            (
-                state.adhesion_connections.anchor_direction_a[connection_idx],
-                state.adhesion_connections.anchor_direction_b[connection_idx],
-            )
+        // Parent's anchor direction for zone classification
+        let parent_anchor_dir = if parent_is_a {
+            state.adhesion_connections.anchor_direction_a[connection_idx]
         } else {
-            (
-                state.adhesion_connections.anchor_direction_b[connection_idx],
-                state.adhesion_connections.anchor_direction_a[connection_idx],
-            )
+            state.adhesion_connections.anchor_direction_b[connection_idx]
         };
 
-        let parent_split_ratio = parent_mode.split_ratio;
-        let zone = classify_bond_direction(parent_anchor_direction, split_direction_local, parent_split_ratio);
+        let zone = classify_bond_direction(parent_anchor_dir, split_dir_local, parent_split_ratio);
 
-        log::debug!(
-            "  Connection {}: neighbor={}, zone={:?}, parent_anchor={:?}, split_dir={:?}",
-            connection_idx, neighbor_idx, zone, parent_anchor_direction, split_direction_local
-        );
+        // Determine which children inherit (matches GPU lines 766-776)
+        let (give_to_a, give_to_b) = match zone {
+            AdhesionZone::ZoneA => (false, child_b_keep),
+            AdhesionZone::ZoneB => (child_a_keep, false),
+            AdhesionZone::ZoneC => (child_a_keep, child_b_keep),
+        };
 
-        match zone {
-            AdhesionZone::ZoneA if child_b_keep => {
-                log::debug!("    -> Inheriting to child B (idx {})", child_b_idx);
-                create_inherited_adhesion(
-                    state,
-                    genome,
-                    child_b_idx,
-                    neighbor_idx,
-                    parent_is_a,
-                    parent_genome_orientation,
-                    parent_anchor_direction,
-                    neighbor_anchor_direction,
-                    split_rotation * parent_mode.child_b.orientation,
-                    split_offset_magnitude,
-                    split_dir_parent,
-                    false, // child_b is at -split
-                    current_time,
-                );
-            }
-            AdhesionZone::ZoneB if child_a_keep => {
-                log::debug!("    -> Inheriting to child A (idx {})", child_a_idx);
-                create_inherited_adhesion(
-                    state,
-                    genome,
-                    child_a_idx,
-                    neighbor_idx,
-                    parent_is_a,
-                    parent_genome_orientation,
-                    parent_anchor_direction,
-                    neighbor_anchor_direction,
-                    split_rotation * parent_mode.child_a.orientation,
-                    split_offset_magnitude,
-                    split_dir_parent,
-                    true, // child_a is at +split
-                    current_time,
-                );
-            }
-            AdhesionZone::ZoneC => {
-                log::debug!("    -> Zone C: child_a_keep={}, child_b_keep={}", child_a_keep, child_b_keep);
-                if child_b_keep {
-                    log::debug!("      -> Inheriting to child B (idx {})", child_b_idx);
-                    create_inherited_adhesion(
-                        state,
-                        genome,
-                        child_b_idx,
-                        neighbor_idx,
-                        parent_is_a,
-                        parent_genome_orientation,
-                        parent_anchor_direction,
-                        neighbor_anchor_direction,
-                        split_rotation * parent_mode.child_b.orientation,
-                        split_offset_magnitude,
-                        split_dir_parent,
-                        false,
-                        current_time,
-                    );
-                }
-                if child_a_keep {
-                    log::debug!("      -> Inheriting to child A (idx {})", child_a_idx);
-                    create_inherited_adhesion(
-                        state,
-                        genome,
-                        child_a_idx,
-                        neighbor_idx,
-                        parent_is_a,
-                        parent_genome_orientation,
-                        parent_anchor_direction,
-                        neighbor_anchor_direction,
-                        split_rotation * parent_mode.child_a.orientation,
-                        split_offset_magnitude,
-                        split_dir_parent,
-                        true,
-                        current_time,
-                    );
-                }
-            }
-            AdhesionZone::ZoneA => {
-                log::debug!("    -> Zone A but child_b_keep=false, skipping inheritance");
-            }
-            AdhesionZone::ZoneB => {
-                log::debug!("    -> Zone B but child_a_keep=false, skipping inheritance");
-            }
+        if !give_to_a && !give_to_b {
+            // Neither child inherits — deactivate and clean up neighbor reference
+            state.adhesion_connections.is_active[connection_idx] = 0;
+            state.adhesion_manager.remove_adhesion_index(neighbor_idx, connection_idx as i32);
+            continue;
         }
 
-        state.adhesion_connections.is_active[connection_idx] = 0;
+        // Neighbor position in parent frame (from stored anchor direction)
+        let neighbor_pos_parent_frame = parent_anchor_dir * center_to_center_dist;
+
+        // Relative rotation for neighbor anchor calculation (genome-pure)
+        let neighbor_genome_orientation = state.genome_orientations[neighbor_idx];
+        let relative_rotation = neighbor_genome_orientation.inverse() * parent_genome_orientation;
+
+        if give_to_a && !give_to_b {
+            // Only child A inherits — modify connection IN PLACE (matches GPU lines 796-822)
+            // Cell indices already correct since child A reuses parent slot
+            let child_anchor = calculate_child_anchor_direction(
+                child_a_pos_parent_frame, neighbor_pos_parent_frame, child_a_orientation_delta,
+            );
+            let dir_to_child = (child_a_pos_parent_frame - neighbor_pos_parent_frame).normalize_or_zero();
+            let neighbor_anchor = (relative_rotation * dir_to_child).normalize();
+
+            if parent_is_a {
+                state.adhesion_connections.anchor_direction_a[connection_idx] = child_anchor;
+                state.adhesion_connections.anchor_direction_b[connection_idx] = neighbor_anchor;
+                state.adhesion_connections.twist_reference_a[connection_idx] = child_a_genome_orientation;
+                state.adhesion_connections.zone_a[connection_idx] =
+                    classify_bond_direction(child_anchor, split_dir_local, child_a_split_ratio) as u8;
+            } else {
+                state.adhesion_connections.anchor_direction_b[connection_idx] = child_anchor;
+                state.adhesion_connections.anchor_direction_a[connection_idx] = neighbor_anchor;
+                state.adhesion_connections.twist_reference_b[connection_idx] = child_a_genome_orientation;
+                state.adhesion_connections.zone_b[connection_idx] =
+                    classify_bond_direction(child_anchor, split_dir_local, child_a_split_ratio) as u8;
+            }
+
+            // Add to child A's adhesion indices
+            if child_a_adhesion_count < MAX_ADHESIONS_PER_CELL {
+                state.adhesion_manager.cell_adhesion_indices[child_a_idx][child_a_adhesion_count] = connection_idx as i32;
+                child_a_adhesion_count += 1;
+            }
+
+        } else if give_to_b && !give_to_a {
+            // Only child B inherits — modify connection IN PLACE (matches GPU lines 824-852)
+            // Update cell index from parent slot to child B
+            let child_anchor = calculate_child_anchor_direction(
+                child_b_pos_parent_frame, neighbor_pos_parent_frame, child_b_orientation_delta,
+            );
+            let dir_to_child = (child_b_pos_parent_frame - neighbor_pos_parent_frame).normalize_or_zero();
+            let neighbor_anchor = (relative_rotation * dir_to_child).normalize();
+
+            if parent_is_a {
+                state.adhesion_connections.cell_a_index[connection_idx] = child_b_idx;
+                state.adhesion_connections.anchor_direction_a[connection_idx] = child_anchor;
+                state.adhesion_connections.anchor_direction_b[connection_idx] = neighbor_anchor;
+                state.adhesion_connections.twist_reference_a[connection_idx] = child_b_genome_orientation;
+                state.adhesion_connections.zone_a[connection_idx] =
+                    classify_bond_direction(child_anchor, split_dir_local, child_b_split_ratio) as u8;
+            } else {
+                state.adhesion_connections.cell_b_index[connection_idx] = child_b_idx;
+                state.adhesion_connections.anchor_direction_b[connection_idx] = child_anchor;
+                state.adhesion_connections.anchor_direction_a[connection_idx] = neighbor_anchor;
+                state.adhesion_connections.twist_reference_b[connection_idx] = child_b_genome_orientation;
+                state.adhesion_connections.zone_b[connection_idx] =
+                    classify_bond_direction(child_anchor, split_dir_local, child_b_split_ratio) as u8;
+            }
+
+            // Add to child B's adhesion indices
+            if child_b_adhesion_count < MAX_ADHESIONS_PER_CELL {
+                state.adhesion_manager.cell_adhesion_indices[child_b_idx][child_b_adhesion_count] = connection_idx as i32;
+                child_b_adhesion_count += 1;
+            }
+
+        } else {
+            // Zone C: Both inherit — modify original for child A, duplicate for child B
+            // (matches GPU lines 854-942)
+
+            // --- Child A gets the original connection (modified in place) ---
+            let child_a_anchor = calculate_child_anchor_direction(
+                child_a_pos_parent_frame, neighbor_pos_parent_frame, child_a_orientation_delta,
+            );
+            let dir_to_child_a = (child_a_pos_parent_frame - neighbor_pos_parent_frame).normalize_or_zero();
+            let neighbor_anchor_to_a = (relative_rotation * dir_to_child_a).normalize();
+
+            if parent_is_a {
+                state.adhesion_connections.anchor_direction_a[connection_idx] = child_a_anchor;
+                state.adhesion_connections.anchor_direction_b[connection_idx] = neighbor_anchor_to_a;
+                state.adhesion_connections.twist_reference_a[connection_idx] = child_a_genome_orientation;
+                state.adhesion_connections.zone_a[connection_idx] =
+                    classify_bond_direction(child_a_anchor, split_dir_local, child_a_split_ratio) as u8;
+            } else {
+                state.adhesion_connections.anchor_direction_b[connection_idx] = child_a_anchor;
+                state.adhesion_connections.anchor_direction_a[connection_idx] = neighbor_anchor_to_a;
+                state.adhesion_connections.twist_reference_b[connection_idx] = child_a_genome_orientation;
+                state.adhesion_connections.zone_b[connection_idx] =
+                    classify_bond_direction(child_a_anchor, split_dir_local, child_a_split_ratio) as u8;
+            }
+
+            if child_a_adhesion_count < MAX_ADHESIONS_PER_CELL {
+                state.adhesion_manager.cell_adhesion_indices[child_a_idx][child_a_adhesion_count] = connection_idx as i32;
+                child_a_adhesion_count += 1;
+            }
+
+            // --- Child B gets a duplicate connection ---
+            let child_b_anchor = calculate_child_anchor_direction(
+                child_b_pos_parent_frame, neighbor_pos_parent_frame, child_b_orientation_delta,
+            );
+            let dir_to_child_b = (child_b_pos_parent_frame - neighbor_pos_parent_frame).normalize_or_zero();
+            let neighbor_anchor_to_b = (relative_rotation * dir_to_child_b).normalize();
+
+            // Find a free connection slot for the duplicate
+            let dup_idx = find_free_connection_slot(&state.adhesion_connections);
+            if let Some(dup_idx) = dup_idx {
+                let neighbor_mode_idx = state.mode_indices[neighbor_idx];
+                let neighbor_split_ratio = genome.modes.get(neighbor_mode_idx)
+                    .map(|m| m.split_ratio).unwrap_or(0.5);
+
+                // Keep original mode_index (matches GPU — connection.mode_index is never changed)
+                let original_mode_index = state.adhesion_connections.mode_index[connection_idx];
+
+                if parent_is_a {
+                    state.adhesion_connections.cell_a_index[dup_idx] = child_b_idx;
+                    state.adhesion_connections.cell_b_index[dup_idx] = neighbor_idx;
+                    state.adhesion_connections.anchor_direction_a[dup_idx] = child_b_anchor;
+                    state.adhesion_connections.anchor_direction_b[dup_idx] = neighbor_anchor_to_b;
+                    state.adhesion_connections.twist_reference_a[dup_idx] = child_b_genome_orientation;
+                    state.adhesion_connections.twist_reference_b[dup_idx] = neighbor_genome_orientation;
+                    state.adhesion_connections.zone_a[dup_idx] =
+                        classify_bond_direction(child_b_anchor, split_dir_local, child_b_split_ratio) as u8;
+                    state.adhesion_connections.zone_b[dup_idx] =
+                        classify_bond_direction(neighbor_anchor_to_b, split_dir_local, neighbor_split_ratio) as u8;
+                } else {
+                    state.adhesion_connections.cell_a_index[dup_idx] = neighbor_idx;
+                    state.adhesion_connections.cell_b_index[dup_idx] = child_b_idx;
+                    state.adhesion_connections.anchor_direction_a[dup_idx] = neighbor_anchor_to_b;
+                    state.adhesion_connections.anchor_direction_b[dup_idx] = child_b_anchor;
+                    state.adhesion_connections.twist_reference_a[dup_idx] = neighbor_genome_orientation;
+                    state.adhesion_connections.twist_reference_b[dup_idx] = child_b_genome_orientation;
+                    state.adhesion_connections.zone_a[dup_idx] =
+                        classify_bond_direction(neighbor_anchor_to_b, split_dir_local, neighbor_split_ratio) as u8;
+                    state.adhesion_connections.zone_b[dup_idx] =
+                        classify_bond_direction(child_b_anchor, split_dir_local, child_b_split_ratio) as u8;
+                }
+
+                state.adhesion_connections.mode_index[dup_idx] = original_mode_index;
+                state.adhesion_connections.is_active[dup_idx] = 1;
+                state.adhesion_connections.birth_time[dup_idx] = current_time;
+
+                if dup_idx >= state.adhesion_connections.active_count {
+                    state.adhesion_connections.active_count = dup_idx + 1;
+                }
+
+                // Add to child B's adhesion indices
+                if child_b_adhesion_count < MAX_ADHESIONS_PER_CELL {
+                    state.adhesion_manager.cell_adhesion_indices[child_b_idx][child_b_adhesion_count] = dup_idx as i32;
+                    child_b_adhesion_count += 1;
+                }
+
+                // Add duplicate to neighbor's adhesion indices (matches GPU lines 934-940)
+                for slot in state.adhesion_manager.cell_adhesion_indices[neighbor_idx].iter_mut() {
+                    if *slot < 0 {
+                        *slot = dup_idx as i32;
+                        break;
+                    }
+                }
+            }
+        }
     }
 }
 
-/// Create an inherited adhesion connection from parent to child.
-///
-/// Anchor directions are computed geometrically in the parent's local genome frame,
-/// using only genome-derived data (no physics rotations, positions, or radii).
-///
-/// child_orientation_delta: split_rotation * child_x.orientation (genome-only)
-/// parent_genome_orientation: state.genome_orientations[parent] captured before division (genome-only)
-/// split_dir_parent / split_offset_magnitude: from genome mode, fixed constants (no physics)
-#[allow(clippy::too_many_arguments)]
-fn create_inherited_adhesion(
-    state: &mut CanonicalState,
-    genome: &Genome,
-    child_idx: usize,
-    neighbor_idx: usize,
-    parent_was_a: bool,
-    parent_genome_orientation: Quat,
-    parent_anchor_direction: Vec3,
-    _neighbor_anchor_direction_stored: Vec3,
+/// Calculate child anchor direction in child's local frame (matches GPU calculate_child_anchor_direction)
+fn calculate_child_anchor_direction(
+    child_pos_parent_frame: Vec3,
+    neighbor_pos_parent_frame: Vec3,
     child_orientation_delta: Quat,
-    split_offset_magnitude: f32,
-    split_dir_parent: Vec3,
-    is_child_a: bool,
-    current_time: f32,
-) {
-    // Get child mode for adhesion rest_length
-    let child_mode_idx = state.mode_indices[child_idx];
-    let child_mode = match genome.modes.get(child_mode_idx) {
-        Some(mode) => mode,
-        None => return,
-    };
-    let rest_length = child_mode.adhesion_settings.rest_length;
+) -> Vec3 {
+    let direction_to_neighbor = (neighbor_pos_parent_frame - child_pos_parent_frame).normalize_or_zero();
+    let inv_delta = child_orientation_delta.inverse();
+    (inv_delta * direction_to_neighbor).normalize()
+}
 
-    // Use a fixed canonical radius (not from state.radii) so geometry is physics-independent.
-    const FIXED_RADIUS: f32 = 1.0;
-    let center_to_center_dist = rest_length + FIXED_RADIUS + FIXED_RADIUS;
-
-    // Child position in parent's local genome frame (genome-derived offset, fixed radius).
-    let child_pos_parent_frame = if is_child_a {
-        split_dir_parent * split_offset_magnitude
-    } else {
-        -split_dir_parent * split_offset_magnitude
-    };
-
-    // Neighbor position approximated from the stored anchor direction and fixed distance.
-    // parent_anchor_direction is in the parent's local genome frame.
-    let neighbor_pos_parent_frame = parent_anchor_direction * center_to_center_dist;
-
-    // Child anchor: direction from child toward neighbor, in child's local genome frame.
-    let dir_to_neighbor = (neighbor_pos_parent_frame - child_pos_parent_frame).normalize_or_zero();
-    let child_anchor_direction = (child_orientation_delta.inverse() * dir_to_neighbor).normalize();
-
-    // Neighbor anchor: direction from neighbor toward child, transformed from parent frame
-    // into the neighbor's local genome frame using the genome-relative rotation.
-    // Uses genome orientations only — no physics rotations involved.
-    let dir_to_child = (child_pos_parent_frame - neighbor_pos_parent_frame).normalize_or_zero();
-    let neighbor_genome_orientation = state.genome_orientations[neighbor_idx];
-    // relative_rotation converts vectors from parent-genome-local to neighbor-genome-local
-    let relative_rotation = neighbor_genome_orientation.inverse() * parent_genome_orientation;
-    let neighbor_anchor_direction = (relative_rotation * dir_to_child).normalize();
-
-    // Mode indices for zone classification
-    let neighbor_mode_idx = state.mode_indices[neighbor_idx];
-    let child_mode = genome.modes.get(child_mode_idx);
-    let neighbor_mode = genome.modes.get(neighbor_mode_idx);
-
-    let child_split_dir = child_mode.map(|m| {
-        let pitch = m.parent_split_direction.x.to_radians();
-        let yaw = m.parent_split_direction.y.to_radians();
-        Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z
-    }).unwrap_or(Vec3::Z);
-
-    let neighbor_split_dir = neighbor_mode.map(|m| {
-        let pitch = m.parent_split_direction.x.to_radians();
-        let yaw = m.parent_split_direction.y.to_radians();
-        Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z
-    }).unwrap_or(Vec3::Z);
-
-    // Twist references: genome orientations only — never mutated by physics.
-    let child_genome_orientation = state.genome_orientations[child_idx];
-    let neighbor_genome_orientation_for_twist = state.genome_orientations[neighbor_idx];
-
-    let child_split_ratio = child_mode.map(|m| m.split_ratio).unwrap_or(0.5);
-    let neighbor_split_ratio = neighbor_mode.map(|m| m.split_ratio).unwrap_or(0.5);
-
-    let result = if parent_was_a {
-        // Parent was cellA, neighbor was cellB → child becomes cellA
-        state.adhesion_manager.add_adhesion_with_directions(
-            &mut state.adhesion_connections,
-            child_idx,
-            neighbor_idx,
-            child_mode_idx,
-            child_anchor_direction,
-            neighbor_anchor_direction,
-            child_split_dir,
-            neighbor_split_dir,
-            child_genome_orientation,
-            neighbor_genome_orientation_for_twist,
-            child_split_ratio,
-            neighbor_split_ratio,
-            current_time,
-        )
-    } else {
-        // Parent was cellB, neighbor was cellA → child becomes cellB
-        state.adhesion_manager.add_adhesion_with_directions(
-            &mut state.adhesion_connections,
-            neighbor_idx,
-            child_idx,
-            child_mode_idx,
-            neighbor_anchor_direction,
-            child_anchor_direction,
-            neighbor_split_dir,
-            child_split_dir,
-            neighbor_genome_orientation_for_twist,
-            child_genome_orientation,
-            neighbor_split_ratio,
-            child_split_ratio,
-            current_time,
-        )
-    };
-
-    let _ = result;
+/// Find a free connection slot (matches GPU allocate_adhesion_slot fallback)
+fn find_free_connection_slot(connections: &crate::cell::adhesion::AdhesionConnections) -> Option<usize> {
+    for i in 0..connections.cell_a_index.len() {
+        if i >= connections.active_count || connections.is_active[i] == 0 {
+            return Some(i);
+        }
+    }
+    None
 }

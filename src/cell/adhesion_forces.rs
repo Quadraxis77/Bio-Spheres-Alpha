@@ -20,6 +20,7 @@ pub fn compute_adhesion_forces(
     rotations: &[Quat],
     angular_velocities: &[Vec3],
     masses: &[f32],
+    genome_orientations: &[Quat],
     mode_settings: &[AdhesionSettings],
     forces: &mut [Vec3],
     torques: &mut [Vec3],
@@ -61,6 +62,8 @@ pub fn compute_adhesion_forces(
             rotations[cell_b_idx],
             angular_velocities[cell_b_idx],
             masses[cell_b_idx],
+            genome_orientations[cell_a_idx],
+            genome_orientations[cell_b_idx],
             connections.anchor_direction_a[i],
             connections.anchor_direction_b[i],
             connections.twist_reference_a[i],
@@ -98,6 +101,7 @@ pub fn compute_adhesion_forces_parallel(
     rotations: &[Quat],
     angular_velocities: &[Vec3],
     masses: &[f32],
+    genome_orientations: &[Quat],
     mode_settings: &[AdhesionSettings],
     forces: &mut [Vec3],
     torques: &mut [Vec3],
@@ -137,6 +141,8 @@ pub fn compute_adhesion_forces_parallel(
                 rotations[cell_b_idx],
                 angular_velocities[cell_b_idx],
                 masses[cell_b_idx],
+                genome_orientations[cell_a_idx],
+                genome_orientations[cell_b_idx],
                 connections.anchor_direction_a[i],
                 connections.anchor_direction_b[i],
                 connections.twist_reference_a[i],
@@ -170,9 +176,12 @@ pub fn compute_adhesion_forces_parallel(
     bonds_to_break
 }
 
-/// Compute adhesion forces for a single connection pair
-/// Direct port of C++ computeAdhesionForces (cell pair version)
-/// Optimized with inline hint for better performance
+/// Compute adhesion forces for a single connection pair.
+/// Matches GPU adhesion_physics.wgsl exactly:
+/// - Genome orientations for geometric spring anchors (genome-pure positioning)
+/// - Physics rotations for orientation/twist springs (detects actual misalignment)
+/// - Anchor-based geometric spring (not simple distance spring)
+/// - Full-strength twist constraints (no reduction factors)
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn compute_adhesion_force_pair(
@@ -186,6 +195,8 @@ fn compute_adhesion_force_pair(
     rot_b: Quat,
     ang_vel_b: Vec3,
     _mass_b: f32,
+    genome_rot_a: Quat,
+    genome_rot_b: Quat,
     anchor_dir_a: Vec3,
     anchor_dir_b: Vec3,
     twist_ref_a: Quat,
@@ -196,158 +207,135 @@ fn compute_adhesion_force_pair(
     let mut torque_a = Vec3::ZERO;
     let mut force_b = Vec3::ZERO;
     let mut torque_b = Vec3::ZERO;
-    
-    // Connection vector from A to B
+
     let delta_pos = pos_b - pos_a;
     let dist = delta_pos.length();
     if dist < QUATERNION_EPSILON {
         return (force_a, torque_a, force_b, torque_b, 0.0);
     }
-    
+
     let adhesion_dir = delta_pos / dist;
     let rest_length = settings.rest_length;
-    
-    // Linear spring force with softness factor (emulates Python softness = 1.0 - bond_stretch * 0.8)
-    let softness = 0.3; // Reduced softness to allow more flexibility for spiral patterns
-    let force_mag = settings.linear_spring_stiffness * (dist - rest_length) * softness;
-    let spring_force_mag = force_mag.abs();
-    let spring_force = adhesion_dir * force_mag;
-    
-    // Damping - matches reference implementation exactly
-    // This is an unusual formula: constant force modified by velocity
-    // When rel_vel is 0: damping_force = -adhesion_dir * 1.0 (constant force toward A)
-    // The velocity component modulates this base force
-    let rel_vel = vel_b - vel_a;
-    let damp_mag = 1.0 - settings.linear_spring_damping * rel_vel.dot(adhesion_dir);
-    let damping_force = -adhesion_dir * damp_mag;
-    
-    // Apply forces: spring + damping
-    force_a += spring_force + damping_force;
-    force_b -= spring_force + damping_force;
-    
-    // Transform anchor directions to world space using PHYSICS rotations
-    // Anchors are stored in local space and rotate with the cell
+
+    // Transform anchor directions to world space using GENOME orientations
+    // (not physics rotations) so structures are defined purely by genome data.
     let anchor_a = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
+        Vec3::X
+    } else {
+        rotate_vector_by_quaternion(anchor_dir_a, genome_rot_a)
+    };
+    let anchor_b = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
+        -Vec3::X
+    } else {
+        rotate_vector_by_quaternion(anchor_dir_b, genome_rot_b)
+    };
+
+    // Compute physics-based anchors for orientation/twist constraints.
+    // These track the cell's ACTUAL physical rotation so springs can detect
+    // and correct misalignment. Genome anchors above are fixed and can't detect rotation.
+    let phys_anchor_a = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
         Vec3::X
     } else {
         rotate_vector_by_quaternion(anchor_dir_a, rot_a)
     };
-    
-    let anchor_b = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
+    let phys_anchor_b = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
         -Vec3::X
     } else {
         rotate_vector_by_quaternion(anchor_dir_b, rot_b)
     };
-    
-    // Apply orientation spring and damping
-    let axis_a = anchor_a.cross(adhesion_dir);
+
+    // Geometric spring force: anchor-defined target positions (matches GPU)
+    let target_b = pos_a + anchor_a * rest_length;
+    let target_a = pos_b + anchor_b * rest_length;
+    let error_a = target_a - pos_a;
+    let error_b = target_b - pos_b;
+    let geo_force_on_a = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness;
+    let spring_force_mag = geo_force_on_a.length();
+
+    // Linear damping
+    let rel_vel = vel_b - vel_a;
+    let damp_mag = 1.0 - settings.linear_spring_damping * rel_vel.dot(adhesion_dir);
+    let damping_force = -adhesion_dir * damp_mag;
+
+    force_a += geo_force_on_a + damping_force;
+    force_b -= geo_force_on_a + damping_force;
+
+    // Orientation spring for cell A - uses PHYSICS rotation anchors
+    // to detect actual misalignment (genome anchors are fixed, can't detect rotation)
+    let axis_a = phys_anchor_a.cross(adhesion_dir);
     let sin_a = axis_a.length();
-    let cos_a = anchor_a.dot(adhesion_dir);
+    let cos_a = phys_anchor_a.dot(adhesion_dir);
     let angle_a = sin_a.atan2(cos_a);
-    
     if sin_a > QUATERNION_EPSILON {
         let axis_a_norm = axis_a.normalize();
-        let spring_torque_a = axis_a_norm * angle_a * settings.orientation_spring_stiffness;
-        let damping_torque_a = -axis_a_norm * ang_vel_a.dot(axis_a_norm) * settings.orientation_spring_damping;
-        torque_a += spring_torque_a + damping_torque_a;
-    }
-    
-    let axis_b = anchor_b.cross(-adhesion_dir);
-    let sin_b = axis_b.length();
-    let cos_b = anchor_b.dot(-adhesion_dir);
-    let angle_b = sin_b.atan2(cos_b);
-    
-    if sin_b > QUATERNION_EPSILON {
-        let axis_b_norm = axis_b.normalize();
-        let spring_torque_b = axis_b_norm * angle_b * settings.orientation_spring_stiffness;
-        let damping_torque_b = -axis_b_norm * ang_vel_b.dot(axis_b_norm) * settings.orientation_spring_damping;
-        torque_b += spring_torque_b + damping_torque_b;
+        torque_a += axis_a_norm * angle_a * settings.orientation_spring_stiffness;
+        torque_a += -axis_a_norm * ang_vel_a.dot(axis_a_norm) * settings.orientation_spring_damping;
     }
 
-    
-    // Apply twist constraints if enabled
-    if settings.enable_twist_constraint && 
-       twist_ref_a.length() > ANGLE_EPSILON && 
-       twist_ref_b.length() > ANGLE_EPSILON {
-        
+    // Orientation spring for cell B
+    let axis_b = phys_anchor_b.cross(-adhesion_dir);
+    let sin_b = axis_b.length();
+    let cos_b = phys_anchor_b.dot(-adhesion_dir);
+    let angle_b = sin_b.atan2(cos_b);
+    if sin_b > QUATERNION_EPSILON {
+        let axis_b_norm = axis_b.normalize();
+        torque_b += axis_b_norm * angle_b * settings.orientation_spring_stiffness;
+        torque_b += -axis_b_norm * ang_vel_b.dot(axis_b_norm) * settings.orientation_spring_damping;
+    }
+
+    // Twist constraints (full strength, matching GPU — no reduction factors)
+    if settings.enable_twist_constraint
+        && twist_ref_a.length() > ANGLE_EPSILON
+        && twist_ref_b.length() > ANGLE_EPSILON
+    {
         let adhesion_axis = delta_pos.normalize();
-        
-        // Get current anchor directions in world space
+
         let current_anchor_a = rotate_vector_by_quaternion(anchor_dir_a, rot_a);
         let current_anchor_b = rotate_vector_by_quaternion(anchor_dir_b, rot_b);
-        
-        // Calculate target anchor directions
+
         let target_anchor_a = adhesion_axis;
         let target_anchor_b = -adhesion_axis;
-        
-        // Find rotation needed to align current to target
+
         let alignment_rot_a = quat_from_two_vectors(current_anchor_a, target_anchor_a);
         let alignment_rot_b = quat_from_two_vectors(current_anchor_b, target_anchor_b);
-        
-        // Apply alignment rotation to reference orientations
+
         let target_orientation_a = (alignment_rot_a * twist_ref_a).normalize();
         let target_orientation_b = (alignment_rot_b * twist_ref_b).normalize();
-        
-        // Calculate correction rotation
+
         let correction_rot_a = (target_orientation_a * rot_a.conjugate()).normalize();
         let correction_rot_b = (target_orientation_b * rot_b.conjugate()).normalize();
-        
-        // Convert to axis-angle
+
         let axis_angle_a = quat_to_axis_angle(correction_rot_a);
         let axis_angle_b = quat_to_axis_angle(correction_rot_b);
-        
-        // Project correction onto adhesion axis (twist component only)
-        let twist_correction_a = axis_angle_a.w * Vec3::new(axis_angle_a.x, axis_angle_a.y, axis_angle_a.z).dot(adhesion_axis);
-        let twist_correction_b = axis_angle_b.w * Vec3::new(axis_angle_b.x, axis_angle_b.y, axis_angle_b.z).dot(adhesion_axis);
-        
-        // Clamp corrections
-        let twist_correction_a = twist_correction_a.clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
-        let twist_correction_b = twist_correction_b.clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
-        
-        // Apply twist torque (reduced strength for CPU stability)
-        let twist_torque_a = adhesion_axis * twist_correction_a * settings.twist_constraint_stiffness * 0.05;
-        let twist_torque_b = adhesion_axis * twist_correction_b * settings.twist_constraint_stiffness * 0.05;
-        
-        // Add strong damping
+
+        let twist_correction_a = (axis_angle_a.w * Vec3::new(axis_angle_a.x, axis_angle_a.y, axis_angle_a.z).dot(adhesion_axis))
+            .clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
+        let twist_correction_b = (axis_angle_b.w * Vec3::new(axis_angle_b.x, axis_angle_b.y, axis_angle_b.z).dot(adhesion_axis))
+            .clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
+
+        let twist_torque_a = adhesion_axis * twist_correction_a * settings.twist_constraint_stiffness;
+        let twist_torque_b = adhesion_axis * twist_correction_b * settings.twist_constraint_stiffness;
+
         let angular_vel_a_proj = ang_vel_a.dot(adhesion_axis);
         let angular_vel_b_proj = ang_vel_b.dot(adhesion_axis);
         let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
-        
-        let twist_damping_a = -adhesion_axis * relative_angular_vel * settings.twist_constraint_damping * 0.6;
-        let twist_damping_b = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping * 0.6;
-        
+
+        let twist_damping_a = -adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
+        let twist_damping_b = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
+
         torque_a += twist_torque_a + twist_damping_a;
         torque_b += twist_torque_b + twist_damping_b;
     }
-    
-    // Apply tangential forces from torques to maintain organism shape
-    // IMPROVED: Use balanced tangential forces that conserve momentum
-    // 
-    // The issue with the original implementation was that it applied:
-    //   force_a += (-delta_pos).cross(torque_b)
-    //   force_b += delta_pos.cross(torque_a)
-    // 
-    // This creates unbalanced forces when torques differ, causing phantom drift.
-    // 
-    // The fix: Apply equal and opposite tangential forces based on the TOTAL torque
-    // that would be needed to maintain the constraint. This ensures momentum conservation.
-    
-    // Calculate the total corrective torque (sum of both cells' torques)
+
+    // Tangential forces from torques (matches GPU)
     let total_torque = torque_a + torque_b;
-    
-    // Calculate tangential force that would create this torque
-    // F_tangential = torque × r / |r|²
-    // This ensures equal and opposite forces on both cells
     let r_squared = delta_pos.length_squared();
     if r_squared > QUATERNION_EPSILON {
         let tangential_force = total_torque.cross(delta_pos) / r_squared;
-        
-        // Apply equal and opposite tangential forces
-        // This maintains shape while conserving momentum
         force_a += tangential_force;
         force_b -= tangential_force;
     }
-    
+
     (force_a, torque_a, force_b, torque_b, spring_force_mag)
 }
 
@@ -419,6 +407,297 @@ fn quat_from_two_vectors(from: Vec3, to: Vec3) -> Quat {
 }
 
 
+/// Compute one adhesion constraint substep iteration (mirrors GPU adhesion_substep.wgsl).
+///
+/// Unlike the main adhesion force pass which accumulates into force/torque buffers,
+/// this directly integrates positions, velocities, rotations, and angular velocities.
+/// Uses genome orientations for geometric spring anchors (genome-pure) and physics
+/// rotations for orientation/twist constraints (detects actual misalignment).
+///
+/// Run N iterations after the main physics pass for stiffer joints.
+#[allow(clippy::too_many_arguments)]
+pub fn compute_adhesion_substep(
+    connections: &AdhesionConnections,
+    positions: &mut [Vec3],
+    velocities: &mut [Vec3],
+    rotations: &mut [Quat],
+    angular_velocities: &mut [Vec3],
+    masses: &[f32],
+    genome_orientations: &[Quat],
+    mode_settings: &[AdhesionSettings],
+    cell_count: usize,
+    dt: f32,
+) {
+    const MAX_FORCE: f32 = 5000.0;
+    const MAX_TORQUE: f32 = 500.0;
+    const MAX_SPEED: f32 = 500.0;
+
+    // Accumulate per-cell forces and torques (Jacobi-style: read current, write corrections)
+    let mut cell_forces: Vec<Vec3> = vec![Vec3::ZERO; cell_count];
+    let mut cell_torques: Vec<Vec3> = vec![Vec3::ZERO; cell_count];
+
+    // Compute force contributions from all active connections
+    for i in 0..connections.active_count {
+        if connections.is_active[i] == 0 {
+            continue;
+        }
+
+        let cell_a_idx = connections.cell_a_index[i];
+        let cell_b_idx = connections.cell_b_index[i];
+        let mode_idx = connections.mode_index[i];
+
+        if cell_a_idx >= cell_count || cell_b_idx >= cell_count {
+            continue;
+        }
+        if mode_idx >= mode_settings.len() {
+            continue;
+        }
+
+        let settings = &mode_settings[mode_idx];
+
+        // Compute substep forces for this pair
+        let (force_a, torque_a, force_b, torque_b) = compute_substep_force_pair(
+            positions[cell_a_idx],
+            velocities[cell_a_idx],
+            rotations[cell_a_idx],
+            angular_velocities[cell_a_idx],
+            positions[cell_b_idx],
+            velocities[cell_b_idx],
+            rotations[cell_b_idx],
+            angular_velocities[cell_b_idx],
+            genome_orientations[cell_a_idx],
+            genome_orientations[cell_b_idx],
+            connections.anchor_direction_a[i],
+            connections.anchor_direction_b[i],
+            connections.twist_reference_a[i],
+            connections.twist_reference_b[i],
+            settings,
+        );
+
+        cell_forces[cell_a_idx] += force_a;
+        cell_forces[cell_b_idx] += force_b;
+        cell_torques[cell_a_idx] += torque_a;
+        cell_torques[cell_b_idx] += torque_b;
+    }
+
+    // Integrate directly (matching GPU adhesion_substep.wgsl lines 462-503)
+    for idx in 0..cell_count {
+        let total_force = cell_forces[idx];
+        let total_torque = cell_torques[idx];
+
+        if total_force.length_squared() < 1e-12 && total_torque.length_squared() < 1e-12 {
+            continue;
+        }
+
+        // Clamp forces and torques
+        let force_mag = total_force.length();
+        let torque_mag = total_torque.length();
+        let clamped_force = if force_mag > MAX_FORCE {
+            total_force * (MAX_FORCE / force_mag)
+        } else {
+            total_force
+        };
+        let clamped_torque = if torque_mag > MAX_TORQUE {
+            total_torque * (MAX_TORQUE / torque_mag)
+        } else {
+            total_torque
+        };
+
+        let safe_mass = masses[idx].max(0.001);
+        let acceleration = clamped_force / safe_mass;
+
+        let old_vel = velocities[idx];
+        let mut new_vel = old_vel + acceleration * dt;
+
+        // Clamp velocity
+        let speed = new_vel.length();
+        if speed > MAX_SPEED {
+            new_vel = new_vel * (MAX_SPEED / speed);
+        }
+
+        // Position correction: only apply the velocity *change* (matches GPU: new_pos = my_pos + (new_vel - my_vel) * dt)
+        let new_pos = positions[idx] + (new_vel - old_vel) * dt;
+
+        // Angular integration
+        let radius = masses[idx].clamp(0.5, 2.0); // calculate_radius_from_mass
+        let moment_of_inertia = 0.4 * safe_mass * radius * radius;
+        let mut new_ang_vel = angular_velocities[idx];
+        if moment_of_inertia > 0.0001 {
+            let angular_acceleration = clamped_torque / moment_of_inertia;
+            new_ang_vel = angular_velocities[idx] + angular_acceleration * dt;
+        }
+
+        // Integrate rotation
+        let ang_vel_mag = new_ang_vel.length();
+        let mut new_rot = rotations[idx];
+        if ang_vel_mag > 0.0001 {
+            let angle = ang_vel_mag * dt;
+            let axis = new_ang_vel / ang_vel_mag;
+            let delta_rotation = Quat::from_axis_angle(axis, angle);
+            new_rot = (delta_rotation * rotations[idx]).normalize();
+        }
+
+        // Write corrected state
+        positions[idx] = new_pos;
+        velocities[idx] = new_vel;
+        rotations[idx] = new_rot;
+        angular_velocities[idx] = new_ang_vel;
+    }
+}
+
+/// Compute substep forces for a single connection pair.
+/// Mirrors GPU adhesion_substep.wgsl compute_substep_forces().
+/// Uses genome orientations for geometric spring, physics rotations for orientation/twist.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn compute_substep_force_pair(
+    pos_a: Vec3,
+    vel_a: Vec3,
+    rot_a: Quat,
+    ang_vel_a: Vec3,
+    pos_b: Vec3,
+    vel_b: Vec3,
+    rot_b: Quat,
+    ang_vel_b: Vec3,
+    genome_rot_a: Quat,
+    genome_rot_b: Quat,
+    anchor_dir_a: Vec3,
+    anchor_dir_b: Vec3,
+    twist_ref_a: Quat,
+    twist_ref_b: Quat,
+    settings: &AdhesionSettings,
+) -> (Vec3, Vec3, Vec3, Vec3) {
+    let mut force_a = Vec3::ZERO;
+    let mut torque_a = Vec3::ZERO;
+    let mut force_b = Vec3::ZERO;
+    let mut torque_b = Vec3::ZERO;
+
+    let delta_pos = pos_b - pos_a;
+    let dist = delta_pos.length();
+    if dist < QUATERNION_EPSILON {
+        return (force_a, torque_a, force_b, torque_b);
+    }
+
+    let adhesion_dir = delta_pos / dist;
+    let rest_length = settings.rest_length;
+
+    // Geometric spring using GENOME orientations (matches GPU)
+    let genome_anchor_a = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
+        Vec3::X
+    } else {
+        rotate_vector_by_quaternion(anchor_dir_a, genome_rot_a)
+    };
+    let genome_anchor_b = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
+        -Vec3::X
+    } else {
+        rotate_vector_by_quaternion(anchor_dir_b, genome_rot_b)
+    };
+
+    // Anchor-based geometric spring force (matches GPU, NOT the simple distance spring)
+    let target_b = pos_a + genome_anchor_a * rest_length;
+    let target_a = pos_b + genome_anchor_b * rest_length;
+    let error_a = target_a - pos_a;
+    let error_b = target_b - pos_b;
+    let geo_force = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness;
+
+    // Linear damping
+    let rel_vel = vel_b - vel_a;
+    let damp_mag = 1.0 - settings.linear_spring_damping * rel_vel.dot(adhesion_dir);
+    let damping_force = -adhesion_dir * damp_mag;
+
+    force_a += geo_force + damping_force;
+    force_b -= geo_force + damping_force;
+
+    // Physics-based anchors for orientation/twist springs (detects actual rotation)
+    let phys_anchor_a = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
+        Vec3::X
+    } else {
+        rotate_vector_by_quaternion(anchor_dir_a, rot_a)
+    };
+    let phys_anchor_b = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
+        -Vec3::X
+    } else {
+        rotate_vector_by_quaternion(anchor_dir_b, rot_b)
+    };
+
+    // Orientation spring for cell A
+    let axis_a = phys_anchor_a.cross(adhesion_dir);
+    let sin_a = axis_a.length();
+    let cos_a = phys_anchor_a.dot(adhesion_dir);
+    let angle_a = sin_a.atan2(cos_a);
+    if sin_a > QUATERNION_EPSILON {
+        let axis_a_norm = axis_a.normalize();
+        torque_a += axis_a_norm * angle_a * settings.orientation_spring_stiffness;
+        torque_a += -axis_a_norm * ang_vel_a.dot(axis_a_norm) * settings.orientation_spring_damping;
+    }
+
+    // Orientation spring for cell B
+    let axis_b = phys_anchor_b.cross(-adhesion_dir);
+    let sin_b = axis_b.length();
+    let cos_b = phys_anchor_b.dot(-adhesion_dir);
+    let angle_b = sin_b.atan2(cos_b);
+    if sin_b > QUATERNION_EPSILON {
+        let axis_b_norm = axis_b.normalize();
+        torque_b += axis_b_norm * angle_b * settings.orientation_spring_stiffness;
+        torque_b += -axis_b_norm * ang_vel_b.dot(axis_b_norm) * settings.orientation_spring_damping;
+    }
+
+    // Twist constraints (full strength, matching GPU — no 0.05 reduction)
+    if settings.enable_twist_constraint
+        && twist_ref_a.length() > ANGLE_EPSILON
+        && twist_ref_b.length() > ANGLE_EPSILON
+    {
+        let adhesion_axis = delta_pos.normalize();
+
+        let current_anchor_a = rotate_vector_by_quaternion(anchor_dir_a, rot_a);
+        let current_anchor_b = rotate_vector_by_quaternion(anchor_dir_b, rot_b);
+
+        let target_anchor_a = adhesion_axis;
+        let target_anchor_b = -adhesion_axis;
+
+        let alignment_rot_a = quat_from_two_vectors(current_anchor_a, target_anchor_a);
+        let alignment_rot_b = quat_from_two_vectors(current_anchor_b, target_anchor_b);
+
+        let target_orientation_a = (alignment_rot_a * twist_ref_a).normalize();
+        let target_orientation_b = (alignment_rot_b * twist_ref_b).normalize();
+
+        let correction_rot_a = (target_orientation_a * rot_a.conjugate()).normalize();
+        let correction_rot_b = (target_orientation_b * rot_b.conjugate()).normalize();
+
+        let axis_angle_a = quat_to_axis_angle(correction_rot_a);
+        let axis_angle_b = quat_to_axis_angle(correction_rot_b);
+
+        let twist_correction_a = (axis_angle_a.w * Vec3::new(axis_angle_a.x, axis_angle_a.y, axis_angle_a.z).dot(adhesion_axis))
+            .clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
+        let twist_correction_b = (axis_angle_b.w * Vec3::new(axis_angle_b.x, axis_angle_b.y, axis_angle_b.z).dot(adhesion_axis))
+            .clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
+
+        let twist_torque_a = adhesion_axis * twist_correction_a * settings.twist_constraint_stiffness;
+        let twist_torque_b = adhesion_axis * twist_correction_b * settings.twist_constraint_stiffness;
+
+        let angular_vel_a_proj = ang_vel_a.dot(adhesion_axis);
+        let angular_vel_b_proj = ang_vel_b.dot(adhesion_axis);
+        let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
+
+        let twist_damping_a = -adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
+        let twist_damping_b = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
+
+        torque_a += twist_torque_a + twist_damping_a;
+        torque_b += twist_torque_b + twist_damping_b;
+    }
+
+    // Tangential forces from torques (matches GPU)
+    let total_torque = torque_a + torque_b;
+    let r_squared = delta_pos.length_squared();
+    if r_squared > QUATERNION_EPSILON {
+        let tangential_force = total_torque.cross(delta_pos) / r_squared;
+        force_a += tangential_force;
+        force_b -= tangential_force;
+    }
+
+    (force_a, torque_a, force_b, torque_b)
+}
+
 /// Compute adhesion forces with improved cache locality
 /// 
 /// This version processes connections in batches to improve CPU cache utilization.
@@ -431,6 +710,7 @@ pub fn compute_adhesion_forces_batched(
     rotations: &[Quat],
     angular_velocities: &[Vec3],
     masses: &[f32],
+    genome_orientations: &[Quat],
     mode_settings: &[AdhesionSettings],
     forces: &mut [Vec3],
     torques: &mut [Vec3],
@@ -479,6 +759,8 @@ pub fn compute_adhesion_forces_batched(
                 rotations[cell_b_idx],
                 angular_velocities[cell_b_idx],
                 masses[cell_b_idx],
+                genome_orientations[cell_a_idx],
+                genome_orientations[cell_b_idx],
                 connections.anchor_direction_a[i],
                 connections.anchor_direction_b[i],
                 connections.twist_reference_a[i],

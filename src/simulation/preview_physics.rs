@@ -727,6 +727,7 @@ pub fn physics_step_with_genome(
             &state.rotations[..state.cell_count],
             &state.angular_velocities[..state.cell_count],
             &state.masses[..state.cell_count],
+            &state.genome_orientations[..state.cell_count],
             &state.cached_adhesion_settings,
             &mut state.forces[..state.cell_count],
             &mut state.torques[..state.cell_count],
@@ -763,6 +764,30 @@ pub fn physics_step_with_genome(
         dt,
         config.angular_damping,
     );
+
+    // Adhesion constraint sub-stepping (matches GPU Stage 7.5)
+    // Each iteration re-evaluates adhesion forces against latest positions and
+    // applies corrections directly. Dramatically increases effective joint stiffness.
+    if config.constraint_iterations > 0
+        && state.adhesion_connections.active_count > 0
+        && !state.cached_adhesion_settings.is_empty()
+    {
+        let cell_count = state.cell_count;
+        for _ in 0..config.constraint_iterations {
+            crate::cell::compute_adhesion_substep(
+                &state.adhesion_connections,
+                &mut state.positions[..cell_count],
+                &mut state.velocities[..cell_count],
+                &mut state.rotations[..cell_count],
+                &mut state.angular_velocities[..cell_count],
+                &state.masses[..cell_count],
+                &state.genome_orientations[..cell_count],
+                &state.cached_adhesion_settings,
+                cell_count,
+                dt,
+            );
+        }
+    }
 
     update_nutrient_growth(state, genome, dt);
 

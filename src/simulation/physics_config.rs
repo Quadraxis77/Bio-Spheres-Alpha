@@ -26,6 +26,10 @@ pub struct PhysicsConfig {
     
     /// Angular velocity damping coefficient
     pub angular_damping: f32,
+    
+    /// Number of additional adhesion constraint solver iterations (0 = single-pass, higher = stiffer joints)
+    #[serde(default = "default_constraint_iterations")]
+    pub constraint_iterations: u32,
 }
 
 impl Default for PhysicsConfig {
@@ -38,6 +42,11 @@ impl Default for PhysicsConfig {
             velocity_damping: 0.98,
             friction_coefficient: 0.3,
             angular_damping: 0.95,
+            constraint_iterations: 4,
         }
     }
+}
+
+fn default_constraint_iterations() -> u32 {
+    4
 }
