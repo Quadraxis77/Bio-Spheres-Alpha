@@ -4,7 +4,7 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, InstanceBuilder, NutrientParticleRenderer, SteamParticleRenderer, SunRenderer, TailRenderer, VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
+use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, InstanceBuilder, NutrientParticleRenderer, OrganismSkinRenderer, SteamParticleRenderer, SunRenderer, TailRenderer, VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
@@ -186,6 +186,12 @@ pub struct GpuScene {
     pub gpu_surface_nets: Option<GpuSurfaceNets>,
     /// Whether to show GPU surface nets density mesh
     pub show_gpu_density_mesh: bool,
+    /// Organism skin renderer — wraps cell clusters in a smooth isosurface skin
+    pub organism_skin_renderer: Option<OrganismSkinRenderer>,
+    /// Whether to show organism skins
+    pub show_organism_skins: bool,
+    /// Cached density bind groups for organism skin (one per triple-buffer index)
+    organism_skin_density_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// GPU fluid simulator for falling/stacking water
     pub fluid_simulator: Option<GpuFluidSimulator>,
     /// Solid mask generator for fluid system
@@ -455,6 +461,9 @@ impl GpuScene {
             voxel_instance_count: 0,
             gpu_surface_nets: None,
             show_gpu_density_mesh: false,
+            organism_skin_renderer: None,
+            show_organism_skins: false,
+            organism_skin_density_bind_groups: None,
             fluid_simulator: None,
             solid_mask_generator: None,
             steam_particle_renderer: None,
@@ -2627,10 +2636,66 @@ impl GpuScene {
         
         self.gpu_surface_nets = Some(gpu_surface_nets);
         self.show_gpu_density_mesh = true;
-        
+
         log::info!("GPU surface nets renderer initialized");
     }
-    
+
+    /// Initialize the organism skin renderer.
+    /// Safe to call multiple times — no-op if already initialized.
+    pub fn initialize_organism_skin(
+        &mut self,
+        device: &wgpu::Device,
+        surface_format: wgpu::TextureFormat,
+        settings: &crate::ui::OrganismSkinSettings,
+    ) {
+        if self.organism_skin_renderer.is_some() {
+            return;
+        }
+
+        // Derive capacity from the triple buffer size (each cell = 4×f32 = 16 bytes in position_and_mass)
+        let cell_capacity = (self.gpu_triple_buffers.position_and_mass[0].size() / 16) as u32;
+
+        let renderer = OrganismSkinRenderer::new(
+            device,
+            surface_format,
+            wgpu::TextureFormat::Depth32Float,
+            self.config.sphere_radius,
+            glam::Vec3::ZERO,
+            cell_capacity,
+            self.renderer.width,
+            self.renderer.height,
+            settings,
+        );
+
+        self.organism_skin_renderer = Some(renderer);
+        self.show_organism_skins = true;
+        // Invalidate cached bind groups so they are recreated with the new renderer
+        self.organism_skin_density_bind_groups = None;
+
+        log::info!("Organism skin renderer initialized (grid {}³)", settings.grid_resolution);
+    }
+
+    /// Ensure organism skin density bind groups are created (one per triple-buffer index).
+    fn ensure_organism_skin_bind_groups(&mut self, device: &wgpu::Device) {
+        if self.organism_skin_density_bind_groups.is_some() {
+            return;
+        }
+        let renderer = match &self.organism_skin_renderer {
+            Some(r) => r,
+            None => return,
+        };
+
+        let bgs = std::array::from_fn(|i| {
+            renderer.create_density_bind_group(
+                device,
+                &self.gpu_triple_buffers.position_and_mass[i],
+                &self.gpu_triple_buffers.death_flags,
+                &self.gpu_triple_buffers.cell_count_buffer,
+            )
+        });
+        self.organism_skin_density_bind_groups = Some(bgs);
+    }
+
     /// Generate test density data for GPU surface nets with multiple fluid types
     pub fn generate_test_density(&mut self, queue: &wgpu::Queue) {
         use crate::simulation::fluid_simulation::GRID_RESOLUTION;
@@ -3979,6 +4044,33 @@ impl Scene for GpuScene {
             }
         }
         
+        // Extract and render organism skins if enabled
+        if self.show_organism_skins {
+            self.ensure_organism_skin_bind_groups(device);
+            let output_idx = self.gpu_triple_buffers.output_buffer_index();
+            let max_cells = self.current_cell_count;
+
+            if let (Some(ref renderer), Some(ref bind_groups)) =
+                (&self.organism_skin_renderer, &self.organism_skin_density_bind_groups)
+            {
+                renderer.generate_density(&mut encoder, &bind_groups[output_idx], max_cells.max(1));
+                renderer.smooth_density(&mut encoder);
+                renderer.extract_mesh(&mut encoder);
+            }
+            // Render pass must be separate (after compute)
+            if let Some(ref renderer) = self.organism_skin_renderer {
+                renderer.set_time(queue, self.current_time);
+                renderer.render(
+                    &mut encoder,
+                    queue,
+                    view,
+                    &self.renderer.depth_view,
+                    self.camera.position(),
+                    self.camera.rotation,
+                );
+            }
+        }
+
         // Extract and render GPU density mesh if enabled
         if self.show_gpu_density_mesh {
             // First extract density from fluid simulator to surface nets buffers

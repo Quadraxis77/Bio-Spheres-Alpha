@@ -216,12 +216,81 @@ pub struct FluidSettings {
     /// Surface pressure: tangential smoothing strength for radial fluid mode (0.0-1.0)
     #[serde(default = "default_surface_pressure")]
     pub surface_pressure: f32,
+    /// Organism skin rendering settings
+    #[serde(default)]
+    pub organism_skin: OrganismSkinSettings,
 }
 
 impl Default for FluidSettings {
     fn default() -> Self {
         Self {
             surface_pressure: 0.5,
+            organism_skin: OrganismSkinSettings::default(),
+        }
+    }
+}
+
+/// Organism skin rendering settings.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct OrganismSkinSettings {
+    /// Whether organism skin rendering is enabled
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    
+    /// Grid resolution for density field (128, 256, etc.)
+    #[serde(default = "default_organism_grid_resolution")]
+    pub grid_resolution: u32,
+    
+    /// Skin radius scale factor (how far the skin extends from cells)
+    #[serde(default = "default_skin_radius_scale")]
+    pub radius_scale: f32,
+    
+    /// Surface extraction iso level (0.0-1.0)
+    #[serde(default = "default_iso_level")]
+    pub iso_level: f32,
+    
+    /// Base color RGB values
+    #[serde(default = "default_skin_base_color")]
+    pub base_color: [f32; 3],
+    
+    /// Material properties
+    #[serde(default = "default_skin_ambient")]
+    pub ambient: f32,
+    
+    #[serde(default = "default_skin_diffuse")]
+    pub diffuse: f32,
+    
+    #[serde(default = "default_skin_specular")]
+    pub specular: f32,
+    
+    #[serde(default = "default_skin_shininess")]
+    pub shininess: f32,
+    
+    #[serde(default = "default_skin_alpha")]
+    pub alpha: f32,
+
+    #[serde(default = "default_skin_sss_strength")]
+    pub sss_strength: f32,
+
+    #[serde(default = "default_skin_rim_strength")]
+    pub rim_strength: f32,
+}
+
+impl Default for OrganismSkinSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            grid_resolution: 256,
+            radius_scale: 5.0,
+            iso_level: 0.3,
+            base_color: [0.85, 0.55, 0.35],
+            ambient: 0.12,
+            diffuse: 0.6,
+            specular: 0.5,
+            shininess: 48.0,
+            alpha: 0.55,
+            sss_strength: 0.5,
+            rim_strength: 0.35,
         }
     }
 }
@@ -271,6 +340,10 @@ fn default_gravity_mode() -> u32 {
 }
 
 fn default_surface_pressure() -> f32 {
+    0.7
+}
+
+fn default_water_drag_strength() -> f32 {
     0.5
 }
 
@@ -278,8 +351,48 @@ fn default_acceleration_damping() -> f32 {
     0.98
 }
 
-fn default_water_drag_strength() -> f32 {
-    0.0
+fn default_organism_grid_resolution() -> u32 {
+    128
+}
+
+fn default_skin_radius_scale() -> f32 {
+    5.0
+}
+
+fn default_skin_sss_strength() -> f32 {
+    0.5
+}
+
+fn default_skin_rim_strength() -> f32 {
+    0.35
+}
+
+fn default_iso_level() -> f32 {
+    0.6
+}
+
+fn default_skin_base_color() -> [f32; 3] {
+    [0.75, 0.45, 0.25] // Warm pinkish-amber
+}
+
+fn default_skin_ambient() -> f32 {
+    0.15
+}
+
+fn default_skin_diffuse() -> f32 {
+    0.7
+}
+
+fn default_skin_specular() -> f32 {
+    0.6
+}
+
+fn default_skin_shininess() -> f32 {
+    50.0
+}
+
+fn default_skin_alpha() -> f32 {
+    0.9
 }
 
 /// Global UI state shared across all UI components.

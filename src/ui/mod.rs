@@ -17,5 +17,5 @@ pub use panel_context::{GenomeEditorState, PanelContext, SceneModeRequest};
 pub use performance::PerformanceMetrics;
 pub use radial_menu::{RadialMenuState, RadialTool};
 pub use tab_viewer::PanelTabViewer;
-pub use types::{GlobalUiState, SimulationMode};
+pub use types::{GlobalUiState, SimulationMode, FluidSettings, OrganismSkinSettings};
 pub use ui_system::UiSystem;

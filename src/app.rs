@@ -602,6 +602,26 @@ impl App {
                     };
                     surface_nets.update_render_params(&self.queue, &params);
                 }
+
+                // ── Organism skin sync ─────────────────────────────────────
+                let os = &self.ui.state.fluid_settings.organism_skin;
+                if os.enabled && gpu_scene.organism_skin_renderer.is_none() {
+                    gpu_scene.initialize_organism_skin(&self.device, self.config.format, os);
+                }
+                gpu_scene.show_organism_skins = os.enabled;
+
+                if let Some(ref mut skin) = gpu_scene.organism_skin_renderer {
+                    skin.set_skin_radius_scale(&self.queue, os.radius_scale);
+                    skin.set_iso_level(&self.queue, os.iso_level);
+                    let mut params = skin.skin_params;
+                    params.base_r = os.base_color[0];
+                    params.base_g = os.base_color[1];
+                    params.base_b = os.base_color[2];
+                    params.alpha = os.alpha;
+                    params.sss_strength = os.sss_strength;
+                    params.rim_strength = os.rim_strength;
+                    skin.update_skin_params(&self.queue, params);
+                }
             }
         }
         

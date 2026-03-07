@@ -60,7 +60,10 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::PerformanceMonitor => render_performance_monitor(ui, self.context, self.state),
             Panel::RenderingControls => render_rendering_controls(ui),
             Panel::CaveSystem => render_cave_system(ui, self.context),
-            Panel::FluidSettings => render_fluid_settings(ui, self.context, self.state),
+            Panel::FluidSettings => {
+                render_fluid_settings(ui, self.context, self.state);
+                render_organism_skin_settings(ui, self.context, &mut self.state.fluid_settings.organism_skin);
+            }
             Panel::WorldSettings => render_world_settings(ui, self.context, self.state),
             Panel::LightSettings => render_light_settings(ui, self.context),
             Panel::TimeScrubber => render_time_scrubber(ui, self.context),
@@ -1100,6 +1103,102 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     
     ui.add_space(10.0);
 }
+
+/// Organism skin controls, embedded at the bottom of the fluid/environment panel.
+fn render_organism_skin_settings(ui: &mut Ui, context: &mut PanelContext, organism_skin: &mut crate::ui::OrganismSkinSettings) {
+    if !context.is_gpu_mode() {
+        return;
+    }
+
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("Organism Skins");
+    ui.add_space(4.0);
+
+    ui.label("Wrap cell clusters in a smooth biological membrane.");
+    ui.add_space(4.0);
+
+    if ui.checkbox(&mut organism_skin.enabled, "Show Organism Skins").changed() {
+        // Enabling is handled in app.rs (lazy initialisation)
+    }
+
+    if !organism_skin.enabled {
+        ui.add_space(8.0);
+        return;
+    }
+
+    ui.add_space(6.0);
+
+    // ── Geometry ──────────────────────────────────────────────────────────────
+    ui.label("Skin Thickness (radius scale):");
+    ui.add(egui::Slider::new(&mut organism_skin.radius_scale, 0.5..=12.0)
+        .step_by(0.1).fixed_decimals(1));
+
+    ui.add_space(4.0);
+    ui.label("Iso Level (surface threshold):");
+    ui.add(egui::Slider::new(&mut organism_skin.iso_level, 0.1..=2.0)
+        .step_by(0.05).fixed_decimals(2));
+
+    // ── Material ──────────────────────────────────────────────────────────────
+    ui.add_space(6.0);
+    ui.separator();
+    ui.label("Skin Colour:");
+    ui.horizontal(|ui| {
+        let c = &mut organism_skin.base_color;
+        let mut rgb = egui::Color32::from_rgb(
+            (c[0] * 255.0) as u8,
+            (c[1] * 255.0) as u8,
+            (c[2] * 255.0) as u8,
+        );
+        if ui.color_edit_button_srgba(&mut rgb).changed() {
+            c[0] = rgb.r() as f32 / 255.0;
+            c[1] = rgb.g() as f32 / 255.0;
+            c[2] = rgb.b() as f32 / 255.0;
+        }
+    });
+
+    ui.add_space(4.0);
+    ui.label("Translucency (alpha):");
+    ui.add(egui::Slider::new(&mut organism_skin.alpha, 0.0..=1.0)
+        .step_by(0.02).fixed_decimals(2));
+
+    ui.add_space(4.0);
+    ui.label("Subsurface Scattering:");
+    ui.add(egui::Slider::new(&mut organism_skin.sss_strength, 0.0..=2.0)
+        .step_by(0.05).fixed_decimals(2));
+
+    ui.add_space(4.0);
+    ui.label("Rim Light Strength:");
+    ui.add(egui::Slider::new(&mut organism_skin.rim_strength, 0.0..=2.0)
+        .step_by(0.05).fixed_decimals(2));
+
+    ui.add_space(8.0);
+
+    // Presets
+    ui.horizontal(|ui| {
+        if ui.button("Cell Membrane").clicked() {
+            organism_skin.base_color = [0.85, 0.55, 0.35];
+            organism_skin.alpha = 0.55;
+            organism_skin.sss_strength = 0.5;
+            organism_skin.rim_strength = 0.35;
+        }
+        if ui.button("Bioluminescent").clicked() {
+            organism_skin.base_color = [0.2, 0.8, 0.7];
+            organism_skin.alpha = 0.45;
+            organism_skin.sss_strength = 1.2;
+            organism_skin.rim_strength = 0.7;
+        }
+        if ui.button("Opaque Shell").clicked() {
+            organism_skin.base_color = [0.7, 0.65, 0.5];
+            organism_skin.alpha = 0.9;
+            organism_skin.sss_strength = 0.1;
+            organism_skin.rim_strength = 0.2;
+        }
+    });
+
+    ui.add_space(4.0);
+}
+
 /// Render the Light & Fog settings panel for light field, photocyte, and volumetric fog controls.
 fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
     if !context.is_gpu_mode() {

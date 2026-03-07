@@ -164,7 +164,23 @@ fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ix = i32(gid.x);
     let iy = i32(gid.y);
     let iz = i32(gid.z);
-    
+
+    // Early-out: skip expensive filtered sampling if no raw density exists at any corner.
+    // The 3x3x3 box filter can bleed density from neighbors, but if all 8 corners have
+    // zero raw density the contribution from outside this cell is negligible in practice.
+    var has_density = false;
+    for (var i = 0u; i < 8u; i++) {
+        let off = CORNER_OFFSETS[i];
+        if sample_density_clamped(ix + off.x, iy + off.y, iz + off.z) > 0.0 {
+            has_density = true;
+            break;
+        }
+    }
+    if !has_density {
+        atomicStore(&vertex_map[cell_idx], 0u);
+        return;
+    }
+
     // Sample 8 corners with aggressive smoothing
     var corners: array<f32, 8>;
     for (var i = 0u; i < 8u; i++) {

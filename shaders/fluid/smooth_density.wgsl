@@ -28,6 +28,15 @@ fn smooth_density(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let idx = grid_index(gid.x, gid.y, gid.z);
 
+    // Early-out: skip the expensive 27-sample blur for voxels that are empty now
+    // and have no recent history. These dominate the grid at high resolutions.
+    let raw_center = raw_density[idx];
+    let prev_center = prev_smoothed[idx];
+    if raw_center < 0.001 && prev_center < 0.001 {
+        output[idx] = 0.0;
+        return;
+    }
+
     // 3x3x3 spatial box blur of raw density
     var sum = 0.0;
     var count = 0.0;

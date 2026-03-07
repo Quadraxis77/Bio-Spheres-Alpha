@@ -331,6 +331,22 @@ pub struct GenomeEditorState {
     pub caustic_scale: f32,
     /// Caustic animation speed
     pub caustic_speed: f32,
+
+    // Organism skin settings
+    /// Whether organism skins are enabled
+    pub show_organism_skins: bool,
+    /// Skin radius scale (multiplier on cell radius for skin thickness)
+    pub skin_radius_scale: f32,
+    /// Iso level for organism skin surface extraction
+    pub skin_iso_level: f32,
+    /// Skin base colour (RGB)
+    pub skin_base_color: [f32; 3],
+    /// Skin alpha (translucency)
+    pub skin_alpha: f32,
+    /// Skin subsurface scattering strength
+    pub skin_sss_strength: f32,
+    /// Skin rim light strength
+    pub skin_rim_strength: f32,
     
     // Orientation gizmo state
     /// Whether the orientation gizmo is visible
@@ -530,6 +546,13 @@ impl GenomeEditorState {
             caustic_intensity,
             caustic_scale,
             caustic_speed,
+            show_organism_skins: false,
+            skin_radius_scale: 5.0,
+            skin_iso_level: 0.3,
+            skin_base_color: [0.85, 0.55, 0.35],
+            skin_alpha: 0.55,
+            skin_sss_strength: 0.5,
+            skin_rim_strength: 0.35,
             gizmo_visible: true,
             split_rings_visible: true,
             radial_menu: crate::ui::radial_menu::RadialMenuState::new(),
