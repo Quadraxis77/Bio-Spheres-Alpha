@@ -704,6 +704,19 @@ impl App {
             }
         }
         
+        // Update continuous drag position every frame when dragging
+        if let Some(cell_idx) = self.editor_state.radial_menu.dragging_cell {
+            // Move cell to current mouse position at the same distance from camera using GPU operations
+            let new_pos = self.scene_manager.screen_to_world_at_distance(
+                self.mouse_position.0,
+                self.mouse_position.1,
+                self.editor_state.drag_distance,
+            );
+            
+            // Use GPU position update via scene manager
+            self.scene_manager.update_cell_position_gpu(cell_idx as u32, new_pos);
+        }
+        
         // Begin egui frame
         self.ui.begin_frame(&self.window);
         

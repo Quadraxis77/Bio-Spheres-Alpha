@@ -174,35 +174,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         force += normal * clamped_pen * clamped_pen * 500.0;
         
         // Apply torque to rotate cell to face inward (matching BioSpheres-Q reference)
+        // DISABLED: Remove barrier spinning force
         // Only apply when in the soft zone (clamped_pen > 0)
-        if (clamped_pen > 0.0) {
-            // Get the cell's forward direction (local +Z axis)
-            let rotation = rotations[cell_idx];
-            let forward = quat_rotate(rotation, vec3<f32>(0.0, 0.0, 1.0));
-            
-            // Calculate desired direction (toward center)
-            let desired_direction = -r_hat;
-            
-            // Calculate rotation axis (cross product of current forward and desired direction)
-            let rotation_axis = cross(forward, desired_direction);
-            let rotation_axis_length = length(rotation_axis);
-            
-            // Only apply torque if there's a meaningful rotation needed
-            if (rotation_axis_length > 0.001) {
-                let normalized_axis = rotation_axis / rotation_axis_length;
-                
-                // Calculate angle between current and desired direction
-                let dot_product = clamp(dot(forward, desired_direction), -1.0, 1.0);
-                let angle = acos(dot_product);
-                
-                // Torque magnitude increases with penetration and angle
-                // Matching BioSpheres-Q: torque_strength = 50.0 * penetration * angle
-                let torque_strength = 50.0 * clamped_pen * angle;
-                
-                // Apply torque to rotate toward center
-                torque += normalized_axis * torque_strength;
-            }
-        }
+        // if (clamped_pen > 0.0) {
+        //     // Get the cell's forward direction (local +Z axis)
+        //     let rotation = rotations[cell_idx];
+        //     let forward = quat_rotate(rotation, vec3<f32>(0.0, 0.0, 1.0));
+        //     
+        //     // Calculate desired direction (toward center)
+        //     let desired_direction = -r_hat;
+        //     
+        //     // Calculate rotation axis (cross product of current forward and desired direction)
+        //     let rotation_axis = cross(forward, desired_direction);
+        //     let rotation_axis_length = length(rotation_axis);
+        //     
+        //     // Only apply torque if there's a meaningful rotation needed
+        //     if (rotation_axis_length > 0.001) {
+        //         let normalized_axis = rotation_axis / rotation_axis_length;
+        //         
+        //         // Calculate angle between current and desired direction
+        //         let dot_product = clamp(dot(forward, desired_direction), -1.0, 1.0);
+        //         let angle = acos(dot_product);
+        //         
+        //         // Torque magnitude increases with penetration and angle
+        //         // Matching BioSpheres-Q: torque_strength = 50.0 * penetration * angle
+        //         let torque_strength = 50.0 * clamped_pen * angle;
+        //         
+        //         // Apply torque to rotate toward center
+        //         torque += normalized_axis * torque_strength;
+        //     }
+        // }
     }
     
     // Pre-compute all 27 neighbor grid indices and counts to reduce redundant calculations
