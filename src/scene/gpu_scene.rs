@@ -644,6 +644,11 @@ impl GpuScene {
         self.readbacks_enabled = enabled;
     }
     
+    /// Set surface pressure for radial fluid mode (tangential smoothing strength).
+    pub fn set_surface_pressure(&mut self, pressure: f32) {
+        self.surface_pressure = pressure.clamp(0.0, 1.0);
+    }
+    
     /// Set whether to show the world boundary sphere.
     pub fn set_show_world_sphere(&mut self, enabled: bool) {
         self.show_world_sphere = enabled;

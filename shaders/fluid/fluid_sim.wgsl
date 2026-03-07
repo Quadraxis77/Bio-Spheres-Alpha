@@ -988,9 +988,8 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
     if abs(alignment) > 0.1 {
         let gravity_strength = length(grav_dir);
         // Fall rate proportional to gravity magnitude
-        // Use quadratic scaling for more gradual low-gravity behavior
-        // gravity_magnitude of 1.0 = 0.5% fall rate, 9.8 = 4.8% fall rate, 50.0 = 100% fall rate
-        let gravity_probability = min(1.0, gravity_strength * gravity_strength * 0.0004);
+        // Linear scaling: gravity_magnitude of 50.0 = 100% fall rate
+        let gravity_probability = min(1.0, gravity_strength / 50.0);
         
         // Use hash-based probability for gravity direction
         let time_hash = u32(params.time * 1000.0) + direction * 12345u;
@@ -1007,8 +1006,9 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
             is_unsupported_water = true;
         }
         
-        // Only skip if not unsupported water
-        if !is_unsupported_water && (combined_hash & 255u) > u32(gravity_probability * 255.0) {
+        // Always respect gravity probability, even for unsupported water
+        // Unsupported water just gets priority in the movement logic, not guaranteed movement
+        if (combined_hash & 255u) > u32(gravity_probability * 255.0) {
             return;
         }
         

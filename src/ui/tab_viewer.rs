@@ -60,7 +60,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::PerformanceMonitor => render_performance_monitor(ui, self.context, self.state),
             Panel::RenderingControls => render_rendering_controls(ui),
             Panel::CaveSystem => render_cave_system(ui, self.context),
-            Panel::FluidSettings => render_fluid_settings(ui, self.context),
+            Panel::FluidSettings => render_fluid_settings(ui, self.context, self.state),
             Panel::WorldSettings => render_world_settings(ui, self.context, self.state),
             Panel::LightSettings => render_light_settings(ui, self.context),
             Panel::TimeScrubber => render_time_scrubber(ui, self.context),
@@ -884,7 +884,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
 }
 
 /// Render the Fluid Settings panel for fluid simulation controls and visualization.
-fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
+fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
     // Check if we're in GPU mode
     if !context.is_gpu_mode() {
         return;
@@ -901,6 +901,8 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
     
     // Continuous spawning controls
     ui.separator();
+    ui.heading("Fluid Spawning");
+    ui.separator();
     let spawn_changed = ui.checkbox(&mut context.editor_state.fluid_continuous_spawn, "Water Fill").changed();
     
     if spawn_changed {
@@ -914,6 +916,24 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext) {
         context.editor_state.save_fluid_settings();
     }
     
+    // Surface pressure control for radial fluid mode
+    ui.separator();
+    ui.heading("Fluid Physics");
+    ui.separator();
+    
+    // Only show surface pressure when gravity mode is radial
+    if state.world_settings.gravity_mode == 3 {
+        ui.label("Surface Pressure:");
+        if ui.add(egui::Slider::new(&mut state.fluid_settings.surface_pressure, 0.0..=1.0)
+            .text("Surface Pressure")
+        ).changed() {
+            // Apply to GPU scene
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                gpu_scene.set_surface_pressure(state.fluid_settings.surface_pressure);
+            }
+        }
+        ui.label(egui::RichText::new("Tangential smoothing strength for radial fluid mode").small());
+    }
 
     // Lateral flow probability control for selected fluid type
     ui.separator();
@@ -3265,7 +3285,6 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     });
     if world.gravity_mode == 3 {
         ui.label(egui::RichText::new("Pulls fluid toward origin; world boundary is the shell").small());
-        ui.add(egui::Slider::new(&mut world.surface_pressure, 0.0..=1.0).text("Surface Pressure"));
     }
     
     ui.add_space(8.0);

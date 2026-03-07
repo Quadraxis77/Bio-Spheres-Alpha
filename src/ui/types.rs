@@ -182,10 +182,6 @@ pub struct WorldSettings {
     #[serde(default = "default_gravity_mode")]
     pub gravity_mode: u32,
 
-    /// Surface pressure: tangential smoothing strength for radial fluid mode (0.0-1.0)
-    #[serde(default = "default_surface_pressure")]
-    pub surface_pressure: f32,
-
     /// Number of additional adhesion constraint solver iterations (0 = single-pass, higher = stiffer)
     #[serde(default = "default_constraint_iterations")]
     pub constraint_iterations: u32,
@@ -201,9 +197,26 @@ impl Default for WorldSettings {
             cell_capacity: 20_000,
             gravity: 0.0,
             gravity_mode: 1, // default Y axis
-            surface_pressure: 0.5,
             constraint_iterations: 4,
             acceleration_damping: 0.98,
+        }
+    }
+}
+
+/// Fluid simulation and rendering settings.
+/// These settings control fluid-specific parameters that should persist
+/// independently of world physics settings.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct FluidSettings {
+    /// Surface pressure: tangential smoothing strength for radial fluid mode (0.0-1.0)
+    #[serde(default = "default_surface_pressure")]
+    pub surface_pressure: f32,
+}
+
+impl Default for FluidSettings {
+    fn default() -> Self {
+        Self {
+            surface_pressure: 0.5,
         }
     }
 }
@@ -345,6 +358,10 @@ pub struct GlobalUiState {
     #[serde(default)]
     pub world_settings: WorldSettings,
 
+    /// Fluid simulation and rendering settings
+    #[serde(default)]
+    pub fluid_settings: FluidSettings,
+
     /// Whether the low FPS warning dialog is shown
     #[serde(skip)]
     pub show_low_fps_dialog: bool,
@@ -392,6 +409,7 @@ impl Default for GlobalUiState {
             lod_threshold_high: 50.0,
             lod_debug_colors: false,
             world_settings: WorldSettings::default(),
+            fluid_settings: FluidSettings::default(),
             show_low_fps_dialog: false,
             suppress_low_fps_dialog: false,
             show_reset_dialog: false,
