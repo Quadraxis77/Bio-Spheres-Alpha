@@ -10,8 +10,8 @@
 // Transport Algorithm:
 // - Nutrients flow to establish equilibrium: mass_a / mass_b = priority_a / priority_b
 // - Flow is driven by "pressure" differences: pressure = mass / priority
-// - Cells with low mass get temporary priority boost (10x) when below danger threshold (0.6)
-// - Transport rate: 20.0 nutrients/sec
+// - Cells with low nutrients get temporary priority boost (10x) when below 10.0 nutrients
+// - Transport rate: 30.0 nutrients/sec
 
 struct PhysicsParams {
     delta_time: f32,
@@ -146,10 +146,9 @@ struct ModeProperties {
 // Constants matching reference implementation
 const MIN_CELL_MASS: f32 = 0.5;
 const MIN_NUTRIENTS: f32 = 1.0;  // Death threshold: nutrients < 1.0
-const DANGER_THRESHOLD: f32 = 0.6;
-const DANGER_NUTRIENTS: f32 = 60.0;  // 0.6 * 100 = 60 nutrients danger threshold
+const DANGER_NUTRIENTS: f32 = 10.0;  // Priority boost threshold in nutrients (matches preview)
 const PRIORITY_BOOST: f32 = 10.0;
-const TRANSPORT_RATE: f32 = 20.0;  // Max nutrients/sec total outflow per cell across ALL connections
+const TRANSPORT_RATE: f32 = 30.0;  // Max nutrients/sec total outflow per cell across ALL connections
 const LERP_SPEED: f32 = 999.0;     // Smoothing factor (per second); lower = smoother, less oscillation
 const BASE_METABOLISM_RATE: f32 = 1.0;  // Base metabolic cost in nutrients/sec for non-auto-gain cells
 const SWIM_CONSUMPTION_RATE: f32 = 2.0;  // 2 nutrients/sec at swim_force=1, 6/sec at swim_force=3
@@ -254,14 +253,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Total outflow is capped at TRANSPORT_RATE nutrients/sec across ALL connections.
     // Transfer is lerp-smoothed to prevent oscillation.
     //
-    // Strategy: count active outgoing connections first, then divide TRANSPORT_RATE
-    // equally among them so the total never exceeds the cap.
+    // Two-pass approach (matches preview):
+    // Pass 1: compute desired flow per connection, sum total outflow for this cell
+    // Pass 2: proportionally scale flows so total stays within TRANSPORT_RATE, then apply
     let adhesion_list = adhesion_indices[cell_idx];
     let mode_a_idx = mode_indices[cell_idx];
 
-    // Count active connections where this cell is cell_a (we only process those)
-    var active_conn_count = 0u;
+    // Snapshot nutrients for this cell once (matches preview's single-snapshot semantics)
+    let nutrients_a_snap = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
+
+    // Pass 1: compute desired flows and accumulate total outflow for this cell
+    var total_out: f32 = 0.0;
+    var desired_arr: array<f32, 20>;
+    var cellb_arr: array<u32, 20>;
+    var nutrb_arr: array<f32, 20>;
+    var prioa_arr: array<u32, 20>;
+    var priob_arr: array<u32, 20>;
+    var valid_arr: array<u32, 20>;
+
     for (var i = 0; i < 20; i++) {
+        valid_arr[i] = 0u;
         let adhesion_idx = adhesion_list[i];
         if (adhesion_idx < 0 || adhesion_idx >= i32(arrayLength(&adhesion_connections))) {
             continue;
@@ -279,82 +290,68 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (is_cell_blocked_from_nutrients(cell_idx)) {
             continue;
         }
-        active_conn_count++;
-    }
 
-    // Rate per connection: TRANSPORT_RATE / conn_count so total stays bounded
-    let rate_per_conn = select(TRANSPORT_RATE, TRANSPORT_RATE / f32(active_conn_count), active_conn_count > 1u);
-    // Lerp factor: fraction of the gap to close this step
-    let lerp_t = min(LERP_SPEED * params.delta_time, 1.0);
-
-    for (var i = 0; i < 20; i++) {  // MAX_ADHESIONS_PER_CELL = 20
-        let adhesion_idx = adhesion_list[i];
-        if (adhesion_idx < 0 || adhesion_idx >= i32(arrayLength(&adhesion_connections))) {
-            continue;
-        }
-        
-        let adhesion = adhesion_connections[adhesion_idx];
-        if (adhesion.is_active == 0u) {
-            continue;
-        }
-        
-        // Only process if this cell is cell_a (avoid double processing)
-        if (adhesion.cell_a_index != cell_idx) {
-            continue;
-        }
-        
-        let cell_b_idx = adhesion.cell_b_index;
-        if (cell_b_idx >= cell_count) {
-            continue;
-        }
-        
-        // Only block the sending cell (cell_a = cell_idx) if it is split-deferred.
-        // cell_b may be split-deferred and still legitimately receive nutrients.
-        if (is_cell_blocked_from_nutrients(cell_idx)) {
-            continue;
-        }
-
-        if (death_flags[cell_b_idx] == 1u) {
-            continue;
-        }
-        
-        // Get nutrients for both cells (use atomic load for thread-safety)
-        let nutrients_a = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
-        let nutrients_b = fixed_to_float(atomicLoad(&nutrients_buffer[cell_b_idx]));
-        
-        // Get mode properties for both cells
         let mode_b_idx = mode_indices[cell_b_idx];
-        
-        if (mode_a_idx >= arrayLength(&mode_properties) || 
+        if (mode_a_idx >= arrayLength(&mode_properties) ||
             mode_b_idx >= arrayLength(&mode_properties)) {
             continue;
         }
-        
+
+        let nutrients_b = fixed_to_float(atomicLoad(&nutrients_buffer[cell_b_idx]));
         let mode_a = mode_properties[mode_a_idx];
         let mode_b = mode_properties[mode_b_idx];
-        
-        // Get base priorities
-        let base_priority_a = mode_a.nutrient_priority;
-        let base_priority_b = mode_b.nutrient_priority;
-        
-        // Apply temporary priority boost when cells are dangerously low on nutrients
+
         let prioritize_a = mode_a.prioritize_when_low > 0.5;
         let prioritize_b = mode_b.prioritize_when_low > 0.5;
-        
-        let priority_a = select(base_priority_a, base_priority_a * PRIORITY_BOOST, 
-                               prioritize_a && nutrients_a < DANGER_NUTRIENTS);
-        let priority_b = select(base_priority_b, base_priority_b * PRIORITY_BOOST,
-                               prioritize_b && nutrients_b < DANGER_NUTRIENTS);
-        
-        // Pressure difference drives flow: clamp to [-rate_per_conn, rate_per_conn] nutrients/sec.
-        // When priorities are equal, any nonzero difference drives full flow up to the cap.
-        let pressure_diff = nutrients_a / priority_a - nutrients_b / priority_b;
-        let desired_rate = clamp(pressure_diff, -rate_per_conn, rate_per_conn);
 
-        // Lerp-smoothed transfer this timestep
-        let nutrient_transfer = desired_rate * lerp_t * params.delta_time;
-        
-        // Apply transfer with min/max thresholds
+        let priority_a = select(mode_a.nutrient_priority, mode_a.nutrient_priority * PRIORITY_BOOST,
+                               prioritize_a && nutrients_a_snap < DANGER_NUTRIENTS);
+        let priority_b = select(mode_b.nutrient_priority, mode_b.nutrient_priority * PRIORITY_BOOST,
+                               prioritize_b && nutrients_b < DANGER_NUTRIENTS);
+
+        let pressure_diff = nutrients_a_snap / priority_a - nutrients_b / priority_b;
+        let desired = clamp(pressure_diff, -TRANSPORT_RATE, TRANSPORT_RATE);
+
+        desired_arr[i] = desired;
+        cellb_arr[i] = cell_b_idx;
+        nutrb_arr[i] = nutrients_b;
+        prioa_arr[i] = select(0u, 1u, prioritize_a);
+        priob_arr[i] = select(0u, 1u, prioritize_b);
+        valid_arr[i] = 1u;
+
+        if (desired > 0.0) {
+            total_out += desired;
+        }
+    }
+
+    // Pass 2: apply proportionally scaled transfers (matches preview)
+    let lerp_t = min(LERP_SPEED * params.delta_time, 1.0);
+
+    for (var i = 0; i < 20; i++) {
+        if (valid_arr[i] == 0u) {
+            continue;
+        }
+
+        let desired = desired_arr[i];
+        let cell_b_idx = cellb_arr[i];
+        let nutrients_b = nutrb_arr[i];
+        let prioritize_a = prioa_arr[i] == 1u;
+        let prioritize_b = priob_arr[i] == 1u;
+
+        // Scale outflow so the sending cell never exceeds TRANSPORT_RATE total.
+        // Proportionally reduces each connection's flow based on total desired outflow.
+        // For negative flows (cell_b sends), we cannot compute cell_b's total_out
+        // on GPU in a single pass, so we don't scale (matches preview when total_out <= TRANSPORT_RATE).
+        var scale: f32 = 1.0;
+        if (desired > 0.0 && total_out > TRANSPORT_RATE) {
+            scale = TRANSPORT_RATE / total_out;
+        }
+
+        // Target transfer this step (nutrients), lerped toward desired
+        let target_per_sec = desired * scale;
+        let nutrient_transfer = target_per_sec * lerp_t * params.delta_time;
+
+        // Clamp by available nutrients and receiver capacity
         let min_nutrients_a = select(0.0, 10.0, prioritize_a);
         let min_nutrients_b = select(0.0, 10.0, prioritize_b);
         let max_nutrients_a = split_nutrient_thresholds[cell_idx] * 2.0;
@@ -362,18 +359,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         var actual_transfer: f32;
         if (nutrient_transfer > 0.0) {
-            let can_give = max(nutrients_a - min_nutrients_a, 0.0);
+            let can_give = max(nutrients_a_snap - min_nutrients_a, 0.0);
             let can_recv = max(max_nutrients_b - nutrients_b, 0.0);
             actual_transfer = min(nutrient_transfer, min(can_give, can_recv));
         } else {
             let can_give = max(nutrients_b - min_nutrients_b, 0.0);
-            let can_recv = max(max_nutrients_a - nutrients_a, 0.0);
+            let can_recv = max(max_nutrients_a - nutrients_a_snap, 0.0);
             actual_transfer = max(nutrient_transfer, -min(can_give, can_recv));
         }
-        
+
         // Apply transfer using atomic operations (thread-safe)
         let transfer_fixed = float_to_fixed(actual_transfer);
-        
+
         // Atomically subtract from cell A and add to cell B
         atomicAdd(&nutrients_buffer[cell_idx], -transfer_fixed);
         atomicAdd(&nutrients_buffer[cell_b_idx], transfer_fixed);

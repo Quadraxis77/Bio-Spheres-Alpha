@@ -53,7 +53,7 @@ struct InspectedCellData {
     age: f32,
     
     // Cell division properties (16 bytes)
-    split_mass: f32,
+    nutrient_threshold: f32,
     split_interval: f32,
     split_count: u32,
     max_splits: u32,
@@ -69,6 +69,12 @@ struct InspectedCellData {
     max_cell_size: f32,
     stiffness: f32,
     is_valid: u32,
+    
+    // Additional properties (16 bytes)
+    nutrients: f32,
+    cell_type: u32,
+    adhesion_count: u32,
+    is_dead: u32,
 }
 
 // Physics bind group (group 0) - standard 6-binding layout
@@ -132,6 +138,21 @@ var<storage, read> max_cell_sizes: array<f32>;
 @group(2) @binding(11)
 var<storage, read> stiffnesses: array<f32>;
 
+@group(2) @binding(12)
+var<storage, read> nutrients_buffer: array<i32>;
+
+@group(2) @binding(13)
+var<storage, read> cell_types: array<u32>;
+
+@group(2) @binding(14)
+var<storage, read> death_flags: array<u32>;
+
+const MAX_ADHESIONS_PER_CELL: u32 = 20u;
+const FIXED_POINT_SCALE: f32 = 1000.0;
+
+@group(2) @binding(15)
+var<storage, read> cell_adhesion_indices: array<i32>;
+
 // Output buffer for extracted cell data
 @group(3) @binding(0)
 var<storage, read_write> extracted_data: InspectedCellData;
@@ -155,18 +176,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         extracted_data.radius = 0.0;
         extracted_data.birth_time = 0.0;
         extracted_data.age = 0.0;
-        extracted_data.split_mass = 0.0;
+        extracted_data.nutrient_threshold = 0.0;
         extracted_data.split_interval = 0.0;
         extracted_data.split_count = 0u;
         extracted_data.max_splits = 0u;
         extracted_data.genome_id = 0u;
         extracted_data.mode_index = 0u;
         extracted_data.cell_id = 0u;
-        extracted_data.cell_slot_index = cell_index; // Set slot index even for invalid cells
-        extracted_data.is_valid = 0u; // Invalid
+        extracted_data.cell_slot_index = cell_index;
+        extracted_data.is_valid = 0u;
         extracted_data.nutrient_gain_rate = 0.0;
         extracted_data.max_cell_size = 0.0;
         extracted_data.stiffness = 0.0;
+        extracted_data.nutrients = 0.0;
+        extracted_data.cell_type = 0u;
+        extracted_data.adhesion_count = 0u;
+        extracted_data.is_dead = 0u;
         return;
     }
     
@@ -182,24 +207,41 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Extract cell state properties
     extracted_data.birth_time = birth_times[cell_index];
     extracted_data.split_interval = split_intervals[cell_index];
-    extracted_data.split_mass = split_masses[cell_index];
+    extracted_data.nutrient_threshold = split_masses[cell_index];
     extracted_data.split_count = split_counts[cell_index];
     extracted_data.max_splits = max_splits[cell_index];
     extracted_data.genome_id = genome_ids[cell_index];
     extracted_data.mode_index = mode_indices[cell_index];
     extracted_data.cell_id = cell_ids[cell_index];
-    extracted_data.cell_slot_index = cell_index; // Set slot index for valid cells
+    extracted_data.cell_slot_index = cell_index;
     extracted_data.nutrient_gain_rate = nutrient_gain_rates[cell_index];
     extracted_data.max_cell_size = max_cell_sizes[cell_index];
     extracted_data.stiffness = stiffnesses[cell_index];
     
-    // Calculate derived values
-    // Age = current_time - birth_time
-    extracted_data.age = params.current_time - extracted_data.birth_time;
+    // Nutrients: convert from fixed-point i32 (scale 1000) to f32
+    let nutrients_fixed = nutrients_buffer[cell_index];
+    extracted_data.nutrients = f32(nutrients_fixed) / FIXED_POINT_SCALE;
     
-    // Calculate radius from mass (matching preview scene: radius = mass clamped to 0.5-2.0)
+    // Cell type
+    extracted_data.cell_type = cell_types[cell_index];
+    
+    // Death flag
+    extracted_data.is_dead = death_flags[cell_index];
+    
+    // Count active adhesion connections
+    let adhesion_base = cell_index * MAX_ADHESIONS_PER_CELL;
+    var adh_count = 0u;
+    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+        if (cell_adhesion_indices[adhesion_base + i] >= 0) {
+            adh_count++;
+        }
+    }
+    extracted_data.adhesion_count = adh_count;
+    
+    // Calculate derived values
+    extracted_data.age = params.current_time - extracted_data.birth_time;
     extracted_data.radius = clamp(extracted_data.mass, 0.5, 2.0);
     
     // Set valid flag
-    extracted_data.is_valid = 1u; // Valid
+    extracted_data.is_valid = 1u;
 }

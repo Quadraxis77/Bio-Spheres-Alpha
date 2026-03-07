@@ -5,6 +5,7 @@ use crate::simulation::canonical_state::{CanonicalState, DivisionEvent};
 use crate::simulation::adhesion_inheritance::inherit_adhesions_on_division;
 use crate::genome::Genome;
 
+#[allow(dead_code)]
 /// Deterministic pseudo-random rotation for cell division
 /// Generates small rotation perturbations for visual variety
 /// Uses u32 arithmetic to match the GPU shader implementation exactly
@@ -365,9 +366,8 @@ pub fn division_step(
                 state.genome_ids[data.child_a_slot] = data.parent_genome_id;
                 state.mode_indices[data.child_a_slot] = data.child_a_mode_idx;
 
-                // Apply pseudo-random rotation perturbation (0.001 radians)
-                let random_rotation_a = pseudo_random_rotation(child_a_id, rng_seed);
-                state.rotations[data.child_a_slot] = data.child_a_orientation * random_rotation_a;
+                // Physics rotation = genome rotation chain (no random perturbation for determinism)
+                state.rotations[data.child_a_slot] = data.child_a_orientation;
 
                 state.genome_orientations[data.child_a_slot] = data.child_a_genome_orientation;
                 state.angular_velocities[data.child_a_slot] = Vec3::ZERO;
@@ -400,9 +400,8 @@ pub fn division_step(
                 state.genome_ids[data.child_b_slot] = data.parent_genome_id;
                 state.mode_indices[data.child_b_slot] = data.child_b_mode_idx;
 
-                // Apply pseudo-random rotation perturbation (0.001 radians)
-                let random_rotation_b = pseudo_random_rotation(child_b_id, rng_seed);
-                state.rotations[data.child_b_slot] = data.child_b_orientation * random_rotation_b;
+                // Physics rotation = genome rotation chain (no random perturbation for determinism)
+                state.rotations[data.child_b_slot] = data.child_b_orientation;
 
                 state.genome_orientations[data.child_b_slot] = data.child_b_genome_orientation;
                 state.angular_velocities[data.child_b_slot] = Vec3::ZERO;
@@ -848,8 +847,7 @@ pub fn division_step_multi(
                 
                 state.genome_ids[data.child_a_slot] = data.parent_genome_id;
                 state.mode_indices[data.child_a_slot] = data.child_a_mode_idx;
-                let random_rotation_a = pseudo_random_rotation(child_a_id, rng_seed);
-                state.rotations[data.child_a_slot] = data.child_a_orientation * random_rotation_a;
+                state.rotations[data.child_a_slot] = data.child_a_orientation;
                 state.genome_orientations[data.child_a_slot] = data.child_a_genome_orientation;
                 state.angular_velocities[data.child_a_slot] = Vec3::ZERO;
                 state.forces[data.child_a_slot] = Vec3::ZERO;
@@ -879,8 +877,7 @@ pub fn division_step_multi(
                 
                 state.genome_ids[data.child_b_slot] = data.parent_genome_id;
                 state.mode_indices[data.child_b_slot] = data.child_b_mode_idx;
-                let random_rotation_b = pseudo_random_rotation(child_b_id, rng_seed);
-                state.rotations[data.child_b_slot] = data.child_b_orientation * random_rotation_b;
+                state.rotations[data.child_b_slot] = data.child_b_orientation;
                 state.genome_orientations[data.child_b_slot] = data.child_b_genome_orientation;
                 state.angular_velocities[data.child_b_slot] = Vec3::ZERO;
                 state.forces[data.child_b_slot] = Vec3::ZERO;

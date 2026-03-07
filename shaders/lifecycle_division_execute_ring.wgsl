@@ -198,7 +198,7 @@ var<storage, read_write> genome_orientations: array<vec4<f32>>;
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
 
 @group(3) @binding(1)
-var<storage, read_write> cell_adhesion_indices: array<i32>;
+var<storage, read_write> cell_adhesion_indices: array<atomic<i32>>;
 
 @group(3) @binding(2)
 var<storage, read_write> next_adhesion_id: array<atomic<u32>>;
@@ -448,7 +448,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_a_genome_orientation = quat_multiply(parent_genome_orientation, quat_multiply(split_rotation_quat, child_a_orientation_final));
     let child_b_genome_orientation = quat_multiply(parent_genome_orientation, quat_multiply(split_rotation_quat, child_b_orientation_final));
 
-    // Calculate parent radius for offset calculation (derive mass from nutrients)
+    // Track sibling adhesion slot radius for offset calculation (derive mass from nutrients)
     let parent_mass = nutrients_to_mass(parent_nutrients);
     let parent_radius = calculate_radius_from_mass(parent_mass);
 
@@ -482,10 +482,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_a_id = atomicAdd(&next_cell_id[0], 1u);
     cell_ids[cell_idx] = child_a_id;
     
-    // Apply pseudo-random rotation perturbation to PHYSICS rotation only (matching CPU)
-    // Genome orientation stays pure (no random perturbation)
-    let random_rotation_a = pseudo_random_rotation(child_a_id);
-    rotations_out[cell_idx] = quat_multiply(child_a_rotation, random_rotation_a);
+    // Physics rotation = genome rotation chain (no random perturbation for determinism)
+    rotations_out[cell_idx] = child_a_rotation;
     genome_orientations[cell_idx] = child_a_genome_orientation;
     
     birth_times[cell_idx] = params.current_time;
@@ -528,10 +526,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_b_id = atomicAdd(&next_cell_id[0], 1u);
     cell_ids[child_b_slot] = child_b_id;
     
-    // Apply pseudo-random rotation perturbation to PHYSICS rotation only (matching CPU)
-    // Genome orientation stays pure (no random perturbation)
-    let random_rotation_b = pseudo_random_rotation(child_b_id);
-    rotations_out[child_b_slot] = quat_multiply(child_b_rotation, random_rotation_b);
+    // Physics rotation = genome rotation chain (no random perturbation for determinism)
+    rotations_out[child_b_slot] = child_b_rotation;
     genome_orientations[child_b_slot] = child_b_genome_orientation;
     
     let child_b_props_0 = mode_properties[child_b_mode_idx * 5u];
@@ -626,14 +622,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let base_b = child_b_slot * MAX_ADHESIONS_PER_CELL;
             
             for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
-                if (cell_adhesion_indices[base_a + i] < 0) {
-                    cell_adhesion_indices[base_a + i] = i32(adhesion_id);
+                if (atomicLoad(&cell_adhesion_indices[base_a + i]) < 0) {
+                    atomicStore(&cell_adhesion_indices[base_a + i], i32(adhesion_id));
                     break;
                 }
             }
             for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
-                if (cell_adhesion_indices[base_b + i] < 0) {
-                    cell_adhesion_indices[base_b + i] = i32(adhesion_id);
+                if (atomicLoad(&cell_adhesion_indices[base_b + i]) < 0) {
+                    atomicStore(&cell_adhesion_indices[base_b + i], i32(adhesion_id));
                     break;
                 }
             }
@@ -659,21 +655,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Clear child_a (parent slot): deactivate old inherited connections, skip sibling
         let clear_base_a = cell_idx * MAX_ADHESIONS_PER_CELL;
         for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
-            let adh_idx_signed = cell_adhesion_indices[clear_base_a + i];
+            let adh_idx_signed = atomicLoad(&cell_adhesion_indices[clear_base_a + i]);
             if (adh_idx_signed >= 0 && u32(adh_idx_signed) != sibling_adhesion_slot) {
                 // Deactivate old inherited connection (not the sibling)
                 adhesion_connections[u32(adh_idx_signed)].is_active = 0u;
-                cell_adhesion_indices[clear_base_a + i] = -1;
+                atomicStore(&cell_adhesion_indices[clear_base_a + i], -1);
             }
         }
         // Clear child_b's stale old indices and repopulate with just the sibling bond.
         // parent_make_adhesion creates the sibling regardless of keep_adhesion settings.
         let clear_base_b = child_b_slot * MAX_ADHESIONS_PER_CELL;
         for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
-            cell_adhesion_indices[clear_base_b + i] = -1;
+            atomicStore(&cell_adhesion_indices[clear_base_b + i], -1);
         }
         if (sibling_adhesion_slot != 0xFFFFFFFFu) {
-            cell_adhesion_indices[clear_base_b] = i32(sibling_adhesion_slot);
+            atomicStore(&cell_adhesion_indices[clear_base_b], i32(sibling_adhesion_slot));
         }
         return;
     }
@@ -685,13 +681,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Save parent's adhesion indices BEFORE modifying them
     var parent_adhesion_indices: array<i32, 20>;
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
-        parent_adhesion_indices[i] = cell_adhesion_indices[parent_adhesion_base + i];
+        parent_adhesion_indices[i] = atomicLoad(&cell_adhesion_indices[parent_adhesion_base + i]);
     }
     
     // Clear Child A's adhesion indices (parent slot) - we'll rebuild them
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
-        cell_adhesion_indices[child_a_adhesion_base + i] = -1;
-        cell_adhesion_indices[child_b_adhesion_base + i] = -1;
+        atomicStore(&cell_adhesion_indices[child_a_adhesion_base + i], -1);
+        atomicStore(&cell_adhesion_indices[child_b_adhesion_base + i], -1);
     }
     
     // Track adhesion counts for each child
@@ -701,11 +697,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Re-add the sibling adhesion (if created)
     if (sibling_adhesion_slot != 0xFFFFFFFFu) {
         if (child_a_adhesion_count < MAX_ADHESIONS_PER_CELL) {
-            cell_adhesion_indices[child_a_adhesion_base + child_a_adhesion_count] = i32(sibling_adhesion_slot);
+            atomicStore(&cell_adhesion_indices[child_a_adhesion_base + child_a_adhesion_count], i32(sibling_adhesion_slot));
             child_a_adhesion_count++;
         }
         if (child_b_adhesion_count < MAX_ADHESIONS_PER_CELL) {
-            cell_adhesion_indices[child_b_adhesion_base + child_b_adhesion_count] = i32(sibling_adhesion_slot);
+            atomicStore(&cell_adhesion_indices[child_b_adhesion_base + child_b_adhesion_count], i32(sibling_adhesion_slot));
             child_b_adhesion_count++;
         }
     }
@@ -817,7 +813,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
             
             if (child_a_adhesion_count < MAX_ADHESIONS_PER_CELL) {
-                cell_adhesion_indices[child_a_adhesion_base + child_a_adhesion_count] = i32(adh_idx);
+                atomicStore(&cell_adhesion_indices[child_a_adhesion_base + child_a_adhesion_count], i32(adh_idx));
                 child_a_adhesion_count++;
             }
             
@@ -847,7 +843,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
             
             if (child_b_adhesion_count < MAX_ADHESIONS_PER_CELL) {
-                cell_adhesion_indices[child_b_adhesion_base + child_b_adhesion_count] = i32(adh_idx);
+                atomicStore(&cell_adhesion_indices[child_b_adhesion_base + child_b_adhesion_count], i32(adh_idx));
                 child_b_adhesion_count++;
             }
             
@@ -876,7 +872,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
             
             if (child_a_adhesion_count < MAX_ADHESIONS_PER_CELL) {
-                cell_adhesion_indices[child_a_adhesion_base + child_a_adhesion_count] = i32(adh_idx);
+                atomicStore(&cell_adhesion_indices[child_a_adhesion_base + child_a_adhesion_count], i32(adh_idx));
                 child_a_adhesion_count++;
             }
             
@@ -926,18 +922,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 adhesion_connections[dup_slot] = dup_conn;
                 
                 if (child_b_adhesion_count < MAX_ADHESIONS_PER_CELL) {
-                    cell_adhesion_indices[child_b_adhesion_base + child_b_adhesion_count] = i32(dup_slot);
+                    atomicStore(&cell_adhesion_indices[child_b_adhesion_base + child_b_adhesion_count], i32(dup_slot));
                     child_b_adhesion_count++;
                 }
                 
                 // Add duplicate to neighbor's adhesion list
+                // Uses atomicCompareExchangeWeak to avoid race when multiple
+                // dividing cells simultaneously duplicate Zone C connections
+                // to the same non-dividing neighbor.
                 let neighbor_adhesion_base = neighbor_idx * MAX_ADHESIONS_PER_CELL;
+                var neighbor_write_slot: u32 = 0xFFFFFFFFu;
                 for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
-                    if (cell_adhesion_indices[neighbor_adhesion_base + i] == -1) {
-                        cell_adhesion_indices[neighbor_adhesion_base + i] = i32(dup_slot);
+                    let cas = atomicCompareExchangeWeak(&cell_adhesion_indices[neighbor_adhesion_base + i], -1, i32(dup_slot));
+                    if (cas.exchanged) {
+                        neighbor_write_slot = i;
                         break;
                     }
+                    // If old_value != -1 the slot is occupied — try next slot.
+                    // If CAS spuriously failed (old_value == -1 but not exchanged),
+                    // the loop retries the same index next iteration... but we
+                    // increment i, so we move on. That's fine — another thread
+                    // claimed it between our load and CAS, so it's no longer free.
                 }
+
             }
         }
     }

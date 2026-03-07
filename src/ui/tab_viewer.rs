@@ -422,47 +422,72 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             ui.add_space(8.0);
             ui.separator();
             
-            // Position (from GPU data)
-            let pos = data.position_vec3();
-            ui.label(format!("Position: ({:.2}, {:.2}, {:.2})", pos.x, pos.y, pos.z));
+            // Cell type name
+            let type_name = match data.cell_type {
+                0 => "Test",
+                1 => "Flagellocyte",
+                2 => "Photocyte",
+                3 => "Glueocyte",
+                4 => "Lipocyte",
+                5 => "Phagocyte",
+                6 => "Devorocyte",
+                7 => "Stereocyte",
+                8 => "Buoyocyte",
+                9 => "Virocyte",
+                10 => "Keratinocyte",
+                11 => "Ciliocyte",
+                12 => "Secrocyte",
+                13 => "Stemocyte",
+                14 => "Sensocyte",
+                _ => "Unknown",
+            };
             
-            // Velocity (from GPU data)
+            // Status line
+            if data.is_dead != 0 {
+                ui.colored_label(egui::Color32::RED, format!("{} (DEAD)", type_name));
+            } else {
+                ui.label(format!("Type: {}", type_name));
+            }
+            
+            // Identity
+            ui.label(format!("Cell ID: {}  Slot: {}  Mode: {}  Genome: {}", 
+                data.cell_id, data.cell_slot_index, data.mode_index, data.genome_id));
+            
+            ui.add_space(4.0);
+            ui.separator();
+            
+            // Nutrients & Division
+            ui.label("Nutrients & Division:");
+            ui.label(format!("  Nutrients: {:.1}", data.nutrients));
+            let div_progress = if data.nutrient_threshold > 0.0 {
+                (data.nutrients / data.nutrient_threshold * 100.0).min(100.0)
+            } else {
+                0.0
+            };
+            ui.label(format!("  Split threshold: {:.1}  ({:.0}%)", data.nutrient_threshold, div_progress));
+            ui.label(format!("  Interval: {:.1}s  Age: {:.1}s", data.split_interval, data.age));
+            let max_splits_str = if data.max_splits == 0 { "∞".to_string() } else { format!("{}", data.max_splits) };
+            ui.label(format!("  Splits: {} / {}", data.split_count, max_splits_str));
+            ui.label(format!("  Gain rate: {:.3}", data.nutrient_gain_rate));
+            
+            ui.add_space(4.0);
+            ui.separator();
+            
+            // Physics
+            ui.label("Physics:");
+            let pos = data.position_vec3();
+            ui.label(format!("  Pos: ({:.1}, {:.1}, {:.1})", pos.x, pos.y, pos.z));
             let vel = data.velocity_vec3();
             let speed = vel.length();
-            ui.label(format!("Velocity: ({:.2}, {:.2}, {:.2})", vel.x, vel.y, vel.z));
-            ui.label(format!("Speed: {:.2}", speed));
+            ui.label(format!("  Vel: ({:.2}, {:.2}, {:.2})  |{:.2}|", vel.x, vel.y, vel.z, speed));
+            ui.label(format!("  Mass: {:.2}  Radius: {:.2}", data.mass, data.radius));
+            ui.label(format!("  Stiffness: {:.2}  Max size: {:.2}", data.stiffness, data.max_cell_size));
             
-            // Mass and radius (from GPU data)
-            ui.label(format!("Mass: {:.2}", data.mass));
-            ui.label(format!("Radius: {:.2}", data.radius));
-            
-            // Division info (from GPU data)
             ui.add_space(4.0);
-            ui.label("Division:");
-            ui.label(format!("  Mass threshold: {:.2}", data.split_mass));
-            ui.label(format!("  Progress: {:.0}%", (data.mass / data.split_mass * 100.0).min(100.0)));
-            ui.label(format!("  Interval: {:.1}s", data.split_interval));
-            ui.label(format!("  Split count: {}", data.split_count));
-            ui.label(format!("  Max splits: {}", data.max_splits));
+            ui.separator();
             
-            // Mode info (from GPU data)
-            ui.add_space(4.0);
-            ui.label(format!("Mode index: {}", data.mode_index));
-            ui.label(format!("Genome ID: {}", data.genome_id));
-            ui.label(format!("Cell ID: {}", data.cell_id));
-            ui.label(format!("Cell Slot Index: {}", data.cell_slot_index));
-            
-            // Birth time and age (from GPU data)
-            ui.add_space(4.0);
-            ui.label(format!("Birth time: {:.1}s", data.birth_time));
-            ui.label(format!("Age: {:.1}s", data.age));
-            
-            // Additional GPU-sourced properties
-            ui.add_space(4.0);
-            ui.label("Cell Properties:");
-            ui.label(format!("  Nutrient gain rate: {:.3}", data.nutrient_gain_rate));
-            ui.label(format!("  Max cell size: {:.2}", data.max_cell_size));
-            ui.label(format!("  Stiffness: {:.2}", data.stiffness));
+            // Adhesions
+            ui.label(format!("Adhesions: {}", data.adhesion_count));
             
             return;
             }
@@ -1420,7 +1445,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     nutrient_priority: 1.0,
                     prioritize_when_low: true,
                     parent_split_direction: glam::Vec2::ZERO,
-                    max_adhesions: 10,
+                    max_adhesions: 20,
                     min_adhesions: 0,
                     enable_parent_angle_snapping: true,
                     max_splits: -1, // -1 means infinite
@@ -2041,8 +2066,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                     ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.max_adhesions, 0..=10).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.max_adhesions).speed(1).range(0..=10));
+                    ui.add(egui::Slider::new(&mut mode.max_adhesions, 0..=20).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.max_adhesions).speed(1).range(0..=20));
                 });
 
                 ui.label("Min Connections:");

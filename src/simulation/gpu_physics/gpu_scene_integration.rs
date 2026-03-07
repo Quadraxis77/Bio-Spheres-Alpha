@@ -32,7 +32,7 @@
 //! - 128³ spatial grid for collision acceleration
 
 use super::{CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem};
-use super::adhesion::MAX_ADHESION_CONNECTIONS;
+// MAX_ADHESION_CONNECTIONS is now dynamic (adhesion_buffers.max_connections)
 
 /// Physics parameters for GPU uniform buffer (256-byte aligned)
 /// 
@@ -523,7 +523,7 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.lifecycle_adhesion, &[]);
-        let adhesion_workgroups = (MAX_ADHESION_CONNECTIONS + WORKGROUP_SIZE_ADHESION - 1) / WORKGROUP_SIZE_ADHESION;
+        let adhesion_workgroups = (adhesion_buffers.max_connections + WORKGROUP_SIZE_ADHESION - 1) / WORKGROUP_SIZE_ADHESION;
         compute_pass.dispatch_workgroups(adhesion_workgroups, 1, 1);
         
         drop(compute_pass);

@@ -23,7 +23,7 @@
 use super::adhesion::{
     GpuAdhesionConnection, GpuAdhesionSettings, AdhesionCounts,
     CellAdhesionIndices, AdhesionSlotAllocator,
-    MAX_ADHESIONS_PER_CELL, MAX_ADHESION_CONNECTIONS,
+    MAX_ADHESIONS_PER_CELL,
 };
 
 /// GPU buffers for the adhesion system
@@ -96,12 +96,14 @@ pub struct AdhesionBuffers {
     /// Second signal flags buffer for double-buffered propagation.
     /// During propagation: read from signal_flags, write to signal_flags_next, then swap.
     pub signal_flags_next: wgpu::Buffer,
+
 }
 
 impl AdhesionBuffers {
     /// Create new adhesion buffer system
     pub fn new(device: &wgpu::Device, cell_capacity: u32, max_modes: u32) -> Self {
-        let max_connections = MAX_ADHESION_CONNECTIONS;
+        // Each connection is shared by 2 cells, so theoretical max = cells * max_per_cell / 2
+        let max_connections = cell_capacity * (MAX_ADHESIONS_PER_CELL as u32) / 2;
         
         // Adhesion connections: 104 bytes each (WGSL struct with implicit padding)
         let adhesion_connections = Self::create_storage_buffer(
@@ -545,4 +547,5 @@ impl AdhesionBuffers {
         
         staging_buffer.unmap();
     }
+
 }

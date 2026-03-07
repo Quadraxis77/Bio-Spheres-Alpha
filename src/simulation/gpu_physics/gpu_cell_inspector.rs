@@ -3,7 +3,7 @@
 //! Provides GPU-based cell inspection with async readback management for real-time cell data display.
 //! Implements the requirements for GPU-only cell inspection without CPU state management.
 
-use super::{GpuTripleBufferSystem, GpuCellDataExtraction, InspectedCellData};
+use super::{GpuTripleBufferSystem, GpuCellDataExtraction, InspectedCellData, AdhesionBuffers};
 use std::collections::HashMap;
 
 /// Unique identifier for async readback requests
@@ -62,6 +62,7 @@ impl GpuCellInspector {
         state_layout: &wgpu::BindGroupLayout,
         output_layout: &wgpu::BindGroupLayout,
         buffers: &GpuTripleBufferSystem,
+        adhesion_buffers: &AdhesionBuffers,
         buffer_index: usize,
     ) -> Self {
         // Create the extraction system
@@ -73,6 +74,7 @@ impl GpuCellInspector {
             state_layout,
             output_layout,
             buffers,
+            adhesion_buffers,
             buffer_index,
         );
         

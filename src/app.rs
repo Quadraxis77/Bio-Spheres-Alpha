@@ -632,7 +632,7 @@ impl App {
             gpu_scene.set_occlusion_min_distance(self.ui.state.occlusion_min_distance);
             gpu_scene.set_readbacks_enabled(self.ui.state.gpu_readbacks_enabled);
             gpu_scene.show_adhesion_lines = self.ui.state.show_adhesion_lines;
-            
+
             // Apply LOD settings from UI
             gpu_scene.set_lod_settings(
                 self.ui.state.lod_scale_factor,

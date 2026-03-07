@@ -1,10 +1,11 @@
 use glam::{Vec3, Quat};
 
-/// Maximum adhesions per cell (reduced from 20 for 200K cell support)
+/// Maximum adhesions per cell
 pub const MAX_ADHESIONS_PER_CELL: usize = 20;
 
-/// Maximum total adhesion connections (20 × max cells)
-pub const MAX_ADHESION_CONNECTIONS: usize = 5120;
+/// Legacy constant - actual capacity is computed dynamically as cell_capacity * MAX_ADHESIONS_PER_CELL / 2
+/// Kept for backwards compatibility with code that references it
+pub const MAX_ADHESION_CONNECTIONS: usize = 2_000_000;
 
 /// Adhesion connection between two cells (Structure-of-Arrays layout)
 #[derive(Clone)]

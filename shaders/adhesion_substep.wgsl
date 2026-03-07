@@ -204,12 +204,12 @@ fn compute_substep_forces(
     let rest_length = settings.rest_length;
 
     // Transform anchor directions to world space using GENOME orientations
-    // (not physics rotations) so structures are defined purely by genome data.
-    let genome_rot_a = genome_orientations[connection.cell_a_index];
-    let genome_rot_b = genome_orientations[connection.cell_b_index];
-    
+    // so that adhesion structure is genome-pure and deterministic.
+    // Physics rotations are still used for twist constraint correction below.
     var anchor_a: vec3<f32>;
     var anchor_b: vec3<f32>;
+    let genome_rot_a = genome_orientations[connection.cell_a_index];
+    let genome_rot_b = genome_orientations[connection.cell_b_index];
 
     if (length(connection.anchor_direction_a.xyz) < 0.001 && length(connection.anchor_direction_b.xyz) < 0.001) {
         anchor_a = vec3<f32>(1.0, 0.0, 0.0);
@@ -217,19 +217,6 @@ fn compute_substep_forces(
     } else {
         anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, genome_rot_a);
         anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, genome_rot_b);
-    }
-
-    // Compute physics-based anchors for orientation/twist constraints.
-    // These track the cell's ACTUAL physical rotation so springs can detect
-    // and correct misalignment. Genome anchors above are fixed and can't detect rotation.
-    var phys_anchor_a: vec3<f32>;
-    var phys_anchor_b: vec3<f32>;
-    if (length(connection.anchor_direction_a.xyz) < 0.001 && length(connection.anchor_direction_b.xyz) < 0.001) {
-        phys_anchor_a = vec3<f32>(1.0, 0.0, 0.0);
-        phys_anchor_b = vec3<f32>(-1.0, 0.0, 0.0);
-    } else {
-        phys_anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
-        phys_anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
     }
 
     // Geometric spring force: anchor-defined target positions
@@ -253,11 +240,10 @@ fn compute_substep_forces(
     var torque_a = vec3<f32>(0.0);
     var torque_b = vec3<f32>(0.0);
 
-    // Orientation spring for cell A - uses PHYSICS rotation anchors
-    // to detect actual misalignment (genome anchors are fixed, can't detect rotation)
-    let axis_a = cross(phys_anchor_a, adhesion_dir);
+    // Orientation spring for cell A - aligns anchor toward bonded neighbor
+    let axis_a = cross(anchor_a, adhesion_dir);
     let sin_a = length(axis_a);
-    let cos_a = dot(phys_anchor_a, adhesion_dir);
+    let cos_a = dot(anchor_a, adhesion_dir);
     let angle_a = atan2(sin_a, cos_a);
     if (sin_a > 0.0001) {
         let norm_axis_a = normalize(axis_a);
@@ -267,9 +253,9 @@ fn compute_substep_forces(
     }
 
     // Orientation spring for cell B
-    let axis_b = cross(phys_anchor_b, -adhesion_dir);
+    let axis_b = cross(anchor_b, -adhesion_dir);
     let sin_b = length(axis_b);
-    let cos_b = dot(phys_anchor_b, -adhesion_dir);
+    let cos_b = dot(anchor_b, -adhesion_dir);
     let angle_b = atan2(sin_b, cos_b);
     if (sin_b > 0.0001) {
         let norm_axis_b = normalize(axis_b);
@@ -285,8 +271,8 @@ fn compute_substep_forces(
 
         let adhesion_axis = normalize(delta_pos);
 
-        let current_anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
-        let current_anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
+        let current_anchor_a = anchor_a;
+        let current_anchor_b = anchor_b;
 
         let target_anchor_a = adhesion_axis;
         let target_anchor_b = -adhesion_axis;

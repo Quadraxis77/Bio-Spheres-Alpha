@@ -414,6 +414,30 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
         
+        // Also check neighbor's adhesion constraints (max/min adhesion gates).
+        // Without this, we'd defer to a neighbor that passes nutrient/time/split
+        // checks but will fail the adhesion gate in its own thread — neither cell
+        // would divide.
+        let neighbor_adhesion_base = neighbor_idx * MAX_ADHESIONS_PER_CELL;
+        var neighbor_adhesion_count = 0u;
+        for (var j = 0u; j < MAX_ADHESIONS_PER_CELL; j++) {
+            if (cell_adhesion_indices[neighbor_adhesion_base + j] >= 0) {
+                neighbor_adhesion_count++;
+            }
+        }
+        let neighbor_props_base = neighbor_mode_idx * 5u;
+        let neighbor_min_adh_raw = mode_properties_lc[neighbor_props_base + 3u].w;
+        let neighbor_max_adh_raw = mode_properties_lc[neighbor_props_base + 4u].x;
+        let neighbor_min_adh = u32(max(neighbor_min_adh_raw, 0.0));
+        let neighbor_max_adh = select(MAX_ADHESIONS_PER_CELL, u32(neighbor_max_adh_raw), neighbor_max_adh_raw > 0.0);
+        
+        if (neighbor_adhesion_count >= neighbor_max_adh) {
+            continue; // Neighbor can't divide (max adhesions full)
+        }
+        if (neighbor_min_adh > 0u && neighbor_adhesion_count < neighbor_min_adh) {
+            continue; // Neighbor can't divide (min adhesions not met)
+        }
+        
         // Neighbor wants to split too - lower index wins priority
         if (neighbor_idx < cell_idx) {
             should_defer = true;

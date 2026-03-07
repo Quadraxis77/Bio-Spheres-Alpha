@@ -3,7 +3,7 @@
 //! Provides GPU-based cell data extraction for cell inspection without CPU state management.
 //! Uses bounds validation and calculates derived values like age.
 
-use super::GpuTripleBufferSystem;
+use super::{GpuTripleBufferSystem, AdhesionBuffers};
 
 /// Cell extraction parameters for GPU cell data extraction compute shader
 #[repr(C)]
@@ -34,7 +34,7 @@ pub struct InspectedCellData {
     pub age: f32,
     
     // Cell division properties (16 bytes)
-    pub split_mass: f32,
+    pub nutrient_threshold: f32,
     pub split_interval: f32,
     pub split_count: u32,
     pub max_splits: u32,
@@ -50,6 +50,12 @@ pub struct InspectedCellData {
     pub max_cell_size: f32,
     pub stiffness: f32,
     pub is_valid: u32,
+    
+    // Additional properties (16 bytes)
+    pub nutrients: f32,
+    pub cell_type: u32,
+    pub adhesion_count: u32,
+    pub is_dead: u32,
 }
 
 impl Default for InspectedCellData {
@@ -63,7 +69,7 @@ impl Default for InspectedCellData {
             radius: 0.0,
             birth_time: 0.0,
             age: 0.0,
-            split_mass: 0.0,
+            nutrient_threshold: 0.0,
             split_interval: 0.0,
             split_count: 0,
             max_splits: 0,
@@ -74,7 +80,11 @@ impl Default for InspectedCellData {
             nutrient_gain_rate: 0.0,
             max_cell_size: 0.0,
             stiffness: 0.0,
-            is_valid: 0, // Invalid by default
+            is_valid: 0,
+            nutrients: 0.0,
+            cell_type: 0,
+            adhesion_count: 0,
+            is_dead: 0,
         }
     }
 }
@@ -130,6 +140,7 @@ impl GpuCellDataExtraction {
         state_layout: &wgpu::BindGroupLayout,
         output_layout: &wgpu::BindGroupLayout,
         buffers: &GpuTripleBufferSystem,
+        adhesion_buffers: &AdhesionBuffers,
         buffer_index: usize,
     ) -> Self {
         let data_size = std::mem::size_of::<InspectedCellData>() as u64;
@@ -254,6 +265,22 @@ impl GpuCellDataExtraction {
                 wgpu::BindGroupEntry {
                     binding: 11,
                     resource: buffers.stiffnesses.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: buffers.nutrients_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: buffers.cell_types.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: buffers.death_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: adhesion_buffers.cell_adhesion_indices.as_entire_binding(),
                 },
             ],
         });
