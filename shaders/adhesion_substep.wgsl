@@ -203,20 +203,17 @@ fn compute_substep_forces(
     let adhesion_dir = delta_pos / dist;
     let rest_length = settings.rest_length;
 
-    // Transform anchor directions to world space using GENOME orientations
-    // so that adhesion structure is genome-pure and deterministic.
-    // Physics rotations are still used for twist constraint correction below.
+    // Transform anchor directions to world space using current physics rotations
+    // so that adhesion structure rotates with the cells rather than being locked to world orientation.
     var anchor_a: vec3<f32>;
     var anchor_b: vec3<f32>;
-    let genome_rot_a = genome_orientations[connection.cell_a_index];
-    let genome_rot_b = genome_orientations[connection.cell_b_index];
 
     if (length(connection.anchor_direction_a.xyz) < 0.001 && length(connection.anchor_direction_b.xyz) < 0.001) {
         anchor_a = vec3<f32>(1.0, 0.0, 0.0);
         anchor_b = vec3<f32>(-1.0, 0.0, 0.0);
     } else {
-        anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, genome_rot_a);
-        anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, genome_rot_b);
+        anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
+        anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
     }
 
     // Geometric spring force: anchor-defined target positions
@@ -271,62 +268,38 @@ fn compute_substep_forces(
 
         let adhesion_axis = normalize(delta_pos);
 
-        let current_anchor_a = anchor_a;
-        let current_anchor_b = anchor_b;
-
-        let target_anchor_a = adhesion_axis;
-        let target_anchor_b = -adhesion_axis;
-
-        let alignment_rot_a = quat_from_two_vectors(current_anchor_a, target_anchor_a);
-        let alignment_rot_b = quat_from_two_vectors(current_anchor_b, target_anchor_b);
-
-        let target_orientation_a = quat_multiply(alignment_rot_a, connection.twist_reference_a);
-        let target_orientation_b = quat_multiply(alignment_rot_b, connection.twist_reference_b);
-
-        let correction_rot_a = quat_multiply(target_orientation_a, quat_conjugate(rot_a));
-        let correction_rot_b = quat_multiply(target_orientation_b, quat_conjugate(rot_b));
-
-        let axis_angle_a = quat_to_axis_angle(correction_rot_a);
-        let axis_angle_b = quat_to_axis_angle(correction_rot_b);
-
-        var twist_correction_a = axis_angle_a.w * dot(axis_angle_a.xyz, adhesion_axis);
-        var twist_correction_b = axis_angle_b.w * dot(axis_angle_b.xyz, adhesion_axis);
-
-        twist_correction_a = clamp(twist_correction_a, -1.57, 1.57);
-        twist_correction_b = clamp(twist_correction_b, -1.57, 1.57);
-
-        let twist_torque_a = adhesion_axis * twist_correction_a * settings.twist_constraint_stiffness;
-        let twist_torque_b = adhesion_axis * twist_correction_b * settings.twist_constraint_stiffness;
+        // Relative twist constraint: constrains A's rotation relative to B about the bond axis.
+        let birth_relative = quat_multiply(quat_conjugate(connection.twist_reference_b), connection.twist_reference_a);
+        let current_relative = quat_multiply(quat_conjugate(rot_b), rot_a);
+        let twist_error_quat = quat_multiply(current_relative, quat_conjugate(birth_relative));
+        let twist_error_aa = quat_to_axis_angle(twist_error_quat);
+        let twist_error_scalar = clamp(twist_error_aa.w * dot(twist_error_aa.xyz, adhesion_axis), -1.57, 1.57);
 
         let angular_vel_a_proj = dot(ang_vel_a, adhesion_axis);
         let angular_vel_b_proj = dot(ang_vel_b, adhesion_axis);
         let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
 
-        let twist_damping_a = -adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
-        let twist_damping_b = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
-
-        torque_a += twist_torque_a + twist_damping_a;
-        torque_b += twist_torque_b + twist_damping_b;
+        // Equal and opposite torques to resist relative twist
+        let twist_spring = adhesion_axis * twist_error_scalar * settings.twist_constraint_stiffness;
+        let twist_damp = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
+        torque_a += -twist_spring - twist_damp;
+        torque_b +=  twist_spring + twist_damp;
     }
 
-    // Apply tangential forces from torques to maintain organism shape.
-    // F_tangential = total_torque × delta_pos / |delta_pos|²
-    // Equal and opposite on both cells to conserve momentum (matches CPU reference).
-    let total_torque_val = torque_a + torque_b;
-    let r_squared = dot(delta_pos, delta_pos);
-    if (r_squared > 0.0001) {
-        let tangential_force = cross(total_torque_val, delta_pos) / r_squared;
-        if (is_cell_a) {
-            force += tangential_force;
-        } else {
-            force -= tangential_force;
-        }
-    }
-
+    // Set the appropriate torque for this cell before tangential force calculation
     if (is_cell_a) {
         torque = torque_a;
     } else {
         torque = torque_b;
+    }
+
+    // Apply tangential forces from torques to maintain organism shape.
+    // F_tangential = torque × delta_pos / |delta_pos|²
+    // Use individual cell torque, not total torque, to allow rolling motion
+    let r_squared = dot(delta_pos, delta_pos);
+    if (r_squared > 0.0001) {
+        let tangential_force = cross(torque, delta_pos) / r_squared;
+        force += tangential_force;
     }
 
     return array<vec3<f32>, 2>(force, torque);

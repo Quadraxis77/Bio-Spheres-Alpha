@@ -17,8 +17,8 @@ struct PhysicsParams {
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
     cell_capacity: u32,
-    _pad0: f32,
-    _pad1: f32,
+    _pad0: f32,           // gravity_mode (unused here)
+    angular_damping: f32, // fraction of angular velocity retained per second (independent of linear)
     _pad2: f32,
 }
 
@@ -117,9 +117,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Read current angular velocity
     let ang_vel = angular_velocities[cell_idx].xyz;
     
-    // Apply angular damping: damping^dt gives frame-rate-independent damping
-    // where acceleration_damping = fraction of angular velocity retained per second
-    let angular_damping_factor = pow(params.acceleration_damping, params.delta_time);
+    // Apply angular damping: separate coefficient from linear damping so structures
+    // can spin freely while still gradually losing rotational energy to drag.
+    let ang_damp = select(params.angular_damping, 0.94, params.angular_damping < 0.001);
+    let angular_damping_factor = pow(ang_damp, params.delta_time);
     let new_ang_vel = (ang_vel + angular_acceleration * params.delta_time) * angular_damping_factor;
     
     // Write updated angular velocity

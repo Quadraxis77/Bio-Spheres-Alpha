@@ -189,6 +189,10 @@ pub struct WorldSettings {
     /// Global velocity damping factor (0.0-1.0, higher = less damping, lower = more drag)
     #[serde(default = "default_acceleration_damping")]
     pub acceleration_damping: f32,
+
+    /// How strongly moving water pushes cells (0.0 = off, 1.0 = strong)
+    #[serde(default = "default_water_drag_strength")]
+    pub water_drag_strength: f32,
 }
 
 impl Default for WorldSettings {
@@ -199,6 +203,7 @@ impl Default for WorldSettings {
             gravity_mode: 1, // default Y axis
             constraint_iterations: 4,
             acceleration_damping: 0.98,
+            water_drag_strength: 0.0,
         }
     }
 }
@@ -271,6 +276,10 @@ fn default_surface_pressure() -> f32 {
 
 fn default_acceleration_damping() -> f32 {
     0.98
+}
+
+fn default_water_drag_strength() -> f32 {
+    0.0
 }
 
 /// Global UI state shared across all UI components.

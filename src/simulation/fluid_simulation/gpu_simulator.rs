@@ -85,7 +85,7 @@ pub struct WaterGridParams {
     pub grid_origin_y: f32,
     pub grid_origin_z: f32,
     pub buoyancy_multiplier: f32,  // How strongly to reverse gravity in water (1.0 = full reversal)
-    pub _pad0: f32,
+    pub water_drag_strength: f32,  // How strongly moving water pushes cells (0.0 = off, 1.0 = strong)
     pub _pad1: f32,
 }
 
@@ -142,6 +142,10 @@ pub struct GpuFluidSimulator {
 
     // Bind group layout
     bind_group_layout: wgpu::BindGroupLayout,
+
+    // Water velocity field for cell drag (128³ packed u32 per voxel, ~8MB)
+    // Each u32 encodes the last movement direction of water at that voxel
+    water_velocity_buffer: wgpu::Buffer,
 
     // Water bitfield for fast cell-water detection (32x compressed)
     water_bitfield_buffer: wgpu::Buffer,
@@ -229,7 +233,16 @@ impl GpuFluidSimulator {
             usage: wgpu::BufferUsages::COPY_SRC,
         });
 
-        // Create bind group layout (params + voxel buffer + solid mask)
+        // Create water velocity buffer (128³ * 4 bytes = ~8MB)
+        // Each u32 encodes the last movement direction of water at that voxel
+        let water_velocity_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Water Velocity Buffer"),
+            size: buffer_size, // Same as state buffer: TOTAL_VOXELS * sizeof(u32)
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create bind group layout (params + voxel buffer + solid mask + water velocity)
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Fluid Sim Bind Group Layout"),
             entries: &[
@@ -258,6 +271,17 @@ impl GpuFluidSimulator {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: Water velocity field (read-write atomic u32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -429,7 +453,7 @@ impl GpuFluidSimulator {
             grid_origin_y: grid_origin.y,
             grid_origin_z: grid_origin.z,
             buoyancy_multiplier: 1.0,  // Full gravity reversal in water
-            _pad0: 0.0,
+            water_drag_strength: 0.0,  // Default off, set by UI
             _pad1: 0.0,
         };
 
@@ -600,6 +624,10 @@ impl GpuFluidSimulator {
                     binding: 2,
                     resource: solid_mask_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: water_velocity_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -657,6 +685,7 @@ impl GpuFluidSimulator {
             extract_params_buffer,
             extract_bind_group_layout,
             bind_group_layout,
+            water_velocity_buffer,
             water_bitfield_buffer,
             water_grid_params_buffer,
             bitfield_params_buffer,
@@ -695,6 +724,10 @@ impl GpuFluidSimulator {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: self.solid_mask_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.water_velocity_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -836,6 +869,9 @@ impl GpuFluidSimulator {
         // Update parameters for GPU (required for shader logic) — sub_step starts at 0
         self.update_params(queue, 3, current_time, gravity_magnitude, gravity_dir, lateral_flow_probabilities, condensation_probability, vaporization_probability);
 
+        // Clear water velocity field before simulation (DMA zero-fill)
+        encoder.clear_buffer(&self.water_velocity_buffer, 0, None);
+
         // Byte offset of sub_step field in GpuFluidParams (20 fields × 4 bytes each, last field)
         const SUB_STEP_OFFSET: u64 = 76;
         const NUM_FLUID_SUB_STEPS: u32 = 4;
@@ -956,6 +992,11 @@ impl GpuFluidSimulator {
         pass.dispatch_workgroups(workgroup_count, 1, 1);
     }
 
+    /// Get the water velocity buffer for cell drag forces
+    pub fn water_velocity_buffer(&self) -> &wgpu::Buffer {
+        &self.water_velocity_buffer
+    }
+
     /// Get the water bitfield buffer for cell physics
     pub fn water_bitfield_buffer(&self) -> &wgpu::Buffer {
         &self.water_bitfield_buffer
@@ -979,11 +1020,18 @@ impl GpuFluidSimulator {
             grid_origin_y: grid_origin.y,
             grid_origin_z: grid_origin.z,
             buoyancy_multiplier: multiplier,
-            _pad0: 0.0,
+            water_drag_strength: 0.0,  // Will be set separately
             _pad1: 0.0,
         };
 
         queue.write_buffer(&self.water_grid_params_buffer, 0, bytemuck::cast_slice(&[water_grid_params]));
+    }
+
+    /// Update water drag strength (how strongly moving water pushes cells)
+    pub fn set_water_drag_strength(&self, queue: &wgpu::Queue, strength: f32) {
+        // water_drag_strength is at byte offset 24 in WaterGridParams (field index 6, after 6 f32s)
+        let offset = 6 * std::mem::size_of::<f32>() as u64;
+        queue.write_buffer(&self.water_grid_params_buffer, offset, bytemuck::cast_slice(&[strength]));
     }
 
     /// Get the nutrient voxels buffer

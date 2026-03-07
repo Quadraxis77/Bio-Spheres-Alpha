@@ -1266,7 +1266,8 @@ impl GpuPhysicsPipelines {
             adhesion_buffers, 
             buffers, 
             None, 
-            None
+            None,
+            None,
         );
         
         // Velocity update angular bind group (same for all frames)
@@ -3017,6 +3018,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 6: Water velocity field (read-only storage)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -3175,12 +3187,13 @@ impl GpuPhysicsPipelines {
         triple_buffers: &GpuTripleBufferSystem,
         water_grid_params_buffer: Option<&wgpu::Buffer>,
         water_bitfield_buffer: Option<&wgpu::Buffer>,
+        water_velocity_buffer: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
         use wgpu::util::DeviceExt;
 
         // Create default water buffers if not provided
-        let (water_grid_params_buffer, water_bitfield_buffer) = match (water_grid_params_buffer, water_bitfield_buffer) {
-            (Some(params), Some(bitfield)) => (params.clone(), bitfield.clone()),
+        let (water_grid_params_buffer, water_bitfield_buffer, water_velocity_buffer) = match (water_grid_params_buffer, water_bitfield_buffer, water_velocity_buffer) {
+            (Some(params), Some(bitfield), Some(velocity)) => (params.clone(), bitfield.clone(), velocity.clone()),
             _ => {
                 // Default params with grid_resolution=0 which will cause all position lookups to be out of bounds
                 #[repr(C)]
@@ -3192,7 +3205,7 @@ impl GpuPhysicsPipelines {
                     grid_origin_y: f32,
                     grid_origin_z: f32,
                     buoyancy_multiplier: f32,
-                    _pad0: f32,
+                    water_drag_strength: f32,
                     _pad1: f32,
                 }
 
@@ -3203,7 +3216,7 @@ impl GpuPhysicsPipelines {
                     grid_origin_y: 0.0,
                     grid_origin_z: 0.0,
                     buoyancy_multiplier: 0.0,
-                    _pad0: 0.0,
+                    water_drag_strength: 0.0,
                     _pad1: 0.0,
                 };
 
@@ -3220,7 +3233,14 @@ impl GpuPhysicsPipelines {
                     usage: wgpu::BufferUsages::STORAGE,
                 });
 
-                (params_buffer, bitfield_buffer)
+                // Minimal velocity buffer (just 4 bytes to satisfy buffer requirements)
+                let velocity_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Default Water Velocity Buffer"),
+                    contents: &[0u8; 4],
+                    usage: wgpu::BufferUsages::STORAGE,
+                });
+
+                (params_buffer, bitfield_buffer, velocity_buffer)
             }
         };
 
@@ -3244,7 +3264,7 @@ impl GpuPhysicsPipelines {
                     binding: 3,
                     resource: triple_buffers.prev_accelerations.as_entire_binding(),
                 },
-                // Water buffers (bindings 4 and 5)
+                // Water buffers (bindings 4, 5, and 6)
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: water_grid_params_buffer.as_entire_binding(),
@@ -3252,6 +3272,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: water_bitfield_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: water_velocity_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -4994,6 +5018,7 @@ impl CachedBindGroups {
         triple_buffers: &GpuTripleBufferSystem,
         water_grid_params_buffer: &wgpu::Buffer,
         water_bitfield_buffer: &wgpu::Buffer,
+        water_velocity_buffer: &wgpu::Buffer,
     ) {
         self.position_update_force_accum = pipelines.create_position_update_force_accum_bind_group(
             device,
@@ -5001,6 +5026,7 @@ impl CachedBindGroups {
             triple_buffers,
             Some(water_grid_params_buffer),
             Some(water_bitfield_buffer),
+            Some(water_velocity_buffer),
         );
     }
 }

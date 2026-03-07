@@ -6,6 +6,36 @@
     lock_tabs: false,
     lock_close_buttons: false,
     scene_configs: {
+        Preview: (
+            visibility: (
+                show_cell_inspector: false,
+                show_genome_editor: true,
+                show_scene_manager: false,
+                show_performance_monitor: false,
+                show_rendering_controls: false,
+                show_time_scrubber: false,
+                show_theme_editor: false,
+                show_camera_settings: false,
+                show_lighting_settings: false,
+            ),
+            locked_windows: [
+                "Viewport",
+                "BottomPanel",
+                "QuaternionBall",
+                "TimeSlider",
+                "Modes",
+                "CircleSliders",
+                "LeftPanel",
+                "SceneManager",
+                "NameTypeEditor",
+                "RightPanel",
+            ],
+            lock_settings: (
+                lock_tab_bar: false,
+                lock_tabs: false,
+                lock_close_buttons: false,
+            ),
+        ),
         Gpu: (
             visibility: (
                 show_cell_inspector: true,
@@ -22,36 +52,6 @@
                 "Viewport",
                 "SceneManager",
                 "RightPanel",
-            ],
-            lock_settings: (
-                lock_tab_bar: false,
-                lock_tabs: false,
-                lock_close_buttons: false,
-            ),
-        ),
-        Preview: (
-            visibility: (
-                show_cell_inspector: false,
-                show_genome_editor: true,
-                show_scene_manager: false,
-                show_performance_monitor: false,
-                show_rendering_controls: false,
-                show_time_scrubber: false,
-                show_theme_editor: false,
-                show_camera_settings: false,
-                show_lighting_settings: false,
-            ),
-            locked_windows: [
-                "LeftPanel",
-                "SceneManager",
-                "TimeSlider",
-                "QuaternionBall",
-                "Viewport",
-                "CircleSliders",
-                "RightPanel",
-                "BottomPanel",
-                "NameTypeEditor",
-                "Modes",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -76,10 +76,11 @@
     lod_debug_colors: false,
     world_settings: (
         cell_capacity: 50000,
-        gravity: 24.0,
-        gravity_mode: 1,
+        gravity: 2.0,
+        gravity_mode: 2,
         constraint_iterations: 3,
         acceleration_damping: 0.8,
+        water_drag_strength: 1.0,
     ),
     fluid_settings: (
         surface_pressure: 0.0,

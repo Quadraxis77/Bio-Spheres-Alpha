@@ -469,13 +469,13 @@ pub fn division_step(
 
                         // Daughter A anchor: points toward Daughter B (opposite spawn direction)
                         let direction_a_to_b = -spawn_direction_vec;
-                        // Transform to Daughter A's local genome space
-                        let anchor_direction_a = (data.child_a_genome_orientation.inverse() * direction_a_to_b).normalize();
+                        // Transform to Daughter A's local physics space
+                        let anchor_direction_a = (data.child_a_orientation.inverse() * direction_a_to_b).normalize();
 
                         // Daughter B anchor: points toward Daughter A (same as spawn direction)
                         let direction_b_to_a = spawn_direction_vec;
-                        // Transform to Daughter B's local genome space
-                        let anchor_direction_b = (data.child_b_genome_orientation.inverse() * direction_b_to_a).normalize();
+                        // Transform to Daughter B's local physics space
+                        let anchor_direction_b = (data.child_b_orientation.inverse() * direction_b_to_a).normalize();
 
                         // Get split directions for zone classification
                         let child_a_mode = genome.modes.get(data.child_a_mode_idx);
@@ -505,8 +505,8 @@ pub fn division_step(
                             anchor_direction_b,
                             child_a_split_dir,
                             child_b_split_dir,
-                            data.child_a_genome_orientation,
-                            data.child_b_genome_orientation,
+                            data.child_a_orientation,
+                            data.child_b_orientation,
                             child_a_split_ratio,
                             child_b_split_ratio,
                             current_time,
@@ -947,8 +947,8 @@ pub fn division_step_multi(
                         anchor_direction_b,
                         child_a_split_dir,
                         child_b_split_dir,
-                        data.child_a_genome_orientation,
-                        data.child_b_genome_orientation,
+                        data.child_a_orientation,
+                        data.child_b_orientation,
                         child_a_split_ratio,
                         child_b_split_ratio,
                         current_time,

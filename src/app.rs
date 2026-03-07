@@ -648,6 +648,7 @@ impl App {
             gpu_scene.surface_pressure = self.ui.state.fluid_settings.surface_pressure;
             gpu_scene.constraint_iterations = self.ui.state.world_settings.constraint_iterations;
             gpu_scene.acceleration_damping = self.ui.state.world_settings.acceleration_damping;
+            gpu_scene.water_drag_strength = self.ui.state.world_settings.water_drag_strength;
 
             // Apply fluid settings from UI
             gpu_scene.lateral_flow_probabilities = self.editor_state.fluid_lateral_flow_probabilities;

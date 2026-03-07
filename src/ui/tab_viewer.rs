@@ -3300,6 +3300,13 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.label("Velocity Damping:");
     ui.add(egui::Slider::new(&mut world.acceleration_damping, 0.8..=1.0).text("damping"));
     ui.label(egui::RichText::new("Global drag on cell movement (lower = more drag, higher = less damping)").small());
+    
+    ui.add_space(8.0);
+    
+    // Water drag strength
+    ui.label("Water Drag:");
+    ui.add(egui::Slider::new(&mut world.water_drag_strength, 0.0..=1.0).text("strength"));
+    ui.label(egui::RichText::new("How strongly moving water pushes cells (0 = off, higher = stronger current force)").small());
 }
 
 /// Render the Help panel showing context-specific controls and shortcuts.

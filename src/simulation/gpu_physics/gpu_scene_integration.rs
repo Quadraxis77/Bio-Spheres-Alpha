@@ -61,7 +61,8 @@ struct PhysicsParams {
     // Capacity and gravity mode (16 bytes)
     cell_capacity: u32,        // Maximum cells that can exist
     gravity_mode: u32,         // 0=X, 1=Y, 2=Z, 3=radial (toward origin)
-    _gravity_pad: [f32; 2],    // padding
+    angular_damping: f32,      // fraction of angular velocity retained per second (velocity_update.wgsl _pad1)
+    _gravity_pad: f32,
     
     // Padding to 256 bytes (192 bytes = 48 floats)
     _padding: [f32; 48],
@@ -123,7 +124,8 @@ pub fn execute_gpu_physics_step(
         enable_thrust_force: 1, // Enable swim force for Flagellocyte cells
         cell_capacity: triple_buffers.capacity,
         gravity_mode,
-        _gravity_pad: [0.0; 2],
+        angular_damping: 0.94,
+        _gravity_pad: 0.0,
         _padding: [0.0; 48],
     };
     queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
@@ -346,7 +348,8 @@ pub fn execute_gpu_mechanics_step(
         enable_thrust_force: 1,
         cell_capacity: triple_buffers.capacity,
         gravity_mode,
-        _gravity_pad: [0.0; 2],
+        angular_damping: 0.94,
+        _gravity_pad: 0.0,
         _padding: [0.0; 48],
     };
     queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));

@@ -20,7 +20,7 @@ pub fn compute_adhesion_forces(
     rotations: &[Quat],
     angular_velocities: &[Vec3],
     masses: &[f32],
-    genome_orientations: &[Quat],
+    _genome_orientations: &[Quat],
     mode_settings: &[AdhesionSettings],
     forces: &mut [Vec3],
     torques: &mut [Vec3],
@@ -62,15 +62,15 @@ pub fn compute_adhesion_forces(
             rotations[cell_b_idx],
             angular_velocities[cell_b_idx],
             masses[cell_b_idx],
-            genome_orientations[cell_a_idx],
-            genome_orientations[cell_b_idx],
+            rotations[cell_a_idx],
+            rotations[cell_b_idx],
             connections.anchor_direction_a[i],
             connections.anchor_direction_b[i],
             connections.twist_reference_a[i],
             connections.twist_reference_b[i],
             settings,
         );
-        
+
         // Check break condition before applying forces
         // Skip break check during grace period after bond creation
         let in_grace = current_time - connections.birth_time[i] < BREAK_GRACE_PERIOD;
@@ -101,7 +101,7 @@ pub fn compute_adhesion_forces_parallel(
     rotations: &[Quat],
     angular_velocities: &[Vec3],
     masses: &[f32],
-    genome_orientations: &[Quat],
+    _genome_orientations: &[Quat],
     mode_settings: &[AdhesionSettings],
     forces: &mut [Vec3],
     torques: &mut [Vec3],
@@ -141,8 +141,8 @@ pub fn compute_adhesion_forces_parallel(
                 rotations[cell_b_idx],
                 angular_velocities[cell_b_idx],
                 masses[cell_b_idx],
-                genome_orientations[cell_a_idx],
-                genome_orientations[cell_b_idx],
+                rotations[cell_a_idx],
+                rotations[cell_b_idx],
                 connections.anchor_direction_a[i],
                 connections.anchor_direction_b[i],
                 connections.twist_reference_a[i],
@@ -283,48 +283,30 @@ fn compute_adhesion_force_pair(
         torque_b += -axis_b_norm * ang_vel_b.dot(axis_b_norm) * settings.orientation_spring_damping;
     }
 
-    // Twist constraints (full strength, matching GPU — no reduction factors)
+    // Relative twist constraint: constrains A's rotation relative to B about the bond axis.
+    // This allows the whole structure to spin freely while preventing cells from
+    // twisting against each other beyond their birth relative orientation.
     if settings.enable_twist_constraint
         && twist_ref_a.length() > ANGLE_EPSILON
         && twist_ref_b.length() > ANGLE_EPSILON
     {
         let adhesion_axis = delta_pos.normalize();
 
-        let current_anchor_a = rotate_vector_by_quaternion(anchor_dir_a, rot_a);
-        let current_anchor_b = rotate_vector_by_quaternion(anchor_dir_b, rot_b);
-
-        let target_anchor_a = adhesion_axis;
-        let target_anchor_b = -adhesion_axis;
-
-        let alignment_rot_a = quat_from_two_vectors(current_anchor_a, target_anchor_a);
-        let alignment_rot_b = quat_from_two_vectors(current_anchor_b, target_anchor_b);
-
-        let target_orientation_a = (alignment_rot_a * twist_ref_a).normalize();
-        let target_orientation_b = (alignment_rot_b * twist_ref_b).normalize();
-
-        let correction_rot_a = (target_orientation_a * rot_a.conjugate()).normalize();
-        let correction_rot_b = (target_orientation_b * rot_b.conjugate()).normalize();
-
-        let axis_angle_a = quat_to_axis_angle(correction_rot_a);
-        let axis_angle_b = quat_to_axis_angle(correction_rot_b);
-
-        let twist_correction_a = (axis_angle_a.w * Vec3::new(axis_angle_a.x, axis_angle_a.y, axis_angle_a.z).dot(adhesion_axis))
+        let birth_relative = (twist_ref_b.conjugate() * twist_ref_a).normalize();
+        let current_relative = (rot_b.conjugate() * rot_a).normalize();
+        let twist_error_quat = (current_relative * birth_relative.conjugate()).normalize();
+        let axis_angle = quat_to_axis_angle(twist_error_quat);
+        let twist_error_scalar = (axis_angle.w * Vec3::new(axis_angle.x, axis_angle.y, axis_angle.z).dot(adhesion_axis))
             .clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
-        let twist_correction_b = (axis_angle_b.w * Vec3::new(axis_angle_b.x, axis_angle_b.y, axis_angle_b.z).dot(adhesion_axis))
-            .clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
-
-        let twist_torque_a = adhesion_axis * twist_correction_a * settings.twist_constraint_stiffness;
-        let twist_torque_b = adhesion_axis * twist_correction_b * settings.twist_constraint_stiffness;
 
         let angular_vel_a_proj = ang_vel_a.dot(adhesion_axis);
         let angular_vel_b_proj = ang_vel_b.dot(adhesion_axis);
         let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
 
-        let twist_damping_a = -adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
-        let twist_damping_b = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
-
-        torque_a += twist_torque_a + twist_damping_a;
-        torque_b += twist_torque_b + twist_damping_b;
+        let twist_spring = adhesion_axis * twist_error_scalar * settings.twist_constraint_stiffness;
+        let twist_damp = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
+        torque_a += -twist_spring - twist_damp;
+        torque_b +=  twist_spring + twist_damp;
     }
 
     // Tangential forces from torques (matches GPU)
@@ -369,42 +351,6 @@ fn quat_to_axis_angle(q: Quat) -> Vec4 {
     Vec4::new(axis.x, axis.y, axis.z, angle)
 }
 
-/// Create quaternion from two vectors (deterministic)
-fn quat_from_two_vectors(from: Vec3, to: Vec3) -> Quat {
-    let v1 = from.normalize();
-    let v2 = to.normalize();
-    
-    let cos_angle = v1.dot(v2);
-    
-    // Vectors already aligned
-    if cos_angle > 0.9999 {
-        return Quat::IDENTITY;
-    }
-    
-    // Vectors are opposite
-    if cos_angle < -0.9999 {
-        // Choose axis deterministically
-        let axis = if v1.x.abs() < v1.y.abs() && v1.x.abs() < v1.z.abs() {
-            Vec3::new(0.0, -v1.z, v1.y).normalize()
-        } else if v1.y.abs() < v1.z.abs() {
-            Vec3::new(-v1.z, 0.0, v1.x).normalize()
-        } else {
-            Vec3::new(-v1.y, v1.x, 0.0).normalize()
-        };
-        return Quat::from_xyzw(axis.x, axis.y, axis.z, 0.0); // 180 degree rotation
-    }
-    
-    // General case: half-way quaternion method
-    let halfway = (v1 + v2).normalize();
-    let axis = Vec3::new(
-        v1.y * halfway.z - v1.z * halfway.y,
-        v1.z * halfway.x - v1.x * halfway.z,
-        v1.x * halfway.y - v1.y * halfway.x,
-    );
-    let w = v1.dot(halfway);
-    
-    Quat::from_xyzw(axis.x, axis.y, axis.z, w).normalize()
-}
 
 
 /// Compute one adhesion constraint substep iteration (mirrors GPU adhesion_substep.wgsl).
@@ -423,7 +369,7 @@ pub fn compute_adhesion_substep(
     rotations: &mut [Quat],
     angular_velocities: &mut [Vec3],
     masses: &[f32],
-    genome_orientations: &[Quat],
+    _genome_orientations: &[Quat],
     mode_settings: &[AdhesionSettings],
     cell_count: usize,
     dt: f32,
@@ -465,8 +411,8 @@ pub fn compute_adhesion_substep(
             velocities[cell_b_idx],
             rotations[cell_b_idx],
             angular_velocities[cell_b_idx],
-            genome_orientations[cell_a_idx],
-            genome_orientations[cell_b_idx],
+            rotations[cell_a_idx],
+            rotations[cell_b_idx],
             connections.anchor_direction_a[i],
             connections.anchor_direction_b[i],
             connections.twist_reference_a[i],
@@ -642,48 +588,28 @@ fn compute_substep_force_pair(
         torque_b += -axis_b_norm * ang_vel_b.dot(axis_b_norm) * settings.orientation_spring_damping;
     }
 
-    // Twist constraints (full strength, matching GPU — no 0.05 reduction)
+    // Relative twist constraint: constrains A's rotation relative to B about the bond axis.
     if settings.enable_twist_constraint
         && twist_ref_a.length() > ANGLE_EPSILON
         && twist_ref_b.length() > ANGLE_EPSILON
     {
         let adhesion_axis = delta_pos.normalize();
 
-        let current_anchor_a = rotate_vector_by_quaternion(anchor_dir_a, rot_a);
-        let current_anchor_b = rotate_vector_by_quaternion(anchor_dir_b, rot_b);
-
-        let target_anchor_a = adhesion_axis;
-        let target_anchor_b = -adhesion_axis;
-
-        let alignment_rot_a = quat_from_two_vectors(current_anchor_a, target_anchor_a);
-        let alignment_rot_b = quat_from_two_vectors(current_anchor_b, target_anchor_b);
-
-        let target_orientation_a = (alignment_rot_a * twist_ref_a).normalize();
-        let target_orientation_b = (alignment_rot_b * twist_ref_b).normalize();
-
-        let correction_rot_a = (target_orientation_a * rot_a.conjugate()).normalize();
-        let correction_rot_b = (target_orientation_b * rot_b.conjugate()).normalize();
-
-        let axis_angle_a = quat_to_axis_angle(correction_rot_a);
-        let axis_angle_b = quat_to_axis_angle(correction_rot_b);
-
-        let twist_correction_a = (axis_angle_a.w * Vec3::new(axis_angle_a.x, axis_angle_a.y, axis_angle_a.z).dot(adhesion_axis))
+        let birth_relative = (twist_ref_b.conjugate() * twist_ref_a).normalize();
+        let current_relative = (rot_b.conjugate() * rot_a).normalize();
+        let twist_error_quat = (current_relative * birth_relative.conjugate()).normalize();
+        let axis_angle = quat_to_axis_angle(twist_error_quat);
+        let twist_error_scalar = (axis_angle.w * Vec3::new(axis_angle.x, axis_angle.y, axis_angle.z).dot(adhesion_axis))
             .clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
-        let twist_correction_b = (axis_angle_b.w * Vec3::new(axis_angle_b.x, axis_angle_b.y, axis_angle_b.z).dot(adhesion_axis))
-            .clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
-
-        let twist_torque_a = adhesion_axis * twist_correction_a * settings.twist_constraint_stiffness;
-        let twist_torque_b = adhesion_axis * twist_correction_b * settings.twist_constraint_stiffness;
 
         let angular_vel_a_proj = ang_vel_a.dot(adhesion_axis);
         let angular_vel_b_proj = ang_vel_b.dot(adhesion_axis);
         let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
 
-        let twist_damping_a = -adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
-        let twist_damping_b = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
-
-        torque_a += twist_torque_a + twist_damping_a;
-        torque_b += twist_torque_b + twist_damping_b;
+        let twist_spring = adhesion_axis * twist_error_scalar * settings.twist_constraint_stiffness;
+        let twist_damp = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
+        torque_a += -twist_spring - twist_damp;
+        torque_b +=  twist_spring + twist_damp;
     }
 
     // Tangential forces from torques (matches GPU)
@@ -710,7 +636,7 @@ pub fn compute_adhesion_forces_batched(
     rotations: &[Quat],
     angular_velocities: &[Vec3],
     masses: &[f32],
-    genome_orientations: &[Quat],
+    _genome_orientations: &[Quat],
     mode_settings: &[AdhesionSettings],
     forces: &mut [Vec3],
     torques: &mut [Vec3],
@@ -759,8 +685,8 @@ pub fn compute_adhesion_forces_batched(
                 rotations[cell_b_idx],
                 angular_velocities[cell_b_idx],
                 masses[cell_b_idx],
-                genome_orientations[cell_a_idx],
-                genome_orientations[cell_b_idx],
+                rotations[cell_a_idx],
+                rotations[cell_b_idx],
                 connections.anchor_direction_a[i],
                 connections.anchor_direction_b[i],
                 connections.twist_reference_a[i],

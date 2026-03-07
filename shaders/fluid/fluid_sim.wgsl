@@ -53,6 +53,31 @@ struct ExtractParams {
 @group(0) @binding(0) var<uniform> params: FluidParams;
 @group(0) @binding(1) var<storage, read_write> voxels: array<atomic<u32>>;
 @group(0) @binding(2) var<storage, read> solid_mask: array<u32>;
+@group(0) @binding(3) var<storage, read_write> water_velocity: array<atomic<u32>>;
+
+// Encode a displacement vector (dx, dy, dz each in {-1, 0, +1}) into a packed u32.
+// Encoding: 2 bits per axis. 0b00=0, 0b01=+1, 0b10=-1.
+// Result is 0 only when all components are zero (no movement sentinel).
+fn encode_velocity(dx: i32, dy: i32, dz: i32) -> u32 {
+    var result = 0u;
+    if dx == 1 { result |= 1u; }
+    else if dx == -1 { result |= 2u; }
+    if dy == 1 { result |= (1u << 2u); }
+    else if dy == -1 { result |= (2u << 2u); }
+    if dz == 1 { result |= (1u << 4u); }
+    else if dz == -1 { result |= (2u << 4u); }
+    return result;
+}
+
+// Write water velocity at destination voxel after a successful move.
+// Only writes for water (type 1) to avoid steam noise.
+fn write_water_velocity(dst_idx: u32, fluid_type: u32, dx: i32, dy: i32, dz: i32) {
+    if fluid_type != 1u { return; }
+    let packed = encode_velocity(dx, dy, dz);
+    if packed != 0u {
+        atomicStore(&water_velocity[dst_idx], packed);
+    }
+}
 
 // Get lateral flow probability for a specific fluid type
 fn get_lateral_flow_probability(fluid_type: u32) -> f32 {
@@ -612,6 +637,9 @@ fn radial_move(gid: vec3<u32>) {
     // Both claimed — swap
     atomicStore(&voxels[idx], target_state);
     atomicStore(&voxels[target_idx], state);
+
+    // Record water velocity at destination
+    write_water_velocity(target_idx, fluid_type, best_dx, best_dy, best_dz);
 }
 
 // Main simulation pass - GPU handles all movement with proper physics order
@@ -745,6 +773,8 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                                     // We own idx (placed water_state there on line above),
                                     // clear it directly — no CAS needed since we control it
                                     atomicStore(&voxels[idx], 0u);
+                                    // Record water velocity (falling in gravity direction)
+                                    write_water_velocity(target_idx, 1u, down.x, down.y, down.z);
                                 }
                             }
                         }
@@ -819,6 +849,8 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                     if result.exchanged {
                         // Success: clear the claimed source
                         atomicStore(&voxels[idx], 0u);
+                        // Record water velocity (falling in gravity direction)
+                        write_water_velocity(target_idx, fluid_type, down.x, down.y, down.z);
                         return;
                     }
                 }
@@ -1120,6 +1152,16 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
     // Both cells claimed, perform the swap
     atomicStore(&voxels[idx_a], state_b);
     atomicStore(&voxels[idx_b], state_a);
+
+    // Record water velocity at the destination of the water
+    let dir = get_offset(direction);
+    if type_a == 1u {
+        // Water moved from A to B
+        write_water_velocity(idx_b, 1u, dir.x, dir.y, dir.z);
+    } else if type_b == 1u {
+        // Water moved from B to A (opposite direction)
+        write_water_velocity(idx_a, 1u, -dir.x, -dir.y, -dir.z);
+    }
 }
 
 // Initialize a sphere of water

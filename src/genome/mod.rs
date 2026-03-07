@@ -71,10 +71,10 @@ impl Default for AdhesionSettings {
             linear_spring_stiffness: 150.0,
             linear_spring_damping: 5.0,
             orientation_spring_stiffness: 50.0,
-            orientation_spring_damping: 5.0,
+            orientation_spring_damping: 0.5,
             max_angular_deviation: 0.0,
             twist_constraint_stiffness: 2.0,
-            twist_constraint_damping: 0.5,
+            twist_constraint_damping: 0.05,
             enable_twist_constraint: true,
         }
     }
@@ -201,7 +201,7 @@ impl Default for ModeSettings {
             oculocyte_signal_value: 10.0, // Default: +10 signal
             oculocyte_signal_hops: 3, // Default: 3 hops
             oculocyte_ray_length: 20.0, // Default: 20 units ray length
-            membrane_stiffness: 50.0, // Default: moderate membrane stiffness
+            membrane_stiffness: 250.0, // Default: moderate membrane stiffness
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),
             adhesion_settings: AdhesionSettings::default(),

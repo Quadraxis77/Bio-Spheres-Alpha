@@ -301,6 +301,11 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
                 // Remove inward velocity and apply damping
                 vel = vel + normal * vel_into_wall * cave_params.collision_damping;
             }
+            // Surface friction: resist sliding along the cave wall
+            let vel_normal_comp = dot(vel, normal);
+            let vel_tangent = vel - normal * vel_normal_comp;
+            let friction = 0.35;
+            vel = normal * vel_normal_comp + vel_tangent * (1.0 - friction);
             velocities[cell_idx] = vec4<f32>(vel, velocities[cell_idx].w);
         }
     }

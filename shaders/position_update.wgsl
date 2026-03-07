@@ -34,7 +34,7 @@ struct WaterGridParams {
     grid_origin_y: f32,
     grid_origin_z: f32,
     buoyancy_multiplier: f32,
-    _pad0: f32,
+    water_drag_strength: f32,
     _pad1: f32,
 }
 
@@ -85,6 +85,10 @@ var<uniform> water_params: WaterGridParams;
 @group(2) @binding(5)
 var<storage, read> water_bitfield: array<u32>;
 
+// Water velocity field - packed u32 per voxel encoding last movement direction
+@group(2) @binding(6)
+var<storage, read> water_velocity: array<u32>;
+
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const WATER_GRID_X_GROUPS: u32 = 4u;  // 128 / 32 = 4 u32s per row
 
@@ -127,6 +131,46 @@ fn is_in_water(world_pos: vec3<f32>) -> bool {
     // Read the u32 containing this voxel and extract the bit
     let bits = water_bitfield[bitfield_idx];
     return (bits & (1u << bit_index)) != 0u;
+}
+
+// Decode a packed velocity u32 into a direction vector.
+// Encoding: 2 bits per axis. 0b00=0, 0b01=+1, 0b10=-1.
+fn decode_velocity_component(v: u32) -> f32 {
+    if v == 1u { return 1.0; }
+    if v == 2u { return -1.0; }
+    return 0.0;
+}
+
+// Sample water velocity at a world position.
+// Returns a normalized direction vector of water flow, or zero if no flow.
+fn sample_water_velocity(world_pos: vec3<f32>) -> vec3<f32> {
+    let res = water_params.grid_resolution;
+    if res == 0u { return vec3<f32>(0.0); }
+
+    let grid_pos = vec3<f32>(
+        (world_pos.x - water_params.grid_origin_x) / water_params.cell_size,
+        (world_pos.y - water_params.grid_origin_y) / water_params.cell_size,
+        (world_pos.z - water_params.grid_origin_z) / water_params.cell_size
+    );
+
+    if (grid_pos.x < 0.0 || grid_pos.x >= f32(res) ||
+        grid_pos.y < 0.0 || grid_pos.y >= f32(res) ||
+        grid_pos.z < 0.0 || grid_pos.z >= f32(res)) {
+        return vec3<f32>(0.0);
+    }
+
+    let gx = u32(grid_pos.x);
+    let gy = u32(grid_pos.y);
+    let gz = u32(grid_pos.z);
+    let voxel_idx = gx + gy * res + gz * res * res;
+
+    let packed = water_velocity[voxel_idx];
+    if packed == 0u { return vec3<f32>(0.0); }
+
+    let dx = decode_velocity_component(packed & 3u);
+    let dy = decode_velocity_component((packed >> 2u) & 3u);
+    let dz = decode_velocity_component((packed >> 4u) & 3u);
+    return vec3<f32>(dx, dy, dz);
 }
 
 @compute @workgroup_size(256)
@@ -174,6 +218,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (in_water) {
         // Reduce gravity to 5% when in water (95% less influenced)
         gravity_multiplier = 0.05;
+
+        // Water drag: moving water pushes cells along its flow direction
+        if (water_params.water_drag_strength > 0.0) {
+            let water_flow = sample_water_velocity(pos);
+            let flow_len = length(water_flow);
+            if (flow_len > 0.001) {
+                // Water velocity in world units: direction * cell_size * sub_steps_per_frame / dt
+                // Simplified: use direction * a configurable strength multiplier
+                let water_vel = water_flow * water_params.cell_size * 4.0; // 4 sub-steps per frame
+                // Drag force = coefficient * (water_vel - cell_vel)
+                // This pushes cells toward water velocity (dragged along by current)
+                let drag_coeff = water_params.water_drag_strength * 50.0 * mass;
+                let relative_vel = water_vel - vel;
+                force += drag_coeff * relative_vel;
+            }
+        }
     }
 
     // Apply gravity (F = mg) in the selected axis or radially toward origin
@@ -250,7 +310,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let damping_factor = 1.0 - (smooth_lerp * 0.8); // Max 80% reduction
             let vel_tangent = new_vel - vel_normal * inward_dir;
             let vel_normal_damped = vel_normal * damping_factor;
-            final_vel = vel_tangent + vel_normal_damped * inward_dir;
+            // Surface friction: resist sliding along the boundary wall
+            let friction_scale = 1.0 - smooth_lerp * 0.5;
+            final_vel = vel_tangent * friction_scale + vel_normal_damped * inward_dir;
         }
     }
     

@@ -150,6 +150,8 @@ pub struct GpuScene {
     pub surface_pressure: f32,
     /// Global velocity damping factor (0.0-1.0, higher = less damping, lower = more drag)
     pub acceleration_damping: f32,
+    /// How strongly moving water pushes cells (0.0 = off, 1.0 = strong)
+    pub water_drag_strength: f32,
     /// Per-fluid-type lateral flow probabilities for fluid simulation (0.0 to 1.0)
     /// Index: 0=Empty (unused), 1=Water, 2=Lava, 3=Steam
     pub lateral_flow_probabilities: [f32; 4],
@@ -435,6 +437,7 @@ impl GpuScene {
             constraint_iterations: 4,
             surface_pressure: 0.5,
             acceleration_damping: 0.98,
+            water_drag_strength: 0.0,
             lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
             condensation_probability: 0.1,
             vaporization_probability: 0.1,
@@ -2801,6 +2804,7 @@ impl GpuScene {
             &self.gpu_triple_buffers,
             simulator.water_grid_params_buffer(),
             simulator.water_bitfield_buffer(),
+            simulator.water_velocity_buffer(),
         );
 
         // Start with empty fluid - no initial sphere spawn
@@ -2872,6 +2876,7 @@ impl GpuScene {
         if let Some(ref simulator) = self.fluid_simulator {
             simulator.set_gravity_mode(self.gravity_mode);
             simulator.set_surface_pressure(self.surface_pressure);
+            simulator.set_water_drag_strength(queue, self.water_drag_strength);
             simulator.step(device, queue, encoder, dt, self.gravity, [self.gravity_mode == 0, self.gravity_mode == 1, self.gravity_mode == 2], self.lateral_flow_probabilities, self.condensation_probability, self.vaporization_probability);
             // Update water bitfield for cell physics (compressed 32x for fast lookup)
             simulator.update_water_bitfield(device, encoder);
