@@ -56,6 +56,12 @@ pub struct InspectedCellData {
     pub cell_type: u32,
     pub adhesion_count: u32,
     pub is_dead: u32,
+
+    // Organism identity (16 bytes)
+    pub organism_id: u32, // min cell index in connected component; 0xFFFFFFFF = dead/isolated
+    pub _pad2: u32,
+    pub _pad3: u32,
+    pub _pad4: u32,
 }
 
 impl Default for InspectedCellData {
@@ -85,6 +91,10 @@ impl Default for InspectedCellData {
             cell_type: 0,
             adhesion_count: 0,
             is_dead: 0,
+            organism_id: u32::MAX,
+            _pad2: 0,
+            _pad3: 0,
+            _pad4: 0,
         }
     }
 }
@@ -141,6 +151,7 @@ impl GpuCellDataExtraction {
         output_layout: &wgpu::BindGroupLayout,
         buffers: &GpuTripleBufferSystem,
         adhesion_buffers: &AdhesionBuffers,
+        label_buffer: &wgpu::Buffer,
         buffer_index: usize,
     ) -> Self {
         let data_size = std::mem::size_of::<InspectedCellData>() as u64;
@@ -282,6 +293,10 @@ impl GpuCellDataExtraction {
                     binding: 15,
                     resource: adhesion_buffers.cell_adhesion_indices.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: label_buffer.as_entire_binding(),
+                },
             ],
         });
         
@@ -389,7 +404,7 @@ impl GpuCellDataExtraction {
                 
                 // Cache the data
                 self.cached_data = Some(data);
-                
+
                 return Some(data);
             } else {
                 // Invalid data size

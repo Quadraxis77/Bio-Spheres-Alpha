@@ -453,8 +453,14 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             }
             
             // Identity
-            ui.label(format!("Cell ID: {}  Slot: {}  Mode: {}  Genome: {}", 
+            ui.label(format!("Cell ID: {}  Slot: {}  Mode: {}  Genome: {}",
                 data.cell_id, data.cell_slot_index, data.mode_index, data.genome_id));
+            let org_str = if data.organism_id == u32::MAX {
+                "None (dead/isolated)".to_string()
+            } else {
+                format!("{}", data.organism_id)
+            };
+            ui.label(format!("Organism ID: {}", org_str));
             
             ui.add_space(4.0);
             ui.separator();

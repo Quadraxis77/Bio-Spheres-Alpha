@@ -404,20 +404,6 @@ impl GpuCellInsertion {
             _pad4: 0,
         };
         
-        // DEBUG: Log cell insertion parameters
-        let type_name = match cell_type {
-            0 => "Test",
-            1 => "Flagellocyte",
-            2 => "Phagocyte",
-            3 => "Photocyte",
-            4 => "Lipocyte",
-            _ => "Unknown",
-        };
-        println!("[DEBUG CELL_INSERTION] Inserting cell:");
-        println!("  genome_id: {}, local_mode_index: {}, absolute_mode_index: {}", genome_id, mode_index, absolute_mode_index);
-        println!("  cell_type: {} ({})", cell_type, type_name);
-        println!("  position: ({:.2}, {:.2}, {:.2})", position.x, position.y, position.z);
-        
         // Upload parameters to GPU
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
         

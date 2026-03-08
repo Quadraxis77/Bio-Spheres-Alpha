@@ -25,6 +25,19 @@ pub struct ReadbackResult {
     pub data: InspectedCellData,
 }
 
+impl ReadbackResult {
+    /// Debug print organism ID for troubleshooting
+    pub fn debug_print_organism_id(&self) {
+        println!("[DEBUG] Cell Inspector Readback - Cell {}: Organism ID = {} (raw: 0x{:08X})", 
+                 self.cell_index, self.data.organism_id, self.data.organism_id);
+        if self.data.organism_id == u32::MAX {
+            println!("[DEBUG]   -> DEAD_LABEL (isolated/dead cell)");
+        } else {
+            println!("[DEBUG]   -> Organism member, root cell index = {}", self.data.organism_id);
+        }
+    }
+}
+
 /// GPU Cell Inspector System
 /// 
 /// Manages GPU-based cell data extraction with async readback management.
@@ -63,6 +76,7 @@ impl GpuCellInspector {
         output_layout: &wgpu::BindGroupLayout,
         buffers: &GpuTripleBufferSystem,
         adhesion_buffers: &AdhesionBuffers,
+        label_buffer: &wgpu::Buffer,
         buffer_index: usize,
     ) -> Self {
         // Create the extraction system
@@ -75,6 +89,7 @@ impl GpuCellInspector {
             output_layout,
             buffers,
             adhesion_buffers,
+            label_buffer,
             buffer_index,
         );
         

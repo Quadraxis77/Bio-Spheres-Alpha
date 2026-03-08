@@ -4178,10 +4178,21 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 16: Organism label buffer (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 16,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
-    
+
     /// Create cell extraction output bind group layout (Group 3 in extract_cell_data shader)
     fn create_cell_extraction_output_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

@@ -228,6 +228,8 @@ pub struct GpuScene {
     phagocyte_consumption: Option<PhagocyteConsumptionSystem>,
     /// Cached phagocyte consumption nutrient bind group (physics bind group created fresh each frame)
     phagocyte_nutrient_bind_group: Option<wgpu::BindGroup>,
+    /// Organism label system — GPU-driven connected-component labeling
+    pub organism_label_system: Option<crate::simulation::gpu_physics::OrganismLabelSystem>,
     /// Light field system for photocyte nutrients and volumetric fog
     pub light_field_system: Option<LightFieldSystem>,
     /// Volumetric fog renderer
@@ -394,6 +396,15 @@ impl GpuScene {
         // Cave system will be initialized on demand
         let cave_renderer = None;
 
+        // Create organism label system (always-on, GPU self-throttled)
+        let organism_label_system = Some(
+            crate::simulation::gpu_physics::OrganismLabelSystem::new(
+                device,
+                &gpu_triple_buffers,
+                &adhesion_buffers,
+            )
+        );
+
         Self {
             renderer,
             adhesion_renderer,
@@ -482,6 +493,7 @@ impl GpuScene {
             nutrient_render_bind_group: None,
             phagocyte_consumption: None,
             phagocyte_nutrient_bind_group: None,
+            organism_label_system,
             light_field_system: None,
             volumetric_fog_renderer: None,
             show_volumetric_fog: false,
@@ -764,7 +776,14 @@ impl GpuScene {
         // is rebuilt at the START of each physics step (stages 1-3). Nothing between
         // lifecycle and the next physics step reads the spatial grid. Removing this
         // saves 3 compute dispatches (clear 128³ grid + assign + insert) per step.
-        
+
+        // Organism label pass: self-throttled GPU union-find.
+        // Controller detects topology changes (cell/bond count), triggers convergence
+        // cycles automatically. Idle frames cost nothing (zero workgroup dispatches).
+        if let Some(label_system) = &mut self.organism_label_system {
+            label_system.encode_frame(encoder);
+        }
+
         // Copy GPU physics output to instance builder's buffers
         self.copy_buffers_to_instance_builder(encoder);
     }
@@ -3474,6 +3493,8 @@ impl GpuScene {
         // Initialize GPU cell inspector (requirement 3.1)
         if self.cell_inspector.is_none() {
             let buffer_index = self.gpu_triple_buffers.output_buffer_index();
+            let label_buf = self.organism_label_system.as_ref()
+                .map(|s| &s.label_buffer);
             let cell_inspector = GpuCellInspector::new(
                 device,
                 self.gpu_physics_pipelines.cell_data_extraction.clone(),
@@ -3483,6 +3504,7 @@ impl GpuScene {
                 &self.gpu_physics_pipelines.cell_extraction_output_layout,
                 &self.gpu_triple_buffers,
                 &self.adhesion_buffers,
+                label_buf.expect("OrganismLabelSystem must exist before cell inspector is created"),
                 buffer_index,
             );
             self.cell_inspector = Some(cell_inspector);
@@ -4234,7 +4256,12 @@ impl Scene for GpuScene {
 
         // Single submit for all GPU work
         queue.submit(std::iter::once(encoder.finish()));
-        
+
+        // Debug: poll label buffer readback.
+        if let Some(label_system) = &mut self.organism_label_system {
+            label_system.poll_debug_readback(device);
+        }
+
         // Initiate the async map operation after submit (if we started a readback)
         if should_start_readback {
             self.gpu_triple_buffers.initiate_cell_count_map();

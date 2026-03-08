@@ -75,6 +75,12 @@ struct InspectedCellData {
     cell_type: u32,
     adhesion_count: u32,
     is_dead: u32,
+
+    // Organism identity (16 bytes)
+    organism_id: u32,  // min cell index in connected component; 0xFFFFFFFF = dead/isolated
+    _pad2: u32,
+    _pad3: u32,
+    _pad4: u32,
 }
 
 // Physics bind group (group 0) - standard 6-binding layout
@@ -153,6 +159,11 @@ const FIXED_POINT_SCALE: f32 = 1000.0;
 @group(2) @binding(15)
 var<storage, read> cell_adhesion_indices: array<i32>;
 
+// Organism label buffer — label[i] = min cell index in connected component
+// 0xFFFFFFFF means the cell is dead or isolated
+@group(2) @binding(16)
+var<storage, read> label_buffer: array<u32>;
+
 // Output buffer for extracted cell data
 @group(3) @binding(0)
 var<storage, read_write> extracted_data: InspectedCellData;
@@ -192,6 +203,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         extracted_data.cell_type = 0u;
         extracted_data.adhesion_count = 0u;
         extracted_data.is_dead = 0u;
+        extracted_data.organism_id = 0xFFFFFFFFu;
         return;
     }
     
@@ -241,6 +253,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Calculate derived values
     extracted_data.age = params.current_time - extracted_data.birth_time;
     extracted_data.radius = clamp(extracted_data.mass, 0.5, 2.0);
+    
+    // Organism ID from label buffer
+    extracted_data.organism_id = label_buffer[cell_index];
+    
+    // Debug: log organism ID values
+    if (extracted_data.organism_id == 0u) {
+        // This shouldn't happen with DEAD_LABEL initialization
+        // Add some visual indicator or store in a debug buffer if needed
+    }
     
     // Set valid flag
     extracted_data.is_valid = 1u;
