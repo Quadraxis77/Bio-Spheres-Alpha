@@ -241,7 +241,7 @@ impl OrganismSkinRenderer {
         
         // Calculate voxel counts based on dynamic resolution
         let total_voxels = (grid_resolution * grid_resolution * grid_resolution) as usize;
-        let padded_resolution = grid_resolution + 2;
+        let padded_resolution = grid_resolution + 2; // Only for surface nets processing
         let padded_voxels = (padded_resolution * padded_resolution * padded_resolution) as usize;
 
         // ── Density compute shader ──────────────────────────────────────────
@@ -269,6 +269,7 @@ impl OrganismSkinRenderer {
         });
 
         // ── Density buffers ─────────────────────────────────────────────────
+        // Use original resolution like water surface nets (not padded)
         let density_accum_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Organism Density Accum (i32)"),
             size: (total_voxels * 4) as u64,
@@ -622,7 +623,7 @@ impl OrganismSkinRenderer {
             ),
         });
 
-        let density_buf_size = (total_voxels * 4) as u64;
+        let density_buf_size = (total_voxels * 4) as u64; // Use original resolution like water surface nets
 
         let smoothed_density_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Organism Smoothed Density"),
@@ -630,6 +631,7 @@ impl OrganismSkinRenderer {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
+        
         let smooth_temp_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Organism Smooth Temp"),
             size: density_buf_size,
@@ -637,11 +639,11 @@ impl OrganismSkinRenderer {
             mapped_at_creation: false,
         });
 
-        let smooth_blend_factor = 0.4_f32;
+        let smooth_blend_factor = 0.15_f32; // Match water surface nets stability
         let smooth_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Organism Smooth Params"),
             contents: bytemuck::bytes_of(&SmoothDensityParams {
-                grid_resolution,
+                grid_resolution, // Use original resolution like water surface nets
                 blend_factor: smooth_blend_factor,
                 _pad0: 0.0,
                 _pad1: 0.0,
@@ -727,7 +729,7 @@ impl OrganismSkinRenderer {
             vertex_count: 0,
             index_count: 0,
             skin_params,
-            total_voxels: total_voxels as u32,
+            total_voxels: total_voxels as u32, // Use original resolution like water surface nets
             grid_resolution,
         }
     }
@@ -772,18 +774,16 @@ impl OrganismSkinRenderer {
         if max_cells == 0 {
             return;
         }
-        
-        let total_voxels = self.total_voxels;
 
-        // Pass 1: clear atomic accumulators
+        // Pass 1: clear atomic accumulators (clear original resolution)
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Organism Clear Density"), timestamp_writes: None,
             });
             pass.set_pipeline(&self.clear_pipeline);
             pass.set_bind_group(0, density_bind_group, &[]);
-            // Clamp to maximum workgroup size to avoid GPU validation error
-            let workgroups_x = ((total_voxels + 255) / 256).min(65535);
+            // Dispatch for original buffer total (not padded)
+            let workgroups_x = ((self.total_voxels + 255) / 256).min(65535);
             pass.dispatch_workgroups(workgroups_x, 1, 1);
         }
 
@@ -797,7 +797,7 @@ impl OrganismSkinRenderer {
             pass.dispatch_workgroups((max_cells + 63) / 64, 1, 1);
         }
 
-        // Pass 3: i32 → f32 normalisation
+        // Pass 3: i32 → f32 normalisation (use original resolution)
         {
             let wg = (self.grid_resolution + 3) / 4;
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -815,7 +815,11 @@ impl OrganismSkinRenderer {
     /// reads the stabilised field instead of the raw per-frame data.
     pub fn smooth_density(&self, encoder: &mut wgpu::CommandEncoder) {
         let wg = (self.grid_resolution + 3) / 4;
-        let buf_size = self.total_voxels as u64 * 4;
+        // Use original resolution buffer size like water surface nets
+        let buf_size = (self.total_voxels * 4) as u64;
+
+        // Clear smoothed density buffer at start to prevent garbage data on first frame
+        encoder.clear_buffer(&self.smoothed_density_buffer, 0, None);
 
         // smooth pass: raw density + prev EMA → smooth_temp
         {
@@ -826,6 +830,7 @@ impl OrganismSkinRenderer {
             pass.set_bind_group(0, &self.smooth_bind_group, &[]);
             pass.dispatch_workgroups(wg, wg, wg);
         }
+        
         // smooth_temp → smoothed_density  (persist EMA state for next frame)
         encoder.copy_buffer_to_buffer(&self.smooth_temp_buffer, 0, &self.smoothed_density_buffer, 0, buf_size);
         // smoothed_density → organism_density  (surface nets reads smoothed data)

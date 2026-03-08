@@ -4053,9 +4053,12 @@ impl Scene for GpuScene {
             if let (Some(ref renderer), Some(ref bind_groups)) =
                 (&self.organism_skin_renderer, &self.organism_skin_density_bind_groups)
             {
-                renderer.generate_density(&mut encoder, &bind_groups[output_idx], max_cells.max(1));
-                renderer.smooth_density(&mut encoder);
-                renderer.extract_mesh(&mut encoder);
+                // Only generate density if we have actual cells to prevent holes
+                if max_cells > 0 {
+                    renderer.generate_density(&mut encoder, &bind_groups[output_idx], max_cells);
+                    renderer.smooth_density(&mut encoder);
+                    renderer.extract_mesh(&mut encoder);
+                }
             }
             // Render pass must be separate (after compute)
             if let Some(ref renderer) = self.organism_skin_renderer {

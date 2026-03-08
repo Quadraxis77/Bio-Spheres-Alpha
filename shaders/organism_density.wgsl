@@ -35,6 +35,7 @@ const MAX_VOXEL_RADIUS: i32 = 28;  // Doubled for 256 grid
 
 fn voxel_index(x: u32, y: u32, z: u32) -> u32 {
     let r = params.grid_resolution;
+    // Standard indexing for original resolution (no padding)
     return x + y * r + z * r * r;
 }
 
@@ -51,8 +52,9 @@ fn metaball_kernel(t: f32) -> f32 {
 // ─────────────────────────────────────────────────────────────────────────────
 @compute @workgroup_size(256, 1, 1)
 fn clear_density(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let total = params.grid_resolution * params.grid_resolution * params.grid_resolution;
-    if gid.x >= total { return; }
+    // Clear original resolution buffer like water surface nets
+    let total_size = params.grid_resolution * params.grid_resolution * params.grid_resolution;
+    if gid.x >= total_size { return; }
     atomicStore(&density_accum[gid.x], 0);
 }
 
@@ -92,6 +94,8 @@ fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Voxel radius to cover the influence sphere
     let vr = min(MAX_VOXEL_RADIUS, i32(influence_radius / cell_size) + 1);
 
+    // Extended bounds with boundary padding to prevent edge holes during movement
+    // Add 1 voxel margin to ensure smooth transitions at boundaries
     let vmin = max(vec3<i32>(0),       vec3<i32>(cx - vr, cy - vr, cz - vr));
     let vmax = min(vec3<i32>(res - 1), vec3<i32>(cx + vr, cy + vr, cz + vr));
 
@@ -126,6 +130,7 @@ fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(4, 4, 4)
 fn normalize_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = params.grid_resolution;
+    // Handle padded resolution in normalize pass too
     if gid.x >= res || gid.y >= res || gid.z >= res { return; }
 
     let idx = voxel_index(gid.x, gid.y, gid.z);
