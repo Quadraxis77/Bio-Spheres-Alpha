@@ -72,7 +72,7 @@ struct SurfaceNetsParams {
     grid_origin: [f32; 3],
     max_indices: u32,
     density_resolution: u32,
-    _pad_a: u32,
+    use_fast_early_out: u32,
     _pad_b: u32,
     _pad_c: u32,
 }
@@ -99,6 +99,8 @@ pub struct OrganismSkinParams {
     pub fresnel_power: f32, pub alpha: f32, pub time: f32, pub sss_strength: f32,
     // vec4 3 — sss colour + rim
     pub sss_r: f32, pub sss_g: f32, pub sss_b: f32, pub rim_strength: f32,
+    // vec4 4 — light direction (world space, pointing toward light) + padding
+    pub light_dir_x: f32, pub light_dir_y: f32, pub light_dir_z: f32, pub _pad: f32,
 }
 
 impl Default for OrganismSkinParams {
@@ -115,6 +117,9 @@ impl Default for OrganismSkinParams {
             // Warm orange SSS bleed (light transmission)
             sss_r: 1.0, sss_g: 0.4, sss_b: 0.1,
             rim_strength: 0.35,
+            // Default light direction (toward light, matches scene default)
+            light_dir_x: 0.4, light_dir_y: 0.8, light_dir_z: 0.4,
+            _pad: 0.0,
         }
     }
 }
@@ -427,7 +432,7 @@ impl OrganismSkinRenderer {
             grid_origin: padded_origin.to_array(),
             max_indices,
             density_resolution: grid_resolution,
-            _pad_a: 0, _pad_b: 0, _pad_c: 0,
+            use_fast_early_out: 1, _pad_b: 0, _pad_c: 0,
         };
         let sn_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Organism SN Params"),
@@ -600,7 +605,7 @@ impl OrganismSkinRenderer {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None, // Render both sides for thin membranes
+                cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
@@ -1017,7 +1022,7 @@ impl OrganismSkinRenderer {
             grid_origin: padded_origin.to_array(),
             max_indices: self.max_indices,
             density_resolution: ORGANISM_GRID_RES,
-            _pad_a: 0, _pad_b: 0, _pad_c: 0,
+            use_fast_early_out: 1, _pad_b: 0, _pad_c: 0,
         };
         queue.write_buffer(&self.sn_params_buffer, 0, bytemuck::bytes_of(&p));
     }

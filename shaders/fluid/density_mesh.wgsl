@@ -25,6 +25,8 @@ struct RenderParams {
     noise_octaves: f32,
     noise_lacunarity: f32,
     noise_persistence: f32,
+    _pad2: f32,
+    light_dir: vec3<f32>,
     _pad: f32,
 }
 
@@ -207,7 +209,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let alpha = get_fluid_alpha(in.fluid_type, params.alpha);
     
     // Light direction
-    let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.3));
+    let light_dir = normalize(params.light_dir);
     
     // Diffuse (Lambert)
     let n_dot_l = max(dot(normal, light_dir), 0.0);

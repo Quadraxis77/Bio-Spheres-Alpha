@@ -10,7 +10,7 @@ struct CameraUniform {
     _padding: f32,
 }
 
-// Must match OrganismSkinParams in Rust (64 bytes = 4 × vec4)
+// Must match OrganismSkinParams in Rust (80 bytes = 5 × vec4)
 struct SkinParams {
     // vec4 0
     base_r: f32, base_g: f32, base_b: f32, ambient: f32,
@@ -20,6 +20,8 @@ struct SkinParams {
     fresnel_power: f32, alpha: f32, time: f32, sss_strength: f32,
     // vec4 3
     sss_r: f32, sss_g: f32, sss_b: f32, rim_strength: f32,
+    // vec4 4 — light direction (world space, pointing toward light) + padding
+    light_dir_x: f32, light_dir_y: f32, light_dir_z: f32, _pad: f32,
 }
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
@@ -51,9 +53,6 @@ fn vs_main(v: VertexInput) -> VertexOutput {
 // ─────────────────────────────────────────────────────────────────────────────
 // Lighting helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-// Fixed sun direction (top-right-front).  Keep in sync with scene light dir.
-const LIGHT_DIR: vec3<f32> = vec3<f32>(0.4, 0.8, 0.4);
 
 fn phong_diffuse(n: vec3<f32>, l: vec3<f32>) -> f32 {
     return max(dot(n, l), 0.0);
@@ -87,7 +86,7 @@ fn sss_approx(n: vec3<f32>, l: vec3<f32>, v: vec3<f32>, strength: f32) -> f32 {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let n = normalize(in.world_normal);
     let v = normalize(in.view_dir);
-    let l = normalize(LIGHT_DIR);
+    let l = normalize(vec3<f32>(skin.light_dir_x, skin.light_dir_y, skin.light_dir_z));
 
     let base_color = vec3<f32>(skin.base_r, skin.base_g, skin.base_b);
     let sss_color  = vec3<f32>(skin.sss_r,  skin.sss_g,  skin.sss_b);

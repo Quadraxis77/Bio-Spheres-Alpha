@@ -598,6 +598,8 @@ impl App {
                         noise_octaves: self.editor_state.fluid_noise_octaves as f32,
                         noise_lacunarity: self.editor_state.fluid_noise_lacunarity,
                         noise_persistence: self.editor_state.fluid_noise_persistence,
+                        _pad2: 0.0,
+                        light_dir: self.editor_state.light_dir,
                         _pad: 0.0,
                     };
                     surface_nets.update_render_params(&self.queue, &params);
@@ -620,6 +622,9 @@ impl App {
                     params.alpha = os.alpha;
                     params.sss_strength = os.sss_strength;
                     params.rim_strength = os.rim_strength;
+                    params.light_dir_x = self.editor_state.light_dir[0];
+                    params.light_dir_y = self.editor_state.light_dir[1];
+                    params.light_dir_z = self.editor_state.light_dir[2];
                     skin.update_skin_params(&self.queue, params);
                 }
             }

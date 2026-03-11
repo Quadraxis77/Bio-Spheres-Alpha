@@ -39,7 +39,7 @@ pub struct SurfaceNetsGpuParams {
     pub max_indices: u32,
     
     pub density_resolution: u32, // Actual density data size (128)
-    pub _pad_a: u32,
+    pub use_fast_early_out: u32, // 1 = check only 8 corners (organism skin), 0 = wider check (water)
     pub _pad_b: u32,
     pub _pad_c: u32,
 }
@@ -146,6 +146,8 @@ pub struct DensityMeshParams {
     pub noise_octaves: f32,
     pub noise_lacunarity: f32,
     pub noise_persistence: f32,
+    pub _pad2: f32, // align light_dir to 16-byte boundary
+    pub light_dir: [f32; 3],
     pub _pad: f32,
 }
 
@@ -169,6 +171,8 @@ impl Default for DensityMeshParams {
             noise_octaves: 3.0,
             noise_lacunarity: 2.0,
             noise_persistence: 0.5,
+            _pad2: 0.0,
+            light_dir: [0.5, 1.0, 0.3],
             _pad: 0.0,
         }
     }
@@ -286,7 +290,7 @@ impl GpuSurfaceNets {
             grid_origin: padded_origin.to_array(),
             max_indices,
             density_resolution: GRID_RESOLUTION,
-            _pad_a: 0,
+            use_fast_early_out: 0,
             _pad_b: 0,
             _pad_c: 0,
         };
@@ -865,6 +869,8 @@ impl GpuSurfaceNets {
             noise_octaves: editor_state.fluid_noise_octaves as f32,
             noise_lacunarity: editor_state.fluid_noise_lacunarity,
             noise_persistence: editor_state.fluid_noise_persistence,
+            _pad2: 0.0,
+            light_dir: editor_state.light_dir,
             _pad: 0.0,
         };
         self.update_render_params(queue, &params);
@@ -886,7 +892,7 @@ impl GpuSurfaceNets {
             grid_origin: padded_origin.to_array(),
             max_indices: self.max_indices,
             density_resolution: GRID_RESOLUTION,
-            _pad_a: 0,
+            use_fast_early_out: 0,
             _pad_b: 0,
             _pad_c: 0,
         };

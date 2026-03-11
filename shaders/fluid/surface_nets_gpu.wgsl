@@ -13,7 +13,7 @@ struct SurfaceNetsParams {
     max_indices: u32,
     
     density_resolution: u32, // Actual density data size (128)
-    _pad_a: u32,
+    use_fast_early_out: u32, // 1 = check only 8 corners (organism skin), 0 = check wider neighborhood (water)
     _pad_b: u32,
     _pad_c: u32,
 }
@@ -165,15 +165,26 @@ fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
     let iy = i32(gid.y);
     let iz = i32(gid.z);
 
-    // Early-out: skip expensive filtered sampling if no raw density exists at any corner.
-    // The 3x3x3 box filter can bleed density from neighbors, but if all 8 corners have
-    // zero raw density the contribution from outside this cell is negligible in practice.
+    // Early-out: skip cells with no nearby density.
+    // Fast mode (organism skin): check only the 8 corners — density is dense so this is safe.
+    // Wide mode (water): check a 4x4x4 neighborhood to account for the 3x3x3 filter kernel bleed.
     var has_density = false;
-    for (var i = 0u; i < 8u; i++) {
-        let off = CORNER_OFFSETS[i];
-        if sample_density_clamped(ix + off.x, iy + off.y, iz + off.z) > 0.0 {
-            has_density = true;
-            break;
+    if params.use_fast_early_out != 0u {
+        for (var i = 0u; i < 8u && !has_density; i++) {
+            let off = CORNER_OFFSETS[i];
+            if sample_density_clamped(ix + off.x, iy + off.y, iz + off.z) > 0.0 {
+                has_density = true;
+            }
+        }
+    } else {
+        for (var dx = -1; dx <= 2 && !has_density; dx++) {
+            for (var dy = -1; dy <= 2 && !has_density; dy++) {
+                for (var dz = -1; dz <= 2 && !has_density; dz++) {
+                    if sample_density_clamped(ix + dx, iy + dy, iz + dz) > 0.0 {
+                        has_density = true;
+                    }
+                }
+            }
         }
     }
     if !has_density {
