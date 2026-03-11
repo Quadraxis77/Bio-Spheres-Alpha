@@ -363,7 +363,17 @@ impl GpuScene {
             mapped_at_creation: false,
         });
 
+        // Create organism label system (always-on, GPU self-throttled)
+        let organism_label_system = Some(
+            crate::simulation::gpu_physics::OrganismLabelSystem::new(
+                device,
+                &gpu_triple_buffers,
+                &adhesion_buffers,
+            ),
+        );
+
         // Create cached bind groups (once, not per-frame!)
+        // Pass organism label buffer for self-collision filtering
         let cached_bind_groups = gpu_physics_pipelines.create_cached_bind_groups(
             device,
             &gpu_triple_buffers,
@@ -373,6 +383,7 @@ impl GpuScene {
             &signal_sense_dummy_light_buffer,
             &signal_sense_dummy_solid_buffer,
             &signal_sense_dummy_density_buffer,
+            organism_label_system.as_ref().map(|s| &s.label_buffer),
         );
 
         // Create GPU cell inspector system (will be initialized later with device)
@@ -395,15 +406,6 @@ impl GpuScene {
         
         // Cave system will be initialized on demand
         let cave_renderer = None;
-
-        // Create organism label system (always-on, GPU self-throttled)
-        let organism_label_system = Some(
-            crate::simulation::gpu_physics::OrganismLabelSystem::new(
-                device,
-                &gpu_triple_buffers,
-                &adhesion_buffers,
-            )
-        );
 
         Self {
             renderer,

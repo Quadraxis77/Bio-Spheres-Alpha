@@ -73,6 +73,12 @@ var<storage, read_write> spatial_grid_cells: array<u32>;
 @group(1) @binding(4)
 var<storage, read> stiffnesses: array<f32>;
 
+// Per-cell organism ID for self-collision filtering
+// Cells with the same organism ID (same connected component) will not collide
+// 0xFFFFFFFF = dead/isolated cell (collides with everything)
+@group(1) @binding(5)
+var<storage, read> organism_labels: array<u32>;
+
 // Force accumulation buffers (group 2) - atomic i32 for multi-adhesion accumulation
 @group(2) @binding(0)
 var<storage, read_write> force_accum_x: array<atomic<i32>>;
@@ -148,6 +154,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let my_stiffness = stiffnesses[cell_idx];
     let my_grid_idx = cell_grid_indices[cell_idx];
     let my_grid_coords = grid_index_to_coords(my_grid_idx, params.grid_resolution);
+    
+    // Get organism ID for self-collision filtering
+    // 0xFFFFFFFF = dead/isolated cell (collides with everything)
+    let my_organism_id = organism_labels[cell_idx];
     
     var force = vec3<f32>(0.0);
     var torque = vec3<f32>(0.0);
@@ -247,6 +257,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let other_idx = spatial_grid_cells[grid_base_offset + i];
             
             if (other_idx == cell_idx) {
+                continue;
+            }
+            
+            // Skip self-collision: cells in the same organism don't collide
+            // 0xFFFFFFFF = dead/isolated cell (collides with everything)
+            let other_organism_id = organism_labels[other_idx];
+            if (my_organism_id != 0xFFFFFFFFu && other_organism_id != 0xFFFFFFFFu && my_organism_id == other_organism_id) {
                 continue;
             }
             

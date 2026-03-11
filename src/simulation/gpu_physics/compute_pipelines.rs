@@ -1190,6 +1190,7 @@ impl GpuPhysicsPipelines {
         signal_sense_light_field_buffer: &wgpu::Buffer,
         signal_sense_solid_mask_buffer: &wgpu::Buffer,
         signal_sense_density_field_buffer: &wgpu::Buffer,
+        organism_label_buffer: Option<&wgpu::Buffer>,
     ) -> CachedBindGroups {
         // Create physics bind groups for all 3 buffer indices
         let physics = [
@@ -1199,7 +1200,7 @@ impl GpuPhysicsPipelines {
         ];
         
         // Spatial grid bind group (same for all frames)
-        let spatial_grid = self.create_spatial_grid_bind_group_internal(device, buffers);
+        let spatial_grid = self.create_spatial_grid_bind_group_internal(device, buffers, organism_label_buffer);
         
         // Position update spatial grid bind group (read-only, same for all frames)
         let position_update_spatial_grid = self.create_position_update_spatial_grid_bind_group_internal(device, buffers);
@@ -1388,7 +1389,22 @@ impl GpuPhysicsPipelines {
         &self,
         device: &wgpu::Device,
         buffers: &GpuTripleBufferSystem,
+        organism_label_buffer: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
+        // Create a dummy buffer if organism labels aren't available
+        let dummy_label_buffer;
+        let label_buffer = if let Some(buf) = organism_label_buffer {
+            buf
+        } else {
+            dummy_label_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Organism Label Buffer"),
+                size: buffers.capacity as u64 * 4, // u32 per cell
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            &dummy_label_buffer
+        };
+        
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Spatial Grid Bind Group"),
             layout: &self.spatial_grid_layout,
@@ -1412,6 +1428,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: buffers.stiffnesses.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: label_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -1608,6 +1628,17 @@ impl GpuPhysicsPipelines {
                 // Stiffnesses (per-cell membrane stiffness from genome)
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Organism labels (per-cell organism ID for self-collision filtering)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
