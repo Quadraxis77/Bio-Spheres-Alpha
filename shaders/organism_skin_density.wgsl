@@ -1,9 +1,9 @@
-// Organism Skin Density — K=2 Overlapping Slots
+// Organism Skin Density — K=4 Overlapping Slots
 //
-// Each voxel has two slots. Each slot holds an organism_id (u32) and a
+// Each voxel has four slots. Each slot holds an organism_id (u32) and a
 // fixed-point density accumulator (atomic i32). Cells claim a slot via CAS
-// and accumulate density via atomicAdd. Two organisms can overlap at any
-// voxel; a third is dropped.
+// and accumulate density via atomicAdd. Four organisms can overlap at any
+// voxel; a fifth is dropped.
 //
 // Three entry points (same bind group):
 //   clear_density      — zero all slot data
@@ -16,7 +16,7 @@ struct OrganismDensityParams {
     grid_resolution: u32,
     skin_radius_scale: f32,
     max_cells: u32,
-    min_cells_for_skin: u32,  // organisms with fewer cells get no skin (typically 4)
+    min_cells_for_skin: u32,
 }
 
 @group(0) @binding(0) var<uniform>            params: OrganismDensityParams;
@@ -24,28 +24,35 @@ struct OrganismDensityParams {
 @group(0) @binding(2) var<storage, read>      death_flags: array<u32>;
 @group(0) @binding(3) var<storage, read>      cell_count: array<u32>;
 
-// K=2 slot buffers — organism IDs
-@group(0) @binding(4) var<storage, read_write> slot_org_0: array<atomic<u32>>;
-@group(0) @binding(5) var<storage, read_write> slot_org_1: array<atomic<u32>>;
+// K=4 slot buffers — organism IDs (atomic u32)
+@group(0) @binding(4)  var<storage, read_write> slot_org_0: array<atomic<u32>>;
+@group(0) @binding(5)  var<storage, read_write> slot_org_1: array<atomic<u32>>;
+@group(0) @binding(6)  var<storage, read_write> slot_org_2: array<atomic<u32>>;
+@group(0) @binding(7)  var<storage, read_write> slot_org_3: array<atomic<u32>>;
 
-// K=2 slot buffers — fixed-point density accumulators
-@group(0) @binding(6) var<storage, read_write> slot_density_0: array<atomic<i32>>;
-@group(0) @binding(7) var<storage, read_write> slot_density_1: array<atomic<i32>>;
+// K=4 slot buffers — fixed-point density accumulators (atomic i32)
+@group(0) @binding(8)  var<storage, read_write> slot_density_0: array<atomic<i32>>;
+@group(0) @binding(9)  var<storage, read_write> slot_density_1: array<atomic<i32>>;
+@group(0) @binding(10) var<storage, read_write> slot_density_2: array<atomic<i32>>;
+@group(0) @binding(11) var<storage, read_write> slot_density_3: array<atomic<i32>>;
 
-// Normalized f32 density output (written by normalize pass, read by surface nets)
-@group(0) @binding(8) var<storage, read_write> density_out_0: array<f32>;
-@group(0) @binding(9) var<storage, read_write> density_out_1: array<f32>;
+// K=4 normalized f32 density output (written by normalize pass, read by surface nets)
+@group(0) @binding(12) var<storage, read_write> density_out_0: array<f32>;
+@group(0) @binding(13) var<storage, read_write> density_out_1: array<f32>;
+@group(0) @binding(14) var<storage, read_write> density_out_2: array<f32>;
+@group(0) @binding(15) var<storage, read_write> density_out_3: array<f32>;
 
-// Organism ID output (non-atomic copy for surface nets to read)
-@group(0) @binding(10) var<storage, read_write> org_id_out_0: array<u32>;
-@group(0) @binding(11) var<storage, read_write> org_id_out_1: array<u32>;
+// K=4 organism ID output (non-atomic copy for surface nets to read)
+@group(0) @binding(16) var<storage, read_write> org_id_out_0: array<u32>;
+@group(0) @binding(17) var<storage, read_write> org_id_out_1: array<u32>;
+@group(0) @binding(18) var<storage, read_write> org_id_out_2: array<u32>;
+@group(0) @binding(19) var<storage, read_write> org_id_out_3: array<u32>;
 
 // Per-cell organism skin ID (0 = no skin, >0 = 16-bit organism ID)
-// Written by the organism_skin_count pass.
-@group(0) @binding(12) var<storage, read>      cell_skin_id: array<u32>;
+@group(0) @binding(20) var<storage, read>      cell_skin_id: array<u32>;
 
 const FIXED_SCALE: f32 = 32768.0;
-const MAX_VOXEL_RADIUS: i32 = 28;
+const MAX_VOXEL_RADIUS: i32 = 14;
 
 fn voxel_index(x: u32, y: u32, z: u32) -> u32 {
     let r = params.grid_resolution;
@@ -55,6 +62,9 @@ fn voxel_index(x: u32, y: u32, z: u32) -> u32 {
 fn metaball_kernel(t: f32) -> f32 {
     return t * t * (3.0 - 2.0 * t);
 }
+
+// Slot claiming is inlined in generate_density because WGSL (naga) does not
+// allow passing storage pointers to functions.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pass 1: clear all slot data
@@ -66,12 +76,16 @@ fn clear_density(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     atomicStore(&slot_org_0[gid.x], 0u);
     atomicStore(&slot_org_1[gid.x], 0u);
+    atomicStore(&slot_org_2[gid.x], 0u);
+    atomicStore(&slot_org_3[gid.x], 0u);
     atomicStore(&slot_density_0[gid.x], 0);
     atomicStore(&slot_density_1[gid.x], 0);
+    atomicStore(&slot_density_2[gid.x], 0);
+    atomicStore(&slot_density_3[gid.x], 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pass 2: per-cell metaball splatting with K=2 slot claiming
+// Pass 2: per-cell metaball splatting with K=4 slot claiming
 // ─────────────────────────────────────────────────────────────────────────────
 @compute @workgroup_size(64, 1, 1)
 fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -85,7 +99,6 @@ fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     let mass     = pos_mass.w;
     if mass <= 0.0 { return; }
 
-    // Read pre-computed skin ID (0 = no skin for this cell)
     let skin_id = cell_skin_id[cell_idx];
     if skin_id == 0u { return; }
 
@@ -121,39 +134,70 @@ fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
 
                 let idx = voxel_index(u32(vx), u32(vy), u32(vz));
 
-                // Try to claim or accumulate into slot 0
-                let org0 = atomicLoad(&slot_org_0[idx]);
-                if org0 == skin_id {
-                    // Our organism already owns slot 0 — accumulate
-                    atomicAdd(&slot_density_0[idx], fixed);
-                    continue;
-                }
-                if org0 == 0u {
-                    // Slot 0 is empty — try to claim it
-                    let cas = atomicCompareExchangeWeak(&slot_org_0[idx], 0u, skin_id);
-                    if cas.exchanged || cas.old_value == skin_id {
+                // Slot 0
+                var claimed = false;
+                {
+                    let org0 = atomicLoad(&slot_org_0[idx]);
+                    if org0 == skin_id {
                         atomicAdd(&slot_density_0[idx], fixed);
-                        continue;
+                        claimed = true;
+                    } else if org0 == 0u {
+                        let cas0 = atomicCompareExchangeWeak(&slot_org_0[idx], 0u, skin_id);
+                        if cas0.exchanged || cas0.old_value == skin_id {
+                            atomicAdd(&slot_density_0[idx], fixed);
+                            claimed = true;
+                        }
                     }
-                    // CAS failed — another organism claimed slot 0 between our load and CAS.
-                    // Fall through to try slot 1.
                 }
+                if claimed { continue; }
 
-                // Try to claim or accumulate into slot 1
-                let org1 = atomicLoad(&slot_org_1[idx]);
-                if org1 == skin_id {
-                    atomicAdd(&slot_density_1[idx], fixed);
-                    continue;
-                }
-                if org1 == 0u {
-                    let cas = atomicCompareExchangeWeak(&slot_org_1[idx], 0u, skin_id);
-                    if cas.exchanged || cas.old_value == skin_id {
+                // Slot 1
+                {
+                    let org1 = atomicLoad(&slot_org_1[idx]);
+                    if org1 == skin_id {
                         atomicAdd(&slot_density_1[idx], fixed);
-                        continue;
+                        claimed = true;
+                    } else if org1 == 0u {
+                        let cas1 = atomicCompareExchangeWeak(&slot_org_1[idx], 0u, skin_id);
+                        if cas1.exchanged || cas1.old_value == skin_id {
+                            atomicAdd(&slot_density_1[idx], fixed);
+                            claimed = true;
+                        }
                     }
                 }
+                if claimed { continue; }
 
-                // Both slots taken by other organisms — drop this contribution.
+                // Slot 2
+                {
+                    let org2 = atomicLoad(&slot_org_2[idx]);
+                    if org2 == skin_id {
+                        atomicAdd(&slot_density_2[idx], fixed);
+                        claimed = true;
+                    } else if org2 == 0u {
+                        let cas2 = atomicCompareExchangeWeak(&slot_org_2[idx], 0u, skin_id);
+                        if cas2.exchanged || cas2.old_value == skin_id {
+                            atomicAdd(&slot_density_2[idx], fixed);
+                            claimed = true;
+                        }
+                    }
+                }
+                if claimed { continue; }
+
+                // Slot 3
+                {
+                    let org3 = atomicLoad(&slot_org_3[idx]);
+                    if org3 == skin_id {
+                        atomicAdd(&slot_density_3[idx], fixed);
+                        claimed = true;
+                    } else if org3 == 0u {
+                        let cas3 = atomicCompareExchangeWeak(&slot_org_3[idx], 0u, skin_id);
+                        if cas3.exchanged || cas3.old_value == skin_id {
+                            atomicAdd(&slot_density_3[idx], fixed);
+                            claimed = true;
+                        }
+                    }
+                }
+                // All 4 slots taken by other organisms — drop this contribution.
             }
         }
     }
@@ -169,13 +213,19 @@ fn normalize_density(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let idx = voxel_index(gid.x, gid.y, gid.z);
 
-    // Slot 0
     let raw0 = atomicLoad(&slot_density_0[idx]);
     density_out_0[idx] = f32(raw0) / FIXED_SCALE;
     org_id_out_0[idx] = atomicLoad(&slot_org_0[idx]);
 
-    // Slot 1
     let raw1 = atomicLoad(&slot_density_1[idx]);
     density_out_1[idx] = f32(raw1) / FIXED_SCALE;
     org_id_out_1[idx] = atomicLoad(&slot_org_1[idx]);
+
+    let raw2 = atomicLoad(&slot_density_2[idx]);
+    density_out_2[idx] = f32(raw2) / FIXED_SCALE;
+    org_id_out_2[idx] = atomicLoad(&slot_org_2[idx]);
+
+    let raw3 = atomicLoad(&slot_density_3[idx]);
+    density_out_3[idx] = f32(raw3) / FIXED_SCALE;
+    org_id_out_3[idx] = atomicLoad(&slot_org_3[idx]);
 }
