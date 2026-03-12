@@ -20,8 +20,8 @@
             ),
             locked_windows: [
                 "Viewport",
-                "RightPanel",
                 "SceneManager",
+                "RightPanel",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -42,16 +42,16 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "CircleSliders",
+                "SceneManager",
                 "NameTypeEditor",
-                "LeftPanel",
+                "CircleSliders",
+                "Modes",
+                "BottomPanel",
+                "QuaternionBall",
                 "RightPanel",
                 "TimeSlider",
                 "Viewport",
-                "BottomPanel",
-                "SceneManager",
-                "Modes",
-                "QuaternionBall",
+                "LeftPanel",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -87,7 +87,7 @@
         organism_skin: (
             enabled: true,
             grid_resolution: 256,
-            radius_scale: 3.0,
+            radius_scale: 1.5,
             iso_level: 0.1,
             base_color: (0.0, 0.33333334, 0.11764706),
             ambient: 0.12,

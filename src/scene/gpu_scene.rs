@@ -192,6 +192,8 @@ pub struct GpuScene {
     pub show_organism_skins: bool,
     /// Cached density bind groups for organism skin (one per triple-buffer index)
     organism_skin_density_bind_groups: Option<[wgpu::BindGroup; 3]>,
+    /// Cached count bind group for organism skin (shared across frames)
+    organism_skin_count_bind_group: Option<wgpu::BindGroup>,
     /// GPU fluid simulator for falling/stacking water
     pub fluid_simulator: Option<GpuFluidSimulator>,
     /// Solid mask generator for fluid system
@@ -477,6 +479,7 @@ impl GpuScene {
             organism_skin_renderer: None,
             show_organism_skins: false,
             organism_skin_density_bind_groups: None,
+            organism_skin_count_bind_group: None,
             fluid_simulator: None,
             solid_mask_generator: None,
             steam_particle_renderer: None,
@@ -2692,29 +2695,42 @@ impl GpuScene {
         self.show_organism_skins = true;
         // Invalidate cached bind groups so they are recreated with the new renderer
         self.organism_skin_density_bind_groups = None;
+        self.organism_skin_count_bind_group = None;
 
         log::info!("Organism skin renderer initialized (grid {}³)", settings.grid_resolution);
     }
 
-    /// Ensure organism skin density bind groups are created (one per triple-buffer index).
+    /// Ensure organism skin bind groups are created.
     fn ensure_organism_skin_bind_groups(&mut self, device: &wgpu::Device) {
-        if self.organism_skin_density_bind_groups.is_some() {
-            return;
-        }
         let renderer = match &self.organism_skin_renderer {
             Some(r) => r,
             None => return,
         };
 
-        let bgs = std::array::from_fn(|i| {
-            renderer.create_density_bind_group(
-                device,
-                &self.gpu_triple_buffers.position_and_mass[i],
-                &self.gpu_triple_buffers.death_flags,
-                &self.gpu_triple_buffers.cell_count_buffer,
-            )
-        });
-        self.organism_skin_density_bind_groups = Some(bgs);
+        // Create count bind group (needs label buffer from organism label system)
+        if self.organism_skin_count_bind_group.is_none() {
+            if let Some(ref label_system) = self.organism_label_system {
+                self.organism_skin_count_bind_group = Some(renderer.create_count_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                    &self.gpu_triple_buffers.death_flags,
+                    &label_system.label_buffer,
+                ));
+            }
+        }
+
+        // Create density bind groups (one per triple-buffer index)
+        if self.organism_skin_density_bind_groups.is_none() {
+            let bgs = std::array::from_fn(|i| {
+                renderer.create_density_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.position_and_mass[i],
+                    &self.gpu_triple_buffers.death_flags,
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                )
+            });
+            self.organism_skin_density_bind_groups = Some(bgs);
+        }
     }
 
     /// Generate test density data for GPU surface nets with multiple fluid types
@@ -4074,13 +4090,12 @@ impl Scene for GpuScene {
             let output_idx = self.gpu_triple_buffers.output_buffer_index();
             let max_cells = self.current_cell_count;
 
-            if let (Some(ref renderer), Some(ref bind_groups)) =
-                (&self.organism_skin_renderer, &self.organism_skin_density_bind_groups)
+            if let (Some(ref renderer), Some(ref density_bgs), Some(ref count_bg)) =
+                (&self.organism_skin_renderer, &self.organism_skin_density_bind_groups, &self.organism_skin_count_bind_group)
             {
-                // Only generate density if we have actual cells to prevent holes
                 if max_cells > 0 {
-                    renderer.generate_density(&mut encoder, &bind_groups[output_idx], max_cells);
-                    renderer.smooth_density(&mut encoder);
+                    renderer.count_organisms(&mut encoder, count_bg, max_cells);
+                    renderer.generate_density(&mut encoder, &density_bgs[output_idx], max_cells);
                     renderer.extract_mesh(&mut encoder);
                 }
             }
