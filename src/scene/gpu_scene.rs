@@ -194,6 +194,8 @@ pub struct GpuScene {
     organism_skin_density_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// Cached count bind group for organism skin (shared across frames)
     organism_skin_count_bind_group: Option<wgpu::BindGroup>,
+    /// Frame counter for throttling organism skin compute (reuse mesh on skipped frames)
+    organism_skin_frame: u32,
     /// GPU fluid simulator for falling/stacking water
     pub fluid_simulator: Option<GpuFluidSimulator>,
     /// Solid mask generator for fluid system
@@ -480,6 +482,7 @@ impl GpuScene {
             show_organism_skins: false,
             organism_skin_density_bind_groups: None,
             organism_skin_count_bind_group: None,
+            organism_skin_frame: 0,
             fluid_simulator: None,
             solid_mask_generator: None,
             steam_particle_renderer: None,
@@ -4086,20 +4089,27 @@ impl Scene for GpuScene {
         
         // Extract and render organism skins if enabled
         if self.show_organism_skins {
-            self.ensure_organism_skin_bind_groups(device);
-            let output_idx = self.gpu_triple_buffers.output_buffer_index();
-            let max_cells = self.current_cell_count;
+            // Throttle compute: regenerate mesh every 3 frames, reuse on others.
+            // The render pass (drawing existing mesh) runs every frame.
+            let should_recompute = self.organism_skin_frame % 3 == 0;
+            self.organism_skin_frame = self.organism_skin_frame.wrapping_add(1);
 
-            if let (Some(ref renderer), Some(ref density_bgs), Some(ref count_bg)) =
-                (&self.organism_skin_renderer, &self.organism_skin_density_bind_groups, &self.organism_skin_count_bind_group)
-            {
-                if max_cells > 0 {
-                    renderer.count_organisms(&mut encoder, count_bg, max_cells);
-                    renderer.generate_density(&mut encoder, &density_bgs[output_idx], max_cells);
-                    renderer.extract_mesh(&mut encoder);
+            if should_recompute {
+                self.ensure_organism_skin_bind_groups(device);
+                let output_idx = self.gpu_triple_buffers.output_buffer_index();
+                let max_cells = self.current_cell_count;
+
+                if let (Some(ref renderer), Some(ref density_bgs), Some(ref count_bg)) =
+                    (&self.organism_skin_renderer, &self.organism_skin_density_bind_groups, &self.organism_skin_count_bind_group)
+                {
+                    if max_cells > 0 {
+                        renderer.count_organisms(&mut encoder, count_bg, max_cells);
+                        renderer.generate_density(&mut encoder, &density_bgs[output_idx], max_cells);
+                        renderer.extract_mesh(&mut encoder);
+                    }
                 }
             }
-            // Render pass must be separate (after compute)
+            // Render pass runs every frame (draws the last computed mesh)
             if let Some(ref renderer) = self.organism_skin_renderer {
                 renderer.set_time(queue, self.current_time);
                 renderer.render(

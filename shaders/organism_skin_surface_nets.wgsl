@@ -207,12 +207,22 @@ fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
     let iy = i32(gid.y);
     let iz = i32(gid.z);
 
-    // Early-out: check 8 corners for any density
+    // Early-out: skip if no density at center voxel (fast path for vast empty space)
+    let dres = i32(params.density_resolution);
+    let cdx = ix - 1; let cdy = iy - 1; let cdz = iz - 1;
     var has_density = false;
-    for (var i = 0u; i < 8u && !has_density; i++) {
-        let off = CORNER_OFFSETS[i];
-        if has_any_density_at(ix + off.x, iy + off.y, iz + off.z) {
-            has_density = true;
+    if cdx >= 0 && cdx < dres && cdy >= 0 && cdy < dres && cdz >= 0 && cdz < dres {
+        let cidx = density_index(u32(cdx), u32(cdy), u32(cdz));
+        has_density = density_0[cidx] > 0.0 || density_1[cidx] > 0.0
+                   || density_2[cidx] > 0.0 || density_3[cidx] > 0.0;
+    }
+    // If center has no density, check remaining corners
+    if !has_density {
+        for (var i = 0u; i < 8u && !has_density; i++) {
+            let off = CORNER_OFFSETS[i];
+            if has_any_density_at(ix + off.x, iy + off.y, iz + off.z) {
+                has_density = true;
+            }
         }
     }
 

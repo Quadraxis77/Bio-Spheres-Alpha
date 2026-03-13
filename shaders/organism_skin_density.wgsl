@@ -52,7 +52,7 @@ struct OrganismDensityParams {
 @group(0) @binding(20) var<storage, read>      cell_skin_id: array<u32>;
 
 const FIXED_SCALE: f32 = 32768.0;
-const MAX_VOXEL_RADIUS: i32 = 14;
+const MAX_VOXEL_RADIUS: i32 = 10;
 
 fn voxel_index(x: u32, y: u32, z: u32) -> u32 {
     let r = params.grid_resolution;
@@ -117,17 +117,25 @@ fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     let vmax = min(vec3<i32>(res - 1), vec3<i32>(cx + vr, cy + vr, cz + vr));
 
     let inv_radius = 1.0 / influence_radius;
+    let inv_radius_sq = inv_radius * inv_radius;
+    let radius_sq = influence_radius * influence_radius;
 
     for (var vz = vmin.z; vz <= vmax.z; vz++) {
+        let wz = grid_origin.z + f32(vz) * cell_size - pos.z;
+        let wz2 = wz * wz;
+        if wz2 >= radius_sq { continue; }
+
         for (var vy = vmin.y; vy <= vmax.y; vy++) {
+            let wy = grid_origin.y + f32(vy) * cell_size - pos.y;
+            let wyz2 = wz2 + wy * wy;
+            if wyz2 >= radius_sq { continue; }
+
             for (var vx = vmin.x; vx <= vmax.x; vx++) {
-                let voxel_ws = grid_origin
-                    + vec3<f32>(f32(vx), f32(vy), f32(vz)) * cell_size;
+                let wx = grid_origin.x + f32(vx) * cell_size - pos.x;
+                let dist_sq = wyz2 + wx * wx;
+                if dist_sq >= radius_sq { continue; }
 
-                let dist = length(voxel_ws - pos);
-                if dist >= influence_radius { continue; }
-
-                let t       = 1.0 - dist * inv_radius;
+                let t       = 1.0 - sqrt(dist_sq) * inv_radius;
                 let contrib = metaball_kernel(t);
                 let fixed   = i32(contrib * FIXED_SCALE);
                 if fixed <= 0 { continue; }
@@ -206,26 +214,46 @@ fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Pass 3: normalize fixed-point → f32 and copy org IDs for surface nets
 // ─────────────────────────────────────────────────────────────────────────────
-@compute @workgroup_size(4, 4, 4)
+@compute @workgroup_size(256, 1, 1)
 fn normalize_density(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let res = params.grid_resolution;
-    if gid.x >= res || gid.y >= res || gid.z >= res { return; }
+    let total = params.grid_resolution * params.grid_resolution * params.grid_resolution;
+    if gid.x >= total { return; }
 
-    let idx = voxel_index(gid.x, gid.y, gid.z);
+    let idx = gid.x;
 
-    let raw0 = atomicLoad(&slot_density_0[idx]);
-    density_out_0[idx] = f32(raw0) / FIXED_SCALE;
-    org_id_out_0[idx] = atomicLoad(&slot_org_0[idx]);
+    let org0 = atomicLoad(&slot_org_0[idx]);
+    if org0 != 0u {
+        density_out_0[idx] = f32(atomicLoad(&slot_density_0[idx])) / FIXED_SCALE;
+        org_id_out_0[idx] = org0;
+    } else {
+        density_out_0[idx] = 0.0;
+        org_id_out_0[idx] = 0u;
+    }
 
-    let raw1 = atomicLoad(&slot_density_1[idx]);
-    density_out_1[idx] = f32(raw1) / FIXED_SCALE;
-    org_id_out_1[idx] = atomicLoad(&slot_org_1[idx]);
+    let org1 = atomicLoad(&slot_org_1[idx]);
+    if org1 != 0u {
+        density_out_1[idx] = f32(atomicLoad(&slot_density_1[idx])) / FIXED_SCALE;
+        org_id_out_1[idx] = org1;
+    } else {
+        density_out_1[idx] = 0.0;
+        org_id_out_1[idx] = 0u;
+    }
 
-    let raw2 = atomicLoad(&slot_density_2[idx]);
-    density_out_2[idx] = f32(raw2) / FIXED_SCALE;
-    org_id_out_2[idx] = atomicLoad(&slot_org_2[idx]);
+    let org2 = atomicLoad(&slot_org_2[idx]);
+    if org2 != 0u {
+        density_out_2[idx] = f32(atomicLoad(&slot_density_2[idx])) / FIXED_SCALE;
+        org_id_out_2[idx] = org2;
+    } else {
+        density_out_2[idx] = 0.0;
+        org_id_out_2[idx] = 0u;
+    }
 
-    let raw3 = atomicLoad(&slot_density_3[idx]);
-    density_out_3[idx] = f32(raw3) / FIXED_SCALE;
-    org_id_out_3[idx] = atomicLoad(&slot_org_3[idx]);
+    let org3 = atomicLoad(&slot_org_3[idx]);
+    if org3 != 0u {
+        density_out_3[idx] = f32(atomicLoad(&slot_density_3[idx])) / FIXED_SCALE;
+        org_id_out_3[idx] = org3;
+    } else {
+        density_out_3[idx] = 0.0;
+        org_id_out_3[idx] = 0u;
+    }
 }
