@@ -55,8 +55,22 @@ fn blend_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
     let alpha = params.blend_factor;
 
-    // Slot 0
+    // Early-out: if no current density AND no previous density at this voxel, skip entirely.
+    // This avoids expensive cross-slot searches for the vast majority of empty voxels.
     let cur_org_0 = org_id_0[idx];
+    let cur_org_1 = org_id_1[idx];
+    let cur_org_2 = org_id_2[idx];
+    let cur_org_3 = org_id_3[idx];
+    let prev_o0 = prev_org_id_0[idx];
+    let prev_o1 = prev_org_id_1[idx];
+    let prev_o2 = prev_org_id_2[idx];
+    let prev_o3 = prev_org_id_3[idx];
+
+    let has_any = (cur_org_0 | cur_org_1 | cur_org_2 | cur_org_3
+                 | prev_o0 | prev_o1 | prev_o2 | prev_o3) != 0u;
+    if !has_any { return; }
+
+    // Slot 0
     let cur_den_0 = density_0[idx];
     if cur_org_0 != 0u {
         let prev = find_prev_density(idx, cur_org_0);
@@ -66,7 +80,6 @@ fn blend_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     prev_org_id_0[idx] = cur_org_0;
 
     // Slot 1
-    let cur_org_1 = org_id_1[idx];
     let cur_den_1 = density_1[idx];
     if cur_org_1 != 0u {
         let prev = find_prev_density(idx, cur_org_1);
@@ -76,7 +89,6 @@ fn blend_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     prev_org_id_1[idx] = cur_org_1;
 
     // Slot 2
-    let cur_org_2 = org_id_2[idx];
     let cur_den_2 = density_2[idx];
     if cur_org_2 != 0u {
         let prev = find_prev_density(idx, cur_org_2);
@@ -86,7 +98,6 @@ fn blend_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     prev_org_id_2[idx] = cur_org_2;
 
     // Slot 3
-    let cur_org_3 = org_id_3[idx];
     let cur_den_3 = density_3[idx];
     if cur_org_3 != 0u {
         let prev = find_prev_density(idx, cur_org_3);

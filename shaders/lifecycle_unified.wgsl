@@ -305,10 +305,15 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Count active adhesions for this cell (used for both max and min checks)
+    // IMPORTANT: Must verify is_active on each referenced connection, not just
+    // check for a non-negative index. Adhesion indices can become stale when
+    // bonds break due to force in adhesion_physics — the connection is marked
+    // inactive but the per-cell index is not cleared.
     let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
     var adhesion_count = 0u;
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
-        if (cell_adhesion_indices[adhesion_base + i] >= 0) {
+        let adh_idx = cell_adhesion_indices[adhesion_base + i];
+        if (adh_idx >= 0 && adhesion_connections[u32(adh_idx)].is_active != 0u) {
             adhesion_count++;
         }
     }
@@ -421,7 +426,8 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let neighbor_adhesion_base = neighbor_idx * MAX_ADHESIONS_PER_CELL;
         var neighbor_adhesion_count = 0u;
         for (var j = 0u; j < MAX_ADHESIONS_PER_CELL; j++) {
-            if (cell_adhesion_indices[neighbor_adhesion_base + j] >= 0) {
+            let n_adh_idx = cell_adhesion_indices[neighbor_adhesion_base + j];
+            if (n_adh_idx >= 0 && adhesion_connections[u32(n_adh_idx)].is_active != 0u) {
                 neighbor_adhesion_count++;
             }
         }

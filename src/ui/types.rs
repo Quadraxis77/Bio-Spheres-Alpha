@@ -280,7 +280,7 @@ impl Default for OrganismSkinSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            grid_resolution: 256,
+            grid_resolution: 128,
             radius_scale: 5.0,
             iso_level: 0.3,
             base_color: [0.85, 0.55, 0.35],

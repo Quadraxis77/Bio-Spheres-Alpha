@@ -90,6 +90,8 @@ pub struct GpuScene {
     pub genomes: Vec<Genome>,
     /// Whether any genome has an oculocyte mode (for signal system gating)
     has_oculocytes: bool,
+    /// Maximum signal hops across all oculocyte modes in all genomes (for signal propagation dispatch count)
+    max_signal_hops: u32,
     /// Genome buffer manager for per-genome GPU resources
     pub genome_buffer_manager: GenomeBufferManager,
     /// Cached parent_make_adhesion flags from genome modes for quick lookup during division
@@ -194,8 +196,6 @@ pub struct GpuScene {
     organism_skin_density_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// Cached count bind group for organism skin (shared across frames)
     organism_skin_count_bind_group: Option<wgpu::BindGroup>,
-    /// Frame counter for throttling organism skin compute (reuse mesh on skipped frames)
-    organism_skin_frame: u32,
     /// GPU fluid simulator for falling/stacking water
     pub fluid_simulator: Option<GpuFluidSimulator>,
     /// Solid mask generator for fluid system
@@ -230,12 +230,22 @@ pub struct GpuScene {
     nutrient_render_bind_group: Option<wgpu::BindGroup>,
     /// Phagocyte nutrient consumption system
     phagocyte_consumption: Option<PhagocyteConsumptionSystem>,
-    /// Cached phagocyte consumption nutrient bind group (physics bind group created fresh each frame)
+    /// Cached phagocyte consumption nutrient bind group
     phagocyte_nutrient_bind_group: Option<wgpu::BindGroup>,
+    /// Cached phagocyte consumption physics bind groups (one per triple buffer index)
+    phagocyte_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// Organism label system — GPU-driven connected-component labeling
     pub organism_label_system: Option<crate::simulation::gpu_physics::OrganismLabelSystem>,
     /// Light field system for photocyte nutrients and volumetric fog
     pub light_field_system: Option<LightFieldSystem>,
+    /// Cached light field bind group (solid_mask doesn't change per frame)
+    cached_light_field_bind_group: Option<wgpu::BindGroup>,
+    /// Cached occupancy bind groups (one per triple buffer index, positions change)
+    cached_occupancy_bind_groups: Option<[wgpu::BindGroup; 3]>,
+    /// Cached photocyte physics bind groups (one per triple buffer index)
+    cached_photocyte_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
+    /// Cached photocyte system bind group (buffers don't change)
+    cached_photocyte_system_bind_group: Option<wgpu::BindGroup>,
     /// Volumetric fog renderer
     pub volumetric_fog_renderer: Option<VolumetricFogRenderer>,
     /// Whether to show volumetric fog
@@ -430,6 +440,7 @@ impl GpuScene {
             current_time: 0.0,
             genomes: Vec::new(),
             has_oculocytes: false,
+            max_signal_hops: 0,
             genome_buffer_manager,
             parent_make_adhesion_flags: Vec::new(),
             time_accumulator: 0.0,
@@ -482,7 +493,6 @@ impl GpuScene {
             show_organism_skins: false,
             organism_skin_density_bind_groups: None,
             organism_skin_count_bind_group: None,
-            organism_skin_frame: 0,
             fluid_simulator: None,
             solid_mask_generator: None,
             steam_particle_renderer: None,
@@ -501,8 +511,13 @@ impl GpuScene {
             nutrient_render_bind_group: None,
             phagocyte_consumption: None,
             phagocyte_nutrient_bind_group: None,
+            phagocyte_physics_bind_groups: None,
             organism_label_system,
             light_field_system: None,
+            cached_light_field_bind_group: None,
+            cached_occupancy_bind_groups: None,
+            cached_photocyte_physics_bind_groups: None,
+            cached_photocyte_system_bind_group: None,
             volumetric_fog_renderer: None,
             show_volumetric_fog: false,
             sun_renderer: None,
@@ -556,7 +571,7 @@ impl GpuScene {
         self.genomes.clear();
         self.parent_make_adhesion_flags.clear();
         self.has_oculocytes = false;
-        // Mark instance builder dirty
+        self.max_signal_hops = 0;
         self.instance_builder.mark_all_dirty();
         // Reset GPU cell count buffer to 0 immediately
         let cell_counts: [u32; 2] = [0, 0];
@@ -792,8 +807,8 @@ impl GpuScene {
             label_system.encode_frame(encoder);
         }
 
-        // Copy GPU physics output to instance builder's buffers
-        self.copy_buffers_to_instance_builder(encoder);
+        // NOTE: copy_buffers_to_instance_builder is called once per frame in render(),
+        // after all physics steps complete. No need to copy after each step.
     }
     
     /// Run mechanics-only physics step (no nutrient transport, no mass accumulation, no lifecycle).
@@ -820,8 +835,8 @@ impl GpuScene {
             self.constraint_iterations,
         );
         
-        // Copy GPU physics output to instance builder's buffers
-        self.copy_buffers_to_instance_builder(encoder);
+        // NOTE: copy_buffers_to_instance_builder is called once per frame in render(),
+        // after mechanics step completes. No need to copy here.
     }
     
     /// Run phagocyte nutrient consumption compute shader
@@ -843,14 +858,29 @@ impl GpuScene {
         let grid_origin = [-world_diameter / 2.0, -world_diameter / 2.0, -world_diameter / 2.0];
         consumption_system.update_params(queue, grid_resolution, cell_size, grid_origin);
         
-        // Create physics bind group fresh each frame (buffer index changes with triple buffering)
-        let output_idx = self.gpu_triple_buffers.output_buffer_index();
-        let physics_bg = consumption_system.create_physics_bind_group(
-            device,
-            &self.gpu_triple_buffers.physics_params,
-            &self.gpu_triple_buffers.position_and_mass[output_idx],
-            &self.gpu_triple_buffers.cell_count_buffer,
-        );
+        // Cache physics bind groups (one per triple buffer index) instead of creating per-frame
+        if self.phagocyte_physics_bind_groups.is_none() {
+            self.phagocyte_physics_bind_groups = Some([
+                consumption_system.create_physics_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.physics_params,
+                    &self.gpu_triple_buffers.position_and_mass[0],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+                consumption_system.create_physics_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.physics_params,
+                    &self.gpu_triple_buffers.position_and_mass[1],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+                consumption_system.create_physics_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.physics_params,
+                    &self.gpu_triple_buffers.position_and_mass[2],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+            ]);
+        }
         
         // Create nutrient bind group (can be cached as these buffers don't change)
         if self.phagocyte_nutrient_bind_group.is_none() {
@@ -865,10 +895,10 @@ impl GpuScene {
             ));
         }
         
-        // Run consumption shader - use capacity for dispatch so all slots are covered;
-        // the shader reads cell_count_buffer[0] internally for bounds checking
-        if let Some(ref nutrient_bg) = &self.phagocyte_nutrient_bind_group {
-            consumption_system.run(encoder, &physics_bg, nutrient_bg, self.gpu_triple_buffers.capacity);
+        // Use cached bind groups - select by output buffer index (where physics wrote positions)
+        let output_idx = self.gpu_triple_buffers.output_buffer_index();
+        if let (Some(ref physics_bgs), Some(ref nutrient_bg)) = (&self.phagocyte_physics_bind_groups, &self.phagocyte_nutrient_bind_group) {
+            consumption_system.run(encoder, &physics_bgs[output_idx], nutrient_bg, self.gpu_triple_buffers.capacity);
         }
     }
     
@@ -883,16 +913,68 @@ impl GpuScene {
         
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
         
-        light_field.run_light_field_only(
-            encoder,
-            device,
-            queue,
-            fluid_sim.solid_mask_buffer(),
-            &self.gpu_triple_buffers.position_and_mass[output_idx],
-            &self.gpu_triple_buffers.cell_count_buffer,
-            self.gpu_triple_buffers.capacity,
-            self.current_time,
-        );
+        // Cache occupancy bind groups (one per triple buffer index)
+        if self.cached_occupancy_bind_groups.is_none() {
+            self.cached_occupancy_bind_groups = Some([
+                light_field.create_occupancy_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.position_and_mass[0],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+                light_field.create_occupancy_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.position_and_mass[1],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+                light_field.create_occupancy_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.position_and_mass[2],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+            ]);
+        }
+        
+        // Cache light field bind group (solid_mask buffer doesn't change)
+        if self.cached_light_field_bind_group.is_none() {
+            self.cached_light_field_bind_group = Some(
+                light_field.create_light_field_bind_group(device, fluid_sim.solid_mask_buffer())
+            );
+        }
+        
+        // Use cached bind groups instead of creating per-frame
+        light_field.update_light_field_params(queue, self.current_time);
+        light_field.update_occupancy_params(queue);
+        
+        let total_voxels = 128u32 * 128 * 128;
+        let light_workgroups = (total_voxels + 63) / 64;
+        
+        // Clear occupancy grid using DMA (faster than compute dispatch)
+        encoder.clear_buffer(light_field.cell_occupancy_buffer_ref(), 0, None);
+        
+        let occupancy_bg = &self.cached_occupancy_bind_groups.as_ref().unwrap()[output_idx];
+        let light_field_bg = self.cached_light_field_bind_group.as_ref().unwrap();
+        
+        if self.current_cell_count > 0 {
+            let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Build Cell Occupancy"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(light_field.build_occupancy_pipeline_ref());
+            pass.set_bind_group(0, occupancy_bg, &[]);
+            pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
+        
+        // Compute light field
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Compute Light Field"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(light_field.compute_light_pipeline_ref());
+            pass.set_bind_group(0, light_field_bg, &[]);
+            pass.dispatch_workgroups(light_workgroups, 1, 1);
+        }
     }
     
     /// Run photocyte light consumption compute shader.
@@ -910,19 +992,58 @@ impl GpuScene {
         
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
         
-        light_field.run_photocyte_only(
-            encoder,
-            device,
-            queue,
-            &self.gpu_triple_buffers.position_and_mass[output_idx],
-            &self.gpu_triple_buffers.cell_count_buffer,
-            &self.gpu_triple_buffers.physics_params,
-            &self.gpu_triple_buffers.cell_types,
-            &self.gpu_triple_buffers.nutrients_buffer,
-            &self.gpu_triple_buffers.split_nutrient_thresholds,
-            &self.gpu_triple_buffers.death_flags,
-            self.gpu_triple_buffers.capacity,
-        );
+        // Cache photocyte physics bind groups (one per triple buffer index)
+        if self.cached_photocyte_physics_bind_groups.is_none() {
+            self.cached_photocyte_physics_bind_groups = Some([
+                light_field.create_photocyte_physics_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.physics_params,
+                    &self.gpu_triple_buffers.position_and_mass[0],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+                light_field.create_photocyte_physics_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.physics_params,
+                    &self.gpu_triple_buffers.position_and_mass[1],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+                light_field.create_photocyte_physics_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.physics_params,
+                    &self.gpu_triple_buffers.position_and_mass[2],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+            ]);
+        }
+        
+        // Cache photocyte system bind group (buffers don't change)
+        if self.cached_photocyte_system_bind_group.is_none() {
+            self.cached_photocyte_system_bind_group = Some(
+                light_field.create_photocyte_system_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.cell_types,
+                    &self.gpu_triple_buffers.nutrients_buffer,
+                    &self.gpu_triple_buffers.split_nutrient_thresholds,
+                    &self.gpu_triple_buffers.death_flags,
+                )
+            );
+        }
+        
+        // Use cached bind groups
+        light_field.update_photocyte_params(queue);
+        
+        let photocyte_physics_bg = &self.cached_photocyte_physics_bind_groups.as_ref().unwrap()[output_idx];
+        let photocyte_system_bg = self.cached_photocyte_system_bind_group.as_ref().unwrap();
+        
+        let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Photocyte Light Consumption (physics step)"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(light_field.photocyte_light_pipeline_ref());
+        pass.set_bind_group(0, photocyte_physics_bg, &[]);
+        pass.set_bind_group(1, photocyte_system_bg, &[]);
+        pass.dispatch_workgroups(cell_workgroups, 1, 1);
     }
     
     /// Copy data from triple buffers to instance builder
@@ -1144,9 +1265,16 @@ impl GpuScene {
     fn update_has_oculocytes(&mut self) {
         use crate::cell::types::CellType;
         let oculocyte_type = CellType::Oculocyte as u32 as i32;
-        self.has_oculocytes = self.genomes.iter().any(|g| {
-            g.modes.iter().any(|m| m.cell_type == oculocyte_type)
-        });
+        self.has_oculocytes = false;
+        self.max_signal_hops = 0;
+        for g in &self.genomes {
+            for m in &g.modes {
+                if m.cell_type == oculocyte_type {
+                    self.has_oculocytes = true;
+                    self.max_signal_hops = self.max_signal_hops.max(m.oculocyte_signal_hops.clamp(1, 20) as u32);
+                }
+            }
+        }
     }
     
     /// Incremental sync of a single genome's data to GPU buffers
@@ -3861,6 +3989,7 @@ impl Scene for GpuScene {
                 &self.cached_bind_groups,
                 self.has_oculocytes,
                 self.current_cell_count,
+                self.max_signal_hops,
             );
         }
 
@@ -4089,37 +4218,35 @@ impl Scene for GpuScene {
         
         // Extract and render organism skins if enabled
         if self.show_organism_skins {
-            // Throttle compute: regenerate mesh every 3 frames, reuse on others.
-            // The render pass (drawing existing mesh) runs every frame.
-            let should_recompute = self.organism_skin_frame % 3 == 0;
-            self.organism_skin_frame = self.organism_skin_frame.wrapping_add(1);
+            self.ensure_organism_skin_bind_groups(device);
+            let output_idx = self.gpu_triple_buffers.output_buffer_index();
+            let max_cells = self.current_cell_count;
 
-            if should_recompute {
-                self.ensure_organism_skin_bind_groups(device);
-                let output_idx = self.gpu_triple_buffers.output_buffer_index();
-                let max_cells = self.current_cell_count;
+            if let (Some(ref mut renderer), Some(ref density_bgs), Some(ref count_bg)) =
+                (&mut self.organism_skin_renderer, &self.organism_skin_density_bind_groups, &self.organism_skin_count_bind_group)
+            {
+                if max_cells > 0 {
+                    renderer.count_organisms(&mut encoder, count_bg, max_cells);
 
-                if let (Some(ref renderer), Some(ref density_bgs), Some(ref count_bg)) =
-                    (&self.organism_skin_renderer, &self.organism_skin_density_bind_groups, &self.organism_skin_count_bind_group)
-                {
-                    if max_cells > 0 {
-                        renderer.count_organisms(&mut encoder, count_bg, max_cells);
+                    if renderer.skinned_cell_count > 0 || renderer.index_count == 0 {
                         renderer.generate_density(&mut encoder, &density_bgs[output_idx], max_cells);
                         renderer.extract_mesh(&mut encoder);
                     }
                 }
             }
-            // Render pass runs every frame (draws the last computed mesh)
+            // Render pass runs every frame (draws the last computed mesh) — but only if there are triangles
             if let Some(ref renderer) = self.organism_skin_renderer {
-                renderer.set_time(queue, self.current_time);
-                renderer.render(
-                    &mut encoder,
-                    queue,
-                    view,
-                    &self.renderer.depth_view,
-                    self.camera.position(),
-                    self.camera.rotation,
-                );
+                if renderer.skinned_cell_count > 0 || renderer.index_count > 0 {
+                    renderer.set_time(queue, self.current_time);
+                    renderer.render(
+                        &mut encoder,
+                        queue,
+                        view,
+                        &self.renderer.depth_view,
+                        self.camera.position(),
+                        self.camera.rotation,
+                    );
+                }
             }
         }
 
@@ -4312,6 +4439,13 @@ impl Scene for GpuScene {
         // Poll for steam particle count (GPU readback)
         if self.show_steam_particles {
             self.poll_steam_particle_count(device);
+        }
+
+        // Poll for organism skin skinned cell count (GPU readback)
+        if self.show_organism_skins {
+            if let Some(ref mut renderer) = self.organism_skin_renderer {
+                renderer.try_read_skinned_count(device);
+            }
         }
 
         // Poll for water particle count (GPU readback)

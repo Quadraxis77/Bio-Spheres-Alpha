@@ -644,6 +644,26 @@ impl LightFieldSystem {
         &self.cell_occupancy_buffer
     }
 
+    /// Get a reference to the cell occupancy buffer (for external DMA clear)
+    pub fn cell_occupancy_buffer_ref(&self) -> &wgpu::Buffer {
+        &self.cell_occupancy_buffer
+    }
+
+    /// Get a reference to the build occupancy pipeline
+    pub fn build_occupancy_pipeline_ref(&self) -> &wgpu::ComputePipeline {
+        &self.build_occupancy_pipeline
+    }
+
+    /// Get a reference to the compute light field pipeline
+    pub fn compute_light_pipeline_ref(&self) -> &wgpu::ComputePipeline {
+        &self.compute_light_pipeline
+    }
+
+    /// Get a reference to the photocyte light pipeline
+    pub fn photocyte_light_pipeline_ref(&self) -> &wgpu::ComputePipeline {
+        &self.photocyte_light_pipeline
+    }
+
     /// Set light direction (will be normalized)
     pub fn set_light_dir(&mut self, dir: [f32; 3]) {
         self.light_dir = Self::normalize_dir(dir);
@@ -830,7 +850,7 @@ impl LightFieldSystem {
     }
 
     /// Update params and write to GPU
-    fn update_light_field_params(&self, queue: &wgpu::Queue, time: f32) {
+    pub fn update_light_field_params(&self, queue: &wgpu::Queue, time: f32) {
         let params = LightFieldParams {
             grid_resolution: GRID_RESOLUTION,
             cell_size: self.cell_size,
@@ -856,7 +876,7 @@ impl LightFieldSystem {
         );
     }
 
-    fn update_occupancy_params(&self, queue: &wgpu::Queue) {
+    pub fn update_occupancy_params(&self, queue: &wgpu::Queue) {
         let params = OccupancyParams {
             grid_resolution: GRID_RESOLUTION,
             cell_size: self.cell_size,
@@ -874,7 +894,7 @@ impl LightFieldSystem {
         );
     }
 
-    fn update_photocyte_params(&self, queue: &wgpu::Queue) {
+    pub fn update_photocyte_params(&self, queue: &wgpu::Queue) {
         let params = PhotocyteParams {
             grid_resolution: GRID_RESOLUTION,
             cell_size: self.cell_size,

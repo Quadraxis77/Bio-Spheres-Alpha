@@ -119,6 +119,16 @@ struct BlendParams {
     _pad1: u32,
 }
 
+/// Spatial smooth params (matches SmoothParams in organism_skin_smooth.wgsl)
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+struct SmoothParams {
+    grid_resolution: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
 /// Vertex format (matches Vertex in organism_skin_surface_nets.wgsl)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -142,8 +152,15 @@ pub struct OrganismSkinRenderer {
     count_params_buffer: wgpu::Buffer,
     histogram_buffer: wgpu::Buffer,
     cell_skin_id_buffer: wgpu::Buffer,
+    /// GPU buffer: atomic counter of cells that received a non-zero skin_id
+    skinned_cell_counter_buffer: wgpu::Buffer,
+    /// Staging buffer for reading back the skinned cell count
+    skinned_cell_counter_staging: wgpu::Buffer,
+    /// CPU-side: number of cells with skins from the last readback (0 = skip heavy passes)
+    pub skinned_cell_count: u32,
 
     // ── K=4 density generation (organism_skin_density.wgsl) ─────────────────
+    #[allow(dead_code)]
     density_clear_pipeline: wgpu::ComputePipeline,
     density_generate_pipeline: wgpu::ComputePipeline,
     density_normalize_pipeline: wgpu::ComputePipeline,
@@ -189,6 +206,20 @@ pub struct OrganismSkinRenderer {
     prev_org_id_2: wgpu::Buffer,
     #[allow(dead_code)]
     prev_org_id_3: wgpu::Buffer,
+
+    // ── Spatial smoothing (organism_skin_smooth.wgsl) ────────────────────────
+    smooth_pipeline: wgpu::ComputePipeline,
+    smooth_bind_group: wgpu::BindGroup,
+    #[allow(dead_code)]
+    smooth_params_buffer: wgpu::Buffer,
+    smooth_temp_density_0: wgpu::Buffer,
+    smooth_temp_density_1: wgpu::Buffer,
+    smooth_temp_density_2: wgpu::Buffer,
+    smooth_temp_density_3: wgpu::Buffer,
+    smooth_temp_org_0: wgpu::Buffer,
+    smooth_temp_org_1: wgpu::Buffer,
+    smooth_temp_org_2: wgpu::Buffer,
+    smooth_temp_org_3: wgpu::Buffer,
 
     // ── Organism-aware surface nets (organism_skin_surface_nets.wgsl) ────────
     sn_reset_pipeline: wgpu::ComputePipeline,
@@ -308,8 +339,20 @@ impl OrganismSkinRenderer {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
+        let skinned_cell_counter_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Skinned Cell Counter"),
+            size: 4, // single u32
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let skinned_cell_counter_staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Skinned Cell Counter Staging"),
+            size: 4,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
-        // Count bind group layout: params, cell_count, death_flags, label_buffer, histogram, cell_skin_id
+        // Count bind group layout: params, cell_count, death_flags, label_buffer, histogram, cell_skin_id, skinned_cell_counter
         let count_bind_group_layout = device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
                 label: Some("Skin Count Layout"),
@@ -330,6 +373,9 @@ impl OrganismSkinRenderer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false, min_binding_size: None }),
                     bgl_entry(5, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false, min_binding_size: None }),
+                    bgl_entry(6, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false, min_binding_size: None }),
                 ],
@@ -353,67 +399,67 @@ impl OrganismSkinRenderer {
 
         let slot_org_0 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Slot Org 0"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let slot_org_1 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Slot Org 1"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let slot_org_2 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Slot Org 2"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let slot_org_3 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Slot Org 3"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let slot_density_0 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Slot Density 0"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let slot_density_1 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Slot Density 1"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let slot_density_2 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Slot Density 2"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let slot_density_3 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Slot Density 3"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let density_out_0 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Density Out 0"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let density_out_1 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Density Out 1"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let density_out_2 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Density Out 2"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let density_out_3 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Density Out 3"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let org_id_out_0 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Org ID Out 0"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let org_id_out_1 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Org ID Out 1"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let org_id_out_2 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Org ID Out 2"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let org_id_out_3 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skin Org ID Out 3"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
 
         let density_params = OrganismDensityParams {
@@ -845,6 +891,157 @@ impl OrganismSkinRenderer {
             ],
         });
 
+        // ── Spatial smoothing pipeline (organism_skin_smooth.wgsl) ──────────
+        let smooth_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Organism Skin Smooth Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/organism_skin_smooth.wgsl").into(),
+            ),
+        });
+
+        // 4 temp density buffers for smooth output
+        let smooth_temp_density_0 = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Skin Smooth Temp 0"), size: voxel_buf_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+        let smooth_temp_density_1 = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Skin Smooth Temp 1"), size: voxel_buf_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+        let smooth_temp_density_2 = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Skin Smooth Temp 2"), size: voxel_buf_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+        let smooth_temp_density_3 = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Skin Smooth Temp 3"), size: voxel_buf_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+        // 4 temp org ID buffers for smooth output
+        let smooth_temp_org_0 = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Skin Smooth Temp Org 0"), size: voxel_buf_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+        let smooth_temp_org_1 = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Skin Smooth Temp Org 1"), size: voxel_buf_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+        let smooth_temp_org_2 = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Skin Smooth Temp Org 2"), size: voxel_buf_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+        let smooth_temp_org_3 = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Skin Smooth Temp Org 3"), size: voxel_buf_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+
+        let smooth_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Skin Smooth Params"),
+            contents: bytemuck::bytes_of(&SmoothParams {
+                grid_resolution,
+                _pad0: 0, _pad1: 0, _pad2: 0,
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Smooth bind group layout: params + 4 density in (read) + 4 org in (read) + 4 density out (rw) + 4 org out (rw)
+        let smooth_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Organism Skin Smooth Layout"),
+            entries: &[
+                bgl_entry(0, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false, min_binding_size: None }),
+                // density_in 1-4 (read)
+                bgl_entry(1, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                bgl_entry(2, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                bgl_entry(3, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                bgl_entry(4, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                // org_in 5-8 (read)
+                bgl_entry(5, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                bgl_entry(6, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                bgl_entry(7, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                bgl_entry(8, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                // density_out 9-12 (rw)
+                bgl_entry(9, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                bgl_entry(10, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                bgl_entry(11, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                bgl_entry(12, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                // org_out 13-16 (rw)
+                bgl_entry(13, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                bgl_entry(14, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                bgl_entry(15, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false, min_binding_size: None }),
+                bgl_entry(16, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false, min_binding_size: None }),
+            ],
+        });
+
+        let smooth_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Organism Skin Smooth Pipeline Layout"),
+            bind_group_layouts: &[&smooth_bgl],
+            push_constant_ranges: &[],
+        });
+        let smooth_pipeline = make_compute_pipeline(device, &smooth_pipeline_layout,
+            &smooth_shader, "smooth_density", "Skin Smooth Density");
+
+        // Smooth bind group: read from density_out/org_id_out, write smoothed to temp
+        let smooth_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Organism Skin Smooth Bind Group"),
+            layout: &smooth_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: smooth_params_buffer.as_entire_binding() },
+                // Read from density_out (input)
+                wgpu::BindGroupEntry { binding: 1, resource: density_out_0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: density_out_1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: density_out_2.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: density_out_3.as_entire_binding() },
+                // Read from org_id_out (input)
+                wgpu::BindGroupEntry { binding: 5, resource: org_id_out_0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: org_id_out_1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: org_id_out_2.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8, resource: org_id_out_3.as_entire_binding() },
+                // Write to temp density (output)
+                wgpu::BindGroupEntry { binding: 9, resource: smooth_temp_density_0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 10, resource: smooth_temp_density_1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 11, resource: smooth_temp_density_2.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 12, resource: smooth_temp_density_3.as_entire_binding() },
+                // Write to temp org ID (output)
+                wgpu::BindGroupEntry { binding: 13, resource: smooth_temp_org_0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 14, resource: smooth_temp_org_1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 15, resource: smooth_temp_org_2.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 16, resource: smooth_temp_org_3.as_entire_binding() },
+            ],
+        });
+
         // ── Render pipeline ─────────────────────────────────────────────────
         let camera_uniform = CameraUniform {
             view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
@@ -963,6 +1160,9 @@ impl OrganismSkinRenderer {
             count_params_buffer,
             histogram_buffer,
             cell_skin_id_buffer,
+            skinned_cell_counter_buffer,
+            skinned_cell_counter_staging,
+            skinned_cell_count: 0,
             density_clear_pipeline,
             density_generate_pipeline,
             density_normalize_pipeline,
@@ -975,6 +1175,9 @@ impl OrganismSkinRenderer {
             blend_pipeline, blend_bind_group, blend_params_buffer,
             prev_density_0, prev_density_1, prev_density_2, prev_density_3,
             prev_org_id_0, prev_org_id_1, prev_org_id_2, prev_org_id_3,
+            smooth_pipeline, smooth_bind_group, smooth_params_buffer,
+            smooth_temp_density_0, smooth_temp_density_1, smooth_temp_density_2, smooth_temp_density_3,
+            smooth_temp_org_0, smooth_temp_org_1, smooth_temp_org_2, smooth_temp_org_3,
             sn_reset_pipeline, sn_vertex_pipeline, sn_index_pipeline, sn_finalize_pipeline,
             sn_compute_bind_group,
             sn_params_buffer,
@@ -1016,6 +1219,7 @@ impl OrganismSkinRenderer {
                 wgpu::BindGroupEntry { binding: 3, resource: label_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: self.histogram_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 5, resource: self.cell_skin_id_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: self.skinned_cell_counter_buffer.as_entire_binding() },
             ],
         })
     }
@@ -1059,6 +1263,7 @@ impl OrganismSkinRenderer {
 
     /// GPU pass: count organisms and assign skin IDs.
     /// Must be called before `generate_density`.
+    /// After this pass completes, call `try_read_skinned_count` to check if any cells have skins.
     pub fn count_organisms(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1073,7 +1278,7 @@ impl OrganismSkinRenderer {
         });
         pass.set_bind_group(0, count_bind_group, &[]);
 
-        // Pass 0: clear histogram
+        // Pass 0: clear histogram + skinned cell counter
         pass.set_pipeline(&self.count_clear_pipeline);
         pass.dispatch_workgroups((HISTOGRAM_SIZE + 255) / 256, 1, 1);
 
@@ -1081,9 +1286,18 @@ impl OrganismSkinRenderer {
         pass.set_pipeline(&self.count_organisms_pipeline);
         pass.dispatch_workgroups((max_cells + 255) / 256, 1, 1);
 
-        // Pass 2: assign skin IDs
+        // Pass 2: assign skin IDs (also increments skinned_cell_counter)
         pass.set_pipeline(&self.assign_skin_ids_pipeline);
         pass.dispatch_workgroups((max_cells + 255) / 256, 1, 1);
+
+        drop(pass);
+
+        // Copy skinned cell counter to staging for CPU readback
+        encoder.copy_buffer_to_buffer(
+            &self.skinned_cell_counter_buffer, 0,
+            &self.skinned_cell_counter_staging, 0,
+            4,
+        );
     }
 
     /// GPU pass: generate K=4 organism density from cell positions.
@@ -1096,28 +1310,57 @@ impl OrganismSkinRenderer {
     ) {
         if max_cells == 0 { return; }
 
-        // All 3 density passes share the same bind group — use a single compute pass
+        // Clear K=4 slot buffers using DMA clear (much faster than compute dispatch)
+        encoder.clear_buffer(&self.slot_org_0, 0, None);
+        encoder.clear_buffer(&self.slot_org_1, 0, None);
+        encoder.clear_buffer(&self.slot_org_2, 0, None);
+        encoder.clear_buffer(&self.slot_org_3, 0, None);
+        encoder.clear_buffer(&self.slot_density_0, 0, None);
+        encoder.clear_buffer(&self.slot_density_1, 0, None);
+        encoder.clear_buffer(&self.slot_density_2, 0, None);
+        encoder.clear_buffer(&self.slot_density_3, 0, None);
+
+        // Generate density + normalize in a single compute pass (skip the clear dispatch)
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Skin Density All"), timestamp_writes: None,
+                label: Some("Skin Density Gen+Norm"), timestamp_writes: None,
             });
             pass.set_bind_group(0, density_bind_group, &[]);
 
-            // Pass 1: clear all K=4 slot data
-            pass.set_pipeline(&self.density_clear_pipeline);
-            let workgroups_x = ((self.total_voxels + 255) / 256).min(65535);
-            pass.dispatch_workgroups(workgroups_x, 1, 1);
-
-            // Pass 2: per-cell metaball splatting with CAS slot claiming
+            // Per-cell metaball splatting with CAS slot claiming
             pass.set_pipeline(&self.density_generate_pipeline);
             pass.dispatch_workgroups((max_cells + 63) / 64, 1, 1);
 
-            // Pass 3: normalize fixed-point → f32 and copy org IDs
+            // Normalize fixed-point → f32 and copy org IDs
             pass.set_pipeline(&self.density_normalize_pipeline);
+            let workgroups_x = ((self.total_voxels + 255) / 256).min(65535);
             pass.dispatch_workgroups(workgroups_x, 1, 1);
         }
 
-        // Pass 4: temporal blend (separate compute pass — different bind group at group 0)
+        // Spatial smoothing pass — 3×3×3 box blur per organism slot
+        {
+            let mut smooth_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Skin Smooth"), timestamp_writes: None,
+            });
+            smooth_pass.set_pipeline(&self.smooth_pipeline);
+            smooth_pass.set_bind_group(0, &self.smooth_bind_group, &[]);
+            let wg = (self.grid_resolution + 3) / 4;
+            smooth_pass.dispatch_workgroups(wg, wg, wg);
+        }
+
+        // Copy smoothed density back from temp buffers → density_out
+        let voxel_bytes = self.total_voxels as u64 * 4;
+        encoder.copy_buffer_to_buffer(&self.smooth_temp_density_0, 0, &self.density_out_0, 0, voxel_bytes);
+        encoder.copy_buffer_to_buffer(&self.smooth_temp_density_1, 0, &self.density_out_1, 0, voxel_bytes);
+        encoder.copy_buffer_to_buffer(&self.smooth_temp_density_2, 0, &self.density_out_2, 0, voxel_bytes);
+        encoder.copy_buffer_to_buffer(&self.smooth_temp_density_3, 0, &self.density_out_3, 0, voxel_bytes);
+        // Copy propagated org IDs back from temp buffers → org_id_out
+        encoder.copy_buffer_to_buffer(&self.smooth_temp_org_0, 0, &self.org_id_out_0, 0, voxel_bytes);
+        encoder.copy_buffer_to_buffer(&self.smooth_temp_org_1, 0, &self.org_id_out_1, 0, voxel_bytes);
+        encoder.copy_buffer_to_buffer(&self.smooth_temp_org_2, 0, &self.org_id_out_2, 0, voxel_bytes);
+        encoder.copy_buffer_to_buffer(&self.smooth_temp_org_3, 0, &self.org_id_out_3, 0, voxel_bytes);
+
+        // Temporal blend (separate compute pass — different bind group at group 0)
         {
             let mut blend_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Skin Blend"), timestamp_writes: None,
@@ -1262,6 +1505,26 @@ impl OrganismSkinRenderer {
             self.index_count = c.index_count.min(self.max_indices);
         }
         self.counter_staging_buffer.unmap();
+    }
+
+    /// Read back the skinned cell counter from the GPU.
+    /// Returns the number of cells that were assigned a non-zero skin_id.
+    /// This is used to skip the expensive density + surface nets passes when no cells have skins.
+    /// Uses non-blocking poll — if the data isn't ready yet, keeps the previous value.
+    pub fn try_read_skinned_count(&mut self, device: &wgpu::Device) {
+        let slice = self.skinned_cell_counter_staging.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        if receiver.try_recv().is_ok() {
+            let data = slice.get_mapped_range();
+            let count: &u32 = bytemuck::from_bytes(&data);
+            self.skinned_cell_count = *count;
+            drop(data);
+            self.skinned_cell_counter_staging.unmap();
+        }
     }
 
     pub fn triangle_count(&self) -> u32 {

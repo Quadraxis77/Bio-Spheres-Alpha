@@ -22,6 +22,7 @@ struct SkinCountParams {
 @group(0) @binding(3) var<storage, read>      label_buffer: array<u32>;  // organism labels from union-find
 @group(0) @binding(4) var<storage, read_write> histogram: array<atomic<u32>>;  // cell count per organism hash
 @group(0) @binding(5) var<storage, read_write> cell_skin_id: array<u32>;       // output: 0 or skin_id per cell
+@group(0) @binding(6) var<storage, read_write> skinned_cell_counter: array<atomic<u32>>;  // [0]: count of cells with skin
 
 const DEAD_LABEL: u32 = 0xFFFFFFFFu;
 
@@ -39,6 +40,10 @@ fn label_to_bin(label: u32) -> u32 {
 fn clear_histogram(@builtin(global_invocation_id) gid: vec3<u32>) {
     if gid.x >= params.histogram_size { return; }
     atomicStore(&histogram[gid.x], 0u);
+    // Clear the skinned cell counter (only thread 0)
+    if gid.x == 0u {
+        atomicStore(&skinned_cell_counter[0], 0u);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -84,6 +89,7 @@ fn assign_skin_ids(@builtin(global_invocation_id) gid: vec3<u32>) {
         // This organism is large enough — use the histogram bin as the skin ID.
         // The bin is in [1, histogram_size), which fits in 16 bits for histogram_size <= 65536.
         cell_skin_id[cell_idx] = bin;
+        atomicAdd(&skinned_cell_counter[0], 1u);
     } else {
         cell_skin_id[cell_idx] = 0u;
     }

@@ -133,15 +133,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let total_adhesions = atomicLoad(&adhesion_counts[0]);
     let cell_count = cell_count_buffer[0];
     
-    // Process adhesions (existing functionality)
+    // Process adhesions: handle dead-cell cleanup AND force-broken bond cleanup.
+    // adhesion_physics breaks bonds by setting is_active=0 but does NOT decrement
+    // adhesion_counts[1], clear cell_adhesion_indices, or free the slot. We handle
+    // all of that here so the organism label shader sees accurate bond counts.
     if (thread_id < total_adhesions) {
         let adhesion_idx = thread_id;
         
         // Read the adhesion connection
         let connection = adhesion_connections[adhesion_idx];
         
-        // Skip if already inactive
         if (connection.is_active != 0u) {
+            // === Active connection: check for dead cells or out-of-bounds ===
             let cell_a = connection.cell_a_index;
             let cell_b = connection.cell_b_index;
             
@@ -151,33 +154,72 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 adhesion_connections[adhesion_idx].is_active = 0u;
                 atomicSub(&adhesion_counts[1], 1u); // Decrement live count
                 
+                // Clean up per-cell indices for in-bounds cells
+                if (cell_a < cell_count) { remove_adhesion_from_cell(cell_a, adhesion_idx); }
+                if (cell_b < cell_count) { remove_adhesion_from_cell(cell_b, adhesion_idx); }
+                
                 // Add to free slot stack (deterministic order by adhesion index)
                 let free_slot_idx = atomicAdd(&adhesion_counts[2], 1u);
                 free_adhesion_slots[free_slot_idx] = adhesion_idx;
-                return;
+            } else {
+                // Check if either cell is dead
+                let cell_a_dead = death_flags[cell_a] == 1u;
+                let cell_b_dead = death_flags[cell_b] == 1u;
+                
+                if (cell_a_dead || cell_b_dead) {
+                    // Mark adhesion as inactive
+                    adhesion_connections[adhesion_idx].is_active = 0u;
+                    
+                    // Remove adhesion index from both cells' per-cell adhesion indices
+                    // Even if a cell is dead, we still clean up its indices for consistency
+                    remove_adhesion_from_cell(cell_a, adhesion_idx);
+                    remove_adhesion_from_cell(cell_b, adhesion_idx);
+                    
+                    // Decrement live adhesion count
+                    atomicSub(&adhesion_counts[1], 1u);
+                    
+                    // Add to free slot stack for reuse
+                    let free_slot_idx = atomicAdd(&adhesion_counts[2], 1u);
+                    free_adhesion_slots[free_slot_idx] = adhesion_idx;
+                }
+            }
+        } else {
+            // === Inactive connection: check if it was force-broken and needs cleanup ===
+            // adhesion_physics sets is_active=0 but doesn't decrement live count,
+            // clear cell_adhesion_indices, or free the slot. Detect this by checking
+            // if either cell still references this adhesion in its per-cell indices.
+            // Only process once: after cleanup, neither cell references it.
+            let cell_a = connection.cell_a_index;
+            let cell_b = connection.cell_b_index;
+            
+            var still_referenced = false;
+            
+            if (cell_a < cell_count) {
+                let base_a = cell_a * MAX_ADHESIONS_PER_CELL;
+                for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+                    if (cell_adhesion_indices[base_a + i] == i32(adhesion_idx)) {
+                        cell_adhesion_indices[base_a + i] = -1;
+                        still_referenced = true;
+                        break;
+                    }
+                }
             }
             
-            // Check if either cell is dead
-            let cell_a_dead = death_flags[cell_a] == 1u;
-            let cell_b_dead = death_flags[cell_b] == 1u;
+            if (cell_b < cell_count) {
+                let base_b = cell_b * MAX_ADHESIONS_PER_CELL;
+                for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+                    if (cell_adhesion_indices[base_b + i] == i32(adhesion_idx)) {
+                        cell_adhesion_indices[base_b + i] = -1;
+                        still_referenced = true;
+                        break;
+                    }
+                }
+            }
             
-            if (cell_a_dead || cell_b_dead) {
-                // Mark adhesion as inactive
-                adhesion_connections[adhesion_idx].is_active = 0u;
-                
-                // Remove adhesion index from both cells' per-cell adhesion indices
-                // Even if a cell is dead, we still clean up its indices for consistency
-                remove_adhesion_from_cell(cell_a, adhesion_idx);
-                remove_adhesion_from_cell(cell_b, adhesion_idx);
-                
-                // Decrement live adhesion count
+            if (still_referenced) {
+                // This was a force-broken bond that hadn't been cleaned up yet.
+                // Decrement live count and free the slot.
                 atomicSub(&adhesion_counts[1], 1u);
-                
-                // Add to free slot stack for reuse
-                // Note: This uses atomic to get a unique slot in the free stack.
-                // Since adhesions are processed in index order (0, 1, 2, ...),
-                // and atomicAdd returns the previous value, lower adhesion indices
-                // will get lower positions in the free stack, maintaining determinism.
                 let free_slot_idx = atomicAdd(&adhesion_counts[2], 1u);
                 free_adhesion_slots[free_slot_idx] = adhesion_idx;
             }

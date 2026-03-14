@@ -652,6 +652,7 @@ pub fn rebuild_spatial_grid_after_lifecycle(
 /// # Arguments
 /// * `has_oculocytes` - If false, skip entire signal system (no genomes have oculocyte modes)
 /// * `cell_count_hint` - Live cell count for dispatch scaling
+/// * `max_signal_hops` - Maximum signal hops across all oculocyte modes (determines propagation iterations)
 pub fn execute_signal_system(
     encoder: &mut wgpu::CommandEncoder,
     pipelines: &GpuPhysicsPipelines,
@@ -659,6 +660,7 @@ pub fn execute_signal_system(
     cached_bind_groups: &CachedBindGroups,
     has_oculocytes: bool,
     cell_count_hint: u32,
+    max_signal_hops: u32,
 ) {
     // Early-out if no oculocytes in any genome - skip entire signal system
     if !has_oculocytes {
@@ -695,9 +697,12 @@ pub fn execute_signal_system(
         compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
     }
 
-    // Step 3: Pull-based propagation (one hop per dispatch, 10 iterations max)
-    // Hop limits are now encoded in the signal values themselves
-    for _ in 0..10u32 {
+    // Step 3: Pull-based propagation (one hop per dispatch)
+    // Use actual max hops from genome data instead of fixed 10.
+    // Hop limits are encoded in the signal values themselves, so extra iterations
+    // are no-ops, but skipping them saves dispatch overhead.
+    let propagation_iterations = max_signal_hops.clamp(1, 20);
+    for _ in 0..propagation_iterations {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Signal Propagate"),
             timestamp_writes: None,

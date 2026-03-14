@@ -52,7 +52,7 @@ struct OrganismDensityParams {
 @group(0) @binding(20) var<storage, read>      cell_skin_id: array<u32>;
 
 const FIXED_SCALE: f32 = 32768.0;
-const MAX_VOXEL_RADIUS: i32 = 10;
+const MAX_VOXEL_RADIUS: i32 = 8;
 
 fn voxel_index(x: u32, y: u32, z: u32) -> u32 {
     let r = params.grid_resolution;
@@ -221,7 +221,26 @@ fn normalize_density(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let idx = gid.x;
 
+    // Early-out: check if any slot has data before doing expensive atomic loads on all 8 accumulators.
+    // The org ID slots are only non-zero if a cell claimed them during generate_density.
     let org0 = atomicLoad(&slot_org_0[idx]);
+    let org1 = atomicLoad(&slot_org_1[idx]);
+    let org2 = atomicLoad(&slot_org_2[idx]);
+    let org3 = atomicLoad(&slot_org_3[idx]);
+
+    if (org0 | org1 | org2 | org3) == 0u {
+        // All slots empty — write zeros and skip
+        density_out_0[idx] = 0.0;
+        density_out_1[idx] = 0.0;
+        density_out_2[idx] = 0.0;
+        density_out_3[idx] = 0.0;
+        org_id_out_0[idx] = 0u;
+        org_id_out_1[idx] = 0u;
+        org_id_out_2[idx] = 0u;
+        org_id_out_3[idx] = 0u;
+        return;
+    }
+
     if org0 != 0u {
         density_out_0[idx] = f32(atomicLoad(&slot_density_0[idx])) / FIXED_SCALE;
         org_id_out_0[idx] = org0;
@@ -230,7 +249,6 @@ fn normalize_density(@builtin(global_invocation_id) gid: vec3<u32>) {
         org_id_out_0[idx] = 0u;
     }
 
-    let org1 = atomicLoad(&slot_org_1[idx]);
     if org1 != 0u {
         density_out_1[idx] = f32(atomicLoad(&slot_density_1[idx])) / FIXED_SCALE;
         org_id_out_1[idx] = org1;
@@ -239,7 +257,6 @@ fn normalize_density(@builtin(global_invocation_id) gid: vec3<u32>) {
         org_id_out_1[idx] = 0u;
     }
 
-    let org2 = atomicLoad(&slot_org_2[idx]);
     if org2 != 0u {
         density_out_2[idx] = f32(atomicLoad(&slot_density_2[idx])) / FIXED_SCALE;
         org_id_out_2[idx] = org2;
@@ -248,7 +265,6 @@ fn normalize_density(@builtin(global_invocation_id) gid: vec3<u32>) {
         org_id_out_2[idx] = 0u;
     }
 
-    let org3 = atomicLoad(&slot_org_3[idx]);
     if org3 != 0u {
         density_out_3[idx] = f32(atomicLoad(&slot_density_3[idx])) / FIXED_SCALE;
         org_id_out_3[idx] = org3;
