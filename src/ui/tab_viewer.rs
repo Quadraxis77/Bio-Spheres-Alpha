@@ -350,19 +350,12 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
         let gpu_extraction_data = if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
             // Check if cell extraction is in progress
             if gpu_scene.is_extracting_cell_data() {
-                Some((true, None, None, None)) // is_extracting flag
+                Some((true, None, None)) // is_extracting flag
             } else if let Some(extraction_result) = gpu_scene.get_latest_cell_extraction() {
                 if extraction_result.cell_index == cell_idx as u32 {
                     let data_valid = extraction_result.data.is_valid();
-                    let genome_id = extraction_result.data.genome_id;
-                    let genomes_len = gpu_scene.genomes.len() as u32;
-                    let genome_clone = if genome_id < genomes_len {
-                        Some(gpu_scene.genomes[genome_id as usize].clone())
-                    } else {
-                        None
-                    };
                     
-                    Some((false, Some(extraction_result), Some(data_valid), genome_clone))
+                    Some((false, Some(extraction_result), Some(data_valid)))
                 } else {
                     None
                 }
@@ -374,7 +367,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
         };
         
         // Now use the extracted data without borrowing context
-        if let Some((is_extracting, extraction_result, data_valid, genome_clone)) = gpu_extraction_data {
+        if let Some((is_extracting, extraction_result, data_valid)) = gpu_extraction_data {
             if is_extracting {
                 ui.add_space(8.0);
                 ui.label(format!("Cell #{}", cell_idx));
@@ -409,17 +402,16 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                 ui.separator();
                 
                 // Action buttons at the top
-                // Note: Genome loading and clear selection temporarily disabled due to borrow checker issues
-                // TODO: Restructure code to fix borrow checker and re-enable these features
                 ui.horizontal(|ui| {
-                    // Load Genome button (disabled for now)
-                    if genome_clone.is_some() {
-                        ui.colored_label(egui::Color32::GRAY, "📋 Load Genome (borrow checker issue)");
-                    } else {
-                        ui.colored_label(egui::Color32::GRAY, "📋 Load Genome (no genome)");
+                    // Load Genome button — reads back genome from GPU (works for both CPU and mutated genomes)
+                    if ui.button("📋 Load Genome").clicked() {
+                        *context.scene_request = crate::ui::panel_context::SceneModeRequest::LoadGenomeFromGpu(data.genome_id);
+                        log::info!("Requested genome readback for genome_id={}", data.genome_id);
                     }
                     
-                    ui.colored_label(egui::Color32::GRAY, "🗑 Clear Selection (borrow checker issue)");
+                    if ui.button("🗑 Clear Selection").clicked() {
+                        context.editor_state.radial_menu.inspected_cell = None;
+                    }
                 });
             
             ui.add_space(8.0);
@@ -3412,6 +3404,19 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.label("Water Drag:");
     ui.add(egui::Slider::new(&mut world.water_drag_strength, 0.0..=1.0).text("strength"));
     ui.label(egui::RichText::new("How strongly moving water pushes cells (0 = off, higher = stronger current force)").small());
+
+    ui.add_space(12.0);
+
+    // Mutation section
+    ui.heading("Mutation");
+    ui.separator();
+
+    ui.label("Radiation Level:");
+    ui.add(egui::Slider::new(&mut world.radiation_level, 0.0..=1.0)
+        .step_by(0.01)
+        .fixed_decimals(2)
+        .text("chance"));
+    ui.label(egui::RichText::new("Probability each child mutates during division (0 = off, 1 = always)").small());
 }
 
 /// Render the Help panel showing context-specific controls and shortcuts.

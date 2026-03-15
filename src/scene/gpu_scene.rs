@@ -154,6 +154,8 @@ pub struct GpuScene {
     pub acceleration_damping: f32,
     /// How strongly moving water pushes cells (0.0 = off, 1.0 = strong)
     pub water_drag_strength: f32,
+    /// Global radiation level controlling mutation probability per division (0.0 = off, 1.0 = always)
+    pub radiation_level: f32,
     /// Per-fluid-type lateral flow probabilities for fluid simulation (0.0 to 1.0)
     /// Index: 0=Empty (unused), 1=Water, 2=Lava, 3=Steam
     pub lateral_flow_probabilities: [f32; 4],
@@ -236,6 +238,8 @@ pub struct GpuScene {
     phagocyte_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// Organism label system — GPU-driven connected-component labeling
     pub organism_label_system: Option<crate::simulation::gpu_physics::OrganismLabelSystem>,
+    /// Mutation system — GPU-driven genome mutation during cell division
+    pub mutation_system: Option<crate::simulation::gpu_physics::MutationSystem>,
     /// Light field system for photocyte nutrients and volumetric fog
     pub light_field_system: Option<LightFieldSystem>,
     /// Cached light field bind group (solid_mask doesn't change per frame)
@@ -386,6 +390,11 @@ impl GpuScene {
             ),
         );
 
+        // Create mutation system for GPU-driven genome mutation
+        let mutation_system = Some(
+            crate::simulation::gpu_physics::MutationSystem::new(device, queue, capacity),
+        );
+
         // Create cached bind groups (once, not per-frame!)
         // Pass organism label buffer for self-collision filtering
         let cached_bind_groups = gpu_physics_pipelines.create_cached_bind_groups(
@@ -472,6 +481,7 @@ impl GpuScene {
             surface_pressure: 0.5,
             acceleration_damping: 0.98,
             water_drag_strength: 0.0,
+            radiation_level: 0.0,
             lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
             condensation_probability: 0.1,
             vaporization_probability: 0.1,
@@ -513,6 +523,7 @@ impl GpuScene {
             phagocyte_nutrient_bind_group: None,
             phagocyte_physics_bind_groups: None,
             organism_label_system,
+            mutation_system,
             light_field_system: None,
             cached_light_field_bind_group: None,
             cached_occupancy_bind_groups: None,
@@ -630,6 +641,293 @@ impl GpuScene {
     /// Set the culling mode for the instance builder.
     pub fn set_culling_mode(&mut self, mode: CullingMode) {
         self.instance_builder.set_culling_mode(mode);
+    }
+
+    /// Read back a genome from GPU buffers and reconstruct it as a CPU-side Genome.
+    ///
+    /// For user-created genomes (genome_id < self.genomes.len()), returns a clone from CPU storage.
+    /// For GPU-mutated genomes, performs synchronous GPU readback of all mode buffers
+    /// and reconstructs the Genome from raw buffer data.
+    ///
+    /// This is a blocking operation (waits for GPU) — only call from UI button clicks.
+    pub fn read_back_genome(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        genome_id: u32,
+    ) -> Option<crate::genome::Genome> {
+        // Fast path: CPU-known genome
+        if (genome_id as usize) < self.genomes.len() {
+            return Some(self.genomes[genome_id as usize].clone());
+        }
+
+        // GPU path: read genome metadata to find mode range
+        let mutation_system = self.mutation_system.as_ref()?;
+        let meta = self.read_back_buffer_range::<crate::simulation::gpu_physics::GenomeMeta>(
+            device, queue,
+            mutation_system.genome_meta_buffer(),
+            genome_id as u64,
+            1,
+        )?;
+        let meta = meta[0];
+        let mode_count = meta.mode_count as usize;
+        let base_offset = meta.base_mode_offset as usize;
+
+        if mode_count == 0 || mode_count > 40 {
+            log::warn!("Invalid genome metadata: mode_count={}, base_offset={}", mode_count, base_offset);
+            return None;
+        }
+
+        // Read back all mode buffers for this genome's mode range
+        let mode_props = self.read_back_buffer_range::<[f32; 20]>(
+            device, queue,
+            &self.gpu_triple_buffers.mode_properties,
+            base_offset as u64,
+            mode_count,
+        )?;
+
+        let mode_data = self.read_back_buffer_range::<[f32; 20]>(
+            device, queue,
+            &self.gpu_triple_buffers.genome_mode_data,
+            base_offset as u64,
+            mode_count,
+        )?;
+
+        let child_indices = self.read_back_buffer_range::<[i32; 2]>(
+            device, queue,
+            &self.gpu_triple_buffers.child_mode_indices,
+            base_offset as u64,
+            mode_count,
+        )?;
+
+        let cell_types = self.read_back_buffer_range::<u32>(
+            device, queue,
+            &self.gpu_triple_buffers.mode_cell_types,
+            base_offset as u64,
+            mode_count,
+        )?;
+
+        let parent_make_flags = self.read_back_buffer_range::<u32>(
+            device, queue,
+            &self.gpu_triple_buffers.parent_make_adhesion_flags,
+            base_offset as u64,
+            mode_count,
+        )?;
+
+        let child_a_keep_flags = self.read_back_buffer_range::<u32>(
+            device, queue,
+            &self.gpu_triple_buffers.child_a_keep_adhesion_flags,
+            base_offset as u64,
+            mode_count,
+        )?;
+
+        let child_b_keep_flags = self.read_back_buffer_range::<u32>(
+            device, queue,
+            &self.gpu_triple_buffers.child_b_keep_adhesion_flags,
+            base_offset as u64,
+            mode_count,
+        )?;
+
+        let glueocyte_flags = self.read_back_buffer_range::<u32>(
+            device, queue,
+            &self.gpu_triple_buffers.glueocyte_env_adhesion_flags,
+            base_offset as u64,
+            mode_count,
+        )?;
+
+        let oculocyte_params = self.read_back_buffer_range::<[u32; 4]>(
+            device, queue,
+            &self.gpu_triple_buffers.oculocyte_params,
+            base_offset as u64,
+            mode_count,
+        )?;
+
+        // mode_visuals: 2 vec4 per mode = 8 f32 per mode
+        let visuals_raw = self.read_back_buffer_range::<[f32; 4]>(
+            device, queue,
+            self.instance_builder.mode_visuals_buffer(),
+            (base_offset * 2) as u64, // 2 vec4 per mode
+            mode_count * 2,
+        )?;
+
+        // adhesion_settings: 48 bytes (12 f32-sized fields) per mode
+        let adhesion_settings_raw = self.read_back_buffer_range::<crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings>(
+            device, queue,
+            &self.adhesion_buffers.adhesion_settings,
+            base_offset as u64,
+            mode_count,
+        )?;
+
+        // Reconstruct Genome from raw data
+        let mut modes = Vec::with_capacity(mode_count);
+        for i in 0..mode_count {
+            let props = &mode_props[i];
+            let data = &mode_data[i];
+            let ci = &child_indices[i];
+
+            // Convert absolute child mode indices back to genome-local
+            let child_a_local = (ci[0] - base_offset as i32).max(0);
+            let child_b_local = (ci[1] - base_offset as i32).max(0);
+
+            // Reconstruct orientations from genome_mode_data
+            let qa = glam::Quat::from_xyzw(data[0], data[1], data[2], data[3]);
+            let qb = glam::Quat::from_xyzw(data[4], data[5], data[6], data[7]);
+            let qa_split = glam::Quat::from_xyzw(data[8], data[9], data[10], data[11]);
+            let qb_split = glam::Quat::from_xyzw(data[12], data[13], data[14], data[15]);
+            let split_quat = glam::Quat::from_xyzw(data[16], data[17], data[18], data[19]);
+
+            // Reconstruct split direction from quaternion (reverse of Euler YXZ encoding)
+            let (yaw, pitch, _roll) = split_quat.to_euler(glam::EulerRot::YXZ);
+
+            // Reconstruct color from mode_visuals
+            let color_vec4 = &visuals_raw[i * 2];
+            let emissive_vec4 = &visuals_raw[i * 2 + 1];
+
+            // Reconstruct max_splits: negative GPU value means infinite (-1)
+            let gpu_max_splits = props[8];
+            let max_splits = if gpu_max_splits < 0.0 { -1 } else { gpu_max_splits as i32 };
+
+            let mode = crate::genome::ModeSettings {
+                name: format!("Mode {}", i),
+                default_name: format!("Mode {}", i),
+                color: glam::Vec3::new(color_vec4[0], color_vec4[1], color_vec4[2]),
+                opacity: 1.0,
+                emissive: emissive_vec4[0],
+                cell_type: cell_types[i] as i32,
+                parent_make_adhesion: parent_make_flags[i] != 0,
+                split_mass: props[4],
+                split_interval: props[3],
+                nutrient_gain_rate: props[0],
+                max_cell_size: props[1],
+                split_ratio: props[9],
+                nutrient_priority: props[5],
+                prioritize_when_low: props[7] > 0.5,
+                parent_split_direction: glam::Vec2::new(pitch.to_degrees(), yaw.to_degrees()),
+                max_adhesions: props[16] as i32,
+                min_adhesions: props[15] as i32,
+                enable_parent_angle_snapping: false,
+                max_splits,
+                mode_a_after_splits: -1,
+                mode_b_after_splits: -1,
+                child_a_after_split_orientation: qa_split,
+                child_b_after_split_orientation: qb_split,
+                child_a_after_split_keep_adhesion: false,
+                child_b_after_split_keep_adhesion: false,
+                glueocyte_cell_adhesion: false,
+                glueocyte_env_adhesion: glueocyte_flags[i] != 0,
+                swim_force: props[6],
+                flagellocyte_use_signal: props[14] > 0.5,
+                flagellocyte_signal_channel: props[10] as i32,
+                flagellocyte_speed_a: props[11],
+                flagellocyte_speed_b: props[12],
+                flagellocyte_threshold_c: props[13],
+                buoyancy_force: 0.0,
+                oculocyte_sense_type: oculocyte_params[i][0] as i32,
+                oculocyte_signal_channel: 0,
+                oculocyte_signal_value: 0.0,
+                oculocyte_signal_hops: oculocyte_params[i][2] as i32,
+                oculocyte_ray_length: f32::from_bits(oculocyte_params[i][1]),
+                membrane_stiffness: props[2],
+                child_a: crate::genome::ChildSettings {
+                    mode_number: child_a_local,
+                    orientation: qa,
+                    keep_adhesion: child_a_keep_flags[i] != 0,
+                    enable_angle_snapping: false,
+                    x_axis_lat: 0.0, x_axis_lon: 0.0,
+                    y_axis_lat: 0.0, y_axis_lon: 0.0,
+                    z_axis_lat: 0.0, z_axis_lon: 0.0,
+                },
+                child_b: crate::genome::ChildSettings {
+                    mode_number: child_b_local,
+                    orientation: qb,
+                    keep_adhesion: child_b_keep_flags[i] != 0,
+                    enable_angle_snapping: false,
+                    x_axis_lat: 0.0, x_axis_lon: 0.0,
+                    y_axis_lat: 0.0, y_axis_lon: 0.0,
+                    z_axis_lat: 0.0, z_axis_lon: 0.0,
+                },
+                adhesion_settings: {
+                    let gpu_as = &adhesion_settings_raw[i];
+                    crate::genome::AdhesionSettings {
+                        can_break: gpu_as.can_break != 0,
+                        break_force: gpu_as.break_force,
+                        rest_length: gpu_as.rest_length,
+                        linear_spring_stiffness: gpu_as.linear_spring_stiffness,
+                        linear_spring_damping: gpu_as.linear_spring_damping,
+                        orientation_spring_stiffness: gpu_as.orientation_spring_stiffness,
+                        orientation_spring_damping: gpu_as.orientation_spring_damping,
+                        max_angular_deviation: gpu_as.max_angular_deviation,
+                        twist_constraint_stiffness: gpu_as.twist_constraint_stiffness,
+                        twist_constraint_damping: gpu_as.twist_constraint_damping,
+                        enable_twist_constraint: gpu_as.enable_twist_constraint != 0,
+                    }
+                },
+            };
+            modes.push(mode);
+        }
+
+        Some(crate::genome::Genome {
+            name: format!("Mutated Genome #{}", genome_id),
+            initial_mode: 0,
+            initial_orientation: glam::Quat::IDENTITY,
+            modes,
+        })
+    }
+
+    /// Synchronous GPU buffer readback helper.
+    /// Reads `count` elements of type T starting at `start_index` from `source_buffer`.
+    /// Blocks until the GPU transfer completes.
+    fn read_back_buffer_range<T: bytemuck::Pod>(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source_buffer: &wgpu::Buffer,
+        start_index: u64,
+        count: usize,
+    ) -> Option<Vec<T>> {
+        let elem_size = std::mem::size_of::<T>() as u64;
+        let offset = start_index * elem_size;
+        let size = count as u64 * elem_size;
+
+        // Create staging buffer for readback
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Genome Readback Staging"),
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Copy from source to staging
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Genome Readback Encoder"),
+        });
+        encoder.copy_buffer_to_buffer(source_buffer, offset, &staging, 0, size);
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Map and read
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+
+        match rx.recv() {
+            Ok(Ok(())) => {
+                let mapped = slice.get_mapped_range();
+                let data: Vec<T> = bytemuck::cast_slice(&mapped).to_vec();
+                drop(mapped);
+                staging.unmap();
+                Some(data)
+            }
+            _ => {
+                log::error!("GPU readback failed");
+                None
+            }
+        }
     }
     
     /// Get the current culling mode.
@@ -794,6 +1092,21 @@ impl GpuScene {
             &self.adhesion_buffers,
             self.current_time,
         );
+
+        // Mutation pass: collect candidates from division results, then apply mutations.
+        // Runs after division execute so division_flags and division_slot_assignments are set.
+        if let Some(mutation_system) = &self.mutation_system {
+            // Calculate total mode count from genomes
+            let total_mode_count: u32 = self.genomes.iter()
+                .map(|g| g.modes.len() as u32)
+                .sum();
+            mutation_system.dispatch(
+                encoder,
+                queue,
+                self.current_frame as u32,
+                total_mode_count,
+            );
+        }
         
         // NOTE: Spatial grid rebuild after lifecycle is unnecessary because the grid
         // is rebuilt at the START of each physics step (stages 1-3). Nothing between
@@ -3686,6 +3999,41 @@ impl GpuScene {
             );
             self.tool_operations = Some(tool_operations);
         }
+
+        // Initialize mutation system bind groups
+        if let Some(mutation_system) = &mut self.mutation_system {
+            // Rebuild collect bind groups (reads lifecycle buffers)
+            mutation_system.rebuild_collect_bind_groups(
+                device,
+                queue,
+                &self.gpu_triple_buffers.division_flags,
+                &self.gpu_triple_buffers.division_slot_assignments,
+                &self.gpu_triple_buffers.genome_ids,
+                &self.gpu_triple_buffers.cell_count_buffer,
+            );
+
+            // Rebuild mutation bind groups (reads/writes genome mode buffers)
+            mutation_system.rebuild_bind_groups(
+                device,
+                &self.gpu_triple_buffers.genome_ids,
+                &self.gpu_triple_buffers.mode_indices,
+                &self.gpu_triple_buffers.mode_properties,
+                &self.gpu_triple_buffers.genome_mode_data,
+                &self.gpu_triple_buffers.child_mode_indices,
+                &self.gpu_triple_buffers.mode_cell_types,
+                &self.gpu_triple_buffers.parent_make_adhesion_flags,
+                &self.gpu_triple_buffers.child_a_keep_adhesion_flags,
+                &self.gpu_triple_buffers.child_b_keep_adhesion_flags,
+                &self.gpu_triple_buffers.glueocyte_env_adhesion_flags,
+                &self.gpu_triple_buffers.oculocyte_params,
+                self.instance_builder.mode_visuals_buffer(),
+            );
+
+            // Sync genome metadata if genomes are already loaded
+            if !self.genomes.is_empty() {
+                mutation_system.sync_genome_metadata(queue, &self.genomes);
+            }
+        }
     }
     
     /// Update physics params buffer with cell_capacity for cell insertion
@@ -3827,6 +4175,17 @@ impl Scene for GpuScene {
         // Sync adhesion settings to GPU only when genomes are added or modified
         if self.genomes_dirty {
             self.sync_adhesion_settings(queue);
+            // Sync mutation system genome metadata when genomes change
+            if let Some(mutation_system) = &self.mutation_system {
+                mutation_system.sync_genome_metadata(queue, &self.genomes);
+            }
+            // Update mode visuals (colors) from CPU genomes.
+            // This must ONLY happen when CPU genomes change, not every frame,
+            // because the mutation shader writes directly to mode_visuals_buffer
+            // for GPU-mutated genomes and a per-frame overwrite would clobber those.
+            if !self.genomes.is_empty() {
+                self.instance_builder.update_mode_visuals_from_genomes(device, queue, &self.genomes);
+            }
             self.genomes_dirty = false;
         }
         
@@ -4005,12 +4364,8 @@ impl Scene for GpuScene {
         // Use capacity for dispatch - shader reads actual cell_count from GPU buffer
         let total_mode_count: usize = self.genomes.iter().map(|g| g.modes.len()).sum();
         
-        // Update instance builder with genome information for mode visuals
-        // Even though we use GPU buffers for cell data, we still need genome info for colors
-        if !self.genomes.is_empty() {
-            // Force update of mode visuals directly since we don't need full state update
-            self.instance_builder.update_mode_visuals_from_genomes(device, queue, &self.genomes);
-        }
+        // Mode visuals are updated in the genomes_dirty block above (not per-frame)
+        // so GPU-mutated colors in mode_visuals_buffer are preserved.
         
         // Update cell type visuals for membrane noise and lighting parameters
         if let Some(visuals) = cell_type_visuals {

@@ -674,6 +674,11 @@ impl App {
             gpu_scene.constraint_iterations = self.ui.state.world_settings.constraint_iterations;
             gpu_scene.acceleration_damping = self.ui.state.world_settings.acceleration_damping;
             gpu_scene.water_drag_strength = self.ui.state.world_settings.water_drag_strength;
+            gpu_scene.radiation_level = self.ui.state.world_settings.radiation_level;
+            // Sync radiation level to mutation system
+            if let Some(mutation_system) = &mut gpu_scene.mutation_system {
+                mutation_system.set_radiation_level(self.ui.state.world_settings.radiation_level);
+            }
 
             // Apply fluid settings from UI
             gpu_scene.lateral_flow_probabilities = self.editor_state.fluid_lateral_flow_probabilities;
@@ -1284,6 +1289,17 @@ impl App {
                         if gpu_scene.gpu_surface_nets.is_some() {
                             gpu_scene.generate_test_density(&self.queue);
                             log::info!("Generated test density field for GPU surface nets");
+                        }
+                    }
+                }
+                crate::ui::panel_context::SceneModeRequest::LoadGenomeFromGpu(genome_id) => {
+                    if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
+                        if let Some(genome) = gpu_scene.read_back_genome(&self.device, &self.queue, genome_id) {
+                            log::info!("Loaded genome '{}' ({} modes) from GPU", genome.name, genome.modes.len());
+                            self.working_genome = genome;
+                            self.ui.state.request_mode_switch(crate::ui::types::SimulationMode::Preview);
+                        } else {
+                            log::error!("Failed to read back genome_id={} from GPU", genome_id);
                         }
                     }
                 }

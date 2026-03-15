@@ -718,6 +718,11 @@ impl InstanceBuilder {
         self.last_visible_count
     }
     
+    /// Get the mode visuals buffer (for mutation shader to write colors)
+    pub fn mode_visuals_buffer(&self) -> &wgpu::Buffer {
+        &self.mode_visuals_buffer
+    }
+
     /// Mark all buffers as dirty (forces full update).
     pub fn mark_all_dirty(&mut self) {
         self.positions_dirty = true;

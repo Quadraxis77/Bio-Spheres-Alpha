@@ -15,6 +15,7 @@ pub mod gpu_cell_inspector;
 pub mod gpu_scene_integration;
 pub mod gpu_tool_operations;
 pub mod light_field;
+pub mod mutation;
 pub mod organism_labels;
 pub mod phagocyte_consumption;
 pub mod triple_buffer;
@@ -29,6 +30,8 @@ pub use gpu_cell_inspector::{AsyncReadbackManager, GpuCellInspector, ReadbackId,
 pub use gpu_scene_integration::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, execute_signal_system};
 pub use gpu_tool_operations::GpuToolOperations;
 pub use light_field::LightFieldSystem;
+pub use mutation::MutationSystem;
+pub use mutation::GenomeMeta;
 pub use organism_labels::OrganismLabelSystem;
 pub use phagocyte_consumption::PhagocyteConsumptionSystem;
 pub use triple_buffer::GpuTripleBufferSystem;

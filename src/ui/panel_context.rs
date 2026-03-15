@@ -40,6 +40,8 @@ pub enum SceneModeRequest {
     RegenerateFluidVoxels,
     /// Request to regenerate fluid mesh using surface nets
     RegenerateFluidMesh,
+    /// Request to read back a mutated genome from GPU and load it into the editor
+    LoadGenomeFromGpu(u32),
 }
 
 impl SceneModeRequest {

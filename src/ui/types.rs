@@ -193,6 +193,10 @@ pub struct WorldSettings {
     /// How strongly moving water pushes cells (0.0 = off, 1.0 = strong)
     #[serde(default = "default_water_drag_strength")]
     pub water_drag_strength: f32,
+
+    /// Global radiation level controlling mutation probability per division (0.0 = off, 1.0 = every division mutates)
+    #[serde(default)]
+    pub radiation_level: f32,
 }
 
 impl Default for WorldSettings {
@@ -204,6 +208,7 @@ impl Default for WorldSettings {
             constraint_iterations: 4,
             acceleration_damping: 0.98,
             water_drag_strength: 0.0,
+            radiation_level: 0.0,
         }
     }
 }
