@@ -807,8 +807,8 @@ impl GpuScene {
                 min_adhesions: props[15] as i32,
                 enable_parent_angle_snapping: false,
                 max_splits,
-                mode_a_after_splits: -1,
-                mode_b_after_splits: -1,
+                mode_a_after_splits: if props[17] < 0.0 { -1 } else { (props[17] as i32 - base_offset as i32).max(0) },
+                mode_b_after_splits: if props[18] < 0.0 { -1 } else { (props[18] as i32 - base_offset as i32).max(0) },
                 child_a_after_split_orientation: qa_split,
                 child_b_after_split_orientation: qb_split,
                 child_a_after_split_keep_adhesion: false,
@@ -1559,6 +1559,8 @@ impl GpuScene {
                 || ma.parent_make_adhesion != mb.parent_make_adhesion
                 || ma.child_a.keep_adhesion != mb.child_a.keep_adhesion
                 || ma.child_b.keep_adhesion != mb.child_b.keep_adhesion
+                || ma.child_a_after_split_keep_adhesion != mb.child_a_after_split_keep_adhesion
+                || ma.child_b_after_split_keep_adhesion != mb.child_b_after_split_keep_adhesion
                 || ma.child_a.orientation != mb.child_a.orientation
                 || ma.child_b.orientation != mb.child_b.orientation
                 || ma.child_a.mode_number != mb.child_a.mode_number
@@ -1567,6 +1569,17 @@ impl GpuScene {
                 || ma.split_ratio != mb.split_ratio
                 || ma.nutrient_priority != mb.nutrient_priority
                 || ma.prioritize_when_low != mb.prioritize_when_low
+                || ma.adhesion_settings.can_break != mb.adhesion_settings.can_break
+                || ma.adhesion_settings.break_force != mb.adhesion_settings.break_force
+                || ma.adhesion_settings.rest_length != mb.adhesion_settings.rest_length
+                || ma.adhesion_settings.linear_spring_stiffness != mb.adhesion_settings.linear_spring_stiffness
+                || ma.adhesion_settings.linear_spring_damping != mb.adhesion_settings.linear_spring_damping
+                || ma.adhesion_settings.orientation_spring_stiffness != mb.adhesion_settings.orientation_spring_stiffness
+                || ma.adhesion_settings.orientation_spring_damping != mb.adhesion_settings.orientation_spring_damping
+                || ma.adhesion_settings.max_angular_deviation != mb.adhesion_settings.max_angular_deviation
+                || ma.adhesion_settings.twist_constraint_stiffness != mb.adhesion_settings.twist_constraint_stiffness
+                || ma.adhesion_settings.twist_constraint_damping != mb.adhesion_settings.twist_constraint_damping
+                || ma.adhesion_settings.enable_twist_constraint != mb.adhesion_settings.enable_twist_constraint
             {
                 return false;
             }
@@ -1700,16 +1713,22 @@ impl GpuScene {
         
         let mut child_a_flags: Vec<u32> = Vec::with_capacity(mode_count);
         let mut child_b_flags: Vec<u32> = Vec::with_capacity(mode_count);
+        let mut child_a_after_split_flags: Vec<u32> = Vec::with_capacity(mode_count);
+        let mut child_b_after_split_flags: Vec<u32> = Vec::with_capacity(mode_count);
         
         for mode in &genome.modes {
             child_a_flags.push(if mode.child_a.keep_adhesion { 1 } else { 0 });
             child_b_flags.push(if mode.child_b.keep_adhesion { 1 } else { 0 });
+            child_a_after_split_flags.push(if mode.child_a_after_split_keep_adhesion { 1 } else { 0 });
+            child_b_after_split_flags.push(if mode.child_b_after_split_keep_adhesion { 1 } else { 0 });
         }
         
         if !child_a_flags.is_empty() {
             let offset = (global_start_index * std::mem::size_of::<u32>()) as u64;
             queue.write_buffer(&self.gpu_triple_buffers.child_a_keep_adhesion_flags, offset, bytemuck::cast_slice(&child_a_flags));
             queue.write_buffer(&self.gpu_triple_buffers.child_b_keep_adhesion_flags, offset, bytemuck::cast_slice(&child_b_flags));
+            queue.write_buffer(&self.gpu_triple_buffers.child_a_after_split_keep_adhesion_flags, offset, bytemuck::cast_slice(&child_a_after_split_flags));
+            queue.write_buffer(&self.gpu_triple_buffers.child_b_after_split_keep_adhesion_flags, offset, bytemuck::cast_slice(&child_b_after_split_flags));
         }
     }
     

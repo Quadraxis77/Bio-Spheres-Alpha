@@ -1297,7 +1297,40 @@ impl App {
                         if let Some(genome) = gpu_scene.read_back_genome(&self.device, &self.queue, genome_id) {
                             log::info!("Loaded genome '{}' ({} modes) from GPU", genome.name, genome.modes.len());
                             self.working_genome = genome;
-                            self.ui.state.request_mode_switch(crate::ui::types::SimulationMode::Preview);
+                            
+                            // Switch to Preview mode immediately (not deferred) so we can
+                            // push the readback genome into the preview scene right away.
+                            // If we used request_mode_switch, the next frame's per-frame sync
+                            // (working_genome = preview_scene.genome.clone()) would overwrite
+                            // our readback genome before update_genome could push it.
+                            let preview_mode = crate::ui::types::SimulationMode::Preview;
+                            if current_mode != preview_mode {
+                                let cave_initialized = self.scene_manager.switch_mode(
+                                    preview_mode, &self.device, &self.queue, &self.config,
+                                    self.ui.state.world_diameter,
+                                    self.ui.state.world_settings.cell_capacity,
+                                    &self.editor_state,
+                                );
+                                if cave_initialized {
+                                    self.editor_state.cave_params_dirty = true;
+                                }
+                                self.dock_manager.switch_mode(preview_mode);
+                                // Clear radial menu / drag state from GPU mode
+                                if self.editor_state.radial_menu.dragging_cell.is_some() {
+                                    self.scene_manager.clear_dragged_cell();
+                                    self.editor_state.radial_menu.clear_drag_state();
+                                }
+                                self.window.set_cursor_visible(true);
+                                self.editor_state.radial_menu.active_tool = crate::ui::radial_menu::RadialTool::None;
+                                self.editor_state.radial_menu.visible = false;
+                                log::info!("Switched to Preview mode for genome inspection");
+                            }
+                            
+                            // Now push the readback genome into the preview scene immediately
+                            if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut() {
+                                preview_scene.update_genome(&self.working_genome);
+                                log::info!("Pushed readback genome into preview scene");
+                            }
                         } else {
                             log::error!("Failed to read back genome_id={} from GPU", genome_id);
                         }

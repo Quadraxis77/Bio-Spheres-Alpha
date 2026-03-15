@@ -316,6 +316,14 @@ pub struct GpuTripleBufferSystem {
     /// Child B keep adhesion flags buffer (one u32 per mode)
     /// Stores whether Child B should inherit adhesions during division
     pub child_b_keep_adhesion_flags: wgpu::Buffer,
+
+    /// Child A after-split keep adhesion flags buffer (one u32 per mode)
+    /// Stores whether Child A should inherit adhesions when max_splits is reached
+    pub child_a_after_split_keep_adhesion_flags: wgpu::Buffer,
+
+    /// Child B after-split keep adhesion flags buffer (one u32 per mode)
+    /// Stores whether Child B should inherit adhesions when max_splits is reached
+    pub child_b_after_split_keep_adhesion_flags: wgpu::Buffer,
     
     /// Mode properties buffer for division (per-mode properties)
     /// Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a, flagellocyte_speed_b, flagellocyte_threshold_c, pad x2] = 64 bytes
@@ -524,6 +532,12 @@ impl GpuTripleBufferSystem {
         
         // Child B keep adhesion flags: one u32 per mode
         let child_b_keep_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Child B Keep Adhesion Flags");
+
+        // Child A after-split keep adhesion flags: one u32 per mode
+        let child_a_after_split_keep_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Child A After Split Keep Adhesion Flags");
+
+        // Child B after-split keep adhesion flags: one u32 per mode
+        let child_b_after_split_keep_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Child B After Split Keep Adhesion Flags");
         
         // Mode properties: 20 floats per mode (80 bytes) - includes min/max adhesions at indices 15/16
         let mode_properties = Self::create_storage_buffer(device, max_modes * 80, "Mode Properties");
@@ -601,6 +615,8 @@ impl GpuTripleBufferSystem {
             parent_make_adhesion_flags,
             child_a_keep_adhesion_flags,
             child_b_keep_adhesion_flags,
+            child_a_after_split_keep_adhesion_flags,
+            child_b_after_split_keep_adhesion_flags,
             mode_properties,
             mode_cell_types,
             behavior_flags,
@@ -1023,17 +1039,23 @@ impl GpuTripleBufferSystem {
     pub fn sync_child_keep_adhesion_flags(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
         let mut child_a_flags: Vec<u32> = Vec::new();
         let mut child_b_flags: Vec<u32> = Vec::new();
+        let mut child_a_after_split_flags: Vec<u32> = Vec::new();
+        let mut child_b_after_split_flags: Vec<u32> = Vec::new();
         
         for genome in genomes {
             for mode in &genome.modes {
                 child_a_flags.push(if mode.child_a.keep_adhesion { 1 } else { 0 });
                 child_b_flags.push(if mode.child_b.keep_adhesion { 1 } else { 0 });
+                child_a_after_split_flags.push(if mode.child_a_after_split_keep_adhesion { 1 } else { 0 });
+                child_b_after_split_flags.push(if mode.child_b_after_split_keep_adhesion { 1 } else { 0 });
             }
         }
         
         if !child_a_flags.is_empty() {
             queue.write_buffer(&self.child_a_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_a_flags));
             queue.write_buffer(&self.child_b_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_b_flags));
+            queue.write_buffer(&self.child_a_after_split_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_a_after_split_flags));
+            queue.write_buffer(&self.child_b_after_split_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_b_after_split_flags));
         }
     }
     
@@ -1042,11 +1064,13 @@ impl GpuTripleBufferSystem {
         // Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval] (vec4)
         //                  [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
         //                  [max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a] (vec4)
-        //                  [flagellocyte_speed_b, flagellocyte_threshold_c, padding, padding] (vec4)
-        // Total: 20 floats = 80 bytes per mode (includes min/max adhesions)
+        //                  [flagellocyte_speed_b, flagellocyte_threshold_c, flagellocyte_use_signal, min_adhesions] (vec4)
+        //                  [max_adhesions, mode_a_after_splits, mode_b_after_splits, padding] (vec4)
+        // Total: 20 floats = 80 bytes per mode
         let mut properties_data: Vec<[f32; 20]> = Vec::new();
         
         let mut global_mode_idx = 0usize;
+        let mut global_mode_offset = 0i32;
         for (genome_idx, genome) in genomes.iter().enumerate() {
             for (mode_idx, mode) in genome.modes.iter().enumerate() {
                 log::debug!("[SYNC MODE PROPS] genome={} mode={} global={} nutrient_priority={} prioritize_when_low={} cell_type={:?}",
@@ -1054,6 +1078,9 @@ impl GpuTripleBufferSystem {
                 global_mode_idx += 1;
                 // Convert max_splits: -1 (infinite) -> -1.0 (shader detects negative = unlimited)
                 let gpu_max_splits = if mode.max_splits < 0 { -1.0 } else { mode.max_splits as f32 };
+                // Convert mode_a/b_after_splits: -1 (use normal) -> -1.0, otherwise absolute mode index
+                let gpu_mode_a_after = if mode.mode_a_after_splits < 0 { -1.0 } else { (global_mode_offset + mode.mode_a_after_splits.max(0)) as f32 };
+                let gpu_mode_b_after = if mode.mode_b_after_splits < 0 { -1.0 } else { (global_mode_offset + mode.mode_b_after_splits.max(0)) as f32 };
                 properties_data.push([
                     mode.nutrient_gain_rate,
                     mode.max_cell_size,
@@ -1072,11 +1099,12 @@ impl GpuTripleBufferSystem {
                     if mode.flagellocyte_use_signal { 1.0 } else { 0.0 },
                     mode.min_adhesions as f32, // index 15: min_adhesions for division gate
                     mode.max_adhesions as f32, // index 16: max_adhesions for division gate
-                    0.0, // index 17: padding
-                    0.0, // index 18: padding
+                    gpu_mode_a_after,          // index 17: mode_a_after_splits (absolute mode index or -1.0)
+                    gpu_mode_b_after,          // index 18: mode_b_after_splits (absolute mode index or -1.0)
                     0.0, // index 19: padding
                 ]);
             }
+            global_mode_offset += genome.modes.len() as i32;
         }
         
         if !properties_data.is_empty() {
@@ -1151,12 +1179,16 @@ impl GpuTripleBufferSystem {
         // Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval] (vec4)
         //                  [split_mass, nutrient_priority, swim_force, prioritize_when_low] (vec4)
         //                  [max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a] (vec4)
-        //                  [flagellocyte_speed_b, flagellocyte_threshold_c, padding, padding] (vec4)
-        // Total: 20 floats = 80 bytes per mode (includes min/max adhesions)
+        //                  [flagellocyte_speed_b, flagellocyte_threshold_c, flagellocyte_use_signal, min_adhesions] (vec4)
+        //                  [max_adhesions, mode_a_after_splits, mode_b_after_splits, padding] (vec4)
+        // Total: 20 floats = 80 bytes per mode
         let mut properties_data: Vec<[f32; 20]> = Vec::new();
         
+        let global_mode_offset = global_start_index as i32;
         for mode in &genome.modes {
             let gpu_max_splits = if mode.max_splits < 0 { -1.0 } else { mode.max_splits as f32 };
+            let gpu_mode_a_after = if mode.mode_a_after_splits < 0 { -1.0 } else { (global_mode_offset + mode.mode_a_after_splits.max(0)) as f32 };
+            let gpu_mode_b_after = if mode.mode_b_after_splits < 0 { -1.0 } else { (global_mode_offset + mode.mode_b_after_splits.max(0)) as f32 };
             properties_data.push([
                 mode.nutrient_gain_rate,
                 mode.max_cell_size,
@@ -1175,8 +1207,8 @@ impl GpuTripleBufferSystem {
                 if mode.flagellocyte_use_signal { 1.0 } else { 0.0 },
                 mode.min_adhesions as f32, // index 15
                 mode.max_adhesions as f32, // index 16
-                0.0, // index 17: padding
-                0.0, // index 18: padding
+                gpu_mode_a_after,          // index 17: mode_a_after_splits
+                gpu_mode_b_after,          // index 18: mode_b_after_splits
                 0.0, // index 19: padding
             ]);
         }

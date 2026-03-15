@@ -1074,6 +1074,14 @@ impl GpuPhysicsPipelines {
                     binding: 24,
                     resource: buffers.genome_orientations.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 25,
+                    resource: buffers.child_a_after_split_keep_adhesion_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 26,
+                    resource: buffers.child_b_after_split_keep_adhesion_flags.as_entire_binding(),
+                },
             ],
         })
     }
@@ -2197,6 +2205,28 @@ impl GpuPhysicsPipelines {
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Child A after-split keep adhesion flags (for inheritance when max_splits reached)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 25,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Child B after-split keep adhesion flags (for inheritance when max_splits reached)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 26,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },

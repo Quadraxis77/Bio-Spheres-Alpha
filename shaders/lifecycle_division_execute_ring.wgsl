@@ -187,7 +187,16 @@ var<storage, read> child_a_keep_adhesion_flags: array<u32>;
 @group(2) @binding(22)
 var<storage, read> child_b_keep_adhesion_flags: array<u32>;
 
-// Per-cell genome orientation: pure genome-derived orientation chain
+// Child A after-split keep adhesion flags: one bool per mode (stored as u32)
+// Used when max_splits is reached instead of the normal keep_adhesion flags
+@group(2) @binding(25)
+var<storage, read> child_a_after_split_keep_adhesion_flags: array<u32>;
+
+// Child B after-split keep adhesion flags: one bool per mode (stored as u32)
+// Used when max_splits is reached instead of the normal keep_adhesion flags
+@group(2) @binding(26)
+var<storage, read> child_b_after_split_keep_adhesion_flags: array<u32>;
+
 // (parent_genome * split_rotation * child_orientation) without physics perturbation.
 // Used by adhesion shaders so structures are defined purely by genome data.
 @group(2) @binding(24)
@@ -471,8 +480,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Get child mode indices
     let child_modes = child_mode_indices[parent_mode_idx];
-    let child_a_mode_idx = u32(max(child_modes.x, 0));
-    let child_b_mode_idx = u32(max(child_modes.y, 0));
+    var child_a_mode_idx = u32(max(child_modes.x, 0));
+    var child_b_mode_idx = u32(max(child_modes.y, 0));
+    
+    // If max_splits is reached, use mode_a/b_after_splits if set (matching CPU behavior)
+    // mode_a_after_splits is at mode_properties[mode * 5 + 4].y (index 17)
+    // mode_b_after_splits is at mode_properties[mode * 5 + 4].z (index 18)
+    // Negative value means "use normal child mode"
+    if (will_reach_max_splits) {
+        let parent_props_4 = mode_properties[parent_mode_idx * 5u + 4u];
+        let mode_a_after = parent_props_4.y;
+        let mode_b_after = parent_props_4.z;
+        if (mode_a_after >= 0.0) {
+            child_a_mode_idx = u32(mode_a_after);
+        }
+        if (mode_b_after >= 0.0) {
+            child_b_mode_idx = u32(mode_b_after);
+        }
+    }
     
     // === Create Child A (overwrites parent slot) ===
     positions_out[cell_idx] = vec4<f32>(child_a_pos, child_a_mass);
@@ -645,10 +670,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // - Zone B (positive dot with split dir) -> Child A  
     // - Zone C (equatorial) -> Both children (duplicate)
     
-    let child_a_keep = child_a_keep_adhesion_flags[parent_mode_idx] == 1u;
-    let child_b_keep = child_b_keep_adhesion_flags[parent_mode_idx] == 1u;
-    
-    // If neither child keeps adhesions, clear parent's old inherited connections
+    let child_a_keep = select(
+        child_a_keep_adhesion_flags[parent_mode_idx] == 1u,
+        child_a_after_split_keep_adhesion_flags[parent_mode_idx] == 1u,
+        will_reach_max_splits
+    );
+    let child_b_keep = select(
+        child_b_keep_adhesion_flags[parent_mode_idx] == 1u,
+        child_b_after_split_keep_adhesion_flags[parent_mode_idx] == 1u,
+        will_reach_max_splits
+    );
     // but always preserve the sibling adhesion (if parent_make_adhesion is set).
     // Also clear child_b's stale indices and rebuild with just the sibling bond.
     if (!child_a_keep && !child_b_keep) {

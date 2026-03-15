@@ -191,8 +191,8 @@ impl GenomeBufferGroup {
                 if mode.flagellocyte_use_signal { 1.0 } else { 0.0 }, // index 14
                 mode.min_adhesions as f32, // index 15: min_adhesions for division gate
                 mode.max_adhesions as f32, // index 16: max_adhesions for division gate
-                0.0, // index 17: padding
-                0.0, // index 18: padding
+                if mode.mode_a_after_splits < 0 { -1.0 } else { mode.mode_a_after_splits.max(0) as f32 }, // index 17: mode_a_after_splits (local)
+                if mode.mode_b_after_splits < 0 { -1.0 } else { mode.mode_b_after_splits.max(0) as f32 }, // index 18: mode_b_after_splits (local)
                 0.0, // index 19: padding
             ]
         }).collect();
