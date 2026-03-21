@@ -197,6 +197,8 @@ pub struct MutationSystem {
     radiation_level: f32,
     cell_capacity: u32,
     gc_frame_counter: AtomicU32,
+    // Number of user-owned genomes (indices 0..user_genome_count must stay immortal)
+    user_genome_count: u32,
 }
 
 impl MutationSystem {
@@ -776,6 +778,7 @@ impl MutationSystem {
             cell_capacity,
             gc_frame_counter: AtomicU32::new(0),
             ring_initialized: false,
+            user_genome_count: 0,
         }
     }
 
@@ -916,6 +919,8 @@ impl MutationSystem {
             queue.write_buffer(&self.genome_ring_state_buffer, 0, bytemuck::cast_slice(&initial_ring_state));
             self.ring_initialized = true;
         }
+
+        self.user_genome_count = genomes.len() as u32;
     }
 
     /// Build bind groups. Call after triple buffer or genome buffers change.
@@ -1215,6 +1220,19 @@ impl MutationSystem {
 
                     let workgroups = (self.cell_capacity + 63) / 64;
                     pass.dispatch_workgroups(workgroups, 1, 1);
+                }
+
+                // Step 2b: Re-apply immortality for user genomes so GC never recycles them.
+                // The clear pass zeroed their ref_counts; the count pass only adds live cells.
+                // If there are no live cells yet (e.g. right after reset), user genomes would
+                // have ref_count=0 and get recycled, breaking mutation for the new session.
+                let immortal: u32 = u32::MAX;
+                for i in 0..self.user_genome_count as u64 {
+                    queue.write_buffer(
+                        &self.genome_ref_counts_buffer,
+                        i * std::mem::size_of::<u32>() as u64,
+                        bytemuck::bytes_of(&immortal),
+                    );
                 }
             }
 
