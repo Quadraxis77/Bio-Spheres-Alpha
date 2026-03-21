@@ -606,6 +606,11 @@ impl GpuScene {
         // Mark GPU buffers as needing sync (will be no-op since cell_count is 0)
         self.gpu_triple_buffers.mark_needs_sync();
 
+        // Reset mutation system so ring state is re-seeded on next genome sync
+        if let Some(mutation_system) = &mut self.mutation_system {
+            mutation_system.reset(queue);
+        }
+
         // Note: Fluid reset is handled separately via reset_fluid() which requires encoder
     }
     

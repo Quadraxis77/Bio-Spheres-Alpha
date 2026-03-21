@@ -666,9 +666,12 @@ impl MutationSystem {
 
         let vulnerability_table = Self::build_default_vulnerability_table();
         let table_size = (vulnerability_table.len() * std::mem::size_of::<MutationParamEntry>()) as u64;
+        // Allocate for at least 64 entries so set_subtle_mutations can upload larger tables
+        // without overrunning the buffer.
+        let max_table_size = (64 * std::mem::size_of::<MutationParamEntry>()) as u64;
         let vulnerability_table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Mutation Vulnerability Table"),
-            size: table_size.max(32), // minimum size
+            size: table_size.max(max_table_size),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -803,6 +806,16 @@ impl MutationSystem {
                 min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
             },
         ]
+    }
+
+    /// Reset mutation system state for scene restart.
+    /// Clears ring_initialized so the next sync_genome_metadata call re-seeds
+    /// next_genome_id and next_mode_offset from scratch.
+    pub fn reset(&mut self, queue: &wgpu::Queue) {
+        self.ring_initialized = false;
+        // Zero out the ring state buffer so stale offsets don't persist
+        let zeroed: [u32; 5] = [0; 5];
+        queue.write_buffer(&self.genome_ring_state_buffer, 0, bytemuck::cast_slice(&zeroed));
     }
 
     /// Set the global radiation level (0.0 = off, 1.0 = every division mutates)
