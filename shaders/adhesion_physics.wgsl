@@ -78,14 +78,24 @@ var<storage, read_write> cell_count_buffer: array<u32>;
 @group(1) @binding(0)
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
 
+// Adhesion settings split into 3 × vec4 sub-buffers (16 bytes each per mode).
+// v0: [can_break(f32), break_force, rest_length, linear_spring_stiffness]
+// v1: [linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation]
+// v2: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint(f32), _padding]
 @group(1) @binding(1)
-var<storage, read> adhesion_settings: array<AdhesionSettings>;
+var<storage, read> adhesion_settings_v0: array<vec4<f32>>;
 
 @group(1) @binding(2)
+var<storage, read> adhesion_settings_v1: array<vec4<f32>>;
+
+@group(1) @binding(3)
+var<storage, read> adhesion_settings_v2: array<vec4<f32>>;
+
+@group(1) @binding(4)
 var<storage, read> adhesion_counts: array<u32>;
 
 // Cell adhesion indices - 20 indices per cell (group 1 continued)
-@group(1) @binding(3)
+@group(1) @binding(5)
 var<storage, read> cell_adhesion_indices: array<i32>;
 
 // Rotations bind group (group 2)
@@ -343,6 +353,27 @@ fn compute_adhesion_forces_for_cell(
     return array<vec3<f32>, 2>(force, torque);
 }
 
+// Reconstruct AdhesionSettings from the 3 split sub-buffers for a given mode index.
+fn load_adhesion_settings(mode_idx: u32) -> AdhesionSettings {
+    let v0 = adhesion_settings_v0[mode_idx];
+    let v1 = adhesion_settings_v1[mode_idx];
+    let v2 = adhesion_settings_v2[mode_idx];
+    return AdhesionSettings(
+        i32(v0.x),  // can_break
+        v0.y,       // break_force
+        v0.z,       // rest_length
+        v0.w,       // linear_spring_stiffness
+        v1.x,       // linear_spring_damping
+        v1.y,       // orientation_spring_stiffness
+        v1.z,       // orientation_spring_damping
+        v1.w,       // max_angular_deviation
+        v2.x,       // twist_constraint_stiffness
+        v2.y,       // twist_constraint_damping
+        i32(v2.z),  // enable_twist_constraint
+        i32(v2.w),  // _padding
+    );
+}
+
 // Convert float to fixed-point i32 for atomic accumulation
 fn float_to_fixed(v: f32) -> i32 {
     return i32(v * FIXED_POINT_SCALE);
@@ -426,7 +457,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let other_ang_vel = angular_velocities_in[other_idx].xyz;
         
         // Get adhesion settings for this mode
-        let settings = adhesion_settings[connection.mode_index];
+        let settings = load_adhesion_settings(connection.mode_index);
         
         // Compute forces for THIS cell only
         // Always pass cell A data first, cell B data second (matching reference)

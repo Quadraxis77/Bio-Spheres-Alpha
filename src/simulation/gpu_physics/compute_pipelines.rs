@@ -2292,7 +2292,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 1: Adhesion settings (read-only)
+                // Binding 1: Adhesion settings V0 (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -2303,7 +2303,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 2: Adhesion counts (read-only for per-cell processing)
+                // Binding 2: Adhesion settings V1 (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -2314,9 +2314,31 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 3: Cell adhesion indices (read-only, 20 indices per cell)
+                // Binding 3: Adhesion settings V2 (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 4: Adhesion counts (read-only for per-cell processing)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: Cell adhesion indices (read-only, 20 indices per cell)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -2572,14 +2594,22 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: adhesion_buffers.adhesion_settings.as_entire_binding(),
+                    resource: adhesion_buffers.adhesion_settings_v0.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: adhesion_buffers.adhesion_counts.as_entire_binding(),
+                    resource: adhesion_buffers.adhesion_settings_v1.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
+                    resource: adhesion_buffers.adhesion_settings_v2.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: adhesion_buffers.adhesion_counts.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
                     resource: adhesion_buffers.cell_adhesion_indices.as_entire_binding(),
                 },
             ],

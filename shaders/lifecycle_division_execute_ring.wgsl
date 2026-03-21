@@ -525,8 +525,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // === Create Child A (overwrites parent slot) ===
+    let parent_velocity = velocities_in[cell_idx];
     positions_out[cell_idx] = vec4<f32>(child_a_pos, child_a_mass);
-    velocities_out[cell_idx] = vec4<f32>(vec3<f32>(0.0, 0.0, 0.0), 0.0);
+    velocities_out[cell_idx] = vec4<f32>(parent_velocity.xyz, 0.0);
     
     // Assign cell ID first so we can use it for pseudo-random rotation
     let child_a_id = atomicAdd(&next_cell_id[0], 1u);
@@ -570,7 +571,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // === Create Child B (in assigned slot) ===
     positions_out[child_b_slot] = vec4<f32>(child_b_pos, child_b_mass);
-    velocities_out[child_b_slot] = vec4<f32>(vec3<f32>(0.0, 0.0, 0.0), 0.0);
+    velocities_out[child_b_slot] = vec4<f32>(parent_velocity.xyz, 0.0);
     
     // Assign cell ID first so we can use it for pseudo-random rotation
     let child_b_id = atomicAdd(&next_cell_id[0], 1u);

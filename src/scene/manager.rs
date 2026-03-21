@@ -130,6 +130,9 @@ impl SceneManager {
                     // Initialize fluid simulator with test water sphere
                     gpu_scene.initialize_fluid_simulator(device, queue, config.format);
 
+                    // Sync lighting and fog from current editor state so reset doesn't revert visuals
+                    gpu_scene.apply_light_params_from_editor(&editor_state);
+
                     self.gpu_scene = Some(gpu_scene);
                     self.current_mode = mode;
                     return cave_initialized; // Return true if cave was just initialized
@@ -205,6 +208,9 @@ impl SceneManager {
 
         // Initialize fluid simulator with test water sphere
         gpu_scene.initialize_fluid_simulator(device, queue, config.format);
+
+        // Sync lighting and fog from current editor state so reset doesn't revert visuals
+        gpu_scene.apply_light_params_from_editor(editor_state);
 
         self.gpu_scene = Some(gpu_scene);
     }

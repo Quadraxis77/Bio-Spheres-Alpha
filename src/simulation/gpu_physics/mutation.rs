@@ -20,7 +20,9 @@ const MAX_MUTATION_LOG_ENTRIES: u32 = 1024;
 const GENOME_RING_CAPACITY: u32 = 80_000;
 
 /// Maximum modes across all genomes (must match triple_buffer.rs: 40 * 200_000 = 8_000_000)
-const MAX_TOTAL_MODES: u32 = 8_000_000;
+/// Public so adhesion_buffers can be sized to match, preventing out-of-bounds reads in
+/// adhesion_physics.wgsl when mutated cells have mode_index values beyond the original genome range.
+pub const MAX_TOTAL_MODES: u32 = 8_000_000;
 
 /// Run genome GC every N frames to avoid race conditions with mutations
 /// Running every frame causes newly created genomes to be recycled before cells can use them
@@ -387,8 +389,12 @@ impl MutationSystem {
                 Self::storage_rw_entry(19),
                 // binding 20: mode_emissive
                 Self::storage_rw_entry(20),
-                // binding 21: adhesion_settings (3 vec4<u32> per mode = 48 bytes per mode)
+                // binding 21: adhesion_settings_v0 (vec4<u32> per mode)
                 Self::storage_rw_entry(21),
+                // binding 22: adhesion_settings_v1 (vec4<u32> per mode)
+                Self::storage_rw_entry(22),
+                // binding 23: adhesion_settings_v2 (vec4<u32> per mode)
+                Self::storage_rw_entry(23),
             ],
         });
 
@@ -996,6 +1002,75 @@ impl MutationSystem {
                 weight: 0.5, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
             },
+
+            // --- Child mode routing ---
+
+            // child_a mode index: nudge by 1–3 modes (data_type MODE_INDEX_CLAMP = clamped to genome's mode_count)
+            MutationParamEntry {
+                buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 0,
+                weight: 0.4, min_delta: 1.0, max_delta: 3.0,
+                min_value: 0.0, max_value: 39.0, data_type: data_type::MODE_INDEX_CLAMP,
+            },
+            // child_b mode index: nudge by 1–3 modes
+            MutationParamEntry {
+                buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 1,
+                weight: 0.4, min_delta: 1.0, max_delta: 3.0,
+                min_value: 0.0, max_value: 39.0, data_type: data_type::MODE_INDEX_CLAMP,
+            },
+
+            // --- Child orientations (quaternion component nudges) ---
+            // Small perturbations to individual XYZW components of child_a_orientation.
+            // Stored in genome_mode_data_v0 (offsets 0–3).
+
+            // child_a orientation X
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 0,
+                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // child_a orientation Y
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 1,
+                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // child_a orientation Z
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 2,
+                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // child_a orientation W
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 3,
+                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+
+            // child_b orientation X (genome_mode_data_v1, offsets 4–7)
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 4,
+                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // child_b orientation Y
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 5,
+                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // child_b orientation Z
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 6,
+                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // child_b orientation W
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 7,
+                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
         ]
     }
 
@@ -1007,6 +1082,26 @@ impl MutationSystem {
         // Zero out the ring state buffer so stale offsets don't persist
         let zeroed: [u32; 5] = [0; 5];
         queue.write_buffer(&self.genome_ring_state_buffer, 0, bytemuck::cast_slice(&zeroed));
+
+        // Zero genome_meta_buffer and genome_ref_counts_buffer so stale entries from the
+        // previous session don't poison the GC's max_active_mode_offset calculation.
+        //
+        // Without this, the GC shader sees stale genome_meta entries with mode_count > 0
+        // and ref_count > 0, calls atomicMax(&genome_ring_state[4], stale_end_offset), and
+        // the mode_offset_reset pass then sets next_mode_offset to that huge stale value.
+        // Every subsequent mutation attempt then hits the "out of mode buffer space" guard
+        // and silently returns without mutating — causing the apparent mutation rate drop.
+        let meta_size = (GENOME_RING_CAPACITY as usize) * std::mem::size_of::<GenomeMeta>();
+        let zeroed_meta = vec![0u8; meta_size];
+        queue.write_buffer(&self.genome_meta_buffer, 0, &zeroed_meta);
+
+        let ref_count_size = (GENOME_RING_CAPACITY as usize) * std::mem::size_of::<u32>();
+        let zeroed_refs = vec![0u8; ref_count_size];
+        queue.write_buffer(&self.genome_ref_counts_buffer, 0, &zeroed_refs);
+
+        // Also reset the gc_frame_counter so GC doesn't fire immediately after reset
+        // (giving sync_genome_metadata time to re-seed the ring state first).
+        self.gc_frame_counter.store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Set the global radiation level (0.0 = off, 1.0 = every division mutates)
@@ -1116,6 +1211,60 @@ impl MutationSystem {
                     weight: 1.0, min_delta: 1.0, max_delta: 4.0,
                     min_value: 1.0, max_value: 100.0, data_type: data_type::CONTINUOUS_F32,
                 },
+                // child_a mode index: nudge by 1 mode
+                MutationParamEntry {
+                    buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 0,
+                    weight: 0.3, min_delta: 1.0, max_delta: 1.0,
+                    min_value: 0.0, max_value: 39.0, data_type: data_type::MODE_INDEX_CLAMP,
+                },
+                // child_b mode index: nudge by 1 mode
+                MutationParamEntry {
+                    buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 1,
+                    weight: 0.3, min_delta: 1.0, max_delta: 1.0,
+                    min_value: 0.0, max_value: 39.0, data_type: data_type::MODE_INDEX_CLAMP,
+                },
+                // child_a orientation XYZW (small nudges)
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 0,
+                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 1,
+                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 2,
+                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 3,
+                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // child_b orientation XYZW (small nudges)
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 4,
+                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 5,
+                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 6,
+                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 7,
+                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
             ]
         } else {
             Self::build_default_vulnerability_table()
@@ -1176,11 +1325,13 @@ impl MutationSystem {
         // After that the GPU mutation shader owns next_genome_id and next_mode_offset —
         // resetting them would cause the shader to re-use IDs already in use by live cells.
         if !self.ring_initialized {
-            let initial_ring_state: [u32; 4] = [
-                0,                          // head
-                0,                          // tail
-                genomes.len() as u32,       // next_genome_id (starts after user genomes)
-                offset,                     // next_mode_offset (starts after user genome modes)
+            let initial_ring_state: [u32; 5] = [
+                0,                          // [0] head
+                0,                          // [1] tail
+                genomes.len() as u32,       // [2] next_genome_id (starts after user genomes)
+                offset,                     // [3] next_mode_offset (starts after user genome modes)
+                offset,                     // [4] max_active_mode_offset — must match [3] so
+                                            //     mode_offset_reset never resets below user genome data
             ];
             queue.write_buffer(&self.genome_ring_state_buffer, 0, bytemuck::cast_slice(&initial_ring_state));
             self.ring_initialized = true;
@@ -1214,7 +1365,9 @@ impl MutationSystem {
         oculocyte_params_buffer: &wgpu::Buffer,
         mode_colors_buffer: &wgpu::Buffer,
         mode_emissive_buffer: &wgpu::Buffer,
-        adhesion_settings_buffer: &wgpu::Buffer,
+        adhesion_settings_v0_buffer: &wgpu::Buffer,
+        adhesion_settings_v1_buffer: &wgpu::Buffer,
+        adhesion_settings_v2_buffer: &wgpu::Buffer,
     ) {
         self.params_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Mutation Params Bind Group"),
@@ -1265,7 +1418,9 @@ impl MutationSystem {
                 wgpu::BindGroupEntry { binding: 18, resource: self.mutation_log_count_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 19, resource: mode_colors_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 20, resource: mode_emissive_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 21, resource: adhesion_settings_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 21, resource: adhesion_settings_v0_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 22, resource: adhesion_settings_v1_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 23, resource: adhesion_settings_v2_buffer.as_entire_binding() },
             ],
         }));
     }
@@ -1518,6 +1673,13 @@ impl MutationSystem {
                 let workgroups = (GENOME_RING_CAPACITY + 63) / 64;
                 pass.dispatch_workgroups(workgroups, 1, 1);
             }
+
+            // Reset next_genome_id ([2]) back to user_genome_count after GC.
+            // This allows the monotonic path to allocate IDs that GC hasn't yet
+            // recycled into the free ring, while keeping IDs 0..user_genome_count
+            // reserved for immortal user genomes.
+            let next_id_reset: u32 = self.user_genome_count;
+            queue.write_buffer(&self.genome_ring_state_buffer, 8, bytemuck::bytes_of(&next_id_reset));
             
             // Step 4: Mode buffer compaction
             // Reset next_mode_offset to max_active_mode_offset (computed by GC shader)

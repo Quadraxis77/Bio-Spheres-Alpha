@@ -341,10 +341,11 @@ impl GpuScene {
         let next_id: [u32; 1] = [0];
         queue.write_buffer(&gpu_triple_buffers.next_cell_id, 0, bytemuck::cast_slice(&next_id));
         
-        // Create adhesion buffer system
-        // Support 20,000 genomes * 40 modes each = 800,000 modes total
-        let max_modes: u32 = 40 * crate::simulation::gpu_physics::MAX_GENOMES as u32;
-        let mut adhesion_buffers = AdhesionBuffers::new(device, capacity, max_modes);
+        // Create adhesion buffer system with split sub-buffers (3 × 128 MB) to stay under
+        // wgpu's 256 MB/buffer limit. The mutation shader writes adhesion settings for all
+        // 8M possible mode slots; splitting into 3 × vec4 sub-buffers matches the pattern
+        // used by mode_properties_v0..v4 in triple_buffer.rs.
+        let mut adhesion_buffers = AdhesionBuffers::new(device, capacity);
         
         // Initialize adhesion buffers with default values
         adhesion_buffers.initialize(queue);
@@ -783,25 +784,38 @@ impl GpuScene {
             mode_count,
         )?;
 
-        // adhesion_settings: 48 bytes per mode — only valid for user genomes (base_offset < 800K).
-        // Mutated genomes have base_offset beyond the adhesion_settings buffer size, so fall back
-        // to defaults in that case (mutation shader doesn't clone adhesion settings).
+        // adhesion_settings: read from split sub-buffers (v0/v1/v2), each 16 bytes per mode.
+        // All 8M mode slots are covered so no bounds check needed.
         let adhesion_settings_raw: Vec<crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings> = {
-            let elem_size = std::mem::size_of::<crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings>() as u64;
-            let required_end = (base_offset as u64 + mode_count as u64) * elem_size;
-            if required_end <= self.adhesion_buffers.adhesion_settings.size() {
-                match self.read_back_buffer_range::<crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings>(
-                    device, queue,
-                    &self.adhesion_buffers.adhesion_settings,
-                    base_offset as u64,
-                    mode_count,
-                ) {
-                    Some(v) => v,
-                    None => vec![crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings::default(); mode_count],
+            let v0 = self.read_back_buffer_range::<[f32; 4]>(
+                device, queue, &self.adhesion_buffers.adhesion_settings_v0, base_offset as u64, mode_count,
+            );
+            let v1 = self.read_back_buffer_range::<[f32; 4]>(
+                device, queue, &self.adhesion_buffers.adhesion_settings_v1, base_offset as u64, mode_count,
+            );
+            let v2 = self.read_back_buffer_range::<[f32; 4]>(
+                device, queue, &self.adhesion_buffers.adhesion_settings_v2, base_offset as u64, mode_count,
+            );
+            match (v0, v1, v2) {
+                (Some(v0), Some(v1), Some(v2)) => {
+                    v0.iter().zip(v1.iter()).zip(v2.iter()).map(|((a, b), c)| {
+                        crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings {
+                            can_break: a[0] as i32,
+                            break_force: a[1],
+                            rest_length: a[2],
+                            linear_spring_stiffness: a[3],
+                            linear_spring_damping: b[0],
+                            orientation_spring_stiffness: b[1],
+                            orientation_spring_damping: b[2],
+                            max_angular_deviation: b[3],
+                            twist_constraint_stiffness: c[0],
+                            twist_constraint_damping: c[1],
+                            enable_twist_constraint: c[2] as i32,
+                            _padding: 0,
+                        }
+                    }).collect()
                 }
-            } else {
-                // Mutated genome — adhesion settings not stored in this buffer, use defaults
-                vec![crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings::default(); mode_count]
+                _ => vec![crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings::default(); mode_count],
             }
         };
 
@@ -1708,34 +1722,22 @@ impl GpuScene {
     fn incremental_sync_adhesion_settings(&mut self, queue: &wgpu::Queue, genome_id: usize, global_start_index: usize, _mode_count: usize) {
         let genome = &self.genomes[genome_id];
         
-        // Create adhesion settings for just this genome's modes
-        let mut settings_data: Vec<crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings> = Vec::new();
+        let mut v0: Vec<[f32; 4]> = Vec::new();
+        let mut v1: Vec<[f32; 4]> = Vec::new();
+        let mut v2: Vec<[f32; 4]> = Vec::new();
         
         for mode in &genome.modes {
-            let settings = crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings {
-                can_break: if mode.adhesion_settings.can_break { 1 } else { 0 },
-                break_force: mode.adhesion_settings.break_force,
-                rest_length: mode.adhesion_settings.rest_length,
-                linear_spring_stiffness: mode.adhesion_settings.linear_spring_stiffness,
-                linear_spring_damping: mode.adhesion_settings.linear_spring_damping,
-                orientation_spring_stiffness: mode.adhesion_settings.orientation_spring_stiffness,
-                orientation_spring_damping: mode.adhesion_settings.orientation_spring_damping,
-                max_angular_deviation: mode.adhesion_settings.max_angular_deviation,
-                twist_constraint_stiffness: mode.adhesion_settings.twist_constraint_stiffness,
-                twist_constraint_damping: mode.adhesion_settings.twist_constraint_damping,
-                enable_twist_constraint: if mode.adhesion_settings.enable_twist_constraint { 1 } else { 0 },
-                _padding: 0,
-            };
-            settings_data.push(settings);
+            let s = &mode.adhesion_settings;
+            v0.push([if s.can_break { 1.0 } else { 0.0 }, s.break_force, s.rest_length, s.linear_spring_stiffness]);
+            v1.push([s.linear_spring_damping, s.orientation_spring_stiffness, s.orientation_spring_damping, s.max_angular_deviation]);
+            v2.push([s.twist_constraint_stiffness, s.twist_constraint_damping, if s.enable_twist_constraint { 1.0 } else { 0.0 }, 0.0]);
         }
         
-        // Update only this genome's portion of the adhesion settings buffer
-        if !settings_data.is_empty() {
-            // Calculate byte offset for this genome's settings
-            let byte_offset = (global_start_index * std::mem::size_of::<crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings>()) as u64;
-            
-            // Write this genome's settings to the appropriate offset in the buffer
-            queue.write_buffer(&self.adhesion_buffers.adhesion_settings, byte_offset, bytemuck::cast_slice(&settings_data));
+        if !v0.is_empty() {
+            let byte_offset = (global_start_index * 16) as u64;
+            queue.write_buffer(&self.adhesion_buffers.adhesion_settings_v0, byte_offset, bytemuck::cast_slice(&v0));
+            queue.write_buffer(&self.adhesion_buffers.adhesion_settings_v1, byte_offset, bytemuck::cast_slice(&v1));
+            queue.write_buffer(&self.adhesion_buffers.adhesion_settings_v2, byte_offset, bytemuck::cast_slice(&v2));
         }
     }
     
@@ -4112,7 +4114,9 @@ impl GpuScene {
                 &self.gpu_triple_buffers.oculocyte_params,
                 self.instance_builder.mode_colors_buffer(),
                 self.instance_builder.mode_emissive_buffer(),
-                &self.adhesion_buffers.adhesion_settings,
+                &self.adhesion_buffers.adhesion_settings_v0,
+                &self.adhesion_buffers.adhesion_settings_v1,
+                &self.adhesion_buffers.adhesion_settings_v2,
             );
 
             // Rebuild GC bind group (for genome recycling)

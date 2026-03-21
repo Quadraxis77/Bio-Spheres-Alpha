@@ -1481,6 +1481,10 @@ impl ApplicationHandler for AppState {
                     // Cell state write bind group uses 35 storage buffers (0-34) after splitting
                     // genome_mode_data and mode_properties into 5 sub-buffers each
                     max_storage_buffers_per_shader_stage: 40,
+                    // adhesion_connections at 200k cells = 200k*10*104 = ~208 MB, exceeds the
+                    // default 128 MB limit. Request 512 MB to cover max capacity with headroom.
+                    max_storage_buffer_binding_size: 512 * 1024 * 1024,
+                    max_buffer_size: 512 * 1024 * 1024,
                     ..wgpu::Limits::default()
                 },
                 memory_hints: Default::default(),

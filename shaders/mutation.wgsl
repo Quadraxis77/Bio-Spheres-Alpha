@@ -190,13 +190,18 @@ var<storage, read_write> mode_colors: array<vec4<f32>>;
 var<storage, read_write> mode_emissive: array<vec4<f32>>;
 
 // Adhesion settings buffer: 12 f32 per mode (48 bytes = 3 vec4s)
-// Layout matches GpuAdhesionSettings: can_break(i32), break_force, rest_length,
-// linear_spring_stiffness, linear_spring_damping, orientation_spring_stiffness,
-// orientation_spring_damping, max_angular_deviation, twist_constraint_stiffness,
-// twist_constraint_damping, enable_twist_constraint(i32), _padding(i32)
-// Stored as 3 vec4<u32> to avoid f32/i32 mixed-type issues.
+// Adhesion settings split into 3 × vec4 sub-buffers (16 bytes each per mode).
+// v0: [can_break(u32 bits), break_force(f32 bits), rest_length(f32 bits), linear_spring_stiffness(f32 bits)]
+// v1: [linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation]
+// v2: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint(u32 bits), _padding]
 @group(2) @binding(21)
-var<storage, read_write> adhesion_settings_buf: array<vec4<u32>>; // 3 vec4<u32> per mode
+var<storage, read_write> adhesion_settings_v0: array<vec4<u32>>;
+
+@group(2) @binding(22)
+var<storage, read_write> adhesion_settings_v1: array<vec4<u32>>;
+
+@group(2) @binding(23)
+var<storage, read_write> adhesion_settings_v2: array<vec4<u32>>;
 
 // ============================================================
 // Hash-based PRNG (PCG-style)
@@ -208,36 +213,58 @@ fn pcg_hash(input: u32) -> u32 {
     return (word >> 22u) ^ word;
 }
 
-// Returns a pseudo-random u32 from cell_id, frame, and salt
-fn rng_u32(cell_id: u32, salt: u32) -> u32 {
-    return pcg_hash(cell_id ^ (mutation_params.rng_seed * 1664525u + salt) ^ (mutation_params.current_frame * 22695477u));
+// Returns a pseudo-random u32 from a unique_id, frame seed, and salt.
+// unique_id must be unique per mutation event (e.g. new_genome_id).
+// We hash unique_id first to avalanche its bits before mixing with the
+// frame seed — this prevents correlated outputs when unique_id is a small
+// sequential integer (which it often is from the monotonic allocator).
+fn rng_u32(unique_id: u32, salt: u32) -> u32 {
+    // First avalanche the unique_id so sequential IDs produce uncorrelated seeds
+    let id_hashed = pcg_hash(unique_id + 1u); // +1 so id=0 doesn't produce a weak hash
+    // Mix with frame-level entropy and salt
+    let frame_entropy = mutation_params.rng_seed * 1664525u + mutation_params.current_frame * 22695477u + salt * 2246822519u;
+    return pcg_hash(id_hashed ^ frame_entropy);
 }
 
 // Returns a pseudo-random f32 in [0.0, 1.0)
-fn rng_f32(cell_id: u32, salt: u32) -> f32 {
-    return f32(rng_u32(cell_id, salt) & 0x00FFFFFFu) / 16777216.0;
+fn rng_f32(unique_id: u32, salt: u32) -> f32 {
+    return f32(rng_u32(unique_id, salt) & 0x00FFFFFFu) / 16777216.0;
 }
 
 // Returns a pseudo-random f32 in [-1.0, 1.0)
-fn rng_signed_f32(cell_id: u32, salt: u32) -> f32 {
-    return rng_f32(cell_id, salt) * 2.0 - 1.0;
+fn rng_signed_f32(unique_id: u32, salt: u32) -> f32 {
+    return rng_f32(unique_id, salt) * 2.0 - 1.0;
 }
 
 // ============================================================
-// Genome slot allocation (ring buffer, same pattern as cell slots)
+// Genome slot allocation (ring buffer)
+//
+// genome_ring_state layout:
+//   [0] = head  (pop cursor, monotonically increasing)
+//   [1] = tail  (push cursor, monotonically increasing)
+//   [2] = next_genome_id (monotonic bootstrap allocator)
+//   [3] = next_mode_offset
+//   [4] = max_active_mode_offset (written by GC)
+//
+// Available slots = tail - head (both wrap at u32 max, subtraction still correct).
+// GC resets next_genome_id to user_genome_count each cycle so the monotonic
+// path re-fills IDs that haven't been recycled into the free ring yet.
 // ============================================================
 
 fn allocate_genome_slot() -> u32 {
-    // Try to pop from free ring
+    // Try to pop from free ring.
+    // tail >= head always (tail only increases via push, head only increases via pop).
+    // We speculatively increment head, then check if we were within bounds.
     let head = atomicAdd(&genome_ring_state[0], 1u);
     let tail = atomicLoad(&genome_ring_state[1]);
 
+    // head was the value BEFORE our increment, so valid if head < tail
     if (head < tail) {
         let ring_idx = head % mutation_params.genome_ring_capacity;
         return genome_free_ring[ring_idx];
     }
 
-    // Ring empty, undo and try monotonic
+    // Ring empty — undo the head increment and fall through to monotonic path
     atomicSub(&genome_ring_state[0], 1u);
 
     let new_id = atomicAdd(&genome_ring_state[2], 1u);
@@ -245,7 +272,7 @@ fn allocate_genome_slot() -> u32 {
         return new_id;
     }
 
-    // At capacity
+    // Monotonic path also exhausted — undo and signal failure
     atomicSub(&genome_ring_state[2], 1u);
     return 0xFFFFFFFFu;
 }
@@ -331,12 +358,10 @@ fn clone_genome_modes(
         mode_colors[dst] = mode_colors[src];
         mode_emissive[dst] = mode_emissive[src];
 
-        // adhesion_settings: 3 vec4<u32> per mode (48 bytes total)
-        let src3 = src * 3u;
-        let dst3 = dst * 3u;
-        adhesion_settings_buf[dst3 + 0u] = adhesion_settings_buf[src3 + 0u];
-        adhesion_settings_buf[dst3 + 1u] = adhesion_settings_buf[src3 + 1u];
-        adhesion_settings_buf[dst3 + 2u] = adhesion_settings_buf[src3 + 2u];
+        // adhesion_settings: 3 separate vec4<u32> sub-buffers per mode
+        adhesion_settings_v0[dst] = adhesion_settings_v0[src];
+        adhesion_settings_v1[dst] = adhesion_settings_v1[src];
+        adhesion_settings_v2[dst] = adhesion_settings_v2[src];
     }
 }
 
@@ -536,8 +561,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = candidate.x;
     let parent_genome_id = candidate.y;
 
-    // Roll mutation chance
-    let roll = rng_f32(cell_idx, 0u);
+    // Roll mutation chance — candidate_idx is unique per thread in this dispatch
+    let roll = rng_f32(candidate_idx, 1u);
     if (roll >= mutation_params.radiation_level) {
         return; // No mutation this time
     }
@@ -557,45 +582,57 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return; // At capacity, skip mutation
     }
 
-    // Calculate new genome's base mode offset
-    // New genomes get modes appended at the end of the flat buffer.
-    // We use genome_meta to track where each genome's modes start.
-    // 
-    // Check capacity BEFORE allocating to avoid race conditions from atomicSub.
-    // We use atomicLoad to read the current offset, then atomicCompareExchangeWeak
-    // to safely allocate only if there's space.
-    var allocated = false;
+    // Determine the base mode offset for the new genome.
+    //
+    // If the slot came from the free ring (a recycled genome), its existing mode range
+    // is preserved in genome_meta[new_genome_id].y (base_mode_offset) with mode_count == 0.
+    // Reuse that range directly — no allocation from next_mode_offset needed.
+    //
+    // If the slot is brand-new (from the monotonic next_genome_id path), allocate a
+    // fresh range from next_mode_offset using CAS.
     var new_base_offset = 0u;
-    
-    for (var attempt = 0u; attempt < 100u; attempt++) {
-        let current_offset = atomicLoad(&genome_ring_state[3]);
-        
-        // Check if allocation would exceed capacity
-        if (current_offset + parent_mode_count > mutation_params.total_mode_count) {
-            // Out of mode buffer space - return genome slot to ring
+    var allocated = false;
+
+    let recycled_meta = genome_meta[new_genome_id];
+    let recycled_mode_count = recycled_meta.x;  // 0 = free slot sentinel
+    let recycled_base_offset = recycled_meta.y;
+
+    if (recycled_mode_count == 0u && recycled_base_offset != 0u) {
+        // Recycled slot with a preserved mode range — reuse it directly.
+        // The range was sized for a genome with the same mode count (all mutations
+        // are clones of user genomes which all have the same mode count).
+        new_base_offset = recycled_base_offset;
+        allocated = true;
+    } else {
+        // Brand-new slot: allocate a fresh range from next_mode_offset.
+        for (var attempt = 0u; attempt < 100u; attempt++) {
+            let current_offset = atomicLoad(&genome_ring_state[3]);
+
+            // Check if allocation would exceed capacity
+            if (current_offset + parent_mode_count > mutation_params.total_mode_count) {
+                // Out of mode buffer space - return genome slot to ring
+                let tail = atomicAdd(&genome_ring_state[1], 1u);
+                let ring_idx = tail % mutation_params.genome_ring_capacity;
+                genome_free_ring[ring_idx] = new_genome_id;
+                return;
+            }
+
+            // Try to atomically claim this range
+            let old_offset = atomicCompareExchangeWeak(&genome_ring_state[3], current_offset, current_offset + parent_mode_count).old_value;
+            if (old_offset == current_offset) {
+                new_base_offset = current_offset;
+                allocated = true;
+                break;
+            }
+        }
+
+        if (!allocated) {
+            // Failed after 100 attempts (extreme contention) - return slot to ring
             let tail = atomicAdd(&genome_ring_state[1], 1u);
             let ring_idx = tail % mutation_params.genome_ring_capacity;
             genome_free_ring[ring_idx] = new_genome_id;
             return;
         }
-        
-        // Try to atomically claim this range
-        let old_offset = atomicCompareExchangeWeak(&genome_ring_state[3], current_offset, current_offset + parent_mode_count).old_value;
-        if (old_offset == current_offset) {
-            // Success! We claimed the range [current_offset, current_offset + parent_mode_count)
-            new_base_offset = current_offset;
-            allocated = true;
-            break;
-        }
-        // If we failed, another thread claimed it first - retry with updated offset
-    }
-    
-    if (!allocated) {
-        // Failed to allocate after 100 attempts (extreme contention) - abort mutation
-        let tail = atomicAdd(&genome_ring_state[1], 1u);
-        let ring_idx = tail % mutation_params.genome_ring_capacity;
-        genome_free_ring[ring_idx] = new_genome_id;
-        return;
     }
 
     // Initialize new genome metadata
@@ -610,8 +647,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Clone all mode data from parent to new genome
     clone_genome_modes(parent_base_offset, new_base_offset, parent_mode_count);
 
-    // Apply one mutation
-    let param_idx = apply_mutation(new_base_offset, parent_mode_count, cell_idx, candidate_idx * 1000u);
+    // Apply one mutation — candidate_idx is the global invocation ID, unique per
+    // thread and uncorrelated with genome IDs or cell slot indices.
+    let param_idx = apply_mutation(new_base_offset, parent_mode_count, candidate_idx, 0u);
 
     // Update cell's genome_id
     genome_ids[cell_idx] = new_genome_id;

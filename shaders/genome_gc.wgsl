@@ -62,8 +62,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let base_offset = genome_data.y;
     
     if (ref_count == 0u && mode_count > 0u) {
-        // Genome is unused - recycle it
-        genome_meta[genome_id] = vec4<u32>(0u, 0u, 0u, 0u);
+        // Genome is unused - recycle it.
+        // Preserve base_mode_offset so the mutation shader can reuse the existing
+        // mode range instead of allocating new space from next_mode_offset.
+        // Set mode_count = 0 as the "free slot" sentinel; base_mode_offset stays.
+        genome_meta[genome_id] = vec4<u32>(0u, base_offset, 0u, 0u);
         push_free_genome(genome_id);
     } else if (ref_count > 0u && mode_count > 0u) {
         // Active genome - track its end offset for mode buffer compaction

@@ -11,8 +11,10 @@
 //! ### Per-Cell Adhesion Indices (40 bytes each = 10 * i32)
 //! - `cell_adhesion_indices`: Array of 10 adhesion indices per cell (-1 = no connection)
 //!
-//! ### Adhesion Settings (48 bytes each)
-//! - `adhesion_settings`: Per-mode adhesion settings from genome
+//! ### Adhesion Settings (split into 3 × 16-byte sub-buffers per mode)
+//! - `adhesion_settings_v0`: [can_break, break_force, rest_length, linear_spring_stiffness]
+//! - `adhesion_settings_v1`: [linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation]
+//! - `adhesion_settings_v2`: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, _padding]
 //!
 //! ### Adhesion Counts
 //! - `adhesion_counts`: [total_count, live_count, free_top, padding]
@@ -21,7 +23,7 @@
 //! - `free_adhesion_slots`: Stack of free adhesion slot indices
 
 use super::adhesion::{
-    GpuAdhesionConnection, GpuAdhesionSettings, AdhesionCounts,
+    GpuAdhesionConnection, AdhesionCounts,
     CellAdhesionIndices, AdhesionSlotAllocator,
     MAX_ADHESIONS_PER_CELL,
 };
@@ -34,8 +36,14 @@ pub struct AdhesionBuffers {
     /// Per-cell adhesion indices (20 * i32 = 80 bytes per cell)
     pub cell_adhesion_indices: wgpu::Buffer,
     
-    /// Per-mode adhesion settings (48 bytes per mode)
-    pub adhesion_settings: wgpu::Buffer,
+    /// Per-mode adhesion settings split into 3 × vec4 sub-buffers (16 bytes each).
+    /// Split to stay under wgpu's 256 MB/buffer limit at 8M modes × 16 bytes = 128 MB each.
+    /// v0: [can_break, break_force, rest_length, linear_spring_stiffness]
+    /// v1: [linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation]
+    /// v2: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, _padding]
+    pub adhesion_settings_v0: wgpu::Buffer,
+    pub adhesion_settings_v1: wgpu::Buffer,
+    pub adhesion_settings_v2: wgpu::Buffer,
     
     /// Adhesion counts: [total, live, free_top, padding]
     pub adhesion_counts: wgpu::Buffer,
@@ -73,9 +81,6 @@ pub struct AdhesionBuffers {
     /// Cell capacity (for per-cell buffers)
     pub cell_capacity: u32,
     
-    /// Maximum modes (for settings buffer)
-    pub max_modes: u32,
-    
     /// CPU-side slot allocator for deterministic allocation
     slot_allocator: AdhesionSlotAllocator,
     
@@ -101,7 +106,7 @@ pub struct AdhesionBuffers {
 
 impl AdhesionBuffers {
     /// Create new adhesion buffer system
-    pub fn new(device: &wgpu::Device, cell_capacity: u32, max_modes: u32) -> Self {
+    pub fn new(device: &wgpu::Device, cell_capacity: u32) -> Self {
         // Each connection is shared by 2 cells, so theoretical max = cells * max_per_cell / 2
         let max_connections = cell_capacity * (MAX_ADHESIONS_PER_CELL as u32) / 2;
         
@@ -119,11 +124,17 @@ impl AdhesionBuffers {
             "Cell Adhesion Indices",
         );
         
-        // Per-mode adhesion settings: 48 bytes per mode
-        let adhesion_settings = Self::create_storage_buffer(
-            device,
-            max_modes as u64 * 48,
-            "Adhesion Settings",
+        // Per-mode adhesion settings split into 3 × vec4 sub-buffers (16 bytes each).
+        // 8M modes × 16 bytes = 128 MB per sub-buffer — stays under wgpu's 256 MB limit.
+        let max_modes_u64 = crate::simulation::gpu_physics::mutation::MAX_TOTAL_MODES as u64;
+        let adhesion_settings_v0 = Self::create_storage_buffer(
+            device, max_modes_u64 * 16, "Adhesion Settings V0",
+        );
+        let adhesion_settings_v1 = Self::create_storage_buffer(
+            device, max_modes_u64 * 16, "Adhesion Settings V1",
+        );
+        let adhesion_settings_v2 = Self::create_storage_buffer(
+            device, max_modes_u64 * 16, "Adhesion Settings V2",
         );
         
         // Adhesion counts: 4 * u32 = 16 bytes
@@ -187,7 +198,9 @@ impl AdhesionBuffers {
         Self {
             adhesion_connections,
             cell_adhesion_indices,
-            adhesion_settings,
+            adhesion_settings_v0,
+            adhesion_settings_v1,
+            adhesion_settings_v2,
             adhesion_counts,
             free_adhesion_slots,
             next_adhesion_id,
@@ -200,7 +213,6 @@ impl AdhesionBuffers {
             torque_accum_z,
             max_connections,
             cell_capacity,
-            max_modes,
             slot_allocator: AdhesionSlotAllocator::new(max_connections),
             connections_cache,
             cell_indices_cache,
@@ -255,30 +267,38 @@ impl AdhesionBuffers {
     
     /// Sync adhesion settings from genomes to GPU
     pub fn sync_adhesion_settings(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
-        let mut settings_data: Vec<GpuAdhesionSettings> = Vec::new();
+        let mut v0: Vec<[f32; 4]> = Vec::new();
+        let mut v1: Vec<[f32; 4]> = Vec::new();
+        let mut v2: Vec<[f32; 4]> = Vec::new();
         
         for genome in genomes {
             for mode in &genome.modes {
-                let settings = GpuAdhesionSettings {
-                    can_break: if mode.adhesion_settings.can_break { 1 } else { 0 },
-                    break_force: mode.adhesion_settings.break_force,
-                    rest_length: mode.adhesion_settings.rest_length,
-                    linear_spring_stiffness: mode.adhesion_settings.linear_spring_stiffness,
-                    linear_spring_damping: mode.adhesion_settings.linear_spring_damping,
-                    orientation_spring_stiffness: mode.adhesion_settings.orientation_spring_stiffness,
-                    orientation_spring_damping: mode.adhesion_settings.orientation_spring_damping,
-                    max_angular_deviation: mode.adhesion_settings.max_angular_deviation,
-                    twist_constraint_stiffness: mode.adhesion_settings.twist_constraint_stiffness,
-                    twist_constraint_damping: mode.adhesion_settings.twist_constraint_damping,
-                    enable_twist_constraint: if mode.adhesion_settings.enable_twist_constraint { 1 } else { 0 },
-                    _padding: 0,
-                };
-                settings_data.push(settings);
+                let s = &mode.adhesion_settings;
+                v0.push([
+                    if s.can_break { 1.0_f32 } else { 0.0 },
+                    s.break_force,
+                    s.rest_length,
+                    s.linear_spring_stiffness,
+                ]);
+                v1.push([
+                    s.linear_spring_damping,
+                    s.orientation_spring_stiffness,
+                    s.orientation_spring_damping,
+                    s.max_angular_deviation,
+                ]);
+                v2.push([
+                    s.twist_constraint_stiffness,
+                    s.twist_constraint_damping,
+                    if s.enable_twist_constraint { 1.0 } else { 0.0 },
+                    0.0,
+                ]);
             }
         }
         
-        if !settings_data.is_empty() {
-            queue.write_buffer(&self.adhesion_settings, 0, bytemuck::cast_slice(&settings_data));
+        if !v0.is_empty() {
+            queue.write_buffer(&self.adhesion_settings_v0, 0, bytemuck::cast_slice(&v0));
+            queue.write_buffer(&self.adhesion_settings_v1, 0, bytemuck::cast_slice(&v1));
+            queue.write_buffer(&self.adhesion_settings_v2, 0, bytemuck::cast_slice(&v2));
         }
     }
     
