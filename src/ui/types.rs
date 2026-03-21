@@ -197,6 +197,10 @@ pub struct WorldSettings {
     /// Global radiation level controlling mutation probability per division (0.0 = off, 1.0 = every division mutates)
     #[serde(default)]
     pub radiation_level: f32,
+
+    /// When true, mutations make small color perturbations instead of full re-rolls
+    #[serde(default)]
+    pub subtle_mutations: bool,
 }
 
 impl Default for WorldSettings {
@@ -209,6 +213,7 @@ impl Default for WorldSettings {
             acceleration_damping: 0.98,
             water_drag_strength: 0.0,
             radiation_level: 0.0,
+            subtle_mutations: false,
         }
     }
 }

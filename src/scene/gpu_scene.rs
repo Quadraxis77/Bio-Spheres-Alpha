@@ -156,6 +156,8 @@ pub struct GpuScene {
     pub water_drag_strength: f32,
     /// Global radiation level controlling mutation probability per division (0.0 = off, 1.0 = always)
     pub radiation_level: f32,
+    /// When true, mutations make small color perturbations instead of full re-rolls
+    pub subtle_mutations: bool,
     /// Per-fluid-type lateral flow probabilities for fluid simulation (0.0 to 1.0)
     /// Index: 0=Empty (unused), 1=Water, 2=Lava, 3=Steam
     pub lateral_flow_probabilities: [f32; 4],
@@ -482,6 +484,7 @@ impl GpuScene {
             acceleration_damping: 0.98,
             water_drag_strength: 0.0,
             radiation_level: 0.0,
+            subtle_mutations: false,
             lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
             condensation_probability: 0.1,
             vaporization_probability: 0.1,
@@ -668,30 +671,49 @@ impl GpuScene {
             mutation_system.genome_meta_buffer(),
             genome_id as u64,
             1,
-        )?;
+        );
+        let meta = match meta {
+            Some(m) => m,
+            None => {
+                log::warn!("read_back_genome: failed to read genome_meta for genome_id={}", genome_id);
+                return None;
+            }
+        };
         let meta = meta[0];
         let mode_count = meta.mode_count as usize;
         let base_offset = meta.base_mode_offset as usize;
 
         if mode_count == 0 || mode_count > 40 {
-            log::warn!("Invalid genome metadata: mode_count={}, base_offset={}", mode_count, base_offset);
+            log::warn!("read_back_genome: invalid metadata for genome_id={}: mode_count={}, base_offset={}", genome_id, mode_count, base_offset);
             return None;
         }
 
-        // Read back all mode buffers for this genome's mode range
-        let mode_props = self.read_back_buffer_range::<[f32; 20]>(
-            device, queue,
-            &self.gpu_triple_buffers.mode_properties,
-            base_offset as u64,
-            mode_count,
-        )?;
+        log::debug!("read_back_genome: genome_id={} mode_count={} base_offset={}", genome_id, mode_count, base_offset);
 
-        let mode_data = self.read_back_buffer_range::<[f32; 20]>(
-            device, queue,
-            &self.gpu_triple_buffers.genome_mode_data,
-            base_offset as u64,
-            mode_count,
-        )?;
+        // Read back all mode buffers for this genome's mode range (split into 5 sub-buffers each)
+        let mp_v0 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.mode_properties_v0, base_offset as u64, mode_count)?;
+        let mp_v1 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.mode_properties_v1, base_offset as u64, mode_count)?;
+        let mp_v2 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.mode_properties_v2, base_offset as u64, mode_count)?;
+        let mp_v3 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.mode_properties_v3, base_offset as u64, mode_count)?;
+        let mp_v4 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.mode_properties_v4, base_offset as u64, mode_count)?;
+        let mode_props: Vec<[f32; 20]> = (0..mode_count).map(|i| {
+            let mut p = [0f32; 20];
+            p[0..4].copy_from_slice(&mp_v0[i]); p[4..8].copy_from_slice(&mp_v1[i]);
+            p[8..12].copy_from_slice(&mp_v2[i]); p[12..16].copy_from_slice(&mp_v3[i]);
+            p[16..20].copy_from_slice(&mp_v4[i]); p
+        }).collect();
+
+        let gmd_v0 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.genome_mode_data_v0, base_offset as u64, mode_count)?;
+        let gmd_v1 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.genome_mode_data_v1, base_offset as u64, mode_count)?;
+        let gmd_v2 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.genome_mode_data_v2, base_offset as u64, mode_count)?;
+        let gmd_v3 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.genome_mode_data_v3, base_offset as u64, mode_count)?;
+        let gmd_v4 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.genome_mode_data_v4, base_offset as u64, mode_count)?;
+        let mode_data: Vec<[f32; 20]> = (0..mode_count).map(|i| {
+            let mut d = [0f32; 20];
+            d[0..4].copy_from_slice(&gmd_v0[i]); d[4..8].copy_from_slice(&gmd_v1[i]);
+            d[8..12].copy_from_slice(&gmd_v2[i]); d[12..16].copy_from_slice(&gmd_v3[i]);
+            d[16..20].copy_from_slice(&gmd_v4[i]); d
+        }).collect();
 
         let child_indices = self.read_back_buffer_range::<[i32; 2]>(
             device, queue,
@@ -742,21 +764,41 @@ impl GpuScene {
             mode_count,
         )?;
 
-        // mode_visuals: 2 vec4 per mode = 8 f32 per mode
-        let visuals_raw = self.read_back_buffer_range::<[f32; 4]>(
+        // mode_visuals: read colors (1 vec4 per mode) and emissive (1 vec4 per mode) separately
+        let colors_raw = self.read_back_buffer_range::<[f32; 4]>(
             device, queue,
-            self.instance_builder.mode_visuals_buffer(),
-            (base_offset * 2) as u64, // 2 vec4 per mode
-            mode_count * 2,
-        )?;
-
-        // adhesion_settings: 48 bytes (12 f32-sized fields) per mode
-        let adhesion_settings_raw = self.read_back_buffer_range::<crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings>(
-            device, queue,
-            &self.adhesion_buffers.adhesion_settings,
+            self.instance_builder.mode_colors_buffer(),
             base_offset as u64,
             mode_count,
         )?;
+        let emissive_raw = self.read_back_buffer_range::<[f32; 4]>(
+            device, queue,
+            self.instance_builder.mode_emissive_buffer(),
+            base_offset as u64,
+            mode_count,
+        )?;
+
+        // adhesion_settings: 48 bytes per mode — only valid for user genomes (base_offset < 800K).
+        // Mutated genomes have base_offset beyond the adhesion_settings buffer size, so fall back
+        // to defaults in that case (mutation shader doesn't clone adhesion settings).
+        let adhesion_settings_raw: Vec<crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings> = {
+            let elem_size = std::mem::size_of::<crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings>() as u64;
+            let required_end = (base_offset as u64 + mode_count as u64) * elem_size;
+            if required_end <= self.adhesion_buffers.adhesion_settings.size() {
+                match self.read_back_buffer_range::<crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings>(
+                    device, queue,
+                    &self.adhesion_buffers.adhesion_settings,
+                    base_offset as u64,
+                    mode_count,
+                ) {
+                    Some(v) => v,
+                    None => vec![crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings::default(); mode_count],
+                }
+            } else {
+                // Mutated genome — adhesion settings not stored in this buffer, use defaults
+                vec![crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings::default(); mode_count]
+            }
+        };
 
         // Reconstruct Genome from raw data
         let mut modes = Vec::with_capacity(mode_count);
@@ -779,17 +821,17 @@ impl GpuScene {
             // Reconstruct split direction from quaternion (reverse of Euler YXZ encoding)
             let (yaw, pitch, _roll) = split_quat.to_euler(glam::EulerRot::YXZ);
 
-            // Reconstruct color from mode_visuals
-            let color_vec4 = &visuals_raw[i * 2];
-            let emissive_vec4 = &visuals_raw[i * 2 + 1];
+            // Reconstruct color from split mode_colors and mode_emissive buffers
+            let color_vec4 = &colors_raw[i];
+            let emissive_vec4 = &emissive_raw[i];
 
             // Reconstruct max_splits: negative GPU value means infinite (-1)
             let gpu_max_splits = props[8];
             let max_splits = if gpu_max_splits < 0.0 { -1 } else { gpu_max_splits as i32 };
 
             let mode = crate::genome::ModeSettings {
-                name: format!("Mode {}", i),
-                default_name: format!("Mode {}", i),
+                name: format!("Mode {}", i + 1),
+                default_name: format!("Mode {}", i + 1),
                 color: glam::Vec3::new(color_vec4[0], color_vec4[1], color_vec4[2]),
                 opacity: 1.0,
                 emissive: emissive_vec4[0],
@@ -888,6 +930,19 @@ impl GpuScene {
         let elem_size = std::mem::size_of::<T>() as u64;
         let offset = start_index * elem_size;
         let size = count as u64 * elem_size;
+
+        // Bounds check before attempting GPU copy
+        if size == 0 {
+            return Some(Vec::new());
+        }
+        if offset + size > source_buffer.size() {
+            log::warn!(
+                "read_back_buffer_range: out of bounds — offset={} size={} buffer_size={} (T={} start_index={} count={})",
+                offset, size, source_buffer.size(),
+                std::any::type_name::<T>(), start_index, count
+            );
+            return None;
+        }
 
         // Create staging buffer for readback
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1095,16 +1150,12 @@ impl GpuScene {
 
         // Mutation pass: collect candidates from division results, then apply mutations.
         // Runs after division execute so division_flags and division_slot_assignments are set.
-        if let Some(mutation_system) = &self.mutation_system {
-            // Calculate total mode count from genomes
-            let total_mode_count: u32 = self.genomes.iter()
-                .map(|g| g.modes.len() as u32)
-                .sum();
+        if let Some(mutation_system) = &mut self.mutation_system {
             mutation_system.dispatch(
+                device,
                 encoder,
                 queue,
                 self.current_frame as u32,
-                total_mode_count,
             );
         }
         
@@ -1429,17 +1480,18 @@ impl GpuScene {
             u32_copy_size,
         );
         
-        // Copy mode properties (20 floats per mode = 80 bytes) - needed for swim_force -> tail_speed calculation
-        // Calculate total modes across all genomes
+        // Copy mode properties v0 only (16 bytes/mode) - needed for swim_force -> tail_speed
+        // (swim_force is index 6, in v1: [split_mass, nutrient_priority, swim_force, prioritize_when_low])
+        // instance_builder.mode_properties_buffer() now holds only v1 (swim_force sub-buffer)
         let total_modes: usize = self.genomes.iter().map(|g| g.modes.len()).sum();
-        let mode_properties_copy_size = (total_modes * 80) as u64;
-        if mode_properties_copy_size > 0 {
+        let mode_properties_v1_copy_size = (total_modes * 16) as u64;
+        if mode_properties_v1_copy_size > 0 {
             encoder.copy_buffer_to_buffer(
-                &self.gpu_triple_buffers.mode_properties,
+                &self.gpu_triple_buffers.mode_properties_v1,
                 0,
                 self.instance_builder.mode_properties_buffer(),
                 0,
-                mode_properties_copy_size,
+                mode_properties_v1_copy_size,
             );
         }
         
@@ -4036,8 +4088,16 @@ impl GpuScene {
                 device,
                 &self.gpu_triple_buffers.genome_ids,
                 &self.gpu_triple_buffers.mode_indices,
-                &self.gpu_triple_buffers.mode_properties,
-                &self.gpu_triple_buffers.genome_mode_data,
+                &self.gpu_triple_buffers.mode_properties_v0,
+                &self.gpu_triple_buffers.mode_properties_v1,
+                &self.gpu_triple_buffers.mode_properties_v2,
+                &self.gpu_triple_buffers.mode_properties_v3,
+                &self.gpu_triple_buffers.mode_properties_v4,
+                &self.gpu_triple_buffers.genome_mode_data_v0,
+                &self.gpu_triple_buffers.genome_mode_data_v1,
+                &self.gpu_triple_buffers.genome_mode_data_v2,
+                &self.gpu_triple_buffers.genome_mode_data_v3,
+                &self.gpu_triple_buffers.genome_mode_data_v4,
                 &self.gpu_triple_buffers.child_mode_indices,
                 &self.gpu_triple_buffers.mode_cell_types,
                 &self.gpu_triple_buffers.parent_make_adhesion_flags,
@@ -4045,7 +4105,19 @@ impl GpuScene {
                 &self.gpu_triple_buffers.child_b_keep_adhesion_flags,
                 &self.gpu_triple_buffers.glueocyte_env_adhesion_flags,
                 &self.gpu_triple_buffers.oculocyte_params,
-                self.instance_builder.mode_visuals_buffer(),
+                self.instance_builder.mode_colors_buffer(),
+                self.instance_builder.mode_emissive_buffer(),
+            );
+
+            // Rebuild GC bind group (for genome recycling)
+            mutation_system.rebuild_gc_bind_group(device, queue);
+
+            // Rebuild ref_count sync bind group (for accurate ref_count tracking)
+            mutation_system.rebuild_ref_count_sync_bind_group(
+                device,
+                queue,
+                &self.gpu_triple_buffers.genome_ids,
+                &self.gpu_triple_buffers.death_flags,
             );
 
             // Sync genome metadata if genomes are already loaded
@@ -4195,7 +4267,7 @@ impl Scene for GpuScene {
         if self.genomes_dirty {
             self.sync_adhesion_settings(queue);
             // Sync mutation system genome metadata when genomes change
-            if let Some(mutation_system) = &self.mutation_system {
+            if let Some(mutation_system) = &mut self.mutation_system {
                 mutation_system.sync_genome_metadata(queue, &self.genomes);
             }
             // Update mode visuals (colors) from CPU genomes.

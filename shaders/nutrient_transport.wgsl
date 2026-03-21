@@ -86,21 +86,30 @@ var<storage, read_write> mass_deltas: array<atomic<i32>>;
 @group(3) @binding(1)
 var<storage, read_write> death_flags: array<u32>;
 
+// mode_properties split into 5 vec4 sub-buffers (bindings 2-6)
 @group(3) @binding(2)
-var<storage, read> mode_properties: array<ModeProperties>;
-
+var<storage, read> mode_properties_v0: array<vec4<f32>>; // [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval]
 @group(3) @binding(3)
+var<storage, read> mode_properties_v1: array<vec4<f32>>; // [split_mass, nutrient_priority, swim_force, prioritize_when_low]
+@group(3) @binding(4)
+var<storage, read> mode_properties_v2: array<vec4<f32>>; // [max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a]
+@group(3) @binding(5)
+var<storage, read> mode_properties_v3: array<vec4<f32>>; // [flagellocyte_speed_b, flagellocyte_threshold_c, flagellocyte_use_signal, min_adhesions]
+@group(3) @binding(6)
+var<storage, read> mode_properties_v4: array<vec4<f32>>; // [max_adhesions, mode_a_after_splits, mode_b_after_splits, padding]
+
+@group(3) @binding(7)
 var<storage, read> split_ready_frame: array<i32>;
 
-@group(3) @binding(4)
+@group(3) @binding(8)
 var<storage, read> mode_cell_types: array<u32>;
 
 // Nutrients buffer: fixed-point i32 with scale 1000 (100.0 nutrients = 100000)
-@group(3) @binding(5)
+@group(3) @binding(9)
 var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
 
 // Split nutrient thresholds (derived from split_mass: threshold = (split_mass - 1.0) * 100.0)
-@group(3) @binding(6)
+@group(3) @binding(10)
 var<storage, read> split_nutrient_thresholds: array<f32>;
 
 struct AdhesionConnection {
@@ -117,30 +126,6 @@ struct AdhesionConnection {
     twist_reference_b: vec4<f32>,
     birth_time: f32,                  // offset 96-99
     _pad: u32,                        // offset 100-103
-}
-
-// Mode properties structure (80 bytes per mode = 20 floats)
-struct ModeProperties {
-    nutrient_gain_rate: f32,        // index 0
-    max_cell_size: f32,             // index 1
-    membrane_stiffness: f32,        // index 2
-    split_interval: f32,            // index 3
-    split_mass: f32,                // index 4
-    nutrient_priority: f32,         // index 5
-    swim_force: f32,                // index 6
-    prioritize_when_low: f32,       // index 7: 1.0 = true, 0.0 = false
-    max_splits: f32,                // index 8
-    split_ratio: f32,               // index 9
-    flagellocyte_signal_channel: f32, // index 10
-    flagellocyte_speed_a: f32,      // index 11
-    flagellocyte_speed_b: f32,      // index 12
-    flagellocyte_threshold_c: f32,  // index 13
-    flagellocyte_use_signal: f32,   // index 14: 1.0 = signal mode, 0.0 = fixed mode
-    min_adhesions: f32,             // index 15
-    max_adhesions: f32,             // index 16
-    _pad17: f32,                    // index 17
-    _pad18: f32,                    // index 18
-    _pad19: f32,                    // index 19
 }
 
 // Constants matching reference implementation
@@ -211,29 +196,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mode_idx = mode_indices[cell_idx];
 
     // Get cell type from mode
-    var cell_type = 0u;
+    // IMPORTANT: Cells with invalid mode indices (out of bounds) should NOT default to Test cell behavior.
+    // They must have metabolism to prevent immortal grey cells from mutations.
+    var cell_type = 0xFFFFFFFFu; // Invalid marker
+    var mode_valid = false;
     if (mode_idx < arrayLength(&mode_cell_types)) {
         cell_type = mode_cell_types[mode_idx];
+        mode_valid = true;
     }
 
     // Test cells (cell_type 0) have no metabolism - they auto-gain from nutrient_gain_rate
     // Phagocytes (cell_type 2) and Photocytes (cell_type 3) use specialized shaders for gain
     // but still need base metabolism to starve when not consuming/absorbing
-    // All other cells have base metabolism
-    let auto_gain_cell = cell_type == 0u;
-    if (!auto_gain_cell && mode_idx < arrayLength(&mode_properties)) {
-        let mode = mode_properties[mode_idx];
+    // All other cells (including invalid mode cells) have base metabolism
+    let auto_gain_cell = mode_valid && cell_type == 0u;
+    if (!auto_gain_cell && mode_idx < arrayLength(&mode_properties_v0)) {
+        let mode_v1 = mode_properties_v1[mode_idx];
 
         // Base metabolism: consume nutrients to stay alive (1.0 nutrients/sec)
+        let mode_v3 = mode_properties_v3[mode_idx];
         var nutrient_loss = BASE_METABOLISM_RATE * params.delta_time;
 
         // Additional consumption from swim force (Flagellocytes only)
+        let swim_force = mode_v1.z; // mode_properties_v1.z = swim_force
+        let flagellocyte_use_signal = mode_v3.z; // v3.z = flagellocyte_use_signal
         var effective_swim_speed = 0.0;
-        if (mode.flagellocyte_use_signal >= 0.5) {
-            // Signal-based: use speed_a as the active speed (conservative estimate for consumption)
-            effective_swim_speed = max(mode.flagellocyte_speed_a, mode.flagellocyte_speed_b);
+        if (flagellocyte_use_signal > 0.5) {
+            // Signal-based: use max of speed_a and speed_b for conservative consumption estimate
+            effective_swim_speed = max(mode_properties_v2[mode_idx].w, mode_properties_v3[mode_idx].x);
         } else {
-            effective_swim_speed = mode.swim_force;
+            effective_swim_speed = swim_force;
         }
         if (effective_swim_speed > 0.0) {
             nutrient_loss += effective_swim_speed * SWIM_CONSUMPTION_RATE * params.delta_time;
@@ -292,21 +284,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         let mode_b_idx = mode_indices[cell_b_idx];
-        if (mode_a_idx >= arrayLength(&mode_properties) ||
-            mode_b_idx >= arrayLength(&mode_properties)) {
+        if (mode_a_idx >= arrayLength(&mode_properties_v0) ||
+            mode_b_idx >= arrayLength(&mode_properties_v0)) {
             continue;
         }
 
         let nutrients_b = fixed_to_float(atomicLoad(&nutrients_buffer[cell_b_idx]));
-        let mode_a = mode_properties[mode_a_idx];
-        let mode_b = mode_properties[mode_b_idx];
+        let mode_a_v1 = mode_properties_v1[mode_a_idx];
+        let mode_b_v1 = mode_properties_v1[mode_b_idx];
+        // v1: [split_mass, nutrient_priority, swim_force, prioritize_when_low]
+        let prioritize_a = mode_a_v1.w > 0.5; // prioritize_when_low
+        let prioritize_b = mode_b_v1.w > 0.5; // prioritize_when_low
 
-        let prioritize_a = mode_a.prioritize_when_low > 0.5;
-        let prioritize_b = mode_b.prioritize_when_low > 0.5;
-
-        let priority_a = select(mode_a.nutrient_priority, mode_a.nutrient_priority * PRIORITY_BOOST,
+        let priority_a = select(mode_a_v1.y, mode_a_v1.y * PRIORITY_BOOST,
                                prioritize_a && nutrients_a_snap < DANGER_NUTRIENTS);
-        let priority_b = select(mode_b.nutrient_priority, mode_b.nutrient_priority * PRIORITY_BOOST,
+        let priority_b = select(mode_b_v1.y, mode_b_v1.y * PRIORITY_BOOST,
                                prioritize_b && nutrients_b < DANGER_NUTRIENTS);
 
         let pressure_diff = nutrients_a_snap / priority_a - nutrients_b / priority_b;

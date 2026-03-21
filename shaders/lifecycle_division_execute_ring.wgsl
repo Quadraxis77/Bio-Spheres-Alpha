@@ -109,7 +109,7 @@ var<storage, read_write> split_nutrient_thresholds: array<f32>;
 var<storage, read_write> split_counts: array<u32>;
 
 // Nutrients buffer: fixed-point i32 with scale 1000 (100.0 nutrients = 100000)
-@group(2) @binding(23)
+@group(2) @binding(31)
 var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
 
 // Fixed-point conversion
@@ -161,45 +161,61 @@ var<storage, read> rotations_in: array<vec4<f32>>;
 @group(2) @binding(14)
 var<storage, read_write> rotations_out: array<vec4<f32>>;
 
+// genome_mode_data split into 5 vec4 sub-buffers (bindings 15-19)
 @group(2) @binding(15)
-var<storage, read> genome_mode_data: array<vec4<f32>>;
-
+var<storage, read> genome_mode_data_v0: array<vec4<f32>>; // child_a_orientation
 @group(2) @binding(16)
-var<storage, read> parent_make_adhesion_flags: array<u32>;
-
+var<storage, read> genome_mode_data_v1: array<vec4<f32>>; // child_b_orientation
 @group(2) @binding(17)
-var<storage, read> child_mode_indices: array<vec2<i32>>;
-
+var<storage, read> genome_mode_data_v2: array<vec4<f32>>; // child_a_split_orientation
 @group(2) @binding(18)
-var<storage, read> mode_properties: array<vec4<f32>>;
-
+var<storage, read> genome_mode_data_v3: array<vec4<f32>>; // child_b_split_orientation
 @group(2) @binding(19)
-var<storage, read_write> cell_types: array<u32>;
+var<storage, read> genome_mode_data_v4: array<vec4<f32>>; // split_rotation_quat (XYZW)
 
 @group(2) @binding(20)
+var<storage, read> parent_make_adhesion_flags: array<u32>;
+
+@group(2) @binding(21)
+var<storage, read> child_mode_indices: array<vec2<i32>>;
+
+// mode_properties split into 5 vec4 sub-buffers (bindings 22-26)
+@group(2) @binding(22)
+var<storage, read> mode_properties_v0: array<vec4<f32>>; // [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval]
+@group(2) @binding(23)
+var<storage, read> mode_properties_v1: array<vec4<f32>>; // [split_mass, nutrient_priority, swim_force, prioritize_when_low]
+@group(2) @binding(24)
+var<storage, read> mode_properties_v2: array<vec4<f32>>; // [max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a]
+@group(2) @binding(25)
+var<storage, read> mode_properties_v3: array<vec4<f32>>; // [flagellocyte_speed_b, flagellocyte_threshold_c, flagellocyte_use_signal, min_adhesions]
+@group(2) @binding(26)
+var<storage, read> mode_properties_v4: array<vec4<f32>>; // [max_adhesions, mode_a_after_splits, mode_b_after_splits, padding]
+
+@group(2) @binding(27)
+var<storage, read_write> cell_types: array<u32>;
+
+@group(2) @binding(28)
 var<storage, read> mode_cell_types: array<u32>;
 
 // Child A keep adhesion flags: one bool per mode (stored as u32)
-@group(2) @binding(21)
+@group(2) @binding(29)
 var<storage, read> child_a_keep_adhesion_flags: array<u32>;
 
 // Child B keep adhesion flags: one bool per mode (stored as u32)
-@group(2) @binding(22)
+@group(2) @binding(30)
 var<storage, read> child_b_keep_adhesion_flags: array<u32>;
 
-// Child A after-split keep adhesion flags: one bool per mode (stored as u32)
-// Used when max_splits is reached instead of the normal keep_adhesion flags
-@group(2) @binding(25)
+// Child A after-split keep adhesion flags
+@group(2) @binding(33)
 var<storage, read> child_a_after_split_keep_adhesion_flags: array<u32>;
 
-// Child B after-split keep adhesion flags: one bool per mode (stored as u32)
-// Used when max_splits is reached instead of the normal keep_adhesion flags
-@group(2) @binding(26)
+// Child B after-split keep adhesion flags
+@group(2) @binding(34)
 var<storage, read> child_b_after_split_keep_adhesion_flags: array<u32>;
 
 // (parent_genome * split_rotation * child_orientation) without physics perturbation.
 // Used by adhesion shaders so structures are defined purely by genome data.
-@group(2) @binding(24)
+@group(2) @binding(32)
 var<storage, read_write> genome_orientations: array<vec4<f32>>;
 
 // Adhesion bind group (group 3)
@@ -420,20 +436,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Get parent's mode index for looking up child orientations and split direction
     let parent_mode_idx = mode_indices[cell_idx];
     
-    // Read parent's split_ratio from mode_properties (third vec4, .y component)
-    // Buffer is now 5 vec4s per mode (20 floats = 80 bytes)
-    let parent_split_ratio = mode_properties[parent_mode_idx * 5u + 2u].y;
+    // Read parent's split_ratio from mode_properties_v2 (.y = split_ratio)
+    let parent_split_ratio = mode_properties_v2[parent_mode_idx].y;
     
     // Read child orientations and split orientations from genome mode data.
     // Layout: [child_a (vec4), child_b (vec4), child_a_split (vec4), child_b_split (vec4),
     //          split_rotation_quat (vec4 XYZW)]
     // Slot 4 is the pre-computed split rotation quaternion from_euler(YXZ, yaw, pitch, 0).
     // It is NOT a direction vector — do not reconstruct via quat_from_z_to_dir().
-    let child_a_orientation = genome_mode_data[parent_mode_idx * 5u];
-    let child_b_orientation = genome_mode_data[parent_mode_idx * 5u + 1u];
-    let child_a_split_orientation = genome_mode_data[parent_mode_idx * 5u + 2u];
-    let child_b_split_orientation = genome_mode_data[parent_mode_idx * 5u + 3u];
-    let split_rotation_quat = genome_mode_data[parent_mode_idx * 5u + 4u]; // full quaternion, XYZW
+    let child_a_orientation = genome_mode_data_v0[parent_mode_idx];
+    let child_b_orientation = genome_mode_data_v1[parent_mode_idx];
+    let child_a_split_orientation = genome_mode_data_v2[parent_mode_idx];
+    let child_b_split_orientation = genome_mode_data_v3[parent_mode_idx];
+    let split_rotation_quat = genome_mode_data_v4[parent_mode_idx]; // full quaternion, XYZW
 
     // Derive the local-space split direction from the quaternion (rotate Z by split_rotation).
     // This is used only for child positioning and zone classification.
@@ -484,11 +499,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var child_b_mode_idx = u32(max(child_modes.y, 0));
     
     // If max_splits is reached, use mode_a/b_after_splits if set (matching CPU behavior)
-    // mode_a_after_splits is at mode_properties[mode * 5 + 4].y (index 17)
-    // mode_b_after_splits is at mode_properties[mode * 5 + 4].z (index 18)
+    // mode_a_after_splits is at mode_properties_v4.y (index 17)
+    // mode_b_after_splits is at mode_properties_v4.z (index 18)
     // Negative value means "use normal child mode"
     if (will_reach_max_splits) {
-        let parent_props_4 = mode_properties[parent_mode_idx * 5u + 4u];
+        let parent_props_4 = mode_properties_v4[parent_mode_idx];
         let mode_a_after = parent_props_4.y;
         let mode_b_after = parent_props_4.z;
         if (mode_a_after >= 0.0) {
@@ -497,6 +512,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (mode_b_after >= 0.0) {
             child_b_mode_idx = u32(mode_b_after);
         }
+    }
+    
+    // CRITICAL: Bounds check child mode indices to prevent invalid array access
+    // If mode index is out of bounds, clamp to parent mode (safe fallback)
+    let mode_count = arrayLength(&mode_cell_types);
+    if (child_a_mode_idx >= mode_count) {
+        child_a_mode_idx = parent_mode_idx;
+    }
+    if (child_b_mode_idx >= mode_count) {
+        child_b_mode_idx = parent_mode_idx;
     }
     
     // === Create Child A (overwrites parent slot) ===
@@ -522,9 +547,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Read Child A's properties from its mode
-    let child_a_props_0 = mode_properties[child_a_mode_idx * 5u];
-    let child_a_props_1 = mode_properties[child_a_mode_idx * 5u + 1u];
-    let child_a_props_2 = mode_properties[child_a_mode_idx * 5u + 2u];
+    let child_a_props_0 = mode_properties_v0[child_a_mode_idx];
+    let child_a_props_1 = mode_properties_v1[child_a_mode_idx];
+    let child_a_props_2 = mode_properties_v2[child_a_mode_idx];
     
     // Only Test cells (cell_type == 0) auto-generate nutrients
     let child_a_cell_type = mode_cell_types[child_a_mode_idx];
@@ -555,9 +580,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     rotations_out[child_b_slot] = child_b_rotation;
     genome_orientations[child_b_slot] = child_b_genome_orientation;
     
-    let child_b_props_0 = mode_properties[child_b_mode_idx * 5u];
-    let child_b_props_1 = mode_properties[child_b_mode_idx * 5u + 1u];
-    let child_b_props_2 = mode_properties[child_b_mode_idx * 5u + 2u];
+    let child_b_props_0 = mode_properties_v0[child_b_mode_idx];
+    let child_b_props_1 = mode_properties_v1[child_b_mode_idx];
+    let child_b_props_2 = mode_properties_v2[child_b_mode_idx];
     
     birth_times[child_b_slot] = params.current_time;
     split_intervals[child_b_slot] = child_b_props_0.w;
@@ -928,7 +953,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 
                 // Get neighbor's split_ratio for zone classification on their side
                 let neighbor_mode_idx = mode_indices[neighbor_idx];
-                let neighbor_split_ratio = mode_properties[neighbor_mode_idx * 5u + 2u].y;
+                let neighbor_split_ratio = mode_properties_v2[neighbor_mode_idx].y;
                 
                 if (is_parent_cell_a) {
                     dup_conn.cell_a_index = child_b_slot;

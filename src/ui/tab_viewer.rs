@@ -3412,11 +3412,63 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.separator();
 
     ui.label("Radiation Level:");
-    ui.add(egui::Slider::new(&mut world.radiation_level, 0.0..=1.0)
-        .step_by(0.01)
-        .fixed_decimals(2)
-        .text("chance"));
-    ui.label(egui::RichText::new("Probability each child mutates during division (0 = off, 1 = always)").small());
+    
+    // Logarithmic slider: position 0.0 = exactly 0.0 (off)
+    // position > 0.0 maps to [0.00001, 1.0] over 5 decades for fine low-end control
+    const EPSILON: f32 = 0.0001;
+    const DECADES: f64 = 5.0; // 10^-5 to 10^0
+
+    let mut log_slider = if world.radiation_level <= 0.0 {
+        0.0f32
+    } else {
+        // Map [1e-5, 1.0] → [0.0, 1.0]
+        let normalized = (world.radiation_level.log10() as f64 + DECADES) / DECADES;
+        normalized.clamp(0.0, 1.0) as f32
+    };
+
+    let response = ui.add(
+        egui::Slider::new(&mut log_slider, 0.0..=1.0)
+            .custom_formatter(|value, _| {
+                if value < EPSILON as f64 {
+                    "0.0000".to_string()
+                } else {
+                    let radiation = 10_f64.powf(value * DECADES - DECADES);
+                    if radiation < 0.001 {
+                        format!("{:.5}", radiation)
+                    } else if radiation < 0.01 {
+                        format!("{:.4}", radiation)
+                    } else {
+                        format!("{:.3}", radiation)
+                    }
+                }
+            })
+            .custom_parser(|s| {
+                s.parse::<f64>().ok().and_then(|v| {
+                    if v <= 0.0 {
+                        Some(0.0)
+                    } else if v <= 1.0 {
+                        Some(((v.log10() + DECADES) / DECADES).clamp(0.0, 1.0))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .text("chance")
+    );
+
+    if response.changed() {
+        world.radiation_level = if log_slider < EPSILON {
+            0.0
+        } else {
+            10_f32.powf(log_slider * DECADES as f32 - DECADES as f32).clamp(0.0, 1.0)
+        };
+    }
+
+    ui.label(egui::RichText::new("Probability each child mutates during division (0 = off, logarithmic scale for fine control)").small());
+
+    ui.add_space(4.0);
+    ui.checkbox(&mut world.subtle_mutations, "Subtle mutations")
+        .on_hover_text("When checked, mutations make small color nudges instead of full re-rolls");
 }
 
 /// Render the Help panel showing context-specific controls and shortcuts.

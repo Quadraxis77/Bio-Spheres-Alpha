@@ -27,30 +27,12 @@ struct PhysicsParams {
     _pad2: f32,
 }
 
-// Mode properties (per-mode settings from genome)
-// Total: 20 floats = 80 bytes per mode
-struct ModeProperties {
-    nutrient_gain_rate: f32,
-    max_cell_size: f32,
-    membrane_stiffness: f32,
-    split_interval: f32,
-    split_mass: f32,
-    nutrient_priority: f32,
-    swim_force: f32,
-    prioritize_when_low: f32,
-    max_splits: f32,
-    split_ratio: f32,
-    flagellocyte_signal_channel: f32,
-    flagellocyte_speed_a: f32,
-    flagellocyte_speed_b: f32,
-    flagellocyte_threshold_c: f32,
-    flagellocyte_use_signal: f32,
-    min_adhesions: f32,
-    max_adhesions: f32,
-    _pad17: f32,
-    _pad18: f32,
-    _pad19: f32,
-}
+// mode_properties layout across 5 sub-buffers (v0-v4), 1 vec4 per mode each:
+// v0: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval]
+// v1: [split_mass, nutrient_priority, swim_force, prioritize_when_low]
+// v2: [max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a]
+// v3: [flagellocyte_speed_b, flagellocyte_threshold_c, flagellocyte_use_signal, min_adhesions]
+// v4: [max_adhesions, mode_a_after_splits, mode_b_after_splits, padding]
 
 // Cell type behavior flags for parameterized shader logic
 struct CellTypeBehaviorFlags {
@@ -103,20 +85,28 @@ var<storage, read> mode_indices: array<u32>;
 @group(2) @binding(1)
 var<storage, read> cell_types: array<u32>;  // DEPRECATED - use mode_cell_types instead
 
+// mode_properties split into 5 vec4 sub-buffers (bindings 2-6)
 @group(2) @binding(2)
-var<storage, read> mode_properties: array<ModeProperties>;
-
-// Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
-// Always up-to-date with genome settings, unlike cell_types buffer which may be stale after division
+var<storage, read> mode_properties_v0: array<vec4<f32>>;
 @group(2) @binding(3)
+var<storage, read> mode_properties_v1: array<vec4<f32>>;
+@group(2) @binding(4)
+var<storage, read> mode_properties_v2: array<vec4<f32>>;
+@group(2) @binding(5)
+var<storage, read> mode_properties_v3: array<vec4<f32>>;
+@group(2) @binding(6)
+var<storage, read> mode_properties_v4: array<vec4<f32>>;
+
+// Mode cell types lookup table
+@group(2) @binding(7)
 var<storage, read> mode_cell_types: array<u32>;
 
-// Cell type behavior flags (one per type, up to MAX_TYPES=30)
-@group(2) @binding(4)
+// Cell type behavior flags
+@group(2) @binding(8)
 var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
 
-// Signal flags buffer (read-only) - for flagellocyte signal-responsive speed
-@group(2) @binding(5)
+// Signal flags buffer (read-only)
+@group(2) @binding(9)
 var<storage, read> signal_flags: array<atomic<u32>>;
 
 const FIXED_POINT_SCALE: f32 = 1000.0;
@@ -151,7 +141,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Get mode index first, then derive cell type from mode
     let mode_idx = mode_indices[cell_idx];
-    if (mode_idx >= arrayLength(&mode_properties)) {
+    if (mode_idx >= arrayLength(&mode_properties_v1)) {
         return;
     }
     
@@ -164,23 +154,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Get mode properties
-    let mode = mode_properties[mode_idx];
-    
+    // Get mode properties from split sub-buffers
+    // v1: [split_mass, nutrient_priority, swim_force, prioritize_when_low]
+    // v2: [max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a]
+    // v3: [flagellocyte_speed_b, flagellocyte_threshold_c, flagellocyte_use_signal, min_adhesions]
+    let mode_v1 = mode_properties_v1[mode_idx];
+    let mode_v2 = mode_properties_v2[mode_idx];
+    let mode_v3 = mode_properties_v3[mode_idx];
+
     // Determine effective swim speed
     var effective_speed: f32;
-    if (mode.flagellocyte_use_signal >= 0.5) {
+    if (mode_v3.z >= 0.5) { // flagellocyte_use_signal
         // Signal-based mode
         let raw_signal = atomicLoad(&signal_flags[cell_idx]);
         let signal_value = f32(raw_signal & 2047u); // Extract value component
-        if (signal_value >= mode.flagellocyte_threshold_c) {
-            effective_speed = mode.flagellocyte_speed_b;
+        if (signal_value >= mode_v3.y) { // flagellocyte_threshold_c
+            effective_speed = mode_v3.x; // flagellocyte_speed_b
         } else {
-            effective_speed = mode.flagellocyte_speed_a;
+            effective_speed = mode_v2.w; // flagellocyte_speed_a
         }
     } else {
         // Fixed speed mode
-        effective_speed = mode.swim_force;
+        effective_speed = mode_v1.z; // swim_force
     }
     
     // Skip if no effective swim speed

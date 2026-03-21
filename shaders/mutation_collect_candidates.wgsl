@@ -49,14 +49,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // Only process cells that just divided
+    // Only process cells that just divided this frame.
+    // division_flags are set by division_scan and remain valid through division_execute.
+    // division_slot_assignments is stale (never reset), so we must check division_flags first.
     if (division_flags[cell_idx] != 1u) {
-        return;
+        return; // Not dividing this frame
     }
 
     let child_b_slot = division_slot_assignments[cell_idx];
     if (child_b_slot >= collect_params.cell_capacity) {
-        return; // Invalid slot
+        return; // Invalid slot (safety check)
     }
 
     // Both children share the same parent genome_id at this point

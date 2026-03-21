@@ -63,7 +63,8 @@ pub struct InstanceBuilder {
     cell_types_buffer: wgpu::Buffer,
     
     // Lookup table buffers
-    mode_visuals_buffer: wgpu::Buffer,
+    mode_colors_buffer: wgpu::Buffer,   // vec4 per mode: RGB color (xyz) + padding (w)
+    mode_emissive_buffer: wgpu::Buffer, // vec4 per mode: emissive (x) + padding (yzw)
     cell_type_visuals_buffer: wgpu::Buffer,
     mode_properties_buffer: wgpu::Buffer,
     /// Cell type per mode (lookup table: mode_cell_types[mode_index] = cell_type)
@@ -275,8 +276,10 @@ const _: () = assert!(
 impl InstanceBuilder {
     /// Create a new instance builder with the given capacity.
     pub fn new(device: &wgpu::Device, cell_capacity: usize) -> Self {
-        // Support up to 100 genomes with 40 modes each = 4000 modes
-        let mode_capacity = 4096;
+        // Must match triple_buffer max_modes (8_000_000) so GPU-mutated mode indices never go out of bounds.
+        // mode_visuals stores 2 vec4<f32> per mode (color + emissive) = 32 bytes per mode.
+        // 8_000_000 * 32 = 256 MB — at wgpu's buffer limit.
+        let mode_capacity = 8_000_000;
         let cell_type_capacity = 16;
         
         // Create compute shader
@@ -366,7 +369,7 @@ impl InstanceBuilder {
                     },
                     count: None,
                 },
-                // mode_visuals (binding 7)
+                // mode_colors (binding 7) - vec4 per mode: RGB color
                 wgpu::BindGroupLayoutEntry {
                     binding: 7,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -487,6 +490,17 @@ impl InstanceBuilder {
                     },
                     count: None,
                 },
+                // Binding 18: mode_emissive - vec4 per mode: emissive (x) + padding
+                wgpu::BindGroupLayoutEntry {
+                    binding: 18,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         
@@ -523,10 +537,12 @@ impl InstanceBuilder {
         let genome_ids_buffer = Self::create_storage_buffer(device, "Genome IDs", cell_capacity * 4);
         let cell_types_buffer = Self::create_storage_buffer(device, "Cell Types", cell_capacity * 4);
         
-        let mode_visuals_buffer = Self::create_storage_buffer(device, "Mode Visuals", mode_capacity * std::mem::size_of::<ModeVisuals>());
+        let mode_colors_buffer = Self::create_storage_buffer(device, "Mode Colors", mode_capacity * 16); // vec4 per mode
+        let mode_emissive_buffer = Self::create_storage_buffer(device, "Mode Emissive", mode_capacity * 16); // vec4 per mode
         let cell_type_visuals_buffer = Self::create_storage_buffer(device, "Cell Type Visuals", cell_type_capacity * std::mem::size_of::<GpuCellTypeVisuals>());
-        // Mode properties: 20 floats per mode (80 bytes) - nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3
-        let mode_properties_buffer = Self::create_storage_buffer(device, "Mode Properties", mode_capacity * 80);
+        // Mode properties: only mode_properties_v1 is copied here (16 bytes/mode = 1 vec4).
+        // swim_force lives in v1 and is the only field the instance builder shader reads.
+        let mode_properties_buffer = Self::create_storage_buffer(device, "Instance Builder Mode Properties", mode_capacity * 16);
         // Mode cell types: 1 u32 per mode - lookup table for deriving cell_type from mode_index
         let mode_cell_types_buffer = Self::create_storage_buffer(device, "Mode Cell Types", mode_capacity * 4);
 
@@ -599,7 +615,8 @@ impl InstanceBuilder {
             cell_ids_buffer,
             genome_ids_buffer,
             cell_types_buffer,
-            mode_visuals_buffer,
+            mode_colors_buffer,
+            mode_emissive_buffer,
             cell_type_visuals_buffer,
             mode_properties_buffer,
             mode_cell_types_buffer,
@@ -718,11 +735,6 @@ impl InstanceBuilder {
         self.last_visible_count
     }
     
-    /// Get the mode visuals buffer (for mutation shader to write colors)
-    pub fn mode_visuals_buffer(&self) -> &wgpu::Buffer {
-        &self.mode_visuals_buffer
-    }
-
     /// Mark all buffers as dirty (forces full update).
     pub fn mark_all_dirty(&mut self) {
         self.positions_dirty = true;
@@ -970,10 +982,15 @@ impl InstanceBuilder {
         
         if total_mode_count > self.mode_capacity {
             self.mode_capacity = total_mode_count * 2;
-            self.mode_visuals_buffer = Self::create_storage_buffer(
+            self.mode_colors_buffer = Self::create_storage_buffer(
                 device,
-                "Mode Visuals",
-                self.mode_capacity * std::mem::size_of::<ModeVisuals>(),
+                "Mode Colors",
+                self.mode_capacity * 16,
+            );
+            self.mode_emissive_buffer = Self::create_storage_buffer(
+                device,
+                "Mode Emissive",
+                self.mode_capacity * 16,
             );
             // Also resize mode_cell_types_buffer
             self.mode_cell_types_buffer = Self::create_storage_buffer(
@@ -984,28 +1001,24 @@ impl InstanceBuilder {
         }
         
         // Always invalidate bind group when mode visuals change
-        // This ensures the shader sees the updated buffer data
         self.bind_group = None;
         
-        // Build combined mode visuals from all genomes
-        let mode_visuals: Vec<ModeVisuals> = genomes
-            .iter()
-            .flat_map(|genome| {
-                genome.modes.iter().map(|mode| {
-                    ModeVisuals {
-                        color: [mode.color.x, mode.color.y, mode.color.z, 1.0], // Always opaque
-                        emissive_pad: [mode.emissive, 0.0, 0.0, 0.0],
-                    }
-                })
-            })
-            .collect();
-        
-        if !mode_visuals.is_empty() {
-            queue.write_buffer(&self.mode_visuals_buffer, 0, bytemuck::cast_slice(&mode_visuals));
+        // Build color and emissive arrays separately
+        let mut colors: Vec<[f32; 4]> = Vec::with_capacity(total_mode_count);
+        let mut emissives: Vec<[f32; 4]> = Vec::with_capacity(total_mode_count);
+        for genome in genomes {
+            for mode in &genome.modes {
+                colors.push([mode.color.x, mode.color.y, mode.color.z, 1.0]);
+                emissives.push([mode.emissive, 0.0, 0.0, 0.0]);
+            }
         }
         
-        // Build mode_cell_types lookup table (cell_type per mode)
-        // This allows the shader to derive cell_type from mode_index
+        if !colors.is_empty() {
+            queue.write_buffer(&self.mode_colors_buffer, 0, bytemuck::cast_slice(&colors));
+            queue.write_buffer(&self.mode_emissive_buffer, 0, bytemuck::cast_slice(&emissives));
+        }
+        
+        // Build mode_cell_types lookup table
         let mode_cell_types: Vec<u32> = genomes
             .iter()
             .flat_map(|genome| {
@@ -1149,7 +1162,7 @@ impl InstanceBuilder {
                 },
                 wgpu::BindGroupEntry {
                     binding: 7,
-                    resource: self.mode_visuals_buffer.as_entire_binding(),
+                    resource: self.mode_colors_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 8,
@@ -1190,6 +1203,10 @@ impl InstanceBuilder {
                 wgpu::BindGroupEntry {
                     binding: 17,
                     resource: death_flags_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 18,
+                    resource: self.mode_emissive_buffer.as_entire_binding(),
                 },
             ],
         }));
@@ -1620,7 +1637,17 @@ impl InstanceBuilder {
         &self.cell_types_buffer
     }
     
-    /// Get the mode properties buffer for external GPU-to-GPU copies.
+    /// Get the mode colors buffer (vec4 per mode: RGB + padding).
+    pub fn mode_colors_buffer(&self) -> &wgpu::Buffer {
+        &self.mode_colors_buffer
+    }
+
+    /// Get the mode emissive buffer (vec4 per mode: emissive + padding).
+    pub fn mode_emissive_buffer(&self) -> &wgpu::Buffer {
+        &self.mode_emissive_buffer
+    }
+
+    /// Get the mode properties buffer for external GPU-to-GPU copies (holds mode_properties_v1).
     pub fn mode_properties_buffer(&self) -> &wgpu::Buffer {
         &self.mode_properties_buffer
     }

@@ -1,5 +1,5 @@
 (
-    current_mode: Gpu,
+    current_mode: Preview,
     ui_scale: 1.0,
     windows_locked: false,
     lock_tab_bar: false,
@@ -19,16 +19,16 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "Viewport",
+                "BottomPanel",
+                "NameTypeEditor",
+                "QuaternionBall",
+                "LeftPanel",
                 "RightPanel",
                 "CircleSliders",
-                "NameTypeEditor",
-                "SceneManager",
-                "LeftPanel",
                 "TimeSlider",
-                "QuaternionBall",
-                "BottomPanel",
+                "SceneManager",
                 "Modes",
+                "Viewport",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -49,8 +49,8 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "Viewport",
                 "SceneManager",
+                "Viewport",
                 "RightPanel",
             ],
             lock_settings: (
@@ -75,13 +75,13 @@
     lod_threshold_high: 50.0,
     lod_debug_colors: false,
     world_settings: (
-        cell_capacity: 100000,
+        cell_capacity: 112000,
         gravity: 0.0,
         gravity_mode: 1,
         constraint_iterations: 4,
         acceleration_damping: 0.8,
         water_drag_strength: 1.0,
-        radiation_level: 1.0,
+        radiation_level: 0.001862087,
     ),
     fluid_settings: (
         surface_pressure: 0.0,

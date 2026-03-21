@@ -102,14 +102,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Get cell type from mode
     let mode_idx = mode_indices[cell_idx];
-    var cell_type = 0u;
+    var cell_type = 0xFFFFFFFFu; // Invalid marker
+    var mode_valid = false;
     if (mode_idx < arrayLength(&mode_cell_types)) {
         cell_type = mode_cell_types[mode_idx];
+        mode_valid = true;
     }
     
-    // Only Test cells (cell_type == 0) auto-gain nutrients on GPU
+    // Only Test cells (cell_type == 0) with valid mode indices auto-gain nutrients on GPU
     // Phagocytes and Photocytes use specialized shaders (phagocyte_consume, photocyte_light)
-    let auto_gain_cell = cell_type == 0u;
+    // Cells with invalid mode indices should NOT auto-gain (prevents immortal grey cells)
+    let auto_gain_cell = mode_valid && cell_type == 0u;
     if (!auto_gain_cell) {
         return;
     }

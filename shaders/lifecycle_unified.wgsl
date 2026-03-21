@@ -117,10 +117,17 @@ var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
 @group(2) @binding(10)
 var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
 
-// Mode properties (read-only) — used to check min_adhesions before allowing division
-// Layout per mode: 20 floats = 80 bytes. 5 vec4s per mode.
+// mode_properties split into 5 vec4 sub-buffers (bindings 11-15)
 @group(2) @binding(11)
-var<storage, read> mode_properties_lc: array<vec4<f32>>;
+var<storage, read> mode_properties_v0: array<vec4<f32>>; // [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval]
+@group(2) @binding(12)
+var<storage, read> mode_properties_v1: array<vec4<f32>>; // [split_mass, nutrient_priority, swim_force, prioritize_when_low]
+@group(2) @binding(13)
+var<storage, read> mode_properties_v2: array<vec4<f32>>; // [max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a]
+@group(2) @binding(14)
+var<storage, read> mode_properties_v3: array<vec4<f32>>; // [flagellocyte_speed_b, flagellocyte_threshold_c, flagellocyte_use_signal, min_adhesions]
+@group(2) @binding(15)
+var<storage, read> mode_properties_v4: array<vec4<f32>>; // [max_adhesions, mode_a_after_splits, mode_b_after_splits, padding]
 
 // Adhesion bind group (group 3) - read-only for neighbor deferral check in division_scan
 @group(3) @binding(0)
@@ -236,7 +243,13 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Read nutrients from nutrients_buffer (fixed-point i32)
     let nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
     let was_dead = death_flags[cell_idx] == 1u;
-    let is_dead = nutrients < DEATH_NUTRIENT_THRESHOLD;
+    
+    // Check for invalid mode index (corrupted cell from mutation)
+    let mode_idx = mode_indices[cell_idx];
+    let has_invalid_mode = mode_idx >= arrayLength(&mode_cell_types);
+    
+    // Cell is dead if: nutrients below threshold OR invalid mode index
+    let is_dead = nutrients < DEATH_NUTRIENT_THRESHOLD || has_invalid_mode;
     
     if (is_dead && !was_dead) {
         // Newly dead cell - push slot to ring buffer for recycling
@@ -318,15 +331,9 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
-    // mode_properties_lc is stored as vec4<f32> array, 5 vec4s per mode (20 floats total).
-    // vec4[3]: x=max_splits, y=split_ratio, z=flagellocyte_signal_channel, w=flagellocyte_speed_a
-    // vec4[3]: x=flagellocyte_speed_b, y=flagellocyte_threshold_c, z=flagellocyte_use_signal, w=min_adhesions
-    // Wait — layout is indices 0-3 in vec4[0], 4-7 in vec4[1], 8-11 in vec4[2], 12-15 in vec4[3], 16-19 in vec4[4]
-    // Index 15 = vec4[3].w = min_adhesions
-    // Index 16 = vec4[4].x = max_adhesions
-    let props_base = mode_idx * 5u;
-    let min_adh_raw = mode_properties_lc[props_base + 3u].w;
-    let max_adh_raw = mode_properties_lc[props_base + 4u].x;
+    // mode_properties: v3.w = min_adhesions, v4.x = max_adhesions
+    let min_adh_raw = mode_properties_v3[mode_idx].w;
+    let max_adh_raw = mode_properties_v4[mode_idx].x;
     let min_adh = u32(max(min_adh_raw, 0.0));
     // max_adhesions: 0 or negative means use hardware cap (MAX_ADHESIONS_PER_CELL)
     let max_adh = select(MAX_ADHESIONS_PER_CELL, u32(max_adh_raw), max_adh_raw > 0.0);
@@ -431,9 +438,8 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 neighbor_adhesion_count++;
             }
         }
-        let neighbor_props_base = neighbor_mode_idx * 5u;
-        let neighbor_min_adh_raw = mode_properties_lc[neighbor_props_base + 3u].w;
-        let neighbor_max_adh_raw = mode_properties_lc[neighbor_props_base + 4u].x;
+        let neighbor_min_adh_raw = mode_properties_v3[neighbor_mode_idx].w;
+        let neighbor_max_adh_raw = mode_properties_v4[neighbor_mode_idx].x;
         let neighbor_min_adh = u32(max(neighbor_min_adh_raw, 0.0));
         let neighbor_max_adh = select(MAX_ADHESIONS_PER_CELL, u32(neighbor_max_adh_raw), neighbor_max_adh_raw > 0.0);
         

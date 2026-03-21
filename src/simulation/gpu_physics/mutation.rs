@@ -16,11 +16,16 @@ const MAX_MUTATION_CANDIDATES: u32 = 8192;
 const MAX_MUTATION_LOG_ENTRIES: u32 = 1024;
 
 /// Maximum genomes the mutation system can allocate
-/// (shares the 20K genome pool with user-created genomes)
-const GENOME_RING_CAPACITY: u32 = 20_000;
+/// (80K genomes × 40 modes each = 3.2M total modes, bounded by wgpu's 256 MB/buffer limit)
+const GENOME_RING_CAPACITY: u32 = 80_000;
 
-/// Maximum modes across all genomes (must match triple_buffer.rs: 40 * 20_000)
-const MAX_TOTAL_MODES: u32 = 800_000;
+/// Maximum modes across all genomes (must match triple_buffer.rs: 40 * 200_000 = 8_000_000)
+const MAX_TOTAL_MODES: u32 = 8_000_000;
+
+/// Run genome GC every N frames to avoid race conditions with mutations
+/// Running every frame causes newly created genomes to be recycled before cells can use them
+/// Reduced to 30 frames to reclaim mode buffer space more frequently at high mutation rates
+const GC_INTERVAL_FRAMES: u32 = 30;
 
 /// Vulnerability table entry matching the WGSL MutationParamEntry struct.
 /// Describes one mutable parameter: which buffer, offset, weight, bounds.
@@ -95,10 +100,27 @@ pub struct CollectParams {
     pub _pad2: u32,
 }
 
+/// Uniform params for the genome GC shader
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GCParams {
+    pub genome_capacity: u32,
+    pub genome_ring_capacity: u32,
+    pub _pad0: u32,
+    pub _pad1: u32,
+}
+
 pub struct MutationSystem {
+    // Whether the ring state has been initialized (first sync_genome_metadata call)
+    ring_initialized: bool,
+
     // Compute pipelines
     pipeline: wgpu::ComputePipeline,
     collect_pipeline: wgpu::ComputePipeline,
+    gc_pipeline: wgpu::ComputePipeline,
+    ref_count_clear_pipeline: wgpu::ComputePipeline,
+    ref_count_count_pipeline: wgpu::ComputePipeline,
+    mode_offset_reset_pipeline: wgpu::ComputePipeline,
 
     // Bind group layouts for mutation shader
     params_layout: wgpu::BindGroupLayout,
@@ -109,11 +131,26 @@ pub struct MutationSystem {
     collect_input_layout: wgpu::BindGroupLayout,
     collect_output_layout: wgpu::BindGroupLayout,
 
+    // Bind group layout for genome GC shader
+    gc_layout: wgpu::BindGroupLayout,
+
+    // Bind group layout for ref_count sync shader
+    ref_count_sync_layout: wgpu::BindGroupLayout,
+
+    // Bind group layout for mode_offset_reset shader (single buffer)
+    mode_offset_reset_layout: wgpu::BindGroupLayout,
+
     // Uniform buffer for MutationParams
     params_buffer: wgpu::Buffer,
 
     // Uniform buffer for CollectParams
     collect_params_buffer: wgpu::Buffer,
+
+    // Uniform buffer for GCParams
+    gc_params_buffer: wgpu::Buffer,
+
+    // Uniform buffer for ref_count sync params
+    ref_count_sync_params_buffer: wgpu::Buffer,
 
     // Vulnerability table (storage buffer, uploaded from CPU)
     vulnerability_table_buffer: wgpu::Buffer,
@@ -146,10 +183,20 @@ pub struct MutationSystem {
     collect_input_bind_group: Option<wgpu::BindGroup>,
     collect_output_bind_group: Option<wgpu::BindGroup>,
 
+    // Cached bind group for genome GC shader
+    gc_bind_group: Option<wgpu::BindGroup>,
+
+    // Cached bind group for ref_count sync shader
+    ref_count_sync_bind_group: Option<wgpu::BindGroup>,
+
+    // Cached bind group for mode_offset_reset shader
+    mode_offset_reset_bind_group: Option<wgpu::BindGroup>,
+
     // State
     rng_counter: AtomicU32,
     radiation_level: f32,
     cell_capacity: u32,
+    gc_frame_counter: AtomicU32,
 }
 
 impl MutationSystem {
@@ -163,6 +210,16 @@ impl MutationSystem {
         let collect_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Mutation Collect Candidates Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/mutation_collect_candidates.wgsl").into()),
+        });
+
+        let gc_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Genome GC Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/genome_gc.wgsl").into()),
+        });
+
+        let ref_count_sync_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Genome Ref Count Sync Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/genome_ref_count_sync.wgsl").into()),
         });
 
         // --- Bind group layouts ---
@@ -292,22 +349,40 @@ impl MutationSystem {
         let buffers_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Mutation Buffers Layout"),
             entries: &[
-                // bindings 0-8: mode buffers (all read_write storage)
-                Self::storage_rw_entry(0),  // mode_properties
-                Self::storage_rw_entry(1),  // genome_mode_data
-                Self::storage_rw_entry(2),  // child_mode_indices
-                Self::storage_rw_entry(3),  // mode_cell_types
-                Self::storage_rw_entry(4),  // parent_make_adhesion_flags
-                Self::storage_rw_entry(5),  // child_a_keep_adhesion_flags
-                Self::storage_rw_entry(6),  // child_b_keep_adhesion_flags
-                Self::storage_rw_entry(7),  // glueocyte_env_adhesion_flags
-                Self::storage_rw_entry(8),  // oculocyte_params
-                // binding 9: mutation_log (read_write)
+                // bindings 0-4: mode_properties sub-buffers (v0-v4)
+                Self::storage_rw_entry(0),
+                Self::storage_rw_entry(1),
+                Self::storage_rw_entry(2),
+                Self::storage_rw_entry(3),
+                Self::storage_rw_entry(4),
+                // bindings 5-9: genome_mode_data sub-buffers (v0-v4)
+                Self::storage_rw_entry(5),
+                Self::storage_rw_entry(6),
+                Self::storage_rw_entry(7),
+                Self::storage_rw_entry(8),
                 Self::storage_rw_entry(9),
-                // binding 10: mutation_log_count (read_write)
+                // binding 10: child_mode_indices
                 Self::storage_rw_entry(10),
-                // binding 11: mode_visuals (read_write)
+                // binding 11: mode_cell_types
                 Self::storage_rw_entry(11),
+                // binding 12: parent_make_adhesion_flags
+                Self::storage_rw_entry(12),
+                // binding 13: child_a_keep_adhesion_flags
+                Self::storage_rw_entry(13),
+                // binding 14: child_b_keep_adhesion_flags
+                Self::storage_rw_entry(14),
+                // binding 15: glueocyte_env_adhesion_flags
+                Self::storage_rw_entry(15),
+                // binding 16: oculocyte_params
+                Self::storage_rw_entry(16),
+                // binding 17: mutation_log
+                Self::storage_rw_entry(17),
+                // binding 18: mutation_log_count
+                Self::storage_rw_entry(18),
+                // binding 19: mode_colors
+                Self::storage_rw_entry(19),
+                // binding 20: mode_emissive
+                Self::storage_rw_entry(20),
             ],
         });
 
@@ -384,6 +459,31 @@ impl MutationSystem {
             ],
         });
 
+        let gc_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Genome GC Layout"),
+            entries: &[
+                // binding 0: genome_ring_state (read_write storage)
+                Self::storage_rw_entry(0),
+                // binding 1: genome_free_ring (read_write storage)
+                Self::storage_rw_entry(1),
+                // binding 2: genome_ref_counts (read_write storage)
+                Self::storage_rw_entry(2),
+                // binding 3: genome_meta (read_write storage)
+                Self::storage_rw_entry(3),
+                // binding 4: gc_params (uniform)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
         // --- Pipelines ---
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -416,6 +516,124 @@ impl MutationSystem {
             cache: None,
         });
 
+        let gc_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Genome GC Pipeline Layout"),
+            bind_group_layouts: &[&gc_layout],
+            push_constant_ranges: &[],
+        });
+
+        let gc_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Genome GC Pipeline"),
+            layout: Some(&gc_pipeline_layout),
+            module: &gc_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        let ref_count_sync_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Ref Count Sync Layout"),
+            entries: &[
+                // binding 0: sync params (uniform)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 1: genome_ids (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 2: death_flags (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 3: genome_ref_counts (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let ref_count_sync_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Ref Count Sync Pipeline Layout"),
+            bind_group_layouts: &[&ref_count_sync_layout],
+            push_constant_ranges: &[],
+        });
+
+        let ref_count_clear_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Ref Count Clear Pipeline"),
+            layout: Some(&ref_count_sync_pipeline_layout),
+            module: &ref_count_sync_shader,
+            entry_point: Some("clear_ref_counts"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        let ref_count_count_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Ref Count Count Pipeline"),
+            layout: Some(&ref_count_sync_pipeline_layout),
+            module: &ref_count_sync_shader,
+            entry_point: Some("count_genome_usage"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        // Mode offset reset shader and pipeline
+        let mode_offset_reset_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Mode Offset Reset Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/mode_offset_reset.wgsl").into()),
+        });
+
+        let mode_offset_reset_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Mode Offset Reset Layout"),
+            entries: &[
+                // binding 0: genome_ring_state (read_write storage)
+                Self::storage_rw_entry(0),
+            ],
+        });
+
+        let mode_offset_reset_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Mode Offset Reset Pipeline Layout"),
+            bind_group_layouts: &[&mode_offset_reset_layout],
+            push_constant_ranges: &[],
+        });
+
+        let mode_offset_reset_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Mode Offset Reset Pipeline"),
+            layout: Some(&mode_offset_reset_pipeline_layout),
+            module: &mode_offset_reset_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         // --- Buffers ---
 
         let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -432,6 +650,20 @@ impl MutationSystem {
             mapped_at_creation: false,
         });
 
+        let gc_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Genome GC Params Uniform"),
+            size: std::mem::size_of::<GCParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let ref_count_sync_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Ref Count Sync Params Uniform"),
+            size: std::mem::size_of::<GCParams>() as u64, // Same size as GCParams (cell_capacity, genome_capacity, pads)
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let vulnerability_table = Self::build_default_vulnerability_table();
         let table_size = (vulnerability_table.len() * std::mem::size_of::<MutationParamEntry>()) as u64;
         let vulnerability_table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -442,11 +674,11 @@ impl MutationSystem {
         });
         queue.write_buffer(&vulnerability_table_buffer, 0, bytemuck::cast_slice(&vulnerability_table));
 
-        // Genome ring state: [head, tail, next_id, next_mode_offset]
+        // Genome ring state: [head, tail, next_id, next_mode_offset, max_active_mode_offset]
         let genome_ring_state_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Genome Ring State"),
-            size: 16, // 4 x u32
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            size: 20, // 5 x u32
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
@@ -502,13 +734,22 @@ impl MutationSystem {
         Self {
             pipeline,
             collect_pipeline,
+            gc_pipeline,
+            ref_count_clear_pipeline,
+            ref_count_count_pipeline,
+            mode_offset_reset_pipeline,
             params_layout,
             candidates_layout,
             buffers_layout,
             collect_input_layout,
             collect_output_layout,
+            gc_layout,
+            ref_count_sync_layout,
+            mode_offset_reset_layout,
             params_buffer,
             collect_params_buffer,
+            gc_params_buffer,
+            ref_count_sync_params_buffer,
             vulnerability_table_buffer,
             vulnerability_table,
             genome_ring_state_buffer,
@@ -524,9 +765,14 @@ impl MutationSystem {
             buffers_bind_group: None,
             collect_input_bind_group: None,
             collect_output_bind_group: None,
+            gc_bind_group: None,
+            ref_count_sync_bind_group: None,
+            mode_offset_reset_bind_group: None,
             rng_counter: AtomicU32::new(0),
-            radiation_level: 0.0,
+            radiation_level: 1.0,  // Default to enabled to avoid timing issues with UI sync
             cell_capacity,
+            gc_frame_counter: AtomicU32::new(0),
+            ring_initialized: false,
         }
     }
 
@@ -548,193 +794,12 @@ impl MutationSystem {
     /// Weights are relative — higher weight = more likely to be selected.
     /// This table is intentionally flexible: add/remove/reweight entries freely.
     fn build_default_vulnerability_table() -> Vec<MutationParamEntry> {
+        // Dramatic color mutation: re-rolls all 3 RGB components of one random mode.
+        // element_offset 0xFF signals the shader to randomize all components.
         vec![
-            // === mode_properties (buffer_id=0) ===
-            // Layout: 20 floats per mode, indexed as element_offset 0-19
-            //  0: nutrient_gain_rate
-            //  1: max_cell_size
-            //  2: membrane_stiffness
-            //  3: split_interval
-            //  4: split_mass
-            //  5: nutrient_priority
-            //  6: swim_force
-            //  7: prioritize_when_low (bool as f32)
-            //  8: max_splits
-            //  9: split_ratio
-            // 10: flagellocyte_signal_channel
-            // 11: flagellocyte_speed_a
-            // 12: flagellocyte_speed_b
-            // 13: flagellocyte_threshold_c
-            // 14: flagellocyte_use_signal (bool as f32)
-            // 15: min_adhesions
-            // 16: max_adhesions
-
-            // nutrient_gain_rate: medium vulnerability
             MutationParamEntry {
-                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 0,
-                weight: 2.0, min_delta: 0.01, max_delta: 0.1,
-                min_value: 0.0, max_value: 5.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // max_cell_size: medium vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 1,
-                weight: 2.0, min_delta: 0.05, max_delta: 0.3,
-                min_value: 0.5, max_value: 3.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // membrane_stiffness: medium vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 2,
-                weight: 1.5, min_delta: 1.0, max_delta: 10.0,
-                min_value: 0.0, max_value: 200.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // split_interval: medium-high vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 3,
-                weight: 3.0, min_delta: 0.5, max_delta: 3.0,
-                min_value: 1.0, max_value: 60.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // split_mass (as nutrient threshold): medium vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 4,
-                weight: 2.5, min_delta: 0.1, max_delta: 0.5,
-                min_value: 1.2, max_value: 5.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // nutrient_priority: medium vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 5,
-                weight: 2.0, min_delta: 0.1, max_delta: 1.0,
-                min_value: 0.1, max_value: 10.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // swim_force: medium vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 6,
-                weight: 2.0, min_delta: 0.01, max_delta: 0.1,
-                min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // prioritize_when_low: low vulnerability (boolean)
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 7,
-                weight: 0.5, min_delta: 0.0, max_delta: 0.0,
-                min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
-            },
-            // split_ratio: medium vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 9,
-                weight: 2.0, min_delta: 0.02, max_delta: 0.1,
-                min_value: 0.1, max_value: 0.9, data_type: data_type::CONTINUOUS_F32,
-            },
-            // flagellocyte_speed_a: medium vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 11,
-                weight: 1.5, min_delta: 0.01, max_delta: 0.1,
-                min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // flagellocyte_speed_b: medium vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 12,
-                weight: 1.5, min_delta: 0.01, max_delta: 0.1,
-                min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // flagellocyte_threshold_c: low vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 13,
-                weight: 1.0, min_delta: 0.5, max_delta: 5.0,
-                min_value: -50.0, max_value: 50.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // min_adhesions: low vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 15,
-                weight: 0.5, min_delta: 1.0, max_delta: 1.0,
-                min_value: 0.0, max_value: 10.0, data_type: data_type::INTEGER,
-            },
-            // max_adhesions: low vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 16,
-                weight: 0.5, min_delta: 1.0, max_delta: 2.0,
-                min_value: 0.0, max_value: 20.0, data_type: data_type::INTEGER,
-            },
-
-            // === mode_cell_types (buffer_id=1) ===
-            // Cell type: very low vulnerability (dramatic change)
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_CELL_TYPES, element_offset: 0,
-                weight: 0.3, min_delta: 0.0, max_delta: 0.0,
-                min_value: 0.0, max_value: 9.0, data_type: data_type::INTEGER,
-            },
-
-            // === child_mode_indices (buffer_id=2) ===
-            // child_a mode pointer: medium-high vulnerability (lineage divergence)
-            MutationParamEntry {
-                buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 0,
-                weight: 2.5, min_delta: 1.0, max_delta: 2.0,
-                min_value: 0.0, max_value: 39.0, data_type: data_type::MODE_INDEX_CLAMP,
-            },
-            // child_b mode pointer: medium-high vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 1,
-                weight: 2.5, min_delta: 1.0, max_delta: 2.0,
-                min_value: 0.0, max_value: 39.0, data_type: data_type::MODE_INDEX_CLAMP,
-            },
-
-            // === Boolean flag buffers (buffer_id=3,4,5) ===
-            // parent_make_adhesion: very low vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::PARENT_MAKE_ADHESION, element_offset: 0,
-                weight: 0.3, min_delta: 0.0, max_delta: 0.0,
-                min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
-            },
-            // child_a_keep_adhesion: very low vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::CHILD_A_KEEP_ADHESION, element_offset: 0,
-                weight: 0.3, min_delta: 0.0, max_delta: 0.0,
-                min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
-            },
-            // child_b_keep_adhesion: very low vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::CHILD_B_KEEP_ADHESION, element_offset: 0,
-                weight: 0.3, min_delta: 0.0, max_delta: 0.0,
-                min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
-            },
-
-            // === glueocyte_env_adhesion (buffer_id=7) ===
-            MutationParamEntry {
-                buffer_id: buffer_id::GLUEOCYTE_ENV_ADHESION, element_offset: 0,
-                weight: 0.2, min_delta: 0.0, max_delta: 0.0,
-                min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
-            },
-
-            // === oculocyte_params (buffer_id=8) ===
-            // sense_type: very low vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::OCULOCYTE_PARAMS, element_offset: 0,
-                weight: 0.2, min_delta: 1.0, max_delta: 1.0,
-                min_value: 0.0, max_value: 3.0, data_type: data_type::INTEGER,
-            },
-            // signal_hops: low vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::OCULOCYTE_PARAMS, element_offset: 2,
-                weight: 0.5, min_delta: 1.0, max_delta: 3.0,
-                min_value: 1.0, max_value: 20.0, data_type: data_type::INTEGER,
-            },
-
-            // === mode_visuals (buffer_id=9) ===
-            // Layout: 2 vec4 per mode — [0] = color (xyz=RGB, w=1.0), [1] = emissive_pad
-            // color R: medium-high vulnerability (visible, interesting mutations)
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_VISUALS, element_offset: 0,
-                weight: 1.5, min_delta: 0.01, max_delta: 0.15,
-                min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // color G: medium-high vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_VISUALS, element_offset: 1,
-                weight: 1.5, min_delta: 0.01, max_delta: 0.15,
-                min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // color B: medium-high vulnerability
-            MutationParamEntry {
-                buffer_id: buffer_id::MODE_VISUALS, element_offset: 2,
-                weight: 1.5, min_delta: 0.01, max_delta: 0.15,
+                buffer_id: buffer_id::MODE_VISUALS, element_offset: 0xFF,
+                weight: 1.0, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
             },
         ]
@@ -750,6 +815,32 @@ impl MutationSystem {
         self.radiation_level
     }
 
+    /// Switch between subtle (small perturbations) and dramatic (full re-roll) color mutations.
+    pub fn set_subtle_mutations(&mut self, queue: &wgpu::Queue, subtle: bool) {
+        let entries = if subtle {
+            vec![
+                MutationParamEntry {
+                    buffer_id: buffer_id::MODE_VISUALS, element_offset: 0,
+                    weight: 1.0, min_delta: 0.03, max_delta: 0.12,
+                    min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::MODE_VISUALS, element_offset: 1,
+                    weight: 1.0, min_delta: 0.03, max_delta: 0.12,
+                    min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::MODE_VISUALS, element_offset: 2,
+                    weight: 1.0, min_delta: 0.03, max_delta: 0.12,
+                    min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+            ]
+        } else {
+            Self::build_default_vulnerability_table()
+        };
+        self.update_vulnerability_table(queue, entries);
+    }
+
     /// Update the vulnerability table with new entries.
     /// Call this when the user modifies vulnerability weights in the UI.
     pub fn update_vulnerability_table(&mut self, queue: &wgpu::Queue, entries: Vec<MutationParamEntry>) {
@@ -761,41 +852,57 @@ impl MutationSystem {
         );
     }
 
-    /// Initialize genome metadata for user-created genomes.
-    /// Called when genomes are first loaded or when a new genome is added.
-    /// Maps each genome_id to its mode_count and base_mode_offset in the flat buffer.
+    /// Sync user genome metadata to GPU.
+    /// Called when genomes are first loaded or when a genome is added/modified.
+    ///
+    /// IMPORTANT: Only writes the user genome entries (0..genomes.len()) using
+    /// targeted partial writes — never zeros the rest of the buffer, which would
+    /// wipe GPU-written metadata for mutated genomes.
+    ///
+    /// The ring state (next_genome_id, next_mode_offset) is only initialized on
+    /// the very first call. Subsequent calls leave it untouched so that mutation
+    /// IDs already allocated by the GPU shader are not recycled.
     pub fn sync_genome_metadata(
-        &self,
+        &mut self,
         queue: &wgpu::Queue,
         genomes: &[crate::genome::Genome],
     ) {
-        let mut meta = vec![GenomeMeta { mode_count: 0, base_mode_offset: 0, ref_count: 0, flags: 0 };
-                            GENOME_RING_CAPACITY as usize];
-
         let mut offset = 0u32;
         for (i, genome) in genomes.iter().enumerate() {
             if i >= GENOME_RING_CAPACITY as usize {
                 break;
             }
-            meta[i] = GenomeMeta {
+            let entry = GenomeMeta {
                 mode_count: genome.modes.len() as u32,
                 base_mode_offset: offset,
-                ref_count: 0, // Will be set by GPU or tracked separately
+                ref_count: 0,
                 flags: 0,
             };
+            // Partial write: only touch this genome's entry, leave all others intact
+            let byte_offset = (i * std::mem::size_of::<GenomeMeta>()) as u64;
+            queue.write_buffer(&self.genome_meta_buffer, byte_offset, bytemuck::bytes_of(&entry));
+
+            // Keep user genomes immortal (ref_count = u32::MAX so GC never recycles them)
+            let ref_byte_offset = (i * std::mem::size_of::<u32>()) as u64;
+            let immortal: u32 = u32::MAX;
+            queue.write_buffer(&self.genome_ref_counts_buffer, ref_byte_offset, bytemuck::bytes_of(&immortal));
+
             offset += genome.modes.len() as u32;
         }
 
-        queue.write_buffer(&self.genome_meta_buffer, 0, bytemuck::cast_slice(&meta));
-
-        // Initialize ring state: next_id starts after user genomes, next_mode_offset after their modes
-        let initial_ring_state: [u32; 4] = [
-            0,                          // head
-            0,                          // tail
-            genomes.len() as u32,       // next_genome_id (after user genomes)
-            offset,                     // next_mode_offset (after user genome modes)
-        ];
-        queue.write_buffer(&self.genome_ring_state_buffer, 0, bytemuck::cast_slice(&initial_ring_state));
+        // Only reset the ring state on the very first call.
+        // After that the GPU mutation shader owns next_genome_id and next_mode_offset —
+        // resetting them would cause the shader to re-use IDs already in use by live cells.
+        if !self.ring_initialized {
+            let initial_ring_state: [u32; 4] = [
+                0,                          // head
+                0,                          // tail
+                genomes.len() as u32,       // next_genome_id (starts after user genomes)
+                offset,                     // next_mode_offset (starts after user genome modes)
+            ];
+            queue.write_buffer(&self.genome_ring_state_buffer, 0, bytemuck::cast_slice(&initial_ring_state));
+            self.ring_initialized = true;
+        }
     }
 
     /// Build bind groups. Call after triple buffer or genome buffers change.
@@ -804,8 +911,16 @@ impl MutationSystem {
         device: &wgpu::Device,
         genome_ids_buffer: &wgpu::Buffer,
         mode_indices_buffer: &wgpu::Buffer,
-        mode_properties_buffer: &wgpu::Buffer,
-        genome_mode_data_buffer: &wgpu::Buffer,
+        mode_properties_v0: &wgpu::Buffer,
+        mode_properties_v1: &wgpu::Buffer,
+        mode_properties_v2: &wgpu::Buffer,
+        mode_properties_v3: &wgpu::Buffer,
+        mode_properties_v4: &wgpu::Buffer,
+        genome_mode_data_v0: &wgpu::Buffer,
+        genome_mode_data_v1: &wgpu::Buffer,
+        genome_mode_data_v2: &wgpu::Buffer,
+        genome_mode_data_v3: &wgpu::Buffer,
+        genome_mode_data_v4: &wgpu::Buffer,
         child_mode_indices_buffer: &wgpu::Buffer,
         mode_cell_types_buffer: &wgpu::Buffer,
         parent_make_adhesion_flags_buffer: &wgpu::Buffer,
@@ -813,7 +928,8 @@ impl MutationSystem {
         child_b_keep_adhesion_flags_buffer: &wgpu::Buffer,
         glueocyte_env_adhesion_flags_buffer: &wgpu::Buffer,
         oculocyte_params_buffer: &wgpu::Buffer,
-        mode_visuals_buffer: &wgpu::Buffer,
+        mode_colors_buffer: &wgpu::Buffer,
+        mode_emissive_buffer: &wgpu::Buffer,
     ) {
         self.params_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Mutation Params Bind Group"),
@@ -843,18 +959,27 @@ impl MutationSystem {
             label: Some("Mutation Buffers Bind Group"),
             layout: &self.buffers_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: mode_properties_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: genome_mode_data_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: child_mode_indices_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: mode_cell_types_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: parent_make_adhesion_flags_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: child_a_keep_adhesion_flags_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: child_b_keep_adhesion_flags_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 7, resource: glueocyte_env_adhesion_flags_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 8, resource: oculocyte_params_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 9, resource: self.mutation_log_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 10, resource: self.mutation_log_count_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 11, resource: mode_visuals_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0, resource: mode_properties_v0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: mode_properties_v1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: mode_properties_v2.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: mode_properties_v3.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: mode_properties_v4.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: genome_mode_data_v0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: genome_mode_data_v1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: genome_mode_data_v2.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8, resource: genome_mode_data_v3.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 9, resource: genome_mode_data_v4.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 10, resource: child_mode_indices_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 11, resource: mode_cell_types_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 12, resource: parent_make_adhesion_flags_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 13, resource: child_a_keep_adhesion_flags_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 14, resource: child_b_keep_adhesion_flags_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 15, resource: glueocyte_env_adhesion_flags_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 16, resource: oculocyte_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 17, resource: self.mutation_log_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 18, resource: self.mutation_log_count_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 19, resource: mode_colors_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 20, resource: mode_emissive_buffer.as_entire_binding() },
             ],
         }));
     }
@@ -901,14 +1026,68 @@ impl MutationSystem {
         }));
     }
 
+    /// Build bind group for the genome GC pipeline.
+    pub fn rebuild_gc_bind_group(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        // Upload GC params
+        let gc_params = GCParams {
+            genome_capacity: GENOME_RING_CAPACITY,
+            genome_ring_capacity: GENOME_RING_CAPACITY,
+            _pad0: 0,
+            _pad1: 0,
+        };
+        queue.write_buffer(&self.gc_params_buffer, 0, bytemuck::bytes_of(&gc_params));
+
+        self.gc_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Genome GC Bind Group"),
+            layout: &self.gc_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.genome_ring_state_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: self.genome_free_ring_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: self.genome_ref_counts_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: self.genome_meta_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: self.gc_params_buffer.as_entire_binding() },
+            ],
+        }));
+    }
+
+    /// Build bind group for the ref_count sync pipeline.
+    /// Requires genome_ids and death_flags from triple buffer.
+    pub fn rebuild_ref_count_sync_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        genome_ids_buffer: &wgpu::Buffer,
+        death_flags_buffer: &wgpu::Buffer,
+    ) {
+        // Upload sync params
+        let sync_params = GCParams {
+            genome_capacity: self.cell_capacity,
+            genome_ring_capacity: GENOME_RING_CAPACITY,
+            _pad0: 0,
+            _pad1: 0,
+        };
+        queue.write_buffer(&self.ref_count_sync_params_buffer, 0, bytemuck::bytes_of(&sync_params));
+
+        self.ref_count_sync_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Ref Count Sync Bind Group"),
+            layout: &self.ref_count_sync_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.ref_count_sync_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: genome_ids_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: death_flags_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: self.genome_ref_counts_buffer.as_entire_binding() },
+            ],
+        }));
+    }
+
     /// Dispatch the full mutation pipeline: collect_candidates → mutation.
     /// Call this AFTER the division execute pass completes.
     pub fn dispatch(
-        &self,
+        &mut self,
+        device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         current_frame: u32,
-        total_mode_count: u32,
     ) {
         if self.radiation_level <= 0.0 {
             return; // Mutations disabled
@@ -960,7 +1139,7 @@ impl MutationSystem {
                 rng_seed,
                 current_frame,
                 param_table_size: self.vulnerability_table.len() as u32,
-                total_mode_count: total_mode_count.min(MAX_TOTAL_MODES),
+                total_mode_count: MAX_TOTAL_MODES,
                 max_modes_per_genome: 40,
                 genome_ring_capacity: GENOME_RING_CAPACITY,
                 _pad0: 0,
@@ -984,6 +1163,93 @@ impl MutationSystem {
             let workgroups = (MAX_MUTATION_CANDIDATES + 63) / 64;
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
+
+        // Stage 3: Periodic genome reference count synchronization + GC
+        // Run every GC_INTERVAL_FRAMES (120 frames) to avoid race conditions
+        // This gives mutations time to stabilize before GC recycles genomes
+        let gc_frame = self.gc_frame_counter.fetch_add(1, Ordering::Relaxed);
+        let should_run_gc = gc_frame % GC_INTERVAL_FRAMES == 0;
+        
+        if should_run_gc {
+            // Step 0: Clear max_active_mode_offset before GC scan
+            // genome_ring_state[4] = 0
+            queue.write_buffer(&self.genome_ring_state_buffer, 16, bytemuck::bytes_of(&0u32));
+            
+            if let Some(sync_bg) = &self.ref_count_sync_bind_group {
+                // Step 1: Clear all ref_counts to 0
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Ref Count Clear Pass"),
+                        timestamp_writes: None,
+                    });
+
+                    pass.set_pipeline(&self.ref_count_clear_pipeline);
+                    pass.set_bind_group(0, sync_bg, &[]);
+
+                    let workgroups = (GENOME_RING_CAPACITY + 63) / 64;
+                    pass.dispatch_workgroups(workgroups, 1, 1);
+                }
+
+                // Step 2: Count active cells per genome
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Ref Count Count Pass"),
+                        timestamp_writes: None,
+                    });
+
+                    pass.set_pipeline(&self.ref_count_count_pipeline);
+                    pass.set_bind_group(0, sync_bg, &[]);
+
+                    let workgroups = (self.cell_capacity + 63) / 64;
+                    pass.dispatch_workgroups(workgroups, 1, 1);
+                }
+            }
+
+            // Step 3: Genome garbage collection
+            // Recycle genomes with ref_count == 0 and track max active mode offset
+            if let Some(gc_bg) = &self.gc_bind_group {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Genome GC Pass"),
+                    timestamp_writes: None,
+                });
+
+                pass.set_pipeline(&self.gc_pipeline);
+                pass.set_bind_group(0, gc_bg, &[]);
+
+                let workgroups = (GENOME_RING_CAPACITY + 63) / 64;
+                pass.dispatch_workgroups(workgroups, 1, 1);
+            }
+            
+            // Step 4: Mode buffer compaction
+            // Reset next_mode_offset to max_active_mode_offset (computed by GC shader)
+            // This reclaims all trailing unused mode buffer space.
+            if self.mode_offset_reset_bind_group.is_none() {
+                // Build bind group on first use
+                self.mode_offset_reset_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Mode Offset Reset Bind Group"),
+                    layout: &self.mode_offset_reset_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.genome_ring_state_buffer.as_entire_binding(),
+                        },
+                    ],
+                }));
+            }
+            
+            if let Some(reset_bg) = &self.mode_offset_reset_bind_group {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Mode Offset Reset Pass"),
+                    timestamp_writes: None,
+                });
+
+                pass.set_pipeline(&self.mode_offset_reset_pipeline);
+                pass.set_bind_group(0, reset_bg, &[]);
+
+                // Single-thread dispatch (1,1,1)
+                pass.dispatch_workgroups(1, 1, 1);
+            }
+        }
     }
 
     /// Get the mutation candidates buffer (for the division shader to write to)
@@ -994,6 +1260,50 @@ impl MutationSystem {
     /// Get the mutation candidate count buffer (for the division shader to write to)
     pub fn mutation_candidate_count_buffer(&self) -> &wgpu::Buffer {
         &self.mutation_candidate_count_buffer
+    }
+
+    /// Debug: Read back genome_ring_state and print values
+    pub fn debug_print_genome_ring_state(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        // Create staging buffer for readback
+        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Genome Ring State Staging"),
+            size: 20, // 5 x u32
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create encoder and copy
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Genome Ring State Readback"),
+        });
+        encoder.copy_buffer_to_buffer(&self.genome_ring_state_buffer, 0, &staging_buffer, 0, 20);
+        queue.submit(Some(encoder.finish()));
+
+        // Map and read
+        let buffer_slice = staging_buffer.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            sender.send(result).unwrap();
+        });
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        receiver.recv().unwrap().unwrap();
+
+        let data = buffer_slice.get_mapped_range();
+        let values: &[u32] = bytemuck::cast_slice(&data);
+        println!("[MUTATION DEBUG] genome_ring_state:");
+        println!("  [0] head: {}", values[0]);
+        println!("  [1] tail: {}", values[1]);
+        println!("  [2] next_id: {}", values[2]);
+        println!("  [3] next_mode_offset: {} / {} ({:.1}%)", 
+            values[3], MAX_TOTAL_MODES, (values[3] as f32 / MAX_TOTAL_MODES as f32) * 100.0);
+        println!("  [4] max_active_mode_offset: {} / {} ({:.1}%)", 
+            values[4], MAX_TOTAL_MODES, (values[4] as f32 / MAX_TOTAL_MODES as f32) * 100.0);
+        
+        drop(data);
+        staging_buffer.unmap();
     }
 
     /// Get the mutation log buffer (for readback/UI display)

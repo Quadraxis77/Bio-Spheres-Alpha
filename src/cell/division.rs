@@ -442,17 +442,6 @@ pub fn division_step(
             let parent_mode = genome.modes.get(data.parent_mode_idx);
 
             if let Some(mode) = parent_mode {
-                let child_a_keep = mode.child_a.keep_adhesion;
-                let child_b_keep = mode.child_b.keep_adhesion;
-                let will_reach_max_splits = mode.max_splits >= 0
-                    && (data.parent_split_count + 1) >= mode.max_splits;
-
-                println!(
-                    "[DIVISION preview] parent={} mode={} make_adhesion={} child_a_keep={} child_b_keep={} will_reach_max_splits={}",
-                    data.parent_idx, data.parent_mode_idx, mode.parent_make_adhesion,
-                    child_a_keep, child_b_keep, will_reach_max_splits
-                );
-
                 // parent_make_adhesion always creates a sibling bond, regardless of keep_adhesion
                 // (matches GPU line 588: only checks make_adhesion flag)
                 if mode.parent_make_adhesion {
@@ -489,14 +478,9 @@ pub fn division_step(
                         let child_a_split_ratio = child_a_mode.map(|m| m.split_ratio).unwrap_or(0.5);
                         let child_b_split_ratio = child_b_mode.map(|m| m.split_ratio).unwrap_or(0.5);
 
-                        println!(
-                            "[DIVISION preview] -> creating sibling adhesion: child_a={} child_b={} anchor_a={:?} anchor_b={:?}",
-                            data.child_a_slot, data.child_b_slot,
-                            anchor_direction_a, anchor_direction_b
-                        );
 
                         // Create child-to-child connection with parent's mode index
-                        let result = state.adhesion_manager.add_adhesion_with_directions(
+                        let _result = state.adhesion_manager.add_adhesion_with_directions(
                             &mut state.adhesion_connections,
                             data.child_a_slot,
                             data.child_b_slot,
@@ -511,11 +495,6 @@ pub fn division_step(
                             child_b_split_ratio,
                             current_time,
                         );
-                        println!(
-                            "[DIVISION preview] -> adhesion result: {:?}  total_adhesions={}",
-                            result,
-                            state.adhesion_manager.count_active_adhesions(data.child_a_slot)
-                        );
                 } else {
                     // parent_make_adhesion is off: grant 1-second sister immunity so
                     // Glueocyte children don't immediately bond to each other on contact.
@@ -526,10 +505,6 @@ pub fn division_step(
                     state.sister_expiry[data.child_a_slot] = expiry;
                     state.sister_cell_id[data.child_b_slot] = id_a;
                     state.sister_expiry[data.child_b_slot] = expiry;
-                    println!(
-                        "[DIVISION preview] -> make_adhesion=false, sister immunity granted child_a={} child_b={}",
-                        data.child_a_slot, data.child_b_slot
-                    );
                 }
             }
         }

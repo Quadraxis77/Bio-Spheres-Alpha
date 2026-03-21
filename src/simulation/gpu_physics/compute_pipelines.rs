@@ -954,10 +954,11 @@ impl GpuPhysicsPipelines {
                     binding: 10,
                     resource: buffers.nutrients_buffer.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 11,
-                    resource: buffers.mode_properties.as_entire_binding(),
-                },
+                wgpu::BindGroupEntry { binding: 11, resource: buffers.mode_properties_v0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 12, resource: buffers.mode_properties_v1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 13, resource: buffers.mode_properties_v2.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 14, resource: buffers.mode_properties_v3.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 15, resource: buffers.mode_properties_v4.as_entire_binding() },
             ],
         })
     }
@@ -1034,54 +1035,26 @@ impl GpuPhysicsPipelines {
                     binding: 14,
                     resource: buffers.rotations[output_index].as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 15,
-                    resource: buffers.genome_mode_data.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 16,
-                    resource: buffers.parent_make_adhesion_flags.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 17,
-                    resource: buffers.child_mode_indices.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 18,
-                    resource: buffers.mode_properties.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 19,
-                    resource: buffers.cell_types.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 20,
-                    resource: buffers.mode_cell_types.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 21,
-                    resource: buffers.child_a_keep_adhesion_flags.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 22,
-                    resource: buffers.child_b_keep_adhesion_flags.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 23,
-                    resource: buffers.nutrients_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 24,
-                    resource: buffers.genome_orientations.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 25,
-                    resource: buffers.child_a_after_split_keep_adhesion_flags.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 26,
-                    resource: buffers.child_b_after_split_keep_adhesion_flags.as_entire_binding(),
-                },
+                wgpu::BindGroupEntry { binding: 15, resource: buffers.genome_mode_data_v0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 16, resource: buffers.genome_mode_data_v1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 17, resource: buffers.genome_mode_data_v2.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 18, resource: buffers.genome_mode_data_v3.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 19, resource: buffers.genome_mode_data_v4.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 20, resource: buffers.parent_make_adhesion_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 21, resource: buffers.child_mode_indices.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 22, resource: buffers.mode_properties_v0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 23, resource: buffers.mode_properties_v1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 24, resource: buffers.mode_properties_v2.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 25, resource: buffers.mode_properties_v3.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 26, resource: buffers.mode_properties_v4.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 27, resource: buffers.cell_types.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 28, resource: buffers.mode_cell_types.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 29, resource: buffers.child_a_keep_adhesion_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 30, resource: buffers.child_b_keep_adhesion_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 31, resource: buffers.nutrients_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 32, resource: buffers.genome_orientations.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 33, resource: buffers.child_a_after_split_keep_adhesion_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 34, resource: buffers.child_b_after_split_keep_adhesion_flags.as_entire_binding() },
             ],
         })
     }
@@ -1917,17 +1890,12 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Binding 11: Mode properties (read-only) — for min_adhesions division gate
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 11,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
+                    // Bindings 11-15: Mode properties v0-v4 (for min_adhesions division gate)
+                    wgpu::BindGroupLayoutEntry { binding: 11, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 12, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 13, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 14, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 15, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 ],
             })
         } else {
@@ -2100,138 +2068,38 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Genome mode data (child orientations)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 15,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
+                    // Genome mode data v0-v4 (child orientations, split quat — 5 sub-buffers)
+                    wgpu::BindGroupLayoutEntry { binding: 15, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 16, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 17, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 18, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 19, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                     // Parent make adhesion flags
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 16,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Child mode indices (child_a_mode, child_b_mode per mode)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 17,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Mode properties (nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, split_mass per mode)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 18,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Cell types (0 = Test, 1 = Flagellocyte) - DEPRECATED, use mode_cell_types
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 19,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 20,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Child A keep adhesion flags (for inheritance)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 21,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Child B keep adhesion flags (for inheritance)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 22,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Nutrients buffer (read-write, fixed-point i32 atomic)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 23,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Genome orientations (read-write) - pure genome-derived orientations per cell
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 24,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Child A after-split keep adhesion flags (for inheritance when max_splits reached)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 25,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Child B after-split keep adhesion flags (for inheritance when max_splits reached)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 26,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
+                    wgpu::BindGroupLayoutEntry { binding: 20, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Child mode indices
+                    wgpu::BindGroupLayoutEntry { binding: 21, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Mode properties v0-v4 (5 sub-buffers)
+                    wgpu::BindGroupLayoutEntry { binding: 22, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 23, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 24, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 25, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 26, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Cell types (DEPRECATED)
+                    wgpu::BindGroupLayoutEntry { binding: 27, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Mode cell types
+                    wgpu::BindGroupLayoutEntry { binding: 28, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Child A keep adhesion flags
+                    wgpu::BindGroupLayoutEntry { binding: 29, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Child B keep adhesion flags
+                    wgpu::BindGroupLayoutEntry { binding: 30, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Nutrients buffer
+                    wgpu::BindGroupLayoutEntry { binding: 31, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Genome orientations
+                    wgpu::BindGroupLayoutEntry { binding: 32, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Child A after-split keep adhesion flags
+                    wgpu::BindGroupLayoutEntry { binding: 33, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Child B after-split keep adhesion flags
+                    wgpu::BindGroupLayoutEntry { binding: 34, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 ],
             })
         }
@@ -3457,61 +3325,20 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 2: Mode properties (read-only, nutrient priorities and swim forces)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Binding 3: Split ready frame (read-only, for nutrient transfer delay)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Binding 4: Mode cell types (read-only, for cell type lookup by mode index)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Binding 5: Nutrients buffer (read-write, fixed-point i32 atomic)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Binding 6: Split nutrient thresholds (read-only, derived from split_mass)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                // Bindings 2-6: mode_properties sub-buffers v0-v4
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 6, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 7: Split ready frame
+                wgpu::BindGroupLayoutEntry { binding: 7, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 8: Mode cell types
+                wgpu::BindGroupLayoutEntry { binding: 8, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 9: Nutrients buffer
+                wgpu::BindGroupLayoutEntry { binding: 9, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 10: Split nutrient thresholds
+                wgpu::BindGroupLayoutEntry { binding: 10, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
             ],
         })
     }
@@ -3565,26 +3392,15 @@ impl GpuPhysicsPipelines {
                     binding: 1,
                     resource: buffers.death_flags.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: buffers.mode_properties.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: buffers.split_ready_frame.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: buffers.mode_cell_types.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: buffers.nutrients_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: buffers.split_nutrient_thresholds.as_entire_binding(),
-                },
+                wgpu::BindGroupEntry { binding: 2, resource: buffers.mode_properties_v0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: buffers.mode_properties_v1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: buffers.mode_properties_v2.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: buffers.mode_properties_v3.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: buffers.mode_properties_v4.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: buffers.split_ready_frame.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8, resource: buffers.mode_cell_types.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 9, resource: buffers.nutrients_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 10, resource: buffers.split_nutrient_thresholds.as_entire_binding() },
             ],
         })
     }
@@ -4471,51 +4287,18 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 2: Mode properties (read-only)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Binding 3: Mode cell types lookup table (read-only)
-                // mode_cell_types[mode_index] = cell_type - always up-to-date with genome settings
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Binding 4: Cell type behavior flags (read-only)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Binding 5: Signal flags (read-only) - for flagellocyte signal-responsive speed
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                // Bindings 2-6: mode_properties sub-buffers v0-v4
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 6, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 7: Mode cell types
+                wgpu::BindGroupLayoutEntry { binding: 7, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 8: Cell type behavior flags
+                wgpu::BindGroupLayoutEntry { binding: 8, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 9: Signal flags
+                wgpu::BindGroupLayoutEntry { binding: 9, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
             ],
         })
     }
@@ -4571,22 +4354,14 @@ impl GpuPhysicsPipelines {
                     binding: 1,
                     resource: triple_buffers.cell_types.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: triple_buffers.mode_properties.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: triple_buffers.mode_cell_types.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: triple_buffers.behavior_flags.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: adhesion_buffers.signal_flags.as_entire_binding(),
-                },
+                wgpu::BindGroupEntry { binding: 2, resource: triple_buffers.mode_properties_v0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: triple_buffers.mode_properties_v1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: triple_buffers.mode_properties_v2.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: triple_buffers.mode_properties_v3.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: triple_buffers.mode_properties_v4.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: triple_buffers.mode_cell_types.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8, resource: triple_buffers.behavior_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 9, resource: adhesion_buffers.signal_flags.as_entire_binding() },
             ],
         })
     }

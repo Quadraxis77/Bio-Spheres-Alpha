@@ -675,9 +675,11 @@ impl App {
             gpu_scene.acceleration_damping = self.ui.state.world_settings.acceleration_damping;
             gpu_scene.water_drag_strength = self.ui.state.world_settings.water_drag_strength;
             gpu_scene.radiation_level = self.ui.state.world_settings.radiation_level;
-            // Sync radiation level to mutation system
+            gpu_scene.subtle_mutations = self.ui.state.world_settings.subtle_mutations;
+            // Sync radiation level and mutation mode to mutation system
             if let Some(mutation_system) = &mut gpu_scene.mutation_system {
                 mutation_system.set_radiation_level(self.ui.state.world_settings.radiation_level);
+                mutation_system.set_subtle_mutations(&self.queue, self.ui.state.world_settings.subtle_mutations);
             }
 
             // Apply fluid settings from UI
@@ -1476,8 +1478,9 @@ impl ApplicationHandler for AppState {
                 label: Some("Bio-Spheres Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits {
-                    // Cell state write bind group uses 25 storage buffers (rotations, genome_mode_data, genome_orientations, etc.)
-                    max_storage_buffers_per_shader_stage: 32,
+                    // Cell state write bind group uses 35 storage buffers (0-34) after splitting
+                    // genome_mode_data and mode_properties into 5 sub-buffers each
+                    max_storage_buffers_per_shader_stage: 40,
                     ..wgpu::Limits::default()
                 },
                 memory_hints: Default::default(),

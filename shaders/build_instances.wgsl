@@ -72,30 +72,8 @@ struct CellTypeVisuals {
     _pad: f32,
 }
 
-// Mode properties (per-mode settings from genome)
-// Total: 20 floats = 80 bytes per mode
-struct ModeProperties {
-    nutrient_gain_rate: f32,
-    max_cell_size: f32,
-    membrane_stiffness: f32,
-    split_interval: f32,
-    split_mass: f32,
-    nutrient_priority: f32,
-    swim_force: f32,
-    prioritize_when_low: f32,
-    max_splits: f32,
-    split_ratio: f32,
-    flagellocyte_signal_channel: f32,
-    flagellocyte_speed_a: f32,
-    flagellocyte_speed_b: f32,
-    flagellocyte_threshold_c: f32,
-    flagellocyte_use_signal: f32,
-    min_adhesions: f32,
-    max_adhesions: f32,
-    _pad17: f32,
-    _pad18: f32,
-    _pad19: f32,
-}
+// mode_properties_v1 per mode: [split_mass, nutrient_priority, swim_force, prioritize_when_low]
+// swim_force is at .z
 
 // Cell type behavior flags for parameterized shader logic
 struct CellTypeBehaviorFlags {
@@ -171,8 +149,9 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
 }
 
 // Lookup tables
-@group(0) @binding(7) var<storage, read> mode_visuals: array<ModeVisuals>;
+@group(0) @binding(7) var<storage, read> mode_colors: array<vec4<f32>>;   // RGB color per mode (xyz=RGB, w=1.0)
 @group(0) @binding(8) var<storage, read> cell_type_visuals: array<CellTypeVisuals>;
+@group(0) @binding(18) var<storage, read> mode_emissive: array<vec4<f32>>; // emissive per mode (x=emissive, yzw=padding)
 
 // Output buffer (write-only)
 @group(0) @binding(9) var<storage, read_write> instances: array<CellInstance>;
@@ -195,8 +174,8 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
 // The shader now derives cell_type from mode_cell_types[mode_index] for correctness.
 @group(0) @binding(13) var<storage, read> cell_types: array<u32>;
 
-// Mode properties (per-mode settings including swim_force for tail animation)
-@group(0) @binding(14) var<storage, read> mode_properties: array<ModeProperties>;
+// mode_properties sub-buffer v1 (swim_force at .z): copied from GpuTripleBufferSystem.mode_properties_v1
+@group(0) @binding(14) var<storage, read> mode_properties: array<vec4<f32>>;
 
 // Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
 // This is always up-to-date with current genome settings, unlike cell_types buffer
@@ -399,7 +378,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Fallback: if cell_types buffer is empty or invalid, use mode_cell_types
     // This can happen for newly inserted cells before cell_types is updated
-    if (cell_type == 0u && mode_index < params.mode_count) {
+    if (cell_type == 0u && mode_index < arrayLength(&mode_cell_types)) {
         cell_type = mode_cell_types[mode_index];
     }
     
@@ -430,11 +409,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Look up mode visuals (with bounds check)
     var color = vec3<f32>(0.5, 0.5, 0.5);
     var emissive = 0.0;
-    if (mode_index < params.mode_count) {
-        let mode = mode_visuals[mode_index];
-        color = mode.color.xyz;
-        // Skip opacity - cells are always opaque
-        emissive = mode.emissive_pad.x;
+    if (mode_index < arrayLength(&mode_colors)) {
+        color = mode_colors[mode_index].xyz;
+        emissive = mode_emissive[mode_index].x;
     }
     
     // Look up cell type visuals (with bounds check)
@@ -485,9 +462,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Calculate tail_speed from swim_force (animation speed proportional to thrust)
         // swim_force is in range 0.0-1.0, scale to tail_speed 0.0-15.0
         var tail_speed = 0.0;
-        if (mode_index < params.mode_count) {
-            let props = mode_properties[mode_index];
-            tail_speed = props.swim_force * 15.0;
+        if (mode_index < arrayLength(&mode_colors)) {
+            let props = mode_properties[mode_index]; // v1: [split_mass, nutrient_priority, swim_force, prioritize_when_low]
+            tail_speed = props.z * 15.0; // swim_force
         }
         
         // type_data layout for Flagellocyte (pixelated 3D geometry):
