@@ -45,8 +45,8 @@ struct MutationParams {
     max_modes_per_genome: u32,
     // Genome ring buffer capacity
     genome_ring_capacity: u32,
-    // padding
-    _pad0: u32,
+    // When 1, the automatic color side-effect nudges each channel slightly instead of full re-roll
+    subtle_color_mutation: u32,
 }
 
 // Per-parameter mutation descriptor.
@@ -189,6 +189,15 @@ var<storage, read_write> mode_colors: array<vec4<f32>>;
 @group(2) @binding(20)
 var<storage, read_write> mode_emissive: array<vec4<f32>>;
 
+// Adhesion settings buffer: 12 f32 per mode (48 bytes = 3 vec4s)
+// Layout matches GpuAdhesionSettings: can_break(i32), break_force, rest_length,
+// linear_spring_stiffness, linear_spring_damping, orientation_spring_stiffness,
+// orientation_spring_damping, max_angular_deviation, twist_constraint_stiffness,
+// twist_constraint_damping, enable_twist_constraint(i32), _padding(i32)
+// Stored as 3 vec4<u32> to avoid f32/i32 mixed-type issues.
+@group(2) @binding(21)
+var<storage, read_write> adhesion_settings_buf: array<vec4<u32>>; // 3 vec4<u32> per mode
+
 // ============================================================
 // Hash-based PRNG (PCG-style)
 // ============================================================
@@ -321,6 +330,13 @@ fn clone_genome_modes(
         // mode_colors and mode_emissive: 1 vec4<f32> per mode each
         mode_colors[dst] = mode_colors[src];
         mode_emissive[dst] = mode_emissive[src];
+
+        // adhesion_settings: 3 vec4<u32> per mode (48 bytes total)
+        let src3 = src * 3u;
+        let dst3 = dst * 3u;
+        adhesion_settings_buf[dst3 + 0u] = adhesion_settings_buf[src3 + 0u];
+        adhesion_settings_buf[dst3 + 1u] = adhesion_settings_buf[src3 + 1u];
+        adhesion_settings_buf[dst3 + 2u] = adhesion_settings_buf[src3 + 2u];
     }
 }
 
@@ -379,9 +395,10 @@ fn apply_mutation(
 
         // buffer_id 1: mode_cell_types (u32, 1 per mode)
         case 1u: {
-            // Cell type mutation: pick a random valid cell type
-            // Cell types: 0-9 (see cell/types.rs)
-            let new_type = rng_u32(cell_id, salt_base + 500u) % u32(entry.max_value + 1.0);
+            // Cell type mutation: pick a random non-Test cell type.
+            // Test = 0 is excluded; valid range is [1, max_value].
+            // We generate in [0, max_value) and add 1 to shift into [1, max_value].
+            let new_type = 1u + rng_u32(cell_id, salt_base + 500u) % u32(entry.max_value);
             mode_cell_types[mode_abs] = new_type;
         }
 
@@ -479,6 +496,24 @@ fn apply_mutation(
         }
 
         default: {}
+    }
+
+    // Always re-roll the color of the mutated mode so every mutation is visually distinct.
+    // Skip if the mutation was already a color mutation (buffer_id 9) to avoid redundancy.
+    if (entry.buffer_id != 9u) {
+        var c = mode_colors[mode_abs];
+        if (mutation_params.subtle_color_mutation != 0u) {
+            // Subtle: small nudge per channel
+            c[0] = clamp(c[0] + rng_signed_f32(cell_id, salt_base + 700u) * 0.08, 0.0, 1.0);
+            c[1] = clamp(c[1] + rng_signed_f32(cell_id, salt_base + 701u) * 0.08, 0.0, 1.0);
+            c[2] = clamp(c[2] + rng_signed_f32(cell_id, salt_base + 702u) * 0.08, 0.0, 1.0);
+        } else {
+            // Dramatic: full re-roll
+            c[0] = rng_f32(cell_id, salt_base + 700u);
+            c[1] = rng_f32(cell_id, salt_base + 701u);
+            c[2] = rng_f32(cell_id, salt_base + 702u);
+        }
+        mode_colors[mode_abs] = c;
     }
 
     return param_idx;

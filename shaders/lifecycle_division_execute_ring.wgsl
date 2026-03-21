@@ -982,23 +982,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     child_b_adhesion_count++;
                 }
                 
-                // Add duplicate to neighbor's adhesion list
-                // Uses atomicCompareExchangeWeak to avoid race when multiple
-                // dividing cells simultaneously duplicate Zone C connections
-                // to the same non-dividing neighbor.
+                // Add duplicate to neighbor's adhesion list.
+                // Use a retry loop with atomicCompareExchangeWeak to handle spurious
+                // failures — keep retrying the same slot until it either succeeds or
+                // we confirm the slot is occupied, then move to the next slot.
                 let neighbor_adhesion_base = neighbor_idx * MAX_ADHESIONS_PER_CELL;
-                var neighbor_write_slot: u32 = 0xFFFFFFFFu;
-                for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+                var i = 0u;
+                loop {
+                    if (i >= MAX_ADHESIONS_PER_CELL) { break; }
                     let cas = atomicCompareExchangeWeak(&cell_adhesion_indices[neighbor_adhesion_base + i], -1, i32(dup_slot));
                     if (cas.exchanged) {
-                        neighbor_write_slot = i;
-                        break;
+                        break; // Successfully registered
                     }
-                    // If old_value != -1 the slot is occupied — try next slot.
-                    // If CAS spuriously failed (old_value == -1 but not exchanged),
-                    // the loop retries the same index next iteration... but we
-                    // increment i, so we move on. That's fine — another thread
-                    // claimed it between our load and CAS, so it's no longer free.
+                    // If old_value != -1, slot is occupied — move to next slot.
+                    // If old_value == -1 but not exchanged (spurious fail) — retry same slot.
+                    if (cas.old_value != -1) {
+                        i++;
+                    }
+                    // else: spurious failure, retry same i
                 }
 
             }

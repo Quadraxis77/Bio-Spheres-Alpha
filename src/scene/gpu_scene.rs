@@ -4112,6 +4112,7 @@ impl GpuScene {
                 &self.gpu_triple_buffers.oculocyte_params,
                 self.instance_builder.mode_colors_buffer(),
                 self.instance_builder.mode_emissive_buffer(),
+                &self.adhesion_buffers.adhesion_settings,
             );
 
             // Rebuild GC bind group (for genome recycling)

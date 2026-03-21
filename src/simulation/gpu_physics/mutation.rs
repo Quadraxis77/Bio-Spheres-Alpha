@@ -77,7 +77,8 @@ pub struct MutationParamsUniform {
     pub total_mode_count: u32,
     pub max_modes_per_genome: u32,
     pub genome_ring_capacity: u32,
-    pub _pad0: u32,
+    /// Mirrors WGSL `subtle_color_mutation`: 1 = nudge color, 0 = full re-roll
+    pub subtle_color_mutation: u32,
 }
 
 /// Per-genome metadata matching WGSL: vec4<u32>(mode_count, base_mode_offset, ref_count, flags)
@@ -195,6 +196,7 @@ pub struct MutationSystem {
     // State
     rng_counter: AtomicU32,
     radiation_level: f32,
+    subtle_mutations: bool,
     cell_capacity: u32,
     gc_frame_counter: AtomicU32,
     // Number of user-owned genomes (indices 0..user_genome_count must stay immortal)
@@ -385,6 +387,8 @@ impl MutationSystem {
                 Self::storage_rw_entry(19),
                 // binding 20: mode_emissive
                 Self::storage_rw_entry(20),
+                // binding 21: adhesion_settings (3 vec4<u32> per mode = 48 bytes per mode)
+                Self::storage_rw_entry(21),
             ],
         });
 
@@ -775,6 +779,7 @@ impl MutationSystem {
             mode_offset_reset_bind_group: None,
             rng_counter: AtomicU32::new(0),
             radiation_level: 1.0,  // Default to enabled to avoid timing issues with UI sync
+            subtle_mutations: false,
             cell_capacity,
             gc_frame_counter: AtomicU32::new(0),
             ring_initialized: false,
@@ -799,14 +804,197 @@ impl MutationSystem {
     /// Each entry describes one mutable parameter with its weight, bounds, and type.
     /// Weights are relative — higher weight = more likely to be selected.
     /// This table is intentionally flexible: add/remove/reweight entries freely.
+    ///
+    /// mode_properties sub-buffer element offsets (vec4 index * 4 + component):
+    ///   v0: nutrient_gain_rate=0, max_cell_size=1, membrane_stiffness=2, split_interval=3
+    ///   v1: split_mass=4, nutrient_priority=5, swim_force=6, prioritize_when_low=7
+    ///   v2: max_splits=8, split_ratio=9, flagellocyte_signal_channel=10, flagellocyte_speed_a=11
+    ///   v3: flagellocyte_speed_b=12, flagellocyte_threshold_c=13, flagellocyte_use_signal=14, min_adhesions=15
+    ///   v4: max_adhesions=16, mode_a_after_splits=17, mode_b_after_splits=18
+    ///
+    /// Weight rationale:
+    ///   1.0 = baseline (continuous params with moderate impact)
+    ///   0.7 = structural integers (adhesion counts, max_splits) — meaningful but not catastrophic
+    ///   0.5 = binary flips and sense-type changes — significant behavioral shift
+    ///   0.3 = cell_type re-roll — completely rewires cell behavior, should be rare
     fn build_default_vulnerability_table() -> Vec<MutationParamEntry> {
-        // Dramatic color mutation: re-rolls all 3 RGB components of one random mode.
-        // element_offset 0xFF signals the shader to randomize all components.
         vec![
+            // --- Visual ---
+            // Dramatic color: re-rolls all 3 RGB components. element_offset 0xFF = full re-roll.
             MutationParamEntry {
                 buffer_id: buffer_id::MODE_VISUALS, element_offset: 0xFF,
                 weight: 1.0, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+
+            // --- Parent settings (continuous) ---
+
+            // split_mass [0.5, 10.0]: delta ~3–5% of range
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 4,
+                weight: 1.0, min_delta: 0.1, max_delta: 0.5,
+                min_value: 0.5, max_value: 10.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // split_interval [0.1, 60.0]: delta ~1–8% of range
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 3,
+                weight: 1.0, min_delta: 0.5, max_delta: 5.0,
+                min_value: 0.1, max_value: 60.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // nutrient_gain_rate [0.0, 2.0]: delta ~1–8% of range
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 0,
+                weight: 1.0, min_delta: 0.02, max_delta: 0.15,
+                min_value: 0.0, max_value: 2.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // max_cell_size [1.0, 2.0]: delta ~5–20% of range
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 1,
+                weight: 1.0, min_delta: 0.05, max_delta: 0.2,
+                min_value: 1.0, max_value: 2.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // split_ratio [0.1, 0.9]: delta ~3–13% of range
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 9,
+                weight: 1.0, min_delta: 0.02, max_delta: 0.1,
+                min_value: 0.1, max_value: 0.9, data_type: data_type::CONTINUOUS_F32,
+            },
+            // nutrient_priority [0.1, 10.0]: delta ~1–5% of range
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 5,
+                weight: 1.0, min_delta: 0.1, max_delta: 0.5,
+                min_value: 0.1, max_value: 10.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // membrane_stiffness [0.0, 1000.0]: delta ~1–5% of range
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 2,
+                weight: 1.0, min_delta: 10.0, max_delta: 50.0,
+                min_value: 0.0, max_value: 1000.0, data_type: data_type::CONTINUOUS_F32,
+            },
+
+            // --- Parent settings (structural integers) ---
+
+            // max_adhesions [0, 20]: nudge by 1–3
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 16,
+                weight: 0.7, min_delta: 1.0, max_delta: 3.0,
+                min_value: 0.0, max_value: 20.0, data_type: data_type::INTEGER,
+            },
+            // min_adhesions [0, 20]: nudge by 1–2
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 15,
+                weight: 0.7, min_delta: 1.0, max_delta: 2.0,
+                min_value: 0.0, max_value: 20.0, data_type: data_type::INTEGER,
+            },
+            // max_splits [1, 20]: nudge by 1–3 (-1=infinite won't be produced by mutation)
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 8,
+                weight: 0.7, min_delta: 1.0, max_delta: 3.0,
+                min_value: 1.0, max_value: 20.0, data_type: data_type::INTEGER,
+            },
+
+            // --- Parent settings (binary flips) ---
+
+            // prioritize_when_low: boolean flip
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 7,
+                weight: 0.5, min_delta: 0.0, max_delta: 0.0,
+                min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
+            },
+            // parent_make_adhesion: boolean flip
+            MutationParamEntry {
+                buffer_id: buffer_id::PARENT_MAKE_ADHESION, element_offset: 0,
+                weight: 0.5, min_delta: 0.0, max_delta: 0.0,
+                min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
+            },
+            // child_a_keep_adhesion: boolean flip
+            MutationParamEntry {
+                buffer_id: buffer_id::CHILD_A_KEEP_ADHESION, element_offset: 0,
+                weight: 0.5, min_delta: 0.0, max_delta: 0.0,
+                min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
+            },
+            // child_b_keep_adhesion: boolean flip
+            MutationParamEntry {
+                buffer_id: buffer_id::CHILD_B_KEEP_ADHESION, element_offset: 0,
+                weight: 0.5, min_delta: 0.0, max_delta: 0.0,
+                min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
+            },
+
+            // --- Cell type (rare — completely rewires behavior) ---
+            // Test=0 is excluded; shader does (rng % max_value) + 1 → [1, 7] = Flagellocyte–Oculocyte
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_CELL_TYPES, element_offset: 0,
+                weight: 0.3, min_delta: 0.0, max_delta: 0.0,
+                min_value: 0.0, max_value: 7.0, data_type: data_type::INTEGER,
+            },
+
+            // --- Flagellocyte settings ---
+
+            // swim_force / buoyancy_force [0.0, 1.0]: delta ~5–20% of range
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 6,
+                weight: 1.0, min_delta: 0.05, max_delta: 0.2,
+                min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // flagellocyte_speed_a [0.0, 1.0]: delta ~5–20% of range
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 11,
+                weight: 1.0, min_delta: 0.05, max_delta: 0.2,
+                min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // flagellocyte_speed_b [0.0, 1.0]: delta ~5–20% of range
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 12,
+                weight: 1.0, min_delta: 0.05, max_delta: 0.2,
+                min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // flagellocyte_threshold_c [-50.0, 50.0]: delta ~1–5% of range
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 13,
+                weight: 1.0, min_delta: 1.0, max_delta: 5.0,
+                min_value: -50.0, max_value: 50.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // flagellocyte_use_signal: boolean flip
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 14,
+                weight: 0.5, min_delta: 0.0, max_delta: 0.0,
+                min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
+            },
+            // flagellocyte_signal_channel [0, 15]: nudge by 1–3
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 10,
+                weight: 0.7, min_delta: 1.0, max_delta: 3.0,
+                min_value: 0.0, max_value: 15.0, data_type: data_type::INTEGER,
+            },
+
+            // --- Oculocyte settings ---
+
+            // oculocyte_ray_length [1.0, 100.0]: delta ~2–10% of range
+            MutationParamEntry {
+                buffer_id: buffer_id::OCULOCYTE_PARAMS, element_offset: 1,
+                weight: 1.0, min_delta: 2.0, max_delta: 10.0,
+                min_value: 1.0, max_value: 100.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // oculocyte_sense_type [0, 3]: changes what the cell detects entirely
+            MutationParamEntry {
+                buffer_id: buffer_id::OCULOCYTE_PARAMS, element_offset: 0,
+                weight: 0.5, min_delta: 1.0, max_delta: 3.0,
+                min_value: 0.0, max_value: 3.0, data_type: data_type::INTEGER,
+            },
+            // oculocyte_signal_hops [1, 20]: nudge by 1–3
+            MutationParamEntry {
+                buffer_id: buffer_id::OCULOCYTE_PARAMS, element_offset: 2,
+                weight: 0.7, min_delta: 1.0, max_delta: 3.0,
+                min_value: 1.0, max_value: 20.0, data_type: data_type::INTEGER,
+            },
+
+            // --- Glueocyte settings ---
+
+            // glueocyte_env_adhesion: boolean flip
+            MutationParamEntry {
+                buffer_id: buffer_id::GLUEOCYTE_ENV_ADHESION, element_offset: 0,
+                weight: 0.5, min_delta: 0.0, max_delta: 0.0,
+                min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
             },
         ]
     }
@@ -832,23 +1020,101 @@ impl MutationSystem {
     }
 
     /// Switch between subtle (small perturbations) and dramatic (full re-roll) color mutations.
+    ///
+    /// Subtle mode restricts mutations to continuous parameters only with tighter deltas.
+    /// Excluded entirely: booleans, cell_type, oculocyte_sense_type, signal channels,
+    /// adhesion counts, max_splits — anything that causes a discrete or structural jump.
     pub fn set_subtle_mutations(&mut self, queue: &wgpu::Queue, subtle: bool) {
+        self.subtle_mutations = subtle;
         let entries = if subtle {
             vec![
+                // Color: per-channel nudge instead of full re-roll
                 MutationParamEntry {
                     buffer_id: buffer_id::MODE_VISUALS, element_offset: 0,
-                    weight: 1.0, min_delta: 0.03, max_delta: 0.12,
+                    weight: 1.0, min_delta: 0.03, max_delta: 0.08,
                     min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
                 },
                 MutationParamEntry {
                     buffer_id: buffer_id::MODE_VISUALS, element_offset: 1,
-                    weight: 1.0, min_delta: 0.03, max_delta: 0.12,
+                    weight: 1.0, min_delta: 0.03, max_delta: 0.08,
                     min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
                 },
                 MutationParamEntry {
                     buffer_id: buffer_id::MODE_VISUALS, element_offset: 2,
-                    weight: 1.0, min_delta: 0.03, max_delta: 0.12,
+                    weight: 1.0, min_delta: 0.03, max_delta: 0.08,
                     min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // split_mass [0.5, 10.0]
+                MutationParamEntry {
+                    buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 4,
+                    weight: 1.0, min_delta: 0.05, max_delta: 0.2,
+                    min_value: 0.5, max_value: 10.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // split_interval [0.1, 60.0]
+                MutationParamEntry {
+                    buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 3,
+                    weight: 1.0, min_delta: 0.2, max_delta: 2.0,
+                    min_value: 0.1, max_value: 60.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // nutrient_gain_rate [0.0, 2.0]
+                MutationParamEntry {
+                    buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 0,
+                    weight: 1.0, min_delta: 0.01, max_delta: 0.05,
+                    min_value: 0.0, max_value: 2.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // max_cell_size [1.0, 2.0]
+                MutationParamEntry {
+                    buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 1,
+                    weight: 1.0, min_delta: 0.02, max_delta: 0.08,
+                    min_value: 1.0, max_value: 2.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // split_ratio [0.1, 0.9]
+                MutationParamEntry {
+                    buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 9,
+                    weight: 1.0, min_delta: 0.01, max_delta: 0.04,
+                    min_value: 0.1, max_value: 0.9, data_type: data_type::CONTINUOUS_F32,
+                },
+                // nutrient_priority [0.1, 10.0]
+                MutationParamEntry {
+                    buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 5,
+                    weight: 1.0, min_delta: 0.05, max_delta: 0.2,
+                    min_value: 0.1, max_value: 10.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // membrane_stiffness [0.0, 1000.0]
+                MutationParamEntry {
+                    buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 2,
+                    weight: 1.0, min_delta: 5.0, max_delta: 20.0,
+                    min_value: 0.0, max_value: 1000.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // swim_force / buoyancy_force [0.0, 1.0]
+                MutationParamEntry {
+                    buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 6,
+                    weight: 1.0, min_delta: 0.02, max_delta: 0.08,
+                    min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // flagellocyte_speed_a [0.0, 1.0]
+                MutationParamEntry {
+                    buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 11,
+                    weight: 1.0, min_delta: 0.02, max_delta: 0.08,
+                    min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // flagellocyte_speed_b [0.0, 1.0]
+                MutationParamEntry {
+                    buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 12,
+                    weight: 1.0, min_delta: 0.02, max_delta: 0.08,
+                    min_value: 0.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // flagellocyte_threshold_c [-50.0, 50.0]
+                MutationParamEntry {
+                    buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 13,
+                    weight: 1.0, min_delta: 0.5, max_delta: 2.0,
+                    min_value: -50.0, max_value: 50.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // oculocyte_ray_length [1.0, 100.0]
+                MutationParamEntry {
+                    buffer_id: buffer_id::OCULOCYTE_PARAMS, element_offset: 1,
+                    weight: 1.0, min_delta: 1.0, max_delta: 4.0,
+                    min_value: 1.0, max_value: 100.0, data_type: data_type::CONTINUOUS_F32,
                 },
             ]
         } else {
@@ -948,6 +1214,7 @@ impl MutationSystem {
         oculocyte_params_buffer: &wgpu::Buffer,
         mode_colors_buffer: &wgpu::Buffer,
         mode_emissive_buffer: &wgpu::Buffer,
+        adhesion_settings_buffer: &wgpu::Buffer,
     ) {
         self.params_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Mutation Params Bind Group"),
@@ -998,6 +1265,7 @@ impl MutationSystem {
                 wgpu::BindGroupEntry { binding: 18, resource: self.mutation_log_count_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 19, resource: mode_colors_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 20, resource: mode_emissive_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 21, resource: adhesion_settings_buffer.as_entire_binding() },
             ],
         }));
     }
@@ -1160,7 +1428,7 @@ impl MutationSystem {
                 total_mode_count: MAX_TOTAL_MODES,
                 max_modes_per_genome: 40,
                 genome_ring_capacity: GENOME_RING_CAPACITY,
-                _pad0: 0,
+                subtle_color_mutation: if self.subtle_mutations { 1 } else { 0 },
             };
             queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 
