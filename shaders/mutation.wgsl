@@ -65,6 +65,7 @@ struct MutationParamEntry {
     //   7 = glueocyte_env_adhesion_flags (u32, 1 per mode)
     //   8 = oculocyte_params (u32 array, 4 per mode)
     //   9 = mode_visuals (f32 array, 2 vec4 per mode: color + emissive)
+    //  10 = genome_initial_mode (u32, per-genome — stored in genome_meta[id].z)
     buffer_id: u32,
     // Element offset within one mode's data in that buffer.
     // e.g. for mode_properties index 4 (split_mass), element_offset = 4
@@ -102,7 +103,8 @@ var<storage, read_write> genome_ring_state: array<atomic<u32>>;
 @group(0) @binding(3)
 var<storage, read_write> genome_free_ring: array<u32>;
 
-// Per-genome metadata: genome_meta[genome_id] = vec4<u32>(mode_count, base_mode_offset, 0, flags)
+// Per-genome metadata: genome_meta[genome_id] = vec4<u32>(mode_count, base_mode_offset, initial_mode_local, flags)
+// .z = initial_mode as a local (0-based) mode index within the genome
 // Note: ref_count is tracked separately in genome_ref_counts for atomic access
 @group(0) @binding(4)
 var<storage, read_write> genome_meta: array<vec4<u32>>;
@@ -520,6 +522,19 @@ fn apply_mutation(
             mode_colors[mode_abs] = v;
         }
 
+        // buffer_id 10: genome_initial_mode (u32, per-genome — stored in genome_meta[new_genome_id].z)
+        // element_offset is ignored; data_type must be MODE_INDEX_CLAMP (3).
+        // Nudges the local initial mode index, clamped to [0, mode_count - 1].
+        case 10u: {
+            let old_local = i32(genome_meta[new_genome_id].z);
+            let new_local = clamp(
+                i32(round(f32(old_local) + delta)),
+                0,
+                i32(parent_mode_count) - 1
+            );
+            genome_meta[new_genome_id].z = u32(new_local);
+        }
+
         default: {}
     }
 
@@ -635,8 +650,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
-    // Initialize new genome metadata
-    genome_meta[new_genome_id] = vec4<u32>(parent_mode_count, new_base_offset, 0u, 0u);
+    // Initialize new genome metadata — copy initial_mode_local (.z) from parent
+    genome_meta[new_genome_id] = vec4<u32>(parent_mode_count, new_base_offset, parent_meta.z, 0u);
 
     // Update reference counts atomically
     // Note: We only increment the new genome's ref_count. The parent genome's ref_count

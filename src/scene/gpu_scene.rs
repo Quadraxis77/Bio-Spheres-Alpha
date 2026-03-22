@@ -688,6 +688,7 @@ impl GpuScene {
         let meta = meta[0];
         let mode_count = meta.mode_count as usize;
         let base_offset = meta.base_mode_offset as usize;
+        let initial_mode_local = meta.initial_mode_local as i32;
 
         if mode_count == 0 || mode_count > 40 {
             log::warn!("read_back_genome: invalid metadata for genome_id={}: mode_count={}, base_offset={}", genome_id, mode_count, base_offset);
@@ -929,7 +930,7 @@ impl GpuScene {
 
         Some(crate::genome::Genome {
             name: format!("Mutated Genome #{}", genome_id),
-            initial_mode: 0,
+            initial_mode: initial_mode_local,
             initial_orientation: glam::Quat::IDENTITY,
             modes,
         })

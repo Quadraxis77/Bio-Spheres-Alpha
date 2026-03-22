@@ -66,6 +66,7 @@ pub mod buffer_id {
     pub const GLUEOCYTE_ENV_ADHESION: u32 = 7;
     pub const OCULOCYTE_PARAMS: u32 = 8;
     pub const MODE_VISUALS: u32 = 9;
+    pub const GENOME_INITIAL_MODE: u32 = 10;
 }
 
 /// Uniform params matching the WGSL MutationParams struct
@@ -83,13 +84,15 @@ pub struct MutationParamsUniform {
     pub subtle_color_mutation: u32,
 }
 
-/// Per-genome metadata matching WGSL: vec4<u32>(mode_count, base_mode_offset, ref_count, flags)
+/// Per-genome metadata matching WGSL: vec4<u32>(mode_count, base_mode_offset, initial_mode_local, flags)
+/// .z = initial_mode as a local (0-based) index within the genome's modes
+/// Real ref counts are tracked separately in genome_ref_counts_buffer (atomic).
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GenomeMeta {
     pub mode_count: u32,
     pub base_mode_offset: u32,
-    pub ref_count: u32,
+    pub initial_mode_local: u32,  // local (0-based) initial mode index; was unused (.z = 0)
     pub flags: u32,
 }
 
@@ -1008,13 +1011,19 @@ impl MutationSystem {
             // child_a mode index: nudge by 1–3 modes (data_type MODE_INDEX_CLAMP = clamped to genome's mode_count)
             MutationParamEntry {
                 buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 0,
-                weight: 0.4, min_delta: 1.0, max_delta: 3.0,
+                weight: 1.5, min_delta: 1.0, max_delta: 3.0,
                 min_value: 0.0, max_value: 39.0, data_type: data_type::MODE_INDEX_CLAMP,
             },
             // child_b mode index: nudge by 1–3 modes
             MutationParamEntry {
                 buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 1,
-                weight: 0.4, min_delta: 1.0, max_delta: 3.0,
+                weight: 1.5, min_delta: 1.0, max_delta: 3.0,
+                min_value: 0.0, max_value: 39.0, data_type: data_type::MODE_INDEX_CLAMP,
+            },
+            // initial mode: nudge by 1–3 modes (clamped to genome's mode_count)
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_INITIAL_MODE, element_offset: 0,
+                weight: 1.5, min_delta: 1.0, max_delta: 3.0,
                 min_value: 0.0, max_value: 39.0, data_type: data_type::MODE_INDEX_CLAMP,
             },
 
@@ -1025,50 +1034,118 @@ impl MutationSystem {
             // child_a orientation X
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 0,
-                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
                 min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
             },
             // child_a orientation Y
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 1,
-                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
                 min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
             },
             // child_a orientation Z
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 2,
-                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
                 min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
             },
             // child_a orientation W
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 3,
-                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
                 min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
             },
 
             // child_b orientation X (genome_mode_data_v1, offsets 4–7)
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 4,
-                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
                 min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
             },
             // child_b orientation Y
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 5,
-                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
                 min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
             },
             // child_b orientation Z
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 6,
-                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
                 min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
             },
             // child_b orientation W
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 7,
-                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+
+            // --- Child after-split orientations (genome_mode_data_v2/v3, offsets 8–15) ---
+            // child_a_split_orientation XYZW
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 8,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 9,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 10,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 11,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            // child_b_split_orientation XYZW
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 12,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 13,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 14,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 15,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+
+            // --- Parent split direction quaternion (genome_mode_data_v4, offsets 16–19) ---
+            // Encodes parent_split_direction pitch/yaw as a quaternion. Mutating these
+            // components changes the axis along which the parent cell splits.
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 16,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 17,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 18,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+            },
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 19,
+                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
                 min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
             },
         ]
@@ -1211,58 +1288,109 @@ impl MutationSystem {
                     weight: 1.0, min_delta: 1.0, max_delta: 4.0,
                     min_value: 1.0, max_value: 100.0, data_type: data_type::CONTINUOUS_F32,
                 },
-                // child_a mode index: nudge by 1 mode
-                MutationParamEntry {
-                    buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 0,
-                    weight: 0.3, min_delta: 1.0, max_delta: 1.0,
-                    min_value: 0.0, max_value: 39.0, data_type: data_type::MODE_INDEX_CLAMP,
-                },
-                // child_b mode index: nudge by 1 mode
-                MutationParamEntry {
-                    buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 1,
-                    weight: 0.3, min_delta: 1.0, max_delta: 1.0,
-                    min_value: 0.0, max_value: 39.0, data_type: data_type::MODE_INDEX_CLAMP,
-                },
                 // child_a orientation XYZW (small nudges)
                 MutationParamEntry {
                     buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 0,
-                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
                     min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
                 },
                 MutationParamEntry {
                     buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 1,
-                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
                     min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
                 },
                 MutationParamEntry {
                     buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 2,
-                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
                     min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
                 },
                 MutationParamEntry {
                     buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 3,
-                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
                     min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
                 },
                 // child_b orientation XYZW (small nudges)
                 MutationParamEntry {
                     buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 4,
-                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
                     min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
                 },
                 MutationParamEntry {
                     buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 5,
-                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
                     min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
                 },
                 MutationParamEntry {
                     buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 6,
-                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
                     min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
                 },
                 MutationParamEntry {
                     buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 7,
-                    weight: 0.4, min_delta: 0.02, max_delta: 0.08,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // child_a_split_orientation XYZW (genome_mode_data_v2, offsets 8–11)
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 8,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 9,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 10,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 11,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // child_b_split_orientation XYZW (genome_mode_data_v3, offsets 12–15)
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 12,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 13,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 14,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 15,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                // split_rotation_quat XYZW (genome_mode_data_v4, offsets 16–19)
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 16,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 17,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 18,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
+                    min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                },
+                MutationParamEntry {
+                    buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 19,
+                    weight: 1.5, min_delta: 0.02, max_delta: 0.08,
                     min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
                 },
             ]
@@ -1306,7 +1434,7 @@ impl MutationSystem {
             let entry = GenomeMeta {
                 mode_count: genome.modes.len() as u32,
                 base_mode_offset: offset,
-                ref_count: 0,
+                initial_mode_local: genome.initial_mode.max(0) as u32,
                 flags: 0,
             };
             // Partial write: only touch this genome's entry, leave all others intact
