@@ -81,7 +81,9 @@ struct MutationParamEntry {
     // Maximum allowed value after mutation
     max_value: f32,
     // Data type: 0 = continuous f32, 1 = integer (round after perturb),
-    //            2 = boolean (flip), 3 = integer with mode_count clamp
+    //            2 = boolean (flip), 3 = integer with mode_count clamp,
+    //            4 = chain_extend, 5 = chain_close, 6 = loop_branch,
+    //            7 = loop_merge, 8 = signal_wire (correlated emitter+receiver)
     data_type: u32,
 }
 
@@ -797,37 +799,142 @@ fn apply_mutation(
         // buffer_id 12: signal_settings (5 × vec4<f32> sub-buffers per mode)
         // element_offset encodes: sub-buffer = offset / 4, component = offset % 4
         // Data types: CONTINUOUS_F32 for thresholds, INTEGER for channels/mode indices, BOOLEAN for inverts
+        // Data type 8 (SIGNAL_WIRE): correlated mutation that wires both emitter + receiver
         case 12u: {
-            let sub_buf = entry.element_offset / 4u;
-            let comp = entry.element_offset % 4u;
+            if (entry.data_type == 8u) {
+                // SIGNAL_WIRE: correlated mutation that bootstraps a complete signal path.
+                // entry.element_offset selects which conditional to wire:
+                //   0 = division gating, 1 = apoptosis, 2 = child_a routing,
+                //   3 = child_b routing, 4 = mode switching
+                let conditional_type = entry.element_offset;
 
-            var v: vec4<f32>;
-            switch (sub_buf) {
-                case 0u: { v = signal_settings_v0[mode_abs]; }
-                case 1u: { v = signal_settings_v1[mode_abs]; }
-                case 2u: { v = signal_settings_v2[mode_abs]; }
-                case 3u: { v = signal_settings_v3[mode_abs]; }
-                default: { v = signal_settings_v4[mode_abs]; }
-            }
+                // Pick a regulation channel (8-15)
+                let channel = 8u + rng_u32(cell_id, salt_base + 800u) % 8u;
+                let channel_f = f32(channel);
 
-            switch (entry.data_type) {
-                // Continuous f32 (thresholds)
-                case 0u: { v[comp] = clamp(v[comp] + delta, entry.min_value, entry.max_value); }
-                // Integer (channels, mode indices)
-                case 1u: { v[comp] = clamp(round(v[comp] + delta), entry.min_value, entry.max_value); }
-                // Boolean flip (inverts)
-                case 2u: { v[comp] = select(1.0, 0.0, v[comp] > 0.5); }
-                // Mode index clamp
-                case 3u: { v[comp] = clamp(round(v[comp] + delta), 0.0, f32(mode_count - 1u)); }
-                default: {}
-            }
+                // Pick emitter mode (random)
+                let emitter_local = rng_u32(cell_id, salt_base + 810u) % mode_count;
+                let emitter_abs = dst_base + emitter_local;
 
-            switch (sub_buf) {
-                case 0u: { signal_settings_v0[mode_abs] = v; }
-                case 1u: { signal_settings_v1[mode_abs] = v; }
-                case 2u: { signal_settings_v2[mode_abs] = v; }
-                case 3u: { signal_settings_v3[mode_abs] = v; }
-                default: { signal_settings_v4[mode_abs] = v; }
+                // Pick receiver mode (different from emitter)
+                var receiver_local = rng_u32(cell_id, salt_base + 820u) % mode_count;
+                if (receiver_local == emitter_local && mode_count > 1u) {
+                    receiver_local = (receiver_local + 1u) % mode_count;
+                }
+                let receiver_abs = dst_base + receiver_local;
+
+                // --- Wire emitter: set regulation_params on emitter mode ---
+                // regulation_params: [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding]
+                var reg = regulation_params_buf[emitter_abs];
+                reg.x = channel;
+                // Set a reasonable default emit value if currently 0
+                let current_value = bitcast<f32>(reg.y);
+                if (current_value < 1.0) {
+                    reg.y = bitcast<u32>(10.0); // Default emit value
+                }
+                // Set reasonable hops if currently 0
+                if (reg.z == 0u) {
+                    reg.z = 3u; // Default 3 hops
+                }
+                regulation_params_buf[emitter_abs] = reg;
+
+                // --- Wire receiver: set the appropriate signal conditional channel ---
+                // Each conditional has a channel stored at a specific sub-buffer/component:
+                //   0 (division):   signal_settings_v0[mode].x  (element 0)
+                //   1 (apoptosis):  signal_settings_v0[mode].w  (element 3)
+                //   2 (child_a):    signal_settings_v1[mode].z  (element 6)
+                //   3 (child_b):    signal_settings_v2[mode].z  (element 10)
+                //   4 (mode_switch): signal_settings_v3[mode].z (element 14)
+                switch (conditional_type) {
+                    case 0u: {
+                        // Division gating: v0.x = channel, v0.y = threshold (set default if 0)
+                        var v = signal_settings_v0[receiver_abs];
+                        v.x = channel_f;
+                        if (v.y == 0.0) { v.y = 5.0; } // Default threshold
+                        signal_settings_v0[receiver_abs] = v;
+                    }
+                    case 1u: {
+                        // Apoptosis: v0.w = channel, v1.x = threshold
+                        var v0 = signal_settings_v0[receiver_abs];
+                        v0.w = channel_f;
+                        signal_settings_v0[receiver_abs] = v0;
+                        var v1 = signal_settings_v1[receiver_abs];
+                        if (v1.x == 0.0) { v1.x = 5.0; }
+                        signal_settings_v1[receiver_abs] = v1;
+                    }
+                    case 2u: {
+                        // Child A routing: v1.z = channel, v1.w = threshold
+                        var v = signal_settings_v1[receiver_abs];
+                        v.z = channel_f;
+                        if (v.w == 0.0) { v.w = 5.0; }
+                        signal_settings_v1[receiver_abs] = v;
+                        // Also set mode_above to a random mode if currently -1
+                        var v2 = signal_settings_v2[receiver_abs];
+                        if (v2.x < 0.0) {
+                            v2.x = f32(rng_u32(cell_id, salt_base + 830u) % mode_count);
+                        }
+                        signal_settings_v2[receiver_abs] = v2;
+                    }
+                    case 3u: {
+                        // Child B routing: v2.z = channel, v2.w = threshold
+                        var v = signal_settings_v2[receiver_abs];
+                        v.z = channel_f;
+                        if (v.w == 0.0) { v.w = 5.0; }
+                        signal_settings_v2[receiver_abs] = v;
+                        // Also set mode_above to a random mode if currently -1
+                        var v3 = signal_settings_v3[receiver_abs];
+                        if (v3.x < 0.0) {
+                            v3.x = f32(rng_u32(cell_id, salt_base + 840u) % mode_count);
+                        }
+                        signal_settings_v3[receiver_abs] = v3;
+                    }
+                    default: {
+                        // Mode switching: v3.z = channel, v3.w = threshold
+                        var v = signal_settings_v3[receiver_abs];
+                        v.z = channel_f;
+                        if (v.w == 0.0) { v.w = 5.0; }
+                        signal_settings_v3[receiver_abs] = v;
+                        // Also set mode_switch_target to a random mode if currently -1
+                        var v4 = signal_settings_v4[receiver_abs];
+                        if (v4.x < 0.0) {
+                            v4.x = f32(rng_u32(cell_id, salt_base + 850u) % mode_count);
+                        }
+                        signal_settings_v4[receiver_abs] = v4;
+                    }
+                }
+            } else {
+                // Standard signal_settings mutation (non-SIGNAL_WIRE)
+                let sub_buf = entry.element_offset / 4u;
+                let comp = entry.element_offset % 4u;
+
+                var v: vec4<f32>;
+                switch (sub_buf) {
+                    case 0u: { v = signal_settings_v0[mode_abs]; }
+                    case 1u: { v = signal_settings_v1[mode_abs]; }
+                    case 2u: { v = signal_settings_v2[mode_abs]; }
+                    case 3u: { v = signal_settings_v3[mode_abs]; }
+                    default: { v = signal_settings_v4[mode_abs]; }
+                }
+
+                switch (entry.data_type) {
+                    // Continuous f32 (thresholds)
+                    case 0u: { v[comp] = clamp(v[comp] + delta, entry.min_value, entry.max_value); }
+                    // Integer (channels, mode indices)
+                    case 1u: { v[comp] = clamp(round(v[comp] + delta), entry.min_value, entry.max_value); }
+                    // Boolean flip (inverts)
+                    case 2u: { v[comp] = select(1.0, 0.0, v[comp] > 0.5); }
+                    // Mode index clamp
+                    case 3u: { v[comp] = clamp(round(v[comp] + delta), 0.0, f32(mode_count - 1u)); }
+                    default: {}
+                }
+
+                switch (sub_buf) {
+                    case 0u: { signal_settings_v0[mode_abs] = v; }
+                    case 1u: { signal_settings_v1[mode_abs] = v; }
+                    case 2u: { signal_settings_v2[mode_abs] = v; }
+                    case 3u: { signal_settings_v3[mode_abs] = v; }
+                    default: { signal_settings_v4[mode_abs] = v; }
+                }
             }
         }
 

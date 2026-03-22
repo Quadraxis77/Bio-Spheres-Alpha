@@ -69,6 +69,16 @@ pub mod data_type {
     /// T.child_b → L. This cross-connects two separate loop structures, making them
     /// share a convergence point and creating the branching interconnected topology.
     pub const LOOP_MERGE: u32 = 7;
+    /// Signal-wire: correlated mutation that solves the signal bootstrapping problem.
+    /// In a single mutation event:
+    ///   1. Picks a regulation channel (8-15)
+    ///   2. Enables regulation emission on one random mode (emitter)
+    ///   3. Wires a signal conditional on a *different* random mode (receiver) to
+    ///      read that same channel with a reasonable default threshold
+    /// element_offset selects which conditional to wire:
+    ///   0 = division gating, 1 = apoptosis, 2 = child_a routing,
+    ///   3 = child_b routing, 4 = mode switching
+    pub const SIGNAL_WIRE: u32 = 8;
 }
 
 /// Buffer IDs matching the WGSL switch cases
@@ -710,9 +720,9 @@ impl MutationSystem {
 
         let vulnerability_table = Self::build_default_vulnerability_table();
         let table_size = (vulnerability_table.len() * std::mem::size_of::<MutationParamEntry>()) as u64;
-        // Allocate for at least 64 entries so set_subtle_mutations can upload larger tables
-        // without overrunning the buffer.
-        let max_table_size = (64 * std::mem::size_of::<MutationParamEntry>()) as u64;
+        // Allocate for at least 128 entries so set_subtle_mutations and signal_wire entries
+        // don't overrun the buffer.
+        let max_table_size = (128 * std::mem::size_of::<MutationParamEntry>()) as u64;
         let vulnerability_table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Mutation Vulnerability Table"),
             size: table_size.max(max_table_size),
@@ -1336,12 +1346,16 @@ impl MutationSystem {
             // --- Signal-conditional settings (buffer_id 12) ---
             // Stored as vec4<f32> in signal_settings_v0..v4.
             // element_offset encodes sub-buffer (offset / 4) and component (offset % 4).
+            //
+            // Channel ranges use min_value=7.0 so nudging from -1 (disabled) jumps
+            // directly to 8+ (valid regulation channels), skipping the useless 0-7 range.
+            // Individual channel weights are low (0.3) since SIGNAL_WIRE handles bootstrapping.
 
-            // division_signal_channel [-1, 15]: nudge by 1–3 (v0.x, element_offset 0)
+            // division_signal_channel [7, 15]: nudge by 1–3 (v0.x, element_offset 0)
             MutationParamEntry {
                 buffer_id: buffer_id::SIGNAL_SETTINGS, element_offset: 0,
-                weight: 0.5, min_delta: 1.0, max_delta: 3.0,
-                min_value: -1.0, max_value: 15.0, data_type: data_type::INTEGER,
+                weight: 0.3, min_delta: 1.0, max_delta: 3.0,
+                min_value: 7.0, max_value: 15.0, data_type: data_type::INTEGER,
             },
             // division_signal_threshold [-50.0, 50.0]: delta ~2–10% (v0.y, element_offset 1)
             MutationParamEntry {
@@ -1355,11 +1369,11 @@ impl MutationSystem {
                 weight: 0.3, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
             },
-            // apoptosis_signal_channel [-1, 15]: nudge by 1–3 (v0.w, element_offset 3)
+            // apoptosis_signal_channel [7, 15]: nudge by 1–3 (v0.w, element_offset 3)
             MutationParamEntry {
                 buffer_id: buffer_id::SIGNAL_SETTINGS, element_offset: 3,
-                weight: 0.5, min_delta: 1.0, max_delta: 3.0,
-                min_value: -1.0, max_value: 15.0, data_type: data_type::INTEGER,
+                weight: 0.3, min_delta: 1.0, max_delta: 3.0,
+                min_value: 7.0, max_value: 15.0, data_type: data_type::INTEGER,
             },
             // apoptosis_signal_threshold [-50.0, 50.0]: delta ~2–10% (v1.x, element_offset 4)
             MutationParamEntry {
@@ -1373,11 +1387,11 @@ impl MutationSystem {
                 weight: 0.3, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
             },
-            // signal_child_a_channel [-1, 15]: nudge by 1–3 (v1.z, element_offset 6)
+            // signal_child_a_channel [7, 15]: nudge by 1–3 (v1.z, element_offset 6)
             MutationParamEntry {
                 buffer_id: buffer_id::SIGNAL_SETTINGS, element_offset: 6,
-                weight: 0.5, min_delta: 1.0, max_delta: 3.0,
-                min_value: -1.0, max_value: 15.0, data_type: data_type::INTEGER,
+                weight: 0.3, min_delta: 1.0, max_delta: 3.0,
+                min_value: 7.0, max_value: 15.0, data_type: data_type::INTEGER,
             },
             // signal_child_a_threshold [-50.0, 50.0] (v1.w, element_offset 7)
             MutationParamEntry {
@@ -1397,11 +1411,11 @@ impl MutationSystem {
                 weight: 0.5, min_delta: 1.0, max_delta: 3.0,
                 min_value: -1.0, max_value: 39.0, data_type: data_type::INTEGER,
             },
-            // signal_child_b_channel [-1, 15]: nudge by 1–3 (v2.z, element_offset 10)
+            // signal_child_b_channel [7, 15]: nudge by 1–3 (v2.z, element_offset 10)
             MutationParamEntry {
                 buffer_id: buffer_id::SIGNAL_SETTINGS, element_offset: 10,
-                weight: 0.5, min_delta: 1.0, max_delta: 3.0,
-                min_value: -1.0, max_value: 15.0, data_type: data_type::INTEGER,
+                weight: 0.3, min_delta: 1.0, max_delta: 3.0,
+                min_value: 7.0, max_value: 15.0, data_type: data_type::INTEGER,
             },
             // signal_child_b_threshold [-50.0, 50.0] (v2.w, element_offset 11)
             MutationParamEntry {
@@ -1421,11 +1435,11 @@ impl MutationSystem {
                 weight: 0.5, min_delta: 1.0, max_delta: 3.0,
                 min_value: -1.0, max_value: 39.0, data_type: data_type::INTEGER,
             },
-            // mode_switch_signal_channel [-1, 15]: nudge by 1–3 (v3.z, element_offset 14)
+            // mode_switch_signal_channel [7, 15]: nudge by 1–3 (v3.z, element_offset 14)
             MutationParamEntry {
                 buffer_id: buffer_id::SIGNAL_SETTINGS, element_offset: 14,
-                weight: 0.5, min_delta: 1.0, max_delta: 3.0,
-                min_value: -1.0, max_value: 15.0, data_type: data_type::INTEGER,
+                weight: 0.3, min_delta: 1.0, max_delta: 3.0,
+                min_value: 7.0, max_value: 15.0, data_type: data_type::INTEGER,
             },
             // mode_switch_signal_threshold [-50.0, 50.0] (v3.w, element_offset 15)
             MutationParamEntry {
@@ -1444,6 +1458,44 @@ impl MutationSystem {
                 buffer_id: buffer_id::SIGNAL_SETTINGS, element_offset: 17,
                 weight: 0.3, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
+            },
+
+            // --- Correlated signal-wire mutations (SIGNAL_WIRE data_type) ---
+            // Each entry wires both an emitter and a receiver in a single mutation event.
+            // element_offset selects which conditional to wire:
+            //   0 = division gating, 1 = apoptosis, 2 = child_a routing,
+            //   3 = child_b routing, 4 = mode switching
+            // Weight 0.8 = moderate — enough to bootstrap signal paths without dominating.
+
+            // Wire division gating: emitter mode + receiver mode with division_signal_channel
+            MutationParamEntry {
+                buffer_id: buffer_id::SIGNAL_SETTINGS, element_offset: 0,
+                weight: 0.8, min_delta: 0.0, max_delta: 0.0,
+                min_value: 8.0, max_value: 15.0, data_type: data_type::SIGNAL_WIRE,
+            },
+            // Wire apoptosis: emitter mode + receiver mode with apoptosis_signal_channel
+            MutationParamEntry {
+                buffer_id: buffer_id::SIGNAL_SETTINGS, element_offset: 1,
+                weight: 0.8, min_delta: 0.0, max_delta: 0.0,
+                min_value: 8.0, max_value: 15.0, data_type: data_type::SIGNAL_WIRE,
+            },
+            // Wire child_a routing: emitter mode + receiver mode with signal_child_a_channel
+            MutationParamEntry {
+                buffer_id: buffer_id::SIGNAL_SETTINGS, element_offset: 2,
+                weight: 0.8, min_delta: 0.0, max_delta: 0.0,
+                min_value: 8.0, max_value: 15.0, data_type: data_type::SIGNAL_WIRE,
+            },
+            // Wire child_b routing: emitter mode + receiver mode with signal_child_b_channel
+            MutationParamEntry {
+                buffer_id: buffer_id::SIGNAL_SETTINGS, element_offset: 3,
+                weight: 0.8, min_delta: 0.0, max_delta: 0.0,
+                min_value: 8.0, max_value: 15.0, data_type: data_type::SIGNAL_WIRE,
+            },
+            // Wire mode switching: emitter mode + receiver mode with mode_switch_signal_channel
+            MutationParamEntry {
+                buffer_id: buffer_id::SIGNAL_SETTINGS, element_offset: 4,
+                weight: 0.8, min_delta: 0.0, max_delta: 0.0,
+                min_value: 8.0, max_value: 15.0, data_type: data_type::SIGNAL_WIRE,
             },
         ]
     }
