@@ -205,6 +205,31 @@ var<storage, read_write> adhesion_settings_v1: array<vec4<u32>>;
 @group(2) @binding(23)
 var<storage, read_write> adhesion_settings_v2: array<vec4<u32>>;
 
+// Signal-conditional settings: 5 × vec4<f32> sub-buffers per mode
+// v0: [division_signal_channel, division_signal_threshold, division_signal_invert, apoptosis_signal_channel]
+// v1: [apoptosis_signal_threshold, apoptosis_signal_invert, signal_child_a_channel, signal_child_a_threshold]
+// v2: [signal_child_a_mode_above, signal_child_a_mode_below, signal_child_b_channel, signal_child_b_threshold]
+// v3: [signal_child_b_mode_above, signal_child_b_mode_below, mode_switch_signal_channel, mode_switch_signal_threshold]
+// v4: [mode_switch_target, mode_switch_invert, padding, padding]
+@group(2) @binding(24)
+var<storage, read_write> signal_settings_v0: array<vec4<f32>>;
+
+@group(2) @binding(25)
+var<storage, read_write> signal_settings_v1: array<vec4<f32>>;
+
+@group(2) @binding(26)
+var<storage, read_write> signal_settings_v2: array<vec4<f32>>;
+
+@group(2) @binding(27)
+var<storage, read_write> signal_settings_v3: array<vec4<f32>>;
+
+@group(2) @binding(28)
+var<storage, read_write> signal_settings_v4: array<vec4<f32>>;
+
+// Per-mode regulation emission parameters: [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding(u32)]
+@group(2) @binding(29)
+var<storage, read_write> regulation_params_buf: array<vec4<u32>>;
+
 // ============================================================
 // Hash-based PRNG (PCG-style)
 // ============================================================
@@ -356,6 +381,9 @@ fn clone_genome_modes(
         // oculocyte_params: 1 vec4<u32> per mode
         oculocyte_params_buf[dst] = oculocyte_params_buf[src];
 
+        // regulation_params: 1 vec4<u32> per mode
+        regulation_params_buf[dst] = regulation_params_buf[src];
+
         // mode_colors and mode_emissive: 1 vec4<f32> per mode each
         mode_colors[dst] = mode_colors[src];
         mode_emissive[dst] = mode_emissive[src];
@@ -364,6 +392,13 @@ fn clone_genome_modes(
         adhesion_settings_v0[dst] = adhesion_settings_v0[src];
         adhesion_settings_v1[dst] = adhesion_settings_v1[src];
         adhesion_settings_v2[dst] = adhesion_settings_v2[src];
+
+        // signal_settings: 5 separate vec4<f32> sub-buffers per mode
+        signal_settings_v0[dst] = signal_settings_v0[src];
+        signal_settings_v1[dst] = signal_settings_v1[src];
+        signal_settings_v2[dst] = signal_settings_v2[src];
+        signal_settings_v3[dst] = signal_settings_v3[src];
+        signal_settings_v4[dst] = signal_settings_v4[src];
     }
 }
 
@@ -376,6 +411,7 @@ fn apply_mutation(
     mode_count: u32,     // number of modes in this genome
     cell_id: u32,        // for RNG
     salt_base: u32,      // salt offset for RNG chain
+    new_genome_id: u32,  // allocated genome id (needed for genome_meta mutations)
 ) -> u32 {  // returns param_entry_idx for logging
     // Pick which mode to mutate
     let mode_local = rng_u32(cell_id, salt_base + 100u) % mode_count;
@@ -433,19 +469,203 @@ fn apply_mutation(
         case 2u: {
             var indices = child_mode_indices_buf[mode_abs];
             let component = entry.element_offset; // 0 = child_a, 1 = child_b
-            let old_val = select(indices.y, indices.x, component == 0u);
-            // Perturb as absolute index, then clamp to this genome's mode range
-            let new_val = clamp(
-                i32(round(f32(old_val) + delta)),
-                i32(dst_base),
-                i32(dst_base + mode_count - 1u)
-            );
-            if (component == 0u) {
-                indices.x = new_val;
+
+            if (entry.data_type == 4u) {
+                // CHAIN_EXTEND: genuinely insert current between T and T's old outgoing target.
+                //
+                // Before: T.child[component] → old_target
+                // After:  T.child[component] → current
+                //         current.child[component] → old_target
+                //
+                // This grows the chain by one node each firing without creating a mutual
+                // reference. Loops only form after CHAIN_CLOSE.
+
+                let rand_local = rng_u32(cell_id, salt_base + 450u) % mode_count;
+                let target_local = select(rand_local, (rand_local + 1u) % mode_count, rand_local == mode_local);
+                let target_abs = u32(i32(dst_base + target_local));
+                let current_abs = i32(mode_abs);
+
+                // Save T's old outgoing pointer for the chosen component
+                var target_indices = child_mode_indices_buf[target_abs];
+                let old_target = select(target_indices.y, target_indices.x, component == 0u);
+
+                // Wire T → current
+                if (component == 0u) {
+                    target_indices.x = current_abs;
+                } else {
+                    target_indices.y = current_abs;
+                }
+                child_mode_indices_buf[target_abs] = target_indices;
+
+                // Wire current → old_target (inherit T's old chain)
+                if (component == 0u) {
+                    indices.x = old_target;
+                } else {
+                    indices.y = old_target;
+                }
+                child_mode_indices_buf[mode_abs] = indices;
+
+            } else if (entry.data_type == 5u) {
+                // CHAIN_CLOSE: walk child_a up to 8 hops, close the tail back to current.
+                //
+                // Finds the end of the chain rooted at current and wires it back, producing
+                // a loop whose length equals the chain depth. Uses child_b on the tail if
+                // it points outside the genome (free slot), otherwise overwrites child_a.
+                // This preserves any branch already hanging off the tail's child_b.
+
+                let current_abs = i32(mode_abs);
+                var cursor = current_abs;
+
+                for (var hop = 0u; hop < 8u; hop++) {
+                    let next = child_mode_indices_buf[u32(cursor)].x;
+                    if (next < i32(dst_base) || next >= i32(dst_base + mode_count)) {
+                        break;
+                    }
+                    if (next == current_abs) {
+                        break; // already a loop, stop
+                    }
+                    cursor = next;
+                }
+
+                if (cursor != current_abs) {
+                    var tail = child_mode_indices_buf[u32(cursor)];
+                    // Prefer child_b if it's pointing outside the genome (unused slot)
+                    let b_free = tail.y < i32(dst_base) || tail.y >= i32(dst_base + mode_count);
+                    if (b_free) {
+                        tail.y = current_abs;
+                    } else {
+                        tail.x = current_abs;
+                    }
+                    child_mode_indices_buf[u32(cursor)] = tail;
+                }
+
+            } else if (entry.data_type == 6u) {
+                // LOOP_BRANCH: add a child_b branch from a mode whose child_b is currently
+                // self-referential (unused slot), sprouting a new outgoing chain toward a
+                // random mode T that is different from current.
+                //
+                // Precondition: current.child_b == current (self-referential = unused slot).
+                // Action: current.child_b → T  (T != current, picked randomly)
+                //
+                // This creates a branch point — a mode that was only in a linear chain now
+                // has a second outgoing edge, which is the raw material for a second
+                // interconnected loop to grow from.
+
+                let current_abs = i32(mode_abs);
+                let child_b_is_self = indices.y == current_abs;
+
+                if (child_b_is_self) {
+                    // Collect the 4-hop reachable set via child_a to avoid branching back
+                    // into the immediate loop (we want a genuinely new branch).
+                    let child_a = indices.x;
+                    var reachable_0 = current_abs;
+                    var reachable_1 = child_a;
+                    var reachable_2 = current_abs; // fallback
+                    var reachable_3 = current_abs;
+                    var reachable_4 = current_abs;
+
+                    if (child_a >= i32(dst_base) && child_a < i32(dst_base + mode_count)) {
+                        let hop1 = child_mode_indices_buf[u32(child_a)].x;
+                        if (hop1 >= i32(dst_base) && hop1 < i32(dst_base + mode_count)) {
+                            reachable_2 = hop1;
+                            let hop2 = child_mode_indices_buf[u32(hop1)].x;
+                            if (hop2 >= i32(dst_base) && hop2 < i32(dst_base + mode_count)) {
+                                reachable_3 = hop2;
+                                let hop3 = child_mode_indices_buf[u32(hop2)].x;
+                                if (hop3 >= i32(dst_base) && hop3 < i32(dst_base + mode_count)) {
+                                    reachable_4 = hop3;
+                                }
+                            }
+                        }
+                    }
+
+                    // Pick a random target, retry once if it's in the reachable set
+                    let r0 = rng_u32(cell_id, salt_base + 460u) % mode_count;
+                    let t0 = i32(dst_base + r0);
+                    let t0_reachable = (t0 == reachable_0 || t0 == reachable_1 ||
+                                        t0 == reachable_2 || t0 == reachable_3 || t0 == reachable_4);
+                    let r1 = (r0 + 1u + rng_u32(cell_id, salt_base + 461u) % (mode_count - 1u)) % mode_count;
+                    let t1 = i32(dst_base + r1);
+                    let branch_target = select(t0, t1, t0_reachable);
+
+                    indices.y = branch_target;
+                    child_mode_indices_buf[mode_abs] = indices;
+                }
+
+            } else if (entry.data_type == 7u) {
+                // LOOP_MERGE: cross-connect two separate loop structures.
+                //
+                // Use Floyd's tortoise-and-hare algorithm (up to 8 hops) to detect a cycle
+                // and identify a node inside it as the "loop head" L.
+                // Then pick a random mode T that is at least 3 modes away from L in the
+                // flat index space (i.e. likely in a different loop or chain).
+                // Wire T.child_b → L.
+                //
+                // Result: T's lineage now converges on L, merging two previously separate
+                // loop structures into one branching interconnected graph.
+
+                let current_abs = i32(mode_abs);
+                let genome_start = i32(dst_base);
+                let genome_end = i32(dst_base + mode_count);
+
+                // Floyd's tortoise-and-hare cycle detection, up to 8 hops
+                var tortoise = current_abs;
+                var hare = current_abs;
+                var loop_head = current_abs;
+                var found_loop = false;
+
+                for (var hop = 0u; hop < 8u; hop++) {
+                    // Advance tortoise one step
+                    let t_next = child_mode_indices_buf[u32(tortoise)].x;
+                    if (t_next < genome_start || t_next >= genome_end) { break; }
+                    tortoise = t_next;
+
+                    // Advance hare two steps
+                    let h_next1 = child_mode_indices_buf[u32(hare)].x;
+                    if (h_next1 < genome_start || h_next1 >= genome_end) { break; }
+                    let h_next2 = child_mode_indices_buf[u32(h_next1)].x;
+                    if (h_next2 < genome_start || h_next2 >= genome_end) { break; }
+                    hare = h_next2;
+
+                    if (tortoise == hare) {
+                        loop_head = tortoise;
+                        found_loop = true;
+                        break;
+                    }
+                }
+
+                // Fall back to current if no loop found — still useful, just merges into current
+                if (!found_loop) {
+                    loop_head = current_abs;
+                }
+
+                // Pick a remote mode T: at least 3 indices away from loop_head in flat space
+                let lh_local = u32(loop_head - genome_start);
+                let min_offset = select(3u, 1u, mode_count <= 3u);
+                let offset = min_offset + rng_u32(cell_id, salt_base + 470u) % (mode_count - min_offset);
+                let t_local = (lh_local + offset) % mode_count;
+                let t_abs = u32(genome_start + i32(t_local));
+
+                // Wire T.child_b → loop_head (cross-connect)
+                var t_indices = child_mode_indices_buf[t_abs];
+                t_indices.y = loop_head;
+                child_mode_indices_buf[t_abs] = t_indices;
+
             } else {
-                indices.y = new_val;
+                // Default: nudge by delta, clamped to genome's mode range
+                let old_val = select(indices.y, indices.x, component == 0u);
+                let new_val = clamp(
+                    i32(round(f32(old_val) + delta)),
+                    i32(dst_base),
+                    i32(dst_base + mode_count - 1u)
+                );
+                if (component == 0u) {
+                    indices.x = new_val;
+                } else {
+                    indices.y = new_val;
+                }
+                child_mode_indices_buf[mode_abs] = indices;
             }
-            child_mode_indices_buf[mode_abs] = indices;
         }
 
         // buffer_id 3-5: boolean flag buffers
@@ -530,9 +750,107 @@ fn apply_mutation(
             let new_local = clamp(
                 i32(round(f32(old_local) + delta)),
                 0,
-                i32(parent_mode_count) - 1
+                i32(mode_count) - 1
             );
             genome_meta[new_genome_id].z = u32(new_local);
+        }
+
+        // buffer_id 11: adhesion_settings (3 × vec4<u32> sub-buffers per mode)
+        // Data is stored as bitcast u32 (f32 values) or raw u32 (booleans).
+        // element_offset encodes: sub-buffer = offset / 4, component = offset % 4
+        //   offsets 0–3  → adhesion_settings_v0 (can_break, break_force, rest_length, linear_spring_stiffness)
+        //   offsets 4–7  → adhesion_settings_v1 (linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation)
+        //   offsets 8–11 → adhesion_settings_v2 (twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, _padding)
+        case 11u: {
+            let sub_buf = entry.element_offset / 4u;
+            let comp = entry.element_offset % 4u;
+
+            // Read the raw vec4<u32> from the correct sub-buffer
+            var raw: vec4<u32>;
+            switch (sub_buf) {
+                case 0u: { raw = adhesion_settings_v0[mode_abs]; }
+                case 1u: { raw = adhesion_settings_v1[mode_abs]; }
+                default: { raw = adhesion_settings_v2[mode_abs]; }
+            }
+
+            switch (entry.data_type) {
+                // Boolean flip (can_break at offset 0, enable_twist_constraint at offset 10)
+                case 2u: {
+                    raw[comp] = select(1u, 0u, raw[comp] > 0u);
+                }
+                // Continuous f32 (stored as bitcast u32)
+                default: {
+                    let old_val = bitcast<f32>(raw[comp]);
+                    let new_val = clamp(old_val + delta, entry.min_value, entry.max_value);
+                    raw[comp] = bitcast<u32>(new_val);
+                }
+            }
+
+            // Write back to the correct sub-buffer
+            switch (sub_buf) {
+                case 0u: { adhesion_settings_v0[mode_abs] = raw; }
+                case 1u: { adhesion_settings_v1[mode_abs] = raw; }
+                default: { adhesion_settings_v2[mode_abs] = raw; }
+            }
+        }
+
+        // buffer_id 12: signal_settings (5 × vec4<f32> sub-buffers per mode)
+        // element_offset encodes: sub-buffer = offset / 4, component = offset % 4
+        // Data types: CONTINUOUS_F32 for thresholds, INTEGER for channels/mode indices, BOOLEAN for inverts
+        case 12u: {
+            let sub_buf = entry.element_offset / 4u;
+            let comp = entry.element_offset % 4u;
+
+            var v: vec4<f32>;
+            switch (sub_buf) {
+                case 0u: { v = signal_settings_v0[mode_abs]; }
+                case 1u: { v = signal_settings_v1[mode_abs]; }
+                case 2u: { v = signal_settings_v2[mode_abs]; }
+                case 3u: { v = signal_settings_v3[mode_abs]; }
+                default: { v = signal_settings_v4[mode_abs]; }
+            }
+
+            switch (entry.data_type) {
+                // Continuous f32 (thresholds)
+                case 0u: { v[comp] = clamp(v[comp] + delta, entry.min_value, entry.max_value); }
+                // Integer (channels, mode indices)
+                case 1u: { v[comp] = clamp(round(v[comp] + delta), entry.min_value, entry.max_value); }
+                // Boolean flip (inverts)
+                case 2u: { v[comp] = select(1.0, 0.0, v[comp] > 0.5); }
+                // Mode index clamp
+                case 3u: { v[comp] = clamp(round(v[comp] + delta), 0.0, f32(mode_count - 1u)); }
+                default: {}
+            }
+
+            switch (sub_buf) {
+                case 0u: { signal_settings_v0[mode_abs] = v; }
+                case 1u: { signal_settings_v1[mode_abs] = v; }
+                case 2u: { signal_settings_v2[mode_abs] = v; }
+                case 3u: { signal_settings_v3[mode_abs] = v; }
+                default: { signal_settings_v4[mode_abs] = v; }
+            }
+        }
+
+        // buffer_id 13: regulation_params (vec4<u32> per mode)
+        // [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding(u32)]
+        // element_offset 0 = channel (integer), 1 = value (f32 as bits), 2 = hops (integer)
+        case 13u: {
+            var p = regulation_params_buf[mode_abs];
+            let comp = entry.element_offset;
+            switch (entry.data_type) {
+                case 1u: {
+                    // integer (channel or hops)
+                    let old_val = f32(p[comp]);
+                    p[comp] = u32(clamp(round(old_val + delta), entry.min_value, entry.max_value));
+                }
+                case 0u: {
+                    // f32 stored as bits (emit_value)
+                    let old_val = bitcast<f32>(p[comp]);
+                    p[comp] = bitcast<u32>(clamp(old_val + delta, entry.min_value, entry.max_value));
+                }
+                default: {}
+            }
+            regulation_params_buf[mode_abs] = p;
         }
 
         default: {}
@@ -664,7 +982,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Apply one mutation — candidate_idx is the global invocation ID, unique per
     // thread and uncorrelated with genome IDs or cell slot indices.
-    let param_idx = apply_mutation(new_base_offset, parent_mode_count, candidate_idx, 0u);
+    let param_idx = apply_mutation(new_base_offset, parent_mode_count, candidate_idx, 0u, new_genome_id);
 
     // Update cell's genome_id
     genome_ids[cell_idx] = new_genome_id;

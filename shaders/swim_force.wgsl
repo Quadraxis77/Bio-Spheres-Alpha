@@ -165,8 +165,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Determine effective swim speed
     var effective_speed: f32;
     if (mode_v3.z >= 0.5) { // flagellocyte_use_signal
-        // Signal-based mode
-        let raw_signal = atomicLoad(&signal_flags[cell_idx]);
+        // Signal-based mode: read from the specific channel
+        // mode_v2.z = flagellocyte_signal_channel
+        let sig_channel = clamp(u32(mode_v2.z), 0u, 7u);
+        let raw_signal = atomicLoad(&signal_flags[cell_idx * 16u + sig_channel]);
         let signal_value = f32(raw_signal & 2047u); // Extract value component
         if (signal_value >= mode_v3.y) { // flagellocyte_threshold_c
             effective_speed = mode_v3.x; // flagellocyte_speed_b

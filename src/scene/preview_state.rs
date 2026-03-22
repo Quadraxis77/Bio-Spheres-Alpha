@@ -243,6 +243,31 @@ impl PreviewState {
             mode.oculocyte_signal_hops.hash(&mut hasher);
             mode.oculocyte_ray_length.to_bits().hash(&mut hasher);
             
+            // Hash regulation emit settings
+            mode.regulation_emit_channel.hash(&mut hasher);
+            mode.regulation_emit_value.to_bits().hash(&mut hasher);
+            mode.regulation_emit_hops.hash(&mut hasher);
+            
+            // Hash signal-conditional settings
+            mode.division_signal_channel.hash(&mut hasher);
+            mode.division_signal_threshold.to_bits().hash(&mut hasher);
+            mode.division_signal_invert.hash(&mut hasher);
+            mode.apoptosis_signal_channel.hash(&mut hasher);
+            mode.apoptosis_signal_threshold.to_bits().hash(&mut hasher);
+            mode.apoptosis_signal_invert.hash(&mut hasher);
+            mode.signal_child_a_channel.hash(&mut hasher);
+            mode.signal_child_a_threshold.to_bits().hash(&mut hasher);
+            mode.signal_child_a_mode_above.hash(&mut hasher);
+            mode.signal_child_a_mode_below.hash(&mut hasher);
+            mode.signal_child_b_channel.hash(&mut hasher);
+            mode.signal_child_b_threshold.to_bits().hash(&mut hasher);
+            mode.signal_child_b_mode_above.hash(&mut hasher);
+            mode.signal_child_b_mode_below.hash(&mut hasher);
+            mode.mode_switch_signal_channel.hash(&mut hasher);
+            mode.mode_switch_signal_threshold.to_bits().hash(&mut hasher);
+            mode.mode_switch_target.hash(&mut hasher);
+            mode.mode_switch_invert.hash(&mut hasher);
+            
             // Hash adhesion settings
             mode.adhesion_settings.can_break.hash(&mut hasher);
             mode.adhesion_settings.break_force.to_bits().hash(&mut hasher);

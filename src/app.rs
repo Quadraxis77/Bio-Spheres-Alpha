@@ -815,7 +815,7 @@ impl App {
                         let _mass = display_state.masses.get(cell_idx).copied().unwrap_or(0.0);
                         let nutrients = display_state.nutrients.get(cell_idx).copied().unwrap_or(0.0);
                         let signal_channel = mode
-                            .map(|m| m.oculocyte_signal_channel.clamp(0, 15) as usize)
+                            .map(|m| m.oculocyte_signal_channel.clamp(0, 7) as usize)
                             .unwrap_or(0);
                         let signal_value = mode.map(|m| m.oculocyte_signal_value).unwrap_or(10.0);
                         let signal_hops = mode
@@ -846,7 +846,7 @@ impl App {
                         let swim_drain = if is_flagellocyte {
                             let mode_settings = mode;
                             let effective_speed = if mode_settings.map(|m| m.flagellocyte_use_signal).unwrap_or(false) {
-                                let channel = mode_settings.map(|m| m.flagellocyte_signal_channel.clamp(0, 15) as usize).unwrap_or(0);
+                                let channel = mode_settings.map(|m| m.flagellocyte_signal_channel.clamp(0, 7) as usize).unwrap_or(0);
                                 let signal_value = display_state.signal_channels.get(cell_idx * 16 + channel).copied().flatten().unwrap_or(0.0);
                                 let threshold_c = mode_settings.map(|m| m.flagellocyte_threshold_c).unwrap_or(0.0);
                                 if signal_value >= threshold_c {

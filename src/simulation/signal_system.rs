@@ -24,6 +24,7 @@ pub const SENSE_CELL: i32 = 0;
 pub const SENSE_FOOD: i32 = 1;
 pub const SENSE_LIGHT: i32 = 2;
 pub const SENSE_BARRIER: i32 = 3;
+pub const SENSE_SELF: i32 = 4;
 
 /// Oculocyte cell type index
 const OCULOCYTE_TYPE: i32 = 7;
@@ -74,7 +75,7 @@ pub fn sense_oculocytes(
         }
 
         let sense_type = mode.oculocyte_sense_type;
-        let channel = mode.oculocyte_signal_channel.clamp(0, 15) as usize;
+        let channel = mode.oculocyte_signal_channel.clamp(0, 7) as usize; // Oculocyte channels 0-7 only
         let signal_value = mode.oculocyte_signal_value.clamp(-100.0, 100.0);
         let hops = mode.oculocyte_signal_hops.clamp(1, 20) as usize;
         let ray_length = mode.oculocyte_ray_length.clamp(1.0, 100.0);
@@ -88,6 +89,7 @@ pub fn sense_oculocytes(
             SENSE_FOOD => false, // Food sensing requires fluid system access — not available in preview
             SENSE_LIGHT => false, // Light sensing requires light field — not available in preview
             SENSE_BARRIER => sense_barrier_ray(pos, forward, ray_length, boundary_radius),
+            SENSE_SELF => true, // Self-sense always detects — emits unconditional positional gradient signal
             _ => false,
         };
 
@@ -422,16 +424,56 @@ pub fn adhesion_has_signal(state: &CanonicalState, cell_a: usize, cell_b: usize)
 
 /// Run the complete signal system for one frame:
 /// 1. Clear all signals
-/// 2. Run oculocyte sensing
-/// 3. Propagate signals via BFS
+/// 2. Run oculocyte sensing (channels 0-7)
+/// 3. Emit regulation signals (channels 8-15)
+/// 4. Propagate all signals via BFS
 pub fn run_signal_system(
     state: &mut CanonicalState,
     genome: &Genome,
     boundary_radius: f32,
 ) {
     clear_all_signals(state);
-    let emissions = sense_oculocytes(state, genome, boundary_radius);
+    let mut emissions = sense_oculocytes(state, genome, boundary_radius);
+    let regulation_emissions = emit_regulation_signals(state, genome);
+    emissions.extend(regulation_emissions);
     propagate_signals(state, genome, &emissions);
+}
+
+/// Emit regulation signals for all cells whose mode has regulation_emit_channel >= 8.
+/// These are unconditional emissions — any cell type can emit on regulation channels.
+pub fn emit_regulation_signals(
+    state: &CanonicalState,
+    genome: &Genome,
+) -> Vec<SignalEmission> {
+    let mut emissions = Vec::new();
+
+    for cell_idx in 0..state.cell_count {
+        let mode_idx = state.mode_indices[cell_idx];
+        let mode = match genome.modes.get(mode_idx) {
+            Some(m) => m,
+            None => continue,
+        };
+
+        // Only emit if regulation channel is enabled (8-15)
+        if mode.regulation_emit_channel < 8 || mode.regulation_emit_channel > 15 {
+            continue;
+        }
+
+        let channel = mode.regulation_emit_channel as usize;
+        let value = mode.regulation_emit_value.clamp(0.0, 2047.0);
+        let hops = mode.regulation_emit_hops.clamp(1, 20) as usize;
+
+        if value > 0.0 {
+            emissions.push(SignalEmission {
+                source_cell: cell_idx,
+                channel,
+                value,
+                hops,
+            });
+        }
+    }
+
+    emissions
 }
 
 /// Run signal propagation with manually-provided emissions (for test buttons).

@@ -388,8 +388,24 @@ pub struct GpuTripleBufferSystem {
     /// Per-mode glueocyte environment adhesion flags (one u32 per mode)
     pub glueocyte_env_adhesion_flags: wgpu::Buffer,
 
-    /// Per-mode oculocyte parameters: [sense_type(u32), ray_length(f32), signal_hops(u32), padding(u32)] = 16 bytes per mode
+    /// Per-mode oculocyte parameters: [sense_type(u32), ray_length(f32), signal_hops(u32), signal_channel(u32)] = 16 bytes per mode
     pub oculocyte_params: wgpu::Buffer,
+
+    /// Per-mode regulation emission parameters: [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding(u32)] = 16 bytes per mode
+    /// emit_channel: 0xFFFFFFFF = disabled, 8-15 = regulation channel
+    pub regulation_params: wgpu::Buffer,
+
+    /// Per-mode signal-conditional settings (5 vec4 sub-buffers, 16 bytes each per mode)
+    /// v0: [division_signal_channel(f32), division_signal_threshold(f32), division_signal_invert(f32 0/1), apoptosis_signal_channel(f32)]
+    /// v1: [apoptosis_signal_threshold(f32), apoptosis_signal_invert(f32 0/1), signal_child_a_channel(f32), signal_child_a_threshold(f32)]
+    /// v2: [signal_child_a_mode_above(f32), signal_child_a_mode_below(f32), signal_child_b_channel(f32), signal_child_b_threshold(f32)]
+    /// v3: [signal_child_b_mode_above(f32), signal_child_b_mode_below(f32), mode_switch_signal_channel(f32), mode_switch_signal_threshold(f32)]
+    /// v4: [mode_switch_target(f32), mode_switch_invert(f32 0/1), padding, padding]
+    pub signal_settings_v0: wgpu::Buffer,
+    pub signal_settings_v1: wgpu::Buffer,
+    pub signal_settings_v2: wgpu::Buffer,
+    pub signal_settings_v3: wgpu::Buffer,
+    pub signal_settings_v4: wgpu::Buffer,
 
     /// Per-cell genome orientation: Vec4(x, y, z, w) quaternion
     /// Tracks the pure genome-derived orientation chain (parent * split_rotation * child_orientation)
@@ -581,8 +597,18 @@ impl GpuTripleBufferSystem {
         // Per-mode glueocyte env adhesion flags (one u32 per mode)
         let glueocyte_env_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Glueocyte Env Adhesion Flags");
 
-        // Per-mode oculocyte parameters: vec4<u32> per mode (sense_type, sense_range_bits, signal_hops, padding)
+        // Per-mode oculocyte parameters: vec4<u32> per mode (sense_type, sense_range_bits, signal_hops, signal_channel)
         let oculocyte_params = Self::create_storage_buffer(device, max_modes * 16, "Oculocyte Params");
+
+        // Per-mode regulation emission parameters: vec4<u32> per mode (emit_channel, emit_value_bits, emit_hops, padding)
+        let regulation_params = Self::create_storage_buffer(device, max_modes * 16, "Regulation Params");
+
+        // Per-mode signal-conditional settings: 5 vec4<f32> sub-buffers per mode
+        let signal_settings_v0 = Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V0");
+        let signal_settings_v1 = Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V1");
+        let signal_settings_v2 = Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V2");
+        let signal_settings_v3 = Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V3");
+        let signal_settings_v4 = Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V4");
 
         // Per-cell genome orientation: vec4<f32> quaternion (identity = 0,0,0,1)
         // Tracks pure genome-derived orientation without physics perturbation
@@ -652,6 +678,12 @@ impl GpuTripleBufferSystem {
             env_anchor_buffer,
             glueocyte_env_adhesion_flags,
             oculocyte_params,
+            regulation_params,
+            signal_settings_v0,
+            signal_settings_v1,
+            signal_settings_v2,
+            signal_settings_v3,
+            signal_settings_v4,
             genome_orientations,
             indirect_dispatch_buffer,
             current_index: AtomicUsize::new(0),
@@ -1173,7 +1205,7 @@ impl GpuTripleBufferSystem {
     }
 
     /// Sync oculocyte parameters for all modes across all genomes
-    /// Layout per mode: [sense_type(u32), ray_length_bits(u32), signal_hops(u32), padding(u32)]
+    /// Layout per mode: [sense_type(u32), ray_length_bits(u32), signal_hops(u32), signal_channel(u32)]
     pub fn sync_oculocyte_params(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
         let params: Vec<[u32; 4]> = genomes
             .iter()
@@ -1183,13 +1215,101 @@ impl GpuTripleBufferSystem {
                         mode.oculocyte_sense_type as u32,
                         mode.oculocyte_ray_length.to_bits(),
                         mode.oculocyte_signal_hops as u32,
-                        0u32, // padding
+                        mode.oculocyte_signal_channel.clamp(0, 7) as u32, // Oculocyte channels 0-7 only
                     ]
                 })
             })
             .collect();
         if !params.is_empty() {
             queue.write_buffer(&self.oculocyte_params, 0, bytemuck::cast_slice(&params));
+        }
+    }
+
+    /// Sync regulation emission parameters for all modes across all genomes.
+    /// Layout per mode: [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding(u32)]
+    /// emit_channel: 0xFFFFFFFF (u32 max) = disabled, 8-15 = regulation channel
+    pub fn sync_regulation_params(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let params: Vec<[u32; 4]> = genomes
+            .iter()
+            .flat_map(|genome| {
+                genome.modes.iter().map(|mode| {
+                    let channel = if mode.regulation_emit_channel < 0 {
+                        0xFFFFFFFFu32 // Disabled sentinel
+                    } else {
+                        (mode.regulation_emit_channel as u32).clamp(8, 15)
+                    };
+                    [
+                        channel,
+                        mode.regulation_emit_value.clamp(0.0, 2047.0).to_bits(),
+                        mode.regulation_emit_hops.clamp(1, 20) as u32,
+                        0u32, // padding
+                    ]
+                })
+            })
+            .collect();
+        if !params.is_empty() {
+            queue.write_buffer(&self.regulation_params, 0, bytemuck::cast_slice(&params));
+        }
+    }
+
+    /// Sync signal-conditional settings for all modes across all genomes.
+    /// Packs division gating, apoptosis, signal-conditional child routing, and mode switching
+    /// into 5 vec4<f32> sub-buffers per mode.
+    pub fn sync_signal_settings(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let mut v0: Vec<[f32; 4]> = Vec::new();
+        let mut v1: Vec<[f32; 4]> = Vec::new();
+        let mut v2: Vec<[f32; 4]> = Vec::new();
+        let mut v3: Vec<[f32; 4]> = Vec::new();
+        let mut v4: Vec<[f32; 4]> = Vec::new();
+
+        let mut global_mode_offset = 0i32;
+        for genome in genomes {
+            for mode in &genome.modes {
+                // Remap local mode indices to absolute GPU mode indices
+                let remap = |local: i32| -> f32 {
+                    if local < 0 { -1.0 } else { (global_mode_offset + local.max(0)) as f32 }
+                };
+
+                v0.push([
+                    mode.division_signal_channel as f32,
+                    mode.division_signal_threshold,
+                    if mode.division_signal_invert { 1.0 } else { 0.0 },
+                    mode.apoptosis_signal_channel as f32,
+                ]);
+                v1.push([
+                    mode.apoptosis_signal_threshold,
+                    if mode.apoptosis_signal_invert { 1.0 } else { 0.0 },
+                    mode.signal_child_a_channel as f32,
+                    mode.signal_child_a_threshold,
+                ]);
+                v2.push([
+                    remap(mode.signal_child_a_mode_above),
+                    remap(mode.signal_child_a_mode_below),
+                    mode.signal_child_b_channel as f32,
+                    mode.signal_child_b_threshold,
+                ]);
+                v3.push([
+                    remap(mode.signal_child_b_mode_above),
+                    remap(mode.signal_child_b_mode_below),
+                    mode.mode_switch_signal_channel as f32,
+                    mode.mode_switch_signal_threshold,
+                ]);
+                v4.push([
+                    remap(mode.mode_switch_target),
+                    if mode.mode_switch_invert { 1.0 } else { 0.0 },
+                    0.0,
+                    0.0,
+                ]);
+            }
+            global_mode_offset += genome.modes.len() as i32;
+        }
+
+        if !v0.is_empty() {
+            queue.write_buffer(&self.signal_settings_v0, 0, bytemuck::cast_slice(&v0));
+            queue.write_buffer(&self.signal_settings_v1, 0, bytemuck::cast_slice(&v1));
+            queue.write_buffer(&self.signal_settings_v2, 0, bytemuck::cast_slice(&v2));
+            queue.write_buffer(&self.signal_settings_v3, 0, bytemuck::cast_slice(&v3));
+            queue.write_buffer(&self.signal_settings_v4, 0, bytemuck::cast_slice(&v4));
         }
     }
 

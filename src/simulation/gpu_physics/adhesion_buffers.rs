@@ -93,9 +93,9 @@ pub struct AdhesionBuffers {
     /// Whether buffers need sync to GPU
     needs_sync: bool,
 
-    /// Per-cell signal active flags: u32 per cell (1 = any signal active, 0 = no signal)
-    /// Used by GPU adhesion line renderer for signal-based coloring.
-    /// Size: cell_capacity * 4 bytes
+    /// Per-cell signal channels: 16 u32 per cell (channels 0-7 oculocyte, 8-15 regulation)
+    /// Each u32 encodes: bits 16+ = direction flag, bits 11-15 = hops, bits 0-10 = signal value
+    /// Size: cell_capacity * 16 * 4 bytes
     pub signal_flags: wgpu::Buffer,
 
     /// Second signal flags buffer for double-buffered propagation.
@@ -177,18 +177,18 @@ impl AdhesionBuffers {
         let torque_accum_y = Self::create_storage_buffer(device, atomic_buffer_size, "Torque Accum Y");
         let torque_accum_z = Self::create_storage_buffer(device, atomic_buffer_size, "Torque Accum Z");
         
-        // Per-cell signal flags for adhesion line coloring (0 = no signal, 1 = has signal)
+        // Per-cell signal flags: 16 channels per cell, 1 u32 per channel = 64 bytes per cell
         let signal_flags = Self::create_storage_buffer(
             device,
-            cell_capacity as u64 * 4,
-            "Signal Flags",
+            cell_capacity as u64 * 16 * 4,
+            "Signal Flags (16 channels)",
         );
 
         // Second signal flags buffer for double-buffered propagation
         let signal_flags_next = Self::create_storage_buffer(
             device,
-            cell_capacity as u64 * 4,
-            "Signal Flags Next",
+            cell_capacity as u64 * 16 * 4,
+            "Signal Flags Next (16 channels)",
         );
 
         // Initialize CPU-side caches

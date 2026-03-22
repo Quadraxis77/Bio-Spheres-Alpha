@@ -129,6 +129,20 @@ var<storage, read> mode_properties_v3: array<vec4<f32>>; // [flagellocyte_speed_
 @group(2) @binding(15)
 var<storage, read> mode_properties_v4: array<vec4<f32>>; // [max_adhesions, mode_a_after_splits, mode_b_after_splits, padding]
 
+// Per-cell signal flags (packed u32: bits encode signal value, hops, direction)
+// Non-zero means cell has received a signal from the oculocyte sensing system
+@group(2) @binding(16)
+var<storage, read> signal_flags_read: array<u32>;
+
+// Per-mode signal-conditional settings (5 vec4<f32> sub-buffers)
+// v0: [division_signal_channel, division_signal_threshold, division_signal_invert, apoptosis_signal_channel]
+// v1: [apoptosis_signal_threshold, apoptosis_signal_invert, signal_child_a_channel, signal_child_a_threshold]
+@group(2) @binding(17)
+var<storage, read> signal_settings_v0_read: array<vec4<f32>>;
+
+@group(2) @binding(18)
+var<storage, read> signal_settings_v1_read: array<vec4<f32>>;
+
 // Adhesion bind group (group 3) - read-only for neighbor deferral check in division_scan
 @group(3) @binding(0)
 var<storage, read> adhesion_connections: array<AdhesionConnection>;
@@ -251,7 +265,41 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Cell is dead if: nutrients below threshold OR invalid mode index
     let is_dead = nutrients < DEATH_NUTRIENT_THRESHOLD || has_invalid_mode;
     
-    if (is_dead && !was_dead) {
+    // Signal-conditional apoptosis check:
+    // If the mode has apoptosis_signal_channel >= 0, check if the cell's signal
+    // meets the threshold condition. If so, trigger death.
+    var apoptosis_triggered = false;
+    if (!is_dead && !was_dead) {
+        let mode_idx = mode_indices[cell_idx];
+        if (mode_idx < arrayLength(&signal_settings_v0_read)) {
+            let ss_v0 = signal_settings_v0_read[mode_idx];
+            let apoptosis_channel = ss_v0.w; // apoptosis_signal_channel
+            if (apoptosis_channel >= 8.0) {
+                let ss_v1 = signal_settings_v1_read[mode_idx];
+                let apoptosis_threshold = ss_v1.x; // apoptosis_signal_threshold
+                let apoptosis_invert = ss_v1.y;    // apoptosis_signal_invert (0 or 1)
+                
+                // Decode signal value from signal_flags (lower 11 bits = value)
+                // 16 channels per cell: signal_flags_read[cell_idx * 16 + channel]
+                let apoptosis_ch = clamp(u32(apoptosis_channel), 8u, 15u);
+                let raw_signal = signal_flags_read[cell_idx * 16u + apoptosis_ch];
+                let signal_value = f32(raw_signal & 0x7FFu);
+                
+                // Check threshold: if invert=0, trigger when signal >= threshold
+                //                   if invert=1, trigger when signal < threshold
+                let above_threshold = signal_value >= apoptosis_threshold;
+                let condition_met = select(above_threshold, !above_threshold, apoptosis_invert > 0.5);
+                
+                // Only trigger if there IS a signal (raw_signal > 0) or if inverted (no signal = trigger)
+                let has_signal = raw_signal > 0u;
+                apoptosis_triggered = select(condition_met && has_signal, condition_met, apoptosis_invert > 0.5);
+            }
+        }
+    }
+    
+    let should_die = is_dead || apoptosis_triggered;
+    
+    if (should_die && !was_dead) {
         // Newly dead cell - push slot to ring buffer for recycling
         death_flags[cell_idx] = 1u;
         push_free_slot(cell_idx);
@@ -261,7 +309,7 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         
         // Clear division flag
         division_flags[cell_idx] = 0u;
-    } else if (is_dead) {
+    } else if (should_die) {
         // Already dead, ensure division flag is clear
         division_flags[cell_idx] = 0u;
     }
@@ -315,6 +363,38 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (!wants_to_divide) {
         division_flags[cell_idx] = 0u;
         return;
+    }
+    
+    // Signal-conditional division gating:
+    // If the mode has division_signal_channel >= 0, check if the cell's signal
+    // meets the threshold condition. If not, block division.
+    if (mode_idx < arrayLength(&signal_settings_v0_read)) {
+        let ss_v0 = signal_settings_v0_read[mode_idx];
+        let div_channel = ss_v0.x; // division_signal_channel
+        if (div_channel >= 8.0) {
+            let div_threshold = ss_v0.y; // division_signal_threshold
+            let div_invert = ss_v0.z;    // division_signal_invert (0 or 1)
+            
+            // Decode signal value from signal_flags (lower 11 bits = value)
+            // 16 channels per cell: signal_flags_read[cell_idx * 16 + channel]
+            let div_ch = clamp(u32(div_channel), 8u, 15u);
+            let raw_signal = signal_flags_read[cell_idx * 16u + div_ch];
+            let signal_value = f32(raw_signal & 0x7FFu);
+            
+            // Check threshold: if invert=0, allow division when signal >= threshold
+            //                   if invert=1, allow division when signal < threshold
+            let above_threshold = signal_value >= div_threshold;
+            let gate_open = select(above_threshold, !above_threshold, div_invert > 0.5);
+            
+            // Gate requires signal presence (unless inverted — no signal = gate open)
+            let has_signal = raw_signal > 0u;
+            let division_allowed = select(gate_open && has_signal, gate_open, div_invert > 0.5);
+            
+            if (!division_allowed) {
+                division_flags[cell_idx] = 0u;
+                return;
+            }
+        }
     }
     
     // Count active adhesions for this cell (used for both max and min checks)

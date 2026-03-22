@@ -890,6 +890,27 @@ impl GpuScene {
                 oculocyte_signal_hops: oculocyte_params[i][2] as i32,
                 oculocyte_ray_length: f32::from_bits(oculocyte_params[i][1]),
                 membrane_stiffness: props[2],
+                regulation_emit_channel: -1,
+                regulation_emit_value: 10.0,
+                regulation_emit_hops: 3,
+                division_signal_channel: -1,
+                division_signal_threshold: 1.0,
+                division_signal_invert: false,
+                apoptosis_signal_channel: -1,
+                apoptosis_signal_threshold: 1.0,
+                apoptosis_signal_invert: false,
+                signal_child_a_channel: -1,
+                signal_child_a_threshold: 1.0,
+                signal_child_a_mode_above: -1,
+                signal_child_a_mode_below: -1,
+                signal_child_b_channel: -1,
+                signal_child_b_threshold: 1.0,
+                signal_child_b_mode_above: -1,
+                signal_child_b_mode_below: -1,
+                mode_switch_signal_channel: -1,
+                mode_switch_signal_threshold: 1.0,
+                mode_switch_target: -1,
+                mode_switch_invert: false,
                 child_a: crate::genome::ChildSettings {
                     mode_number: child_a_local,
                     orientation: qa,
@@ -1815,8 +1836,14 @@ impl GpuScene {
         // Sync glueocyte env adhesion flags (one u32 per mode)
         self.gpu_triple_buffers.sync_glueocyte_env_adhesion_flags(queue, &self.genomes);
 
-        // Sync oculocyte parameters (sense_type, sense_range, signal_hops per mode)
+        // Sync oculocyte parameters (sense_type, sense_range, signal_hops, signal_channel per mode)
         self.gpu_triple_buffers.sync_oculocyte_params(queue, &self.genomes);
+
+        // Sync regulation emission parameters (emit_channel, emit_value, emit_hops per mode)
+        self.gpu_triple_buffers.sync_regulation_params(queue, &self.genomes);
+
+        // Sync signal-conditional settings (division gating, apoptosis, child routing, mode switching)
+        self.gpu_triple_buffers.sync_signal_settings(queue, &self.genomes);
 
         // Sync child mode indices for division (CRITICAL: determines what mode children get)
         self.gpu_triple_buffers.sync_child_mode_indices(queue, &self.genomes);
@@ -4118,6 +4145,12 @@ impl GpuScene {
                 &self.adhesion_buffers.adhesion_settings_v0,
                 &self.adhesion_buffers.adhesion_settings_v1,
                 &self.adhesion_buffers.adhesion_settings_v2,
+                &self.gpu_triple_buffers.signal_settings_v0,
+                &self.gpu_triple_buffers.signal_settings_v1,
+                &self.gpu_triple_buffers.signal_settings_v2,
+                &self.gpu_triple_buffers.signal_settings_v3,
+                &self.gpu_triple_buffers.signal_settings_v4,
+                &self.gpu_triple_buffers.regulation_params,
             );
 
             // Rebuild GC bind group (for genome recycling)

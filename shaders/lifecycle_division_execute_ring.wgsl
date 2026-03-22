@@ -218,6 +218,23 @@ var<storage, read> child_b_after_split_keep_adhesion_flags: array<u32>;
 @group(2) @binding(32)
 var<storage, read_write> genome_orientations: array<vec4<f32>>;
 
+// Per-cell signal flags for signal-conditional child mode routing
+@group(2) @binding(35)
+var<storage, read> signal_flags_read: array<u32>;
+
+// Per-mode signal-conditional settings for child mode routing
+// v1: [apoptosis_signal_threshold, apoptosis_signal_invert, signal_child_a_channel, signal_child_a_threshold]
+// v2: [signal_child_a_mode_above, signal_child_a_mode_below, signal_child_b_channel, signal_child_b_threshold]
+// v3: [signal_child_b_mode_above, signal_child_b_mode_below, mode_switch_signal_channel, mode_switch_signal_threshold]
+@group(2) @binding(36)
+var<storage, read> signal_settings_v1_read: array<vec4<f32>>;
+
+@group(2) @binding(37)
+var<storage, read> signal_settings_v2_read: array<vec4<f32>>;
+
+@group(2) @binding(38)
+var<storage, read> signal_settings_v3_read: array<vec4<f32>>;
+
 // Adhesion bind group (group 3)
 @group(3) @binding(0)
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
@@ -517,6 +534,65 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // CRITICAL: Bounds check child mode indices to prevent invalid array access
     // If mode index is out of bounds, clamp to parent mode (safe fallback)
     let mode_count = arrayLength(&mode_cell_types);
+
+    // Signal-conditional child mode routing:
+    // If the parent mode has signal_child_a/b_channel >= 0, check the parent cell's signal
+    // and override child mode based on whether signal is above or below threshold.
+    if (parent_mode_idx < arrayLength(&signal_settings_v1_read)) {
+        let ss_v1 = signal_settings_v1_read[parent_mode_idx];
+        let ss_v2 = signal_settings_v2_read[parent_mode_idx];
+        let ss_v3 = signal_settings_v3_read[parent_mode_idx];
+        
+        // Child A signal routing: ss_v1.z = channel, ss_v1.w = threshold
+        // ss_v2.x = mode_above, ss_v2.y = mode_below
+        let child_a_channel = ss_v1.z;
+        if (child_a_channel >= 8.0) {
+            // 16 channels per cell: signal_flags_read[cell_idx * 16 + channel]
+            let child_a_ch = clamp(u32(child_a_channel), 8u, 15u);
+            let raw_signal = signal_flags_read[cell_idx * 16u + child_a_ch];
+            let signal_value = f32(raw_signal & 0x7FFu);
+            let has_signal = raw_signal > 0u;
+            
+            let child_a_threshold = ss_v1.w;
+            let child_a_mode_above = i32(ss_v2.x);
+            let child_a_mode_below = i32(ss_v2.y);
+            
+            if (has_signal && signal_value >= child_a_threshold) {
+                if (child_a_mode_above >= 0) {
+                    child_a_mode_idx = u32(child_a_mode_above);
+                }
+            } else {
+                if (child_a_mode_below >= 0) {
+                    child_a_mode_idx = u32(child_a_mode_below);
+                }
+            }
+        }
+        
+        // Child B signal routing: ss_v2.z = channel, ss_v2.w = threshold
+        // ss_v3.x = mode_above, ss_v3.y = mode_below
+        let child_b_channel = ss_v2.z;
+        if (child_b_channel >= 8.0) {
+            let child_b_ch = clamp(u32(child_b_channel), 8u, 15u);
+            let raw_signal_b = signal_flags_read[cell_idx * 16u + child_b_ch];
+            let signal_value_b = f32(raw_signal_b & 0x7FFu);
+            let has_signal_b = raw_signal_b > 0u;
+            
+            let child_b_threshold = ss_v2.w;
+            let child_b_mode_above = i32(ss_v3.x);
+            let child_b_mode_below = i32(ss_v3.y);
+            
+            if (has_signal_b && signal_value_b >= child_b_threshold) {
+                if (child_b_mode_above >= 0) {
+                    child_b_mode_idx = u32(child_b_mode_above);
+                }
+            } else {
+                if (child_b_mode_below >= 0) {
+                    child_b_mode_idx = u32(child_b_mode_below);
+                }
+            }
+        }
+    }
+
     if (child_a_mode_idx >= mode_count) {
         child_a_mode_idx = parent_mode_idx;
     }

@@ -142,6 +142,48 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oculocyte_ray_length: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub regulation_emit_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regulation_emit_value: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regulation_emit_hops: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub division_signal_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub division_signal_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub division_signal_invert: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apoptosis_signal_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apoptosis_signal_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apoptosis_signal_invert: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_child_a_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_child_a_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_child_a_mode_above: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_child_a_mode_below: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_child_b_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_child_b_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_child_b_mode_above: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_child_b_mode_below: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_switch_signal_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_switch_signal_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_switch_target: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_switch_invert: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_b: Option<SerializableChildSettings>,
@@ -293,6 +335,27 @@ fn mode_to_serializable(
         oculocyte_signal_value: diff_f32(mode.oculocyte_signal_value, default.oculocyte_signal_value),
         oculocyte_signal_hops: diff_i32(mode.oculocyte_signal_hops, default.oculocyte_signal_hops),
         oculocyte_ray_length: diff_f32(mode.oculocyte_ray_length, default.oculocyte_ray_length),
+        regulation_emit_channel: diff_i32(mode.regulation_emit_channel, default.regulation_emit_channel),
+        regulation_emit_value: diff_f32(mode.regulation_emit_value, default.regulation_emit_value),
+        regulation_emit_hops: diff_i32(mode.regulation_emit_hops, default.regulation_emit_hops),
+        division_signal_channel: diff_i32(mode.division_signal_channel, default.division_signal_channel),
+        division_signal_threshold: diff_f32(mode.division_signal_threshold, default.division_signal_threshold),
+        division_signal_invert: diff_bool(mode.division_signal_invert, default.division_signal_invert),
+        apoptosis_signal_channel: diff_i32(mode.apoptosis_signal_channel, default.apoptosis_signal_channel),
+        apoptosis_signal_threshold: diff_f32(mode.apoptosis_signal_threshold, default.apoptosis_signal_threshold),
+        apoptosis_signal_invert: diff_bool(mode.apoptosis_signal_invert, default.apoptosis_signal_invert),
+        signal_child_a_channel: diff_i32(mode.signal_child_a_channel, default.signal_child_a_channel),
+        signal_child_a_threshold: diff_f32(mode.signal_child_a_threshold, default.signal_child_a_threshold),
+        signal_child_a_mode_above: diff_i32(mode.signal_child_a_mode_above, default.signal_child_a_mode_above),
+        signal_child_a_mode_below: diff_i32(mode.signal_child_a_mode_below, default.signal_child_a_mode_below),
+        signal_child_b_channel: diff_i32(mode.signal_child_b_channel, default.signal_child_b_channel),
+        signal_child_b_threshold: diff_f32(mode.signal_child_b_threshold, default.signal_child_b_threshold),
+        signal_child_b_mode_above: diff_i32(mode.signal_child_b_mode_above, default.signal_child_b_mode_above),
+        signal_child_b_mode_below: diff_i32(mode.signal_child_b_mode_below, default.signal_child_b_mode_below),
+        mode_switch_signal_channel: diff_i32(mode.mode_switch_signal_channel, default.mode_switch_signal_channel),
+        mode_switch_signal_threshold: diff_f32(mode.mode_switch_signal_threshold, default.mode_switch_signal_threshold),
+        mode_switch_target: diff_i32(mode.mode_switch_target, default.mode_switch_target),
+        mode_switch_invert: diff_bool(mode.mode_switch_invert, default.mode_switch_invert),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(&mode.adhesion_settings, &default.adhesion_settings),
@@ -345,6 +408,27 @@ impl SerializableModeSettings {
             || self.oculocyte_signal_value.is_some()
             || self.oculocyte_signal_hops.is_some()
             || self.oculocyte_ray_length.is_some()
+            || self.regulation_emit_channel.is_some()
+            || self.regulation_emit_value.is_some()
+            || self.regulation_emit_hops.is_some()
+            || self.division_signal_channel.is_some()
+            || self.division_signal_threshold.is_some()
+            || self.division_signal_invert.is_some()
+            || self.apoptosis_signal_channel.is_some()
+            || self.apoptosis_signal_threshold.is_some()
+            || self.apoptosis_signal_invert.is_some()
+            || self.signal_child_a_channel.is_some()
+            || self.signal_child_a_threshold.is_some()
+            || self.signal_child_a_mode_above.is_some()
+            || self.signal_child_a_mode_below.is_some()
+            || self.signal_child_b_channel.is_some()
+            || self.signal_child_b_threshold.is_some()
+            || self.signal_child_b_mode_above.is_some()
+            || self.signal_child_b_mode_below.is_some()
+            || self.mode_switch_signal_channel.is_some()
+            || self.mode_switch_signal_threshold.is_some()
+            || self.mode_switch_target.is_some()
+            || self.mode_switch_invert.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -522,6 +606,69 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(len) = ser.oculocyte_ray_length {
         mode.oculocyte_ray_length = len;
+    }
+    if let Some(v) = ser.regulation_emit_channel {
+        mode.regulation_emit_channel = v;
+    }
+    if let Some(v) = ser.regulation_emit_value {
+        mode.regulation_emit_value = v;
+    }
+    if let Some(v) = ser.regulation_emit_hops {
+        mode.regulation_emit_hops = v;
+    }
+    if let Some(v) = ser.division_signal_channel {
+        mode.division_signal_channel = v;
+    }
+    if let Some(v) = ser.division_signal_threshold {
+        mode.division_signal_threshold = v;
+    }
+    if let Some(v) = ser.division_signal_invert {
+        mode.division_signal_invert = v;
+    }
+    if let Some(v) = ser.apoptosis_signal_channel {
+        mode.apoptosis_signal_channel = v;
+    }
+    if let Some(v) = ser.apoptosis_signal_threshold {
+        mode.apoptosis_signal_threshold = v;
+    }
+    if let Some(v) = ser.apoptosis_signal_invert {
+        mode.apoptosis_signal_invert = v;
+    }
+    if let Some(v) = ser.signal_child_a_channel {
+        mode.signal_child_a_channel = v;
+    }
+    if let Some(v) = ser.signal_child_a_threshold {
+        mode.signal_child_a_threshold = v;
+    }
+    if let Some(v) = ser.signal_child_a_mode_above {
+        mode.signal_child_a_mode_above = v;
+    }
+    if let Some(v) = ser.signal_child_a_mode_below {
+        mode.signal_child_a_mode_below = v;
+    }
+    if let Some(v) = ser.signal_child_b_channel {
+        mode.signal_child_b_channel = v;
+    }
+    if let Some(v) = ser.signal_child_b_threshold {
+        mode.signal_child_b_threshold = v;
+    }
+    if let Some(v) = ser.signal_child_b_mode_above {
+        mode.signal_child_b_mode_above = v;
+    }
+    if let Some(v) = ser.signal_child_b_mode_below {
+        mode.signal_child_b_mode_below = v;
+    }
+    if let Some(v) = ser.mode_switch_signal_channel {
+        mode.mode_switch_signal_channel = v;
+    }
+    if let Some(v) = ser.mode_switch_signal_threshold {
+        mode.mode_switch_signal_threshold = v;
+    }
+    if let Some(v) = ser.mode_switch_target {
+        mode.mode_switch_target = v;
+    }
+    if let Some(v) = ser.mode_switch_invert {
+        mode.mode_switch_invert = v;
     }
     if let Some(ref child_a) = ser.child_a {
         apply_child_settings(&mut mode.child_a, child_a);

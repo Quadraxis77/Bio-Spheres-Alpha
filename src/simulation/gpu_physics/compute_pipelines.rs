@@ -905,6 +905,7 @@ impl GpuPhysicsPipelines {
         &self,
         device: &wgpu::Device,
         buffers: &GpuTripleBufferSystem,
+        adhesion_buffers: &super::AdhesionBuffers,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cell State Read Bind Group"),
@@ -959,6 +960,9 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry { binding: 13, resource: buffers.mode_properties_v2.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 14, resource: buffers.mode_properties_v3.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 15, resource: buffers.mode_properties_v4.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 16, resource: adhesion_buffers.signal_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 17, resource: buffers.signal_settings_v0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 18, resource: buffers.signal_settings_v1.as_entire_binding() },
             ],
         })
     }
@@ -968,6 +972,7 @@ impl GpuPhysicsPipelines {
         &self,
         device: &wgpu::Device,
         buffers: &GpuTripleBufferSystem,
+        adhesion_buffers: &super::AdhesionBuffers,
         buffer_index: usize,
     ) -> wgpu::BindGroup {
         let output_index = (buffer_index + 1) % 3;
@@ -1055,6 +1060,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry { binding: 32, resource: buffers.genome_orientations.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 33, resource: buffers.child_a_after_split_keep_adhesion_flags.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 34, resource: buffers.child_b_after_split_keep_adhesion_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 35, resource: adhesion_buffers.signal_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 36, resource: buffers.signal_settings_v1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 37, resource: buffers.signal_settings_v2.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 38, resource: buffers.signal_settings_v3.as_entire_binding() },
             ],
         })
     }
@@ -1190,13 +1199,13 @@ impl GpuPhysicsPipelines {
         let lifecycle = self.create_lifecycle_bind_group(device, buffers);
         
         // Cell state read bind group (same for all frames)
-        let cell_state_read = self.create_cell_state_read_bind_group(device, buffers);
+        let cell_state_read = self.create_cell_state_read_bind_group(device, buffers, adhesion_buffers);
         
         // Cell state write bind groups for all 3 buffer indices
         let cell_state_write = [
-            self.create_cell_state_write_bind_group(device, buffers, 0),
-            self.create_cell_state_write_bind_group(device, buffers, 1),
-            self.create_cell_state_write_bind_group(device, buffers, 2),
+            self.create_cell_state_write_bind_group(device, buffers, adhesion_buffers, 0),
+            self.create_cell_state_write_bind_group(device, buffers, adhesion_buffers, 1),
+            self.create_cell_state_write_bind_group(device, buffers, adhesion_buffers, 2),
         ];
         
         // Mass accumulation bind group (same for all frames)
@@ -1896,6 +1905,11 @@ impl GpuPhysicsPipelines {
                     wgpu::BindGroupLayoutEntry { binding: 13, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                     wgpu::BindGroupLayoutEntry { binding: 14, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                     wgpu::BindGroupLayoutEntry { binding: 15, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Binding 16: Signal flags (per-cell, read-only for signal-conditional checks)
+                    wgpu::BindGroupLayoutEntry { binding: 16, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Bindings 17-18: Signal settings v0-v1 (per-mode, for division gating + apoptosis)
+                    wgpu::BindGroupLayoutEntry { binding: 17, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 18, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 ],
             })
         } else {
@@ -2100,6 +2114,12 @@ impl GpuPhysicsPipelines {
                     wgpu::BindGroupLayoutEntry { binding: 33, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                     // Child B after-split keep adhesion flags
                     wgpu::BindGroupLayoutEntry { binding: 34, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Binding 35: Signal flags (per-cell, read-only for signal-conditional child mode routing)
+                    wgpu::BindGroupLayoutEntry { binding: 35, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Bindings 36-38: Signal settings v1-v3 (per-mode, for child mode routing)
+                    wgpu::BindGroupLayoutEntry { binding: 36, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 37, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    wgpu::BindGroupLayoutEntry { binding: 38, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 ],
             })
         }
@@ -4577,7 +4597,7 @@ impl GpuPhysicsPipelines {
     }
 
     /// Signal sense cell data bind group layout (Group 1 for signal_sense)
-    /// binding 0: positions, binding 1: rotations, binding 2: mode_indices, binding 3: mode_cell_types, binding 4: oculocyte_params, binding 5: mode_properties
+    /// binding 0: positions, binding 1: rotations, binding 2: mode_indices, binding 3: mode_cell_types, binding 4: oculocyte_params, binding 5: regulation_params
     fn create_signal_sense_cell_data_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Signal Sense Cell Data Bind Group Layout"),
@@ -4624,6 +4644,17 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: regulation_params (per-mode regulation emission parameters)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -4817,7 +4848,7 @@ impl GpuPhysicsPipelines {
     }
 
     /// Create signal sense cell data bind group (Group 1) for a given buffer index
-    /// binding 0: positions, binding 1: rotations, binding 2: mode_indices, binding 3: mode_cell_types, binding 4: oculocyte_params
+    /// binding 0: positions, binding 1: rotations, binding 2: mode_indices, binding 3: mode_cell_types, binding 4: oculocyte_params, binding 5: regulation_params
     fn create_signal_sense_cell_data_bind_group(
         &self,
         device: &wgpu::Device,
@@ -4847,6 +4878,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: triple_buffers.oculocyte_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: triple_buffers.regulation_params.as_entire_binding(),
                 },
             ],
         })

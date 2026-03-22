@@ -117,20 +117,27 @@ fn vs_main(
     // source both have signal but the connection between them was never traversed.
     // Instead, signal flowed along this bond only if the hop counts differ by exactly 1
     // (the upstream cell has one more remaining hop than the downstream cell).
-    let signal_a = atomicLoad(&signal_flags[connection.cell_a_index]);
-    let signal_b = atomicLoad(&signal_flags[connection.cell_b_index]);
+    // With 16 channels, check ALL channels and highlight if ANY channel has flow.
+    var signal_flowed_through = false;
+    for (var ch = 0u; ch < 16u; ch++) {
+        let signal_a = atomicLoad(&signal_flags[connection.cell_a_index * 16u + ch]);
+        let signal_b = atomicLoad(&signal_flags[connection.cell_b_index * 16u + ch]);
 
-    // Decode hop counts (bits 11-15) and values (bits 0-10)
-    let hops_a = (signal_a >> 11u) & 31u;
-    let hops_b = (signal_b >> 11u) & 31u;
-    let value_a = signal_a & 2047u;
-    let value_b = signal_b & 2047u;
+        // Decode hop counts (bits 11-15) and values (bits 0-10)
+        let hops_a = (signal_a >> 11u) & 31u;
+        let hops_b = (signal_b >> 11u) & 31u;
+        let value_a = signal_a & 2047u;
+        let value_b = signal_b & 2047u;
 
-    // Signal flowed along this bond if both ends have signal and their hop counts
-    // differ by exactly 1 (one is exactly one step upstream of the other).
-    let both_have_signal = (value_a != 0u) && (value_b != 0u);
-    let hops_differ_by_one = (hops_a == hops_b + 1u) || (hops_b == hops_a + 1u);
-    let signal_flowed_through = both_have_signal && hops_differ_by_one;
+        // Signal flowed along this bond if both ends have signal and their hop counts
+        // differ by exactly 1 (one is exactly one step upstream of the other).
+        let both_have_signal = (value_a != 0u) && (value_b != 0u);
+        let hops_differ_by_one = (hops_a == hops_b + 1u) || (hops_b == hops_a + 1u);
+        if (both_have_signal && hops_differ_by_one) {
+            signal_flowed_through = true;
+            break;
+        }
+    }
     
     var sig_color: vec4<f32>;
     if (signal_flowed_through) {

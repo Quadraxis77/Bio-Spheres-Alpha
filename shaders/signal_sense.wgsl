@@ -1,14 +1,20 @@
 // Signal Sense Compute Shader
-// Oculocyte cells detect targets along a single forward ray.
-// Exits early on first hit for all sense types.
+// Two-phase signal emission:
+//   Phase 1: Oculocyte cells detect targets along a forward ray → emit on channels 0-7
+//   Phase 2: ALL cells with regulation_emit_channel 8-15 → emit unconditionally
+//
+// 16 channels per cell: signal_flags[cell_idx * 16 + channel]
+// Each channel is a packed u32: bits 16+ = direction flag, bits 11-15 = hops, bits 0-10 = value
 //
 // sense_type 0 = Cell (ray-vs-sphere test against each cell)
 // sense_type 1 = Food (DDA ray march through nutrient voxels)
 // sense_type 2 = Light (DDA ray march through light voxels)
 // sense_type 3 = Barrier (ray-sphere vs world boundary + DDA for solid voxels + water surface isosurface)
+// sense_type 4 = Self (always detects)
 
 const OCULOCYTE_TYPE: u32 = 7u;
 const LIGHT_THRESHOLD: f32 = 0.1;
+const SIGNAL_CHANNELS: u32 = 16u;
 
 @group(0) @binding(0)
 var<storage, read_write> signal_flags: array<atomic<u32>>;
@@ -28,8 +34,13 @@ var<storage, read> mode_indices: array<u32>;
 @group(1) @binding(3)
 var<storage, read> mode_cell_types: array<u32>;
 
+// Oculocyte params: [sense_type(u32), ray_length_bits(u32), signal_hops(u32), signal_channel(u32)]
 @group(1) @binding(4)
 var<storage, read> oculocyte_params: array<vec4<u32>>;
+
+// Regulation params: [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding(u32)]
+@group(1) @binding(5)
+var<storage, read> regulation_params: array<vec4<u32>>;
 
 // World data for barrier, food, and light sensing
 struct SignalSenseWorldParams {
@@ -86,8 +97,7 @@ fn sense_cells(idx: u32, my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32,
 }
 
 // DDA ray march through a voxel grid along the forward ray.
-// Returns the flat voxel index of the first hit, or -1 if no hit within ray_length.
-// check_fn is inlined by the caller — we return the voxel index and let the caller check the buffer.
+// Returns true if a non-zero nutrient voxel is hit within ray_length.
 fn dda_march_food(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> bool {
     let res = i32(world_params.grid_resolution);
     if (res <= 0) { return false; }
@@ -201,8 +211,6 @@ fn sense_barrier(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> bool
     }
 
     // DDA march for solid cave voxels and water surface isosurface.
-    // The water surface sits at the density iso-level (density >= WATER_ISO_LEVEL).
-    // We detect the first voxel that is either solid rock or crosses the air/water boundary.
     let res = i32(world_params.grid_resolution);
     if (res <= 0) { return false; }
     let grid_origin = vec3<f32>(world_params.grid_origin_x, world_params.grid_origin_y, world_params.grid_origin_z);
@@ -266,41 +274,62 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_count = cell_count_buffer[0];
     if (idx >= cell_count) { return; }
 
-    // Only oculocytes perform sensing
     let mode_idx = mode_indices[idx];
     let cell_type = mode_cell_types[mode_idx];
-    if (cell_type != OCULOCYTE_TYPE) { return; }
 
-    // Read oculocyte parameters for this mode
-    let params = oculocyte_params[mode_idx];
-    let sense_type = params.x;
-    let ray_length = bitcast<f32>(params.y);
-    let signal_hops = params.z;
+    // === Phase 1: Oculocyte sensing (channels 0-7) ===
+    if (cell_type == OCULOCYTE_TYPE) {
+        // Read oculocyte parameters for this mode
+        let params = oculocyte_params[mode_idx];
+        let sense_type = params.x;
+        let ray_length = bitcast<f32>(params.y);
+        let signal_hops = params.z;
+        let signal_channel = min(params.w, 7u); // Clamp oculocyte to channels 0-7
 
-    // Skip if ray_length is effectively zero
-    if (ray_length < 0.01) { return; }
+        // Skip if ray_length is effectively zero
+        if (ray_length >= 0.01) {
+            let my_pos = positions[idx].xyz;
 
-    let my_pos = positions[idx].xyz;
+            // Forward direction from cell's orientation quaternion
+            let rot = rotations[idx];
+            let forward = quat_rotate(rot, vec3<f32>(0.0, 0.0, 1.0));
 
-    // Forward direction from cell's orientation quaternion
-    let rot = rotations[idx];
-    let forward = quat_rotate(rot, vec3<f32>(0.0, 0.0, 1.0));
+            var detected = false;
 
-    var detected = false;
+            switch (sense_type) {
+                case 0u: { detected = sense_cells(idx, my_pos, forward, ray_length, cell_count); }
+                case 1u: { detected = dda_march_food(my_pos, forward, ray_length); }
+                case 2u: { detected = dda_march_light(my_pos, forward, ray_length); }
+                case 3u: { detected = sense_barrier(my_pos, forward, ray_length); }
+                case 4u: { detected = true; } // Self-sense: always fires
+                default: {}
+            }
 
-    switch (sense_type) {
-        case 0u: { detected = sense_cells(idx, my_pos, forward, ray_length, cell_count); }
-        case 1u: { detected = dda_march_food(my_pos, forward, ray_length); }
-        case 2u: { detected = dda_march_light(my_pos, forward, ray_length); }
-        case 3u: { detected = sense_barrier(my_pos, forward, ray_length); }
-        default: {}
+            if (detected) {
+                // Write signal to the correct channel slot
+                // Format: DDDDDHHHHHVVVVVVVVVVVV (5 bits direction flag, 5 bits hops, 11 bits value)
+                let signal_value = (1u << 16u) | (signal_hops << 11u) | 20u; // Source flag + hops + base value
+                atomicAdd(&signal_flags[idx * SIGNAL_CHANNELS + signal_channel], signal_value);
+            }
+        }
     }
 
-    if (detected) {
-        // Write signal value with flow direction encoded
-        // Format: DDDDDHHHHHVVVVVVVVVVVV (5 bits direction flag, 5 bits hops, 11 bits value)
-        // Direction flag: 1 = signal source, 0 = propagated signal
-        let signal_value = (1u << 16u) | (signal_hops << 11u) | 20u; // Source flag + hops + base value
-        atomicAdd(&signal_flags[idx], signal_value);
+    // === Phase 2: Regulation emission (channels 8-15, any cell type) ===
+    let reg_params = regulation_params[mode_idx];
+    let reg_channel = reg_params.x;
+    // reg_channel == 0xFFFFFFFF means disabled (stored as -1 cast to u32)
+    if (reg_channel >= 8u && reg_channel <= 15u) {
+        let reg_value_bits = reg_params.y;
+        let reg_hops = reg_params.z;
+        let reg_value = bitcast<f32>(reg_value_bits);
+
+        // Clamp value to 11-bit range (0-2047)
+        let clamped_value = min(u32(max(reg_value, 0.0)), 2047u);
+
+        if (clamped_value > 0u && reg_hops > 0u) {
+            // Source flag + hops + value
+            let signal_packed = (1u << 16u) | (reg_hops << 11u) | clamped_value;
+            atomicAdd(&signal_flags[idx * SIGNAL_CHANNELS + reg_channel], signal_packed);
+        }
     }
 }

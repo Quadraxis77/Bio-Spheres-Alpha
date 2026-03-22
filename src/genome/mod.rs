@@ -119,7 +119,7 @@ pub struct ModeSettings {
     // Flagellocyte settings
     pub swim_force: f32, // Forward thrust force (0.0 to 1.0, for Flagellocyte cells)
     pub flagellocyte_use_signal: bool, // If true, use signal-based speed; if false, use fixed swim_force
-    pub flagellocyte_signal_channel: i32, // Which signal channel to read (0-15)
+    pub flagellocyte_signal_channel: i32, // Which signal channel to read (0-7, oculocyte channels only)
     pub flagellocyte_speed_a: f32, // Swim speed when signal < threshold_c
     pub flagellocyte_speed_b: f32, // Swim speed when signal >= threshold_c
     pub flagellocyte_threshold_c: f32, // Signal threshold for speed switching
@@ -128,14 +128,46 @@ pub struct ModeSettings {
     pub buoyancy_force: f32, // Upward buoyancy force (0.0 to 1.0, for Buoyocyte cells)
     
     // Oculocyte settings
-    pub oculocyte_sense_type: i32, // 0=Cell, 1=Food, 2=Light, 3=Barrier
-    pub oculocyte_signal_channel: i32, // Which channel to send on (0-15)
+    pub oculocyte_sense_type: i32, // 0=Cell, 1=Food, 2=Light, 3=Barrier, 4=Self
+    pub oculocyte_signal_channel: i32, // Which channel to send on (0-7, oculocyte-only range)
     pub oculocyte_signal_value: f32, // Signal value to send when target detected (-50.0 to 50.0)
     pub oculocyte_signal_hops: i32, // How many adhesion hops the signal propagates (1-20)
     pub oculocyte_ray_length: f32, // How far ahead the oculocyte ray reaches (1.0 to 100.0)
     
     // Membrane settings
     pub membrane_stiffness: f32, // Cell membrane stiffness for collision response (0.0 = no repulsion, higher = more rigid)
+
+    // Regulation signal emission: any cell mode can emit a signal on channels 8-15
+    pub regulation_emit_channel: i32, // Channel to emit on (-1 = disabled, 8-15 = regulation channel)
+    pub regulation_emit_value: f32, // Signal value to emit (0.0 to 2047.0)
+    pub regulation_emit_hops: i32, // How many adhesion hops the signal propagates (1-20)
+
+    // Signal-conditional behavior settings
+    // Division gating: cell only divides if signal condition is met
+    pub division_signal_channel: i32, // Signal channel to check (-1 = disabled, 0-15 = channel)
+    pub division_signal_threshold: f32, // Signal value threshold for division
+    pub division_signal_invert: bool, // If true, divide when signal BELOW threshold instead of above
+    
+    // Apoptosis: signal-triggered cell death
+    pub apoptosis_signal_channel: i32, // Signal channel to check (-1 = disabled, 0-15 = channel)
+    pub apoptosis_signal_threshold: f32, // Signal value threshold for death
+    pub apoptosis_signal_invert: bool, // If true, die when signal BELOW threshold instead of above
+    
+    // Signal-conditional child mode routing: override child mode based on signal state at division
+    pub signal_child_a_channel: i32, // Signal channel to check (-1 = disabled)
+    pub signal_child_a_threshold: f32, // Threshold for mode override
+    pub signal_child_a_mode_above: i32, // Mode index when signal >= threshold (-1 = use default)
+    pub signal_child_a_mode_below: i32, // Mode index when signal < threshold (-1 = use default)
+    pub signal_child_b_channel: i32, // Signal channel to check (-1 = disabled)
+    pub signal_child_b_threshold: f32, // Threshold for mode override
+    pub signal_child_b_mode_above: i32, // Mode index when signal >= threshold (-1 = use default)
+    pub signal_child_b_mode_below: i32, // Mode index when signal < threshold (-1 = use default)
+    
+    // Mode switching without division: signal-triggered mode transition
+    pub mode_switch_signal_channel: i32, // Signal channel to check (-1 = disabled)
+    pub mode_switch_signal_threshold: f32, // Threshold for mode switch
+    pub mode_switch_target: i32, // Target mode index (-1 = disabled)
+    pub mode_switch_invert: bool, // If true, switch when signal BELOW threshold
 
     // Child settings
     pub child_a: ChildSettings,
@@ -202,6 +234,27 @@ impl Default for ModeSettings {
             oculocyte_signal_hops: 3, // Default: 3 hops
             oculocyte_ray_length: 20.0, // Default: 20 units ray length
             membrane_stiffness: 250.0, // Default: moderate membrane stiffness
+            regulation_emit_channel: -1, // Disabled by default
+            regulation_emit_value: 10.0, // Default: 10 signal value
+            regulation_emit_hops: 3, // Default: 3 hops
+            division_signal_channel: -1, // Disabled by default
+            division_signal_threshold: 1.0,
+            division_signal_invert: false,
+            apoptosis_signal_channel: -1, // Disabled by default
+            apoptosis_signal_threshold: 1.0,
+            apoptosis_signal_invert: false,
+            signal_child_a_channel: -1, // Disabled by default
+            signal_child_a_threshold: 1.0,
+            signal_child_a_mode_above: -1,
+            signal_child_a_mode_below: -1,
+            signal_child_b_channel: -1, // Disabled by default
+            signal_child_b_threshold: 1.0,
+            signal_child_b_mode_above: -1,
+            signal_child_b_mode_below: -1,
+            mode_switch_signal_channel: -1, // Disabled by default
+            mode_switch_signal_threshold: 1.0,
+            mode_switch_target: -1,
+            mode_switch_invert: false,
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),
             adhesion_settings: AdhesionSettings::default(),

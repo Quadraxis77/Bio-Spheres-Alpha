@@ -1587,6 +1587,27 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     oculocyte_signal_hops: 3,
                     oculocyte_ray_length: 20.0,
                     membrane_stiffness: 50.0, // Default: moderate membrane stiffness
+                    regulation_emit_channel: -1,
+                    regulation_emit_value: 10.0,
+                    regulation_emit_hops: 3,
+                    division_signal_channel: -1,
+                    division_signal_threshold: 1.0,
+                    division_signal_invert: false,
+                    apoptosis_signal_channel: -1,
+                    apoptosis_signal_threshold: 1.0,
+                    apoptosis_signal_invert: false,
+                    signal_child_a_channel: -1,
+                    signal_child_a_threshold: 1.0,
+                    signal_child_a_mode_above: -1,
+                    signal_child_a_mode_below: -1,
+                    signal_child_b_channel: -1,
+                    signal_child_b_threshold: 1.0,
+                    signal_child_b_mode_above: -1,
+                    signal_child_b_mode_below: -1,
+                    mode_switch_signal_channel: -1,
+                    mode_switch_signal_threshold: 1.0,
+                    mode_switch_target: -1,
+                    mode_switch_invert: false,
                     child_a: crate::genome::ChildSettings {
                         mode_number: selected_index as i32,
                         ..Default::default()
@@ -1994,10 +2015,20 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         });
                     } else {
                         // Signal-based speed mode
-                        ui.horizontal(|ui| {
-                            ui.label("Channel:");
-                            ui.add(egui::DragValue::new(&mut mode.flagellocyte_signal_channel).range(0..=15));
-                        });
+                        {
+                            let flag_ch_labels = ["Ch 0", "Ch 1", "Ch 2", "Ch 3", "Ch 4", "Ch 5", "Ch 6", "Ch 7"];
+                            let flag_ch_idx = (mode.flagellocyte_signal_channel as usize).min(7);
+                            ui.horizontal(|ui| {
+                                ui.label("Channel:");
+                                egui::ComboBox::from_id_salt("flag_signal_channel")
+                                    .selected_text(flag_ch_labels[flag_ch_idx])
+                                    .show_ui(ui, |ui| {
+                                        for (i, label) in flag_ch_labels.iter().enumerate() {
+                                            ui.selectable_value(&mut mode.flagellocyte_signal_channel, i as i32, *label);
+                                        }
+                                    });
+                            });
+                        }
 
                         ui.label("Speed A (signal < C):");
                         ui.horizontal(|ui| {
@@ -2042,8 +2073,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 group_container(ui, "Oculocyte Functions", egui::Color32::from_rgb(200, 160, 220), |ui| {
                     // Sense Type dropdown
                     ui.label("Sense Type:");
-                    let sense_labels = ["Cell", "Food", "Light", "Barrier"];
-                    let current_sense = mode.oculocyte_sense_type.clamp(0, 3) as usize;
+                    let sense_labels = ["Cell", "Food", "Light", "Barrier", "Self"];
+                    let current_sense = mode.oculocyte_sense_type.clamp(0, 4) as usize;
                     egui::ComboBox::from_id_salt("oculocyte_sense_type")
                         .selected_text(sense_labels[current_sense])
                         .show_ui(ui, |ui| {
@@ -2052,14 +2083,14 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             }
                         });
 
-                    // Signal Channel
+                    // Signal Channel (oculocyte: 0-7 only)
                     ui.label("Signal Channel:");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_channel, 0..=15).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_channel).speed(0.1).range(0..=15));
+                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_channel, 0..=7).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_channel).speed(0.1).range(0..=7));
                     });
 
                     // Signal Value
@@ -2160,6 +2191,299 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::Slider::new(&mut mode.membrane_stiffness, 0.0..=250.0).show_value(false));
                     ui.add(egui::DragValue::new(&mut mode.membrane_stiffness).speed(0.1).range(0.0..=250.0));
                 });
+            });
+
+            // Regulation Emit Group (Teal) — any cell type can emit on channels 8-15
+            group_container(ui, "Regulation Emit", egui::Color32::from_rgb(80, 180, 170), |ui| {
+                let reg_channel_labels = ["Disabled", "Ch 8", "Ch 9", "Ch 10", "Ch 11", "Ch 12", "Ch 13", "Ch 14", "Ch 15"];
+                // Map regulation_emit_channel: -1 = Disabled (index 0), 8 = index 1, 9 = index 2, etc.
+                let reg_ch_idx = if mode.regulation_emit_channel < 8 { 0usize } else { (mode.regulation_emit_channel - 7).clamp(0, 8) as usize };
+                
+                ui.label("Emit Channel:");
+                egui::ComboBox::from_id_salt("reg_emit_channel")
+                    .selected_text(reg_channel_labels[reg_ch_idx])
+                    .show_ui(ui, |ui| {
+                        for (i, label) in reg_channel_labels.iter().enumerate() {
+                            let ch_val = if i == 0 { -1i32 } else { (i as i32) + 7 };
+                            ui.selectable_value(&mut mode.regulation_emit_channel, ch_val, *label);
+                        }
+                    });
+
+                if mode.regulation_emit_channel >= 8 {
+                    ui.label("Emit Value:");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.regulation_emit_value, 0.0..=2047.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.regulation_emit_value).speed(1.0).range(0.0..=2047.0));
+                    });
+
+                    ui.label("Emit Hops:");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.regulation_emit_hops, 1..=20).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.regulation_emit_hops).speed(0.1).range(1..=20));
+                    });
+                }
+            });
+
+            // Signal-Conditional Settings Group (Purple)
+            group_container(ui, "Signal Conditions", egui::Color32::from_rgb(160, 120, 200), |ui| {
+                let mode_count = mode_info_for_dropdowns.len();
+                // Signal conditionals only read from regulation channels 8-15
+                let channel_labels = ["Disabled", "Ch 8", "Ch 9", "Ch 10", "Ch 11", "Ch 12", "Ch 13", "Ch 14", "Ch 15"];
+                // Map dropdown index to channel value: 0 → -1 (disabled), 1 → 8, 2 → 9, ...
+                let idx_to_channel = |idx: usize| -> i32 { if idx == 0 { -1 } else { idx as i32 + 7 } };
+                // Map channel value to dropdown index: -1 → 0, 8 → 1, 9 → 2, ... (invalid → 0)
+                let channel_to_idx = |ch: i32| -> usize { if ch < 8 { 0 } else { (ch - 7).clamp(0, 8) as usize } };
+
+                // --- Division Gating ---
+                ui.label("Division Gating:");
+                let div_ch_idx = channel_to_idx(mode.division_signal_channel);
+                egui::ComboBox::from_id_salt("div_signal_channel")
+                    .selected_text(channel_labels[div_ch_idx])
+                    .show_ui(ui, |ui| {
+                        for (i, label) in channel_labels.iter().enumerate() {
+                            ui.selectable_value(&mut mode.division_signal_channel, idx_to_channel(i), *label);
+                        }
+                    });
+                if mode.division_signal_channel >= 8 {
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.division_signal_threshold, 0.0..=2047.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.division_signal_threshold).speed(1.0).range(0.0..=2047.0));
+                    });
+                    ui.checkbox(&mut mode.division_signal_invert, "Invert (divide below threshold)");
+                }
+
+                ui.add_space(4.0);
+                ui.separator();
+
+                // --- Apoptosis ---
+                ui.label("Apoptosis (Signal Death):");
+                let apo_ch_idx = channel_to_idx(mode.apoptosis_signal_channel);
+                egui::ComboBox::from_id_salt("apo_signal_channel")
+                    .selected_text(channel_labels[apo_ch_idx])
+                    .show_ui(ui, |ui| {
+                        for (i, label) in channel_labels.iter().enumerate() {
+                            ui.selectable_value(&mut mode.apoptosis_signal_channel, idx_to_channel(i), *label);
+                        }
+                    });
+                if mode.apoptosis_signal_channel >= 8 {
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.apoptosis_signal_threshold, 0.0..=2047.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.apoptosis_signal_threshold).speed(1.0).range(0.0..=2047.0));
+                    });
+                    ui.checkbox(&mut mode.apoptosis_signal_invert, "Invert (die below threshold)");
+                }
+
+                ui.add_space(4.0);
+                ui.separator();
+
+                // --- Signal-Conditional Child A Mode ---
+                ui.label("Child A Signal Routing:");
+                let ch_a_idx = channel_to_idx(mode.signal_child_a_channel);
+                egui::ComboBox::from_id_salt("sig_child_a_channel")
+                    .selected_text(channel_labels[ch_a_idx])
+                    .show_ui(ui, |ui| {
+                        for (i, label) in channel_labels.iter().enumerate() {
+                            ui.selectable_value(&mut mode.signal_child_a_channel, idx_to_channel(i), *label);
+                        }
+                    });
+                if mode.signal_child_a_channel >= 8 {
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.signal_child_a_threshold, 0.0..=2047.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.signal_child_a_threshold).speed(1.0).range(0.0..=2047.0));
+                    });
+                    // Mode above threshold
+                    {
+                        let current = mode.signal_child_a_mode_above;
+                        let selected_text = if current < 0 { "Default".to_string() }
+                            else if (current as usize) < mode_count { mode_info_for_dropdowns[current as usize].0.clone() }
+                            else { "Invalid".to_string() };
+                        let mut new_val: Option<i32> = None;
+                        ui.horizontal(|ui| {
+                            ui.label("Above:");
+                            egui::ComboBox::from_id_salt("sig_child_a_above")
+                                .selected_text(selected_text)
+                                .width(ui.available_width() - 10.0)
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_label(current < 0, "Default").clicked() { new_val = Some(-1); }
+                                    ui.separator();
+                                    for (idx, (name, color)) in mode_info_for_dropdowns.iter().enumerate() {
+                                        let color32 = egui::Color32::from_rgb((color.x * 255.0) as u8, (color.y * 255.0) as u8, (color.z * 255.0) as u8);
+                                        ui.horizontal(|ui| {
+                                            ui.colored_label(color32, "●");
+                                            if ui.selectable_label(current == idx as i32, name).clicked() { new_val = Some(idx as i32); }
+                                        });
+                                    }
+                                });
+                        });
+                        if let Some(v) = new_val { mode.signal_child_a_mode_above = v; }
+                    }
+                    // Mode below threshold
+                    {
+                        let current = mode.signal_child_a_mode_below;
+                        let selected_text = if current < 0 { "Default".to_string() }
+                            else if (current as usize) < mode_count { mode_info_for_dropdowns[current as usize].0.clone() }
+                            else { "Invalid".to_string() };
+                        let mut new_val: Option<i32> = None;
+                        ui.horizontal(|ui| {
+                            ui.label("Below:");
+                            egui::ComboBox::from_id_salt("sig_child_a_below")
+                                .selected_text(selected_text)
+                                .width(ui.available_width() - 10.0)
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_label(current < 0, "Default").clicked() { new_val = Some(-1); }
+                                    ui.separator();
+                                    for (idx, (name, color)) in mode_info_for_dropdowns.iter().enumerate() {
+                                        let color32 = egui::Color32::from_rgb((color.x * 255.0) as u8, (color.y * 255.0) as u8, (color.z * 255.0) as u8);
+                                        ui.horizontal(|ui| {
+                                            ui.colored_label(color32, "●");
+                                            if ui.selectable_label(current == idx as i32, name).clicked() { new_val = Some(idx as i32); }
+                                        });
+                                    }
+                                });
+                        });
+                        if let Some(v) = new_val { mode.signal_child_a_mode_below = v; }
+                    }
+                }
+
+                ui.add_space(4.0);
+                ui.separator();
+
+                // --- Signal-Conditional Child B Mode ---
+                ui.label("Child B Signal Routing:");
+                let ch_b_idx = channel_to_idx(mode.signal_child_b_channel);
+                egui::ComboBox::from_id_salt("sig_child_b_channel")
+                    .selected_text(channel_labels[ch_b_idx])
+                    .show_ui(ui, |ui| {
+                        for (i, label) in channel_labels.iter().enumerate() {
+                            ui.selectable_value(&mut mode.signal_child_b_channel, idx_to_channel(i), *label);
+                        }
+                    });
+                if mode.signal_child_b_channel >= 8 {
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.signal_child_b_threshold, 0.0..=2047.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.signal_child_b_threshold).speed(1.0).range(0.0..=2047.0));
+                    });
+                    // Mode above threshold
+                    {
+                        let current = mode.signal_child_b_mode_above;
+                        let selected_text = if current < 0 { "Default".to_string() }
+                            else if (current as usize) < mode_count { mode_info_for_dropdowns[current as usize].0.clone() }
+                            else { "Invalid".to_string() };
+                        let mut new_val: Option<i32> = None;
+                        ui.horizontal(|ui| {
+                            ui.label("Above:");
+                            egui::ComboBox::from_id_salt("sig_child_b_above")
+                                .selected_text(selected_text)
+                                .width(ui.available_width() - 10.0)
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_label(current < 0, "Default").clicked() { new_val = Some(-1); }
+                                    ui.separator();
+                                    for (idx, (name, color)) in mode_info_for_dropdowns.iter().enumerate() {
+                                        let color32 = egui::Color32::from_rgb((color.x * 255.0) as u8, (color.y * 255.0) as u8, (color.z * 255.0) as u8);
+                                        ui.horizontal(|ui| {
+                                            ui.colored_label(color32, "●");
+                                            if ui.selectable_label(current == idx as i32, name).clicked() { new_val = Some(idx as i32); }
+                                        });
+                                    }
+                                });
+                        });
+                        if let Some(v) = new_val { mode.signal_child_b_mode_above = v; }
+                    }
+                    // Mode below threshold
+                    {
+                        let current = mode.signal_child_b_mode_below;
+                        let selected_text = if current < 0 { "Default".to_string() }
+                            else if (current as usize) < mode_count { mode_info_for_dropdowns[current as usize].0.clone() }
+                            else { "Invalid".to_string() };
+                        let mut new_val: Option<i32> = None;
+                        ui.horizontal(|ui| {
+                            ui.label("Below:");
+                            egui::ComboBox::from_id_salt("sig_child_b_below")
+                                .selected_text(selected_text)
+                                .width(ui.available_width() - 10.0)
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_label(current < 0, "Default").clicked() { new_val = Some(-1); }
+                                    ui.separator();
+                                    for (idx, (name, color)) in mode_info_for_dropdowns.iter().enumerate() {
+                                        let color32 = egui::Color32::from_rgb((color.x * 255.0) as u8, (color.y * 255.0) as u8, (color.z * 255.0) as u8);
+                                        ui.horizontal(|ui| {
+                                            ui.colored_label(color32, "●");
+                                            if ui.selectable_label(current == idx as i32, name).clicked() { new_val = Some(idx as i32); }
+                                        });
+                                    }
+                                });
+                        });
+                        if let Some(v) = new_val { mode.signal_child_b_mode_below = v; }
+                    }
+                }
+
+                ui.add_space(4.0);
+                ui.separator();
+
+                // --- Mode Switching ---
+                ui.label("Mode Switch (No Division):");
+                let ms_ch_idx = channel_to_idx(mode.mode_switch_signal_channel);
+                egui::ComboBox::from_id_salt("mode_switch_channel")
+                    .selected_text(channel_labels[ms_ch_idx])
+                    .show_ui(ui, |ui| {
+                        for (i, label) in channel_labels.iter().enumerate() {
+                            ui.selectable_value(&mut mode.mode_switch_signal_channel, idx_to_channel(i), *label);
+                        }
+                    });
+                if mode.mode_switch_signal_channel >= 8 {
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.mode_switch_signal_threshold, 0.0..=2047.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.mode_switch_signal_threshold).speed(1.0).range(0.0..=2047.0));
+                    });
+                    ui.checkbox(&mut mode.mode_switch_invert, "Invert (switch below threshold)");
+                    // Target mode
+                    {
+                        let current = mode.mode_switch_target;
+                        let selected_text = if current < 0 { "Disabled".to_string() }
+                            else if (current as usize) < mode_count { mode_info_for_dropdowns[current as usize].0.clone() }
+                            else { "Invalid".to_string() };
+                        let mut new_val: Option<i32> = None;
+                        ui.horizontal(|ui| {
+                            ui.label("Target:");
+                            egui::ComboBox::from_id_salt("mode_switch_target")
+                                .selected_text(selected_text)
+                                .width(ui.available_width() - 10.0)
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_label(current < 0, "Disabled").clicked() { new_val = Some(-1); }
+                                    ui.separator();
+                                    for (idx, (name, color)) in mode_info_for_dropdowns.iter().enumerate() {
+                                        let color32 = egui::Color32::from_rgb((color.x * 255.0) as u8, (color.y * 255.0) as u8, (color.z * 255.0) as u8);
+                                        ui.horizontal(|ui| {
+                                            ui.colored_label(color32, "●");
+                                            if ui.selectable_label(current == idx as i32, name).clicked() { new_val = Some(idx as i32); }
+                                        });
+                                    }
+                                });
+                        });
+                        if let Some(v) = new_val { mode.mode_switch_target = v; }
+                    }
+                }
             });
 
             // Nutrient Settings Group (Green)

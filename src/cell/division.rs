@@ -97,6 +97,20 @@ pub fn division_step(
                 true
             };
             
+            // Check signal-conditional division gating
+            let can_split_by_signal = if let Some(m) = mode {
+                if m.division_signal_channel >= 8 && (m.division_signal_channel as usize) <= 15 {
+                    let ch = m.division_signal_channel as usize;
+                    let signal_val = state.signal_channels[i * 16 + ch].unwrap_or(0.0);
+                    let above = signal_val >= m.division_signal_threshold;
+                    if m.division_signal_invert { !above } else { above }
+                } else {
+                    true // disabled = no gating
+                }
+            } else {
+                true
+            };
+            
             // Check nutrient threshold - cells must have enough nutrients to split
             // Values > 100 mean "never split" (UI sentinel: split_mass > 2.0 -> threshold > 100)
             // Lipocytes (cell_type 4) can have threshold up to 200
@@ -110,7 +124,7 @@ pub fn division_step(
             
             // Cell can split if ALL conditions are met
             let split_interval_valid = state.split_intervals[i] <= 59.0;
-            if can_split_by_count && can_split_by_adhesions && can_split_by_nutrients && can_split_by_time && split_interval_valid {
+            if can_split_by_count && can_split_by_adhesions && can_split_by_signal && can_split_by_nutrients && can_split_by_time && split_interval_valid {
                 state.divisions_to_process_buffer.push(i);
             }
         }
@@ -219,17 +233,37 @@ pub fn division_step(
                 let will_reach_max_splits = mode.max_splits >= 0 && (parent_split_count + 1) >= mode.max_splits;
                 
                 // If max_splits is reached and mode_a_after_splits is set, use that mode for Child A
-                let child_a_mode_idx = if will_reach_max_splits && mode.mode_a_after_splits >= 0 {
+                let mut child_a_mode_idx = if will_reach_max_splits && mode.mode_a_after_splits >= 0 {
                     mode.mode_a_after_splits.max(0) as usize
                 } else {
                     mode.child_a.mode_number.max(0) as usize
                 };
                 // If max_splits is reached and mode_b_after_splits is set, use that mode for Child B
-                let child_b_mode_idx = if will_reach_max_splits && mode.mode_b_after_splits >= 0 {
+                let mut child_b_mode_idx = if will_reach_max_splits && mode.mode_b_after_splits >= 0 {
                     mode.mode_b_after_splits.max(0) as usize
                 } else {
                     mode.child_b.mode_number.max(0) as usize
                 };
+                
+                // Signal-conditional child mode routing: override child modes based on parent's signal state
+                if mode.signal_child_a_channel >= 8 && (mode.signal_child_a_channel as usize) <= 15 {
+                    let ch = mode.signal_child_a_channel as usize;
+                    let signal_val = state.signal_channels[parent_idx * 16 + ch].unwrap_or(0.0);
+                    if signal_val >= mode.signal_child_a_threshold {
+                        if mode.signal_child_a_mode_above >= 0 { child_a_mode_idx = mode.signal_child_a_mode_above as usize; }
+                    } else {
+                        if mode.signal_child_a_mode_below >= 0 { child_a_mode_idx = mode.signal_child_a_mode_below as usize; }
+                    }
+                }
+                if mode.signal_child_b_channel >= 8 && (mode.signal_child_b_channel as usize) <= 15 {
+                    let ch = mode.signal_child_b_channel as usize;
+                    let signal_val = state.signal_channels[parent_idx * 16 + ch].unwrap_or(0.0);
+                    if signal_val >= mode.signal_child_b_threshold {
+                        if mode.signal_child_b_mode_above >= 0 { child_b_mode_idx = mode.signal_child_b_mode_above as usize; }
+                    } else {
+                        if mode.signal_child_b_mode_below >= 0 { child_b_mode_idx = mode.signal_child_b_mode_below as usize; }
+                    }
+                }
                 
                 // Determine split counts: reset to 0 if mode changes, otherwise inherit parent's count + 1
                 let child_a_split_count = if child_a_mode_idx != mode_index {
@@ -720,16 +754,36 @@ pub fn division_step_multi(
             
             let will_reach_max_splits = mode.max_splits >= 0 && (parent_split_count + 1) >= mode.max_splits;
             
-            let child_a_mode_idx = if will_reach_max_splits && mode.mode_a_after_splits >= 0 {
+            let mut child_a_mode_idx = if will_reach_max_splits && mode.mode_a_after_splits >= 0 {
                 mode.mode_a_after_splits.max(0) as usize
             } else {
                 mode.child_a.mode_number.max(0) as usize
             };
-            let child_b_mode_idx = if will_reach_max_splits && mode.mode_b_after_splits >= 0 {
+            let mut child_b_mode_idx = if will_reach_max_splits && mode.mode_b_after_splits >= 0 {
                 mode.mode_b_after_splits.max(0) as usize
             } else {
                 mode.child_b.mode_number.max(0) as usize
             };
+            
+            // Signal-conditional child mode routing: override child modes based on parent's signal state
+            if mode.signal_child_a_channel >= 0 && (mode.signal_child_a_channel as usize) < 16 {
+                let ch = mode.signal_child_a_channel as usize;
+                let signal_val = state.signal_channels[parent_idx * 16 + ch].unwrap_or(0.0);
+                if signal_val >= mode.signal_child_a_threshold {
+                    if mode.signal_child_a_mode_above >= 0 { child_a_mode_idx = mode.signal_child_a_mode_above as usize; }
+                } else {
+                    if mode.signal_child_a_mode_below >= 0 { child_a_mode_idx = mode.signal_child_a_mode_below as usize; }
+                }
+            }
+            if mode.signal_child_b_channel >= 0 && (mode.signal_child_b_channel as usize) < 16 {
+                let ch = mode.signal_child_b_channel as usize;
+                let signal_val = state.signal_channels[parent_idx * 16 + ch].unwrap_or(0.0);
+                if signal_val >= mode.signal_child_b_threshold {
+                    if mode.signal_child_b_mode_above >= 0 { child_b_mode_idx = mode.signal_child_b_mode_above as usize; }
+                } else {
+                    if mode.signal_child_b_mode_below >= 0 { child_b_mode_idx = mode.signal_child_b_mode_below as usize; }
+                }
+            }
             
             let child_a_split_count = if child_a_mode_idx != mode_index { 0 } else { parent_split_count + 1 };
             let child_b_split_count = if child_b_mode_idx != mode_index { 0 } else { parent_split_count + 1 };

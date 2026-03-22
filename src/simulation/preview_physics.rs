@@ -273,7 +273,7 @@ pub fn apply_swim_forces(state: &mut CanonicalState, genome: &Genome) {
             if mode.cell_type == 1 {
                 // Determine effective swim speed
                 let effective_speed = if mode.flagellocyte_use_signal {
-                    let channel = mode.flagellocyte_signal_channel.clamp(0, 15) as usize;
+                    let channel = mode.flagellocyte_signal_channel.clamp(0, 7) as usize;
                     let signal_value = state.signal_channels[i * 16 + channel].unwrap_or(0.0);
                     if signal_value >= mode.flagellocyte_threshold_c {
                         mode.flagellocyte_speed_b
@@ -337,7 +337,7 @@ pub fn consume_swim_nutrients(
             if mode.cell_type == 1 {
                 // Determine effective swim speed
                 let effective_speed = if mode.flagellocyte_use_signal {
-                    let channel = mode.flagellocyte_signal_channel.clamp(0, 15) as usize;
+                    let channel = mode.flagellocyte_signal_channel.clamp(0, 7) as usize;
                     let signal_value = state.signal_channels[i * 16 + channel].unwrap_or(0.0);
                     if signal_value >= mode.flagellocyte_threshold_c {
                         mode.flagellocyte_speed_b
@@ -833,5 +833,45 @@ pub fn physics_step_with_genome(
 
     let max_cells = state.capacity;
     let rng_seed = 12345;
+
+    // Signal-conditional apoptosis: kill cells whose signal meets the apoptosis condition
+    let mut apoptosis_cells: Vec<usize> = Vec::new();
+    for i in 0..state.cell_count {
+        let mode_index = state.mode_indices[i];
+        if let Some(mode) = genome.modes.get(mode_index) {
+            if mode.apoptosis_signal_channel >= 8 && (mode.apoptosis_signal_channel as usize) <= 15 {
+                let ch = mode.apoptosis_signal_channel as usize;
+                let signal_val = state.signal_channels[i * 16 + ch].unwrap_or(0.0);
+                let above = signal_val >= mode.apoptosis_signal_threshold;
+                let should_die = if mode.apoptosis_signal_invert { !above } else { above };
+                if should_die {
+                    apoptosis_cells.push(i);
+                }
+            }
+        }
+    }
+    if !apoptosis_cells.is_empty() {
+        state.remove_cells(&apoptosis_cells);
+    }
+
+    // Signal-conditional mode switching: change cell mode without division
+    for i in 0..state.cell_count {
+        let mode_index = state.mode_indices[i];
+        if let Some(mode) = genome.modes.get(mode_index) {
+            if mode.mode_switch_signal_channel >= 8 && (mode.mode_switch_signal_channel as usize) <= 15 && mode.mode_switch_target >= 0 {
+                let ch = mode.mode_switch_signal_channel as usize;
+                let signal_val = state.signal_channels[i * 16 + ch].unwrap_or(0.0);
+                let above = signal_val >= mode.mode_switch_signal_threshold;
+                let should_switch = if mode.mode_switch_invert { !above } else { above };
+                if should_switch {
+                    let target = mode.mode_switch_target as usize;
+                    if target < genome.modes.len() {
+                        state.mode_indices[i] = target;
+                    }
+                }
+            }
+        }
+    }
+
     division::division_step(state, genome, current_time, max_cells, rng_seed)
 }
