@@ -3793,6 +3793,16 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.add_space(4.0);
     ui.checkbox(&mut world.subtle_mutations, "Subtle mutations")
         .on_hover_text("When checked, mutations make small color nudges instead of full re-rolls");
+
+    ui.add_space(12.0);
+
+    // Isolation section
+    ui.heading("Isolation");
+    ui.separator();
+
+    ui.label("Standalone Cell Burn:");
+    ui.add(egui::Slider::new(&mut world.standalone_burn_multiplier, 1.0..=10.0).text("×"));
+    ui.label(egui::RichText::new("Nutrient burn multiplier for cells with no adhesion connections (1 = no penalty, 2 = double consumption)").small());
 }
 
 /// Render the Help panel showing context-specific controls and shortcuts.

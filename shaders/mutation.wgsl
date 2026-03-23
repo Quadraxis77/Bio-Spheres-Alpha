@@ -83,7 +83,8 @@ struct MutationParamEntry {
     // Data type: 0 = continuous f32, 1 = integer (round after perturb),
     //            2 = boolean (flip), 3 = integer with mode_count clamp,
     //            4 = chain_extend, 5 = chain_close, 6 = loop_branch,
-    //            7 = loop_merge, 8 = signal_wire (correlated emitter+receiver)
+    //            7 = loop_merge, 8 = signal_wire (correlated emitter+receiver),
+    //            9 = quat_snap (replace whole quaternion with snapped orientation)
     data_type: u32,
 }
 
@@ -171,6 +172,12 @@ var<storage, read_write> child_a_keep_adhesion_flags: array<u32>;
 
 @group(2) @binding(14)
 var<storage, read_write> child_b_keep_adhesion_flags: array<u32>;
+
+@group(2) @binding(30)
+var<storage, read_write> child_a_after_split_keep_adhesion_flags: array<u32>;
+
+@group(2) @binding(31)
+var<storage, read_write> child_b_after_split_keep_adhesion_flags: array<u32>;
 
 @group(2) @binding(15)
 var<storage, read_write> glueocyte_env_adhesion_flags: array<u32>;
@@ -307,6 +314,91 @@ fn allocate_genome_slot() -> u32 {
 }
 
 // ============================================================
+// Quaternion snap to cardinal / 45° / 15° grid
+// ============================================================
+
+// Hamilton product: a * b (XYZW convention, w is scalar component)
+fn quat_mul(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    );
+}
+
+// Returns a unit quaternion snapped to a discrete rotation grid.
+// Tier is chosen by weighted RNG seeded from (cell_id, salt):
+//   r < 0.60 → cardinal  (90° rotations: identity + ±90° around X/Y/Z)
+//   r < 0.90 → 45° diagonal (half-way between cardinals)
+//   r < 1.00 → 15° fine   (small rotations around each axis)
+fn snap_quaternion(cell_id: u32, salt: u32) -> vec4<f32> {
+    let tier_r = rng_f32(cell_id, salt);
+    let idx    = rng_u32(cell_id, salt + 1u);
+
+    // half-sqrt(2) constant used for 45° quaternions
+    let h = 0.7071067811865476; // sqrt(2)/2
+
+    if (tier_r < 0.60) {
+        // --- Cardinal: 90° rotations (14 orientations) ---
+        // identity + ±90° around X, Y, Z + 180° around X, Y, Z + ±90° around diagonals
+        // We use 12 clean 90° axis-aligned rotations + identity + 180° identity
+        let n = idx % 14u;
+        switch (n) {
+            case  0u: { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }           // identity
+            case  1u: { return vec4<f32>(1.0, 0.0, 0.0, 0.0); }           // 180° X
+            case  2u: { return vec4<f32>(0.0, 1.0, 0.0, 0.0); }           // 180° Y
+            case  3u: { return vec4<f32>(0.0, 0.0, 1.0, 0.0); }           // 180° Z
+            case  4u: { return vec4<f32>(h,   0.0, 0.0, h  ); }           // +90° X
+            case  5u: { return vec4<f32>(-h,  0.0, 0.0, h  ); }           // -90° X
+            case  6u: { return vec4<f32>(0.0, h,   0.0, h  ); }           // +90° Y
+            case  7u: { return vec4<f32>(0.0, -h,  0.0, h  ); }           // -90° Y
+            case  8u: { return vec4<f32>(0.0, 0.0, h,   h  ); }           // +90° Z
+            case  9u: { return vec4<f32>(0.0, 0.0, -h,  h  ); }           // -90° Z
+            case 10u: { return vec4<f32>(h,   h,   0.0, 0.0); }           // 180° XY diagonal
+            case 11u: { return vec4<f32>(h,   0.0, h,   0.0); }           // 180° XZ diagonal
+            case 12u: { return vec4<f32>(0.0, h,   h,   0.0); }           // 180° YZ diagonal
+            default:  { return vec4<f32>(h,   -h,  0.0, 0.0); }           // 180° X-Y diagonal
+        }
+    } else if (tier_r < 0.90) {
+        // --- 45° diagonal rotations (8 orientations) ---
+        // Rotations of 45° around the four body diagonals (±X±Y±Z axes)
+        let s = 0.5;   // sin(22.5°) ≈ 0.3827, but for 45° half-angle: sin(22.5°)
+        // Use exact 45° around X, Y, Z axes and their combinations
+        let c45 = 0.9238795325112867; // cos(22.5°)
+        let s45 = 0.3826834323650898; // sin(22.5°)
+        let n = idx % 12u;
+        switch (n) {
+            case  0u: { return vec4<f32>(s45,  0.0,  0.0,  c45); }        // +45° X
+            case  1u: { return vec4<f32>(-s45, 0.0,  0.0,  c45); }        // -45° X
+            case  2u: { return vec4<f32>(0.0,  s45,  0.0,  c45); }        // +45° Y
+            case  3u: { return vec4<f32>(0.0,  -s45, 0.0,  c45); }        // -45° Y
+            case  4u: { return vec4<f32>(0.0,  0.0,  s45,  c45); }        // +45° Z
+            case  5u: { return vec4<f32>(0.0,  0.0,  -s45, c45); }        // -45° Z
+            case  6u: { return vec4<f32>(s*s45, s*s45, 0.0, c45); }       // +45° XY
+            case  7u: { return vec4<f32>(s*s45, 0.0, s*s45, c45); }       // +45° XZ
+            case  8u: { return vec4<f32>(0.0, s*s45, s*s45, c45); }       // +45° YZ
+            case  9u: { return vec4<f32>(-s*s45, s*s45, 0.0, c45); }      // -45° XY
+            case 10u: { return vec4<f32>(-s*s45, 0.0, s*s45, c45); }      // -45° XZ
+            default:  { return vec4<f32>(0.0, -s*s45, s*s45, c45); }      // -45° YZ
+        }
+    } else {
+        // --- 15° fine rotations ---
+        let c15 = 0.9914449160435743; // cos(7.5°)
+        let s15 = 0.1305261922200517; // sin(7.5°)
+        let n = idx % 6u;
+        switch (n) {
+            case 0u: { return vec4<f32>(s15,  0.0,  0.0,  c15); }         // +15° X
+            case 1u: { return vec4<f32>(-s15, 0.0,  0.0,  c15); }         // -15° X
+            case 2u: { return vec4<f32>(0.0,  s15,  0.0,  c15); }         // +15° Y
+            case 3u: { return vec4<f32>(0.0,  -s15, 0.0,  c15); }         // -15° Y
+            case 4u: { return vec4<f32>(0.0,  0.0,  s15,  c15); }         // +15° Z
+            default: { return vec4<f32>(0.0,  0.0,  -s15, c15); }         // -15° Z
+        }
+    }
+}
+
+// ============================================================
 // Weighted random parameter selection
 // ============================================================
 
@@ -350,12 +442,22 @@ fn clone_genome_modes(
         let src = src_base + m;
         let dst = dst_base + m;
 
+        // Offset delta for remapping absolute mode indices from source to destination genome
+        let offset_delta = i32(dst_base) - i32(src_base);
+
         // mode_properties: 5 separate sub-buffers (v0-v4), 1 vec4 per mode each
         mode_properties_v0[dst] = mode_properties_v0[src];
         mode_properties_v1[dst] = mode_properties_v1[src];
         mode_properties_v2[dst] = mode_properties_v2[src];
         mode_properties_v3[dst] = mode_properties_v3[src];
-        mode_properties_v4[dst] = mode_properties_v4[src];
+        // v4: [max_adhesions, mode_a_after_splits(abs), mode_b_after_splits(abs), padding]
+        // mode_a/b_after_splits are stored as absolute mode indices — remap with offset_delta.
+        // A value of -1.0 means "unused" and must not be remapped.
+        let src_v4 = mode_properties_v4[src];
+        var dst_v4 = src_v4;
+        if (src_v4.y >= 0.0) { dst_v4.y = src_v4.y + f32(offset_delta); }
+        if (src_v4.z >= 0.0) { dst_v4.z = src_v4.z + f32(offset_delta); }
+        mode_properties_v4[dst] = dst_v4;
 
         // genome_mode_data: 5 separate sub-buffers (v0-v4), 1 vec4 per mode each
         genome_mode_data_v0[dst] = genome_mode_data_v0[src];
@@ -367,7 +469,6 @@ fn clone_genome_modes(
         // child_mode_indices: 1 vec2<i32> per mode
         // IMPORTANT: remap absolute indices from source genome to destination genome
         let src_indices = child_mode_indices_buf[src];
-        let offset_delta = i32(dst_base) - i32(src_base);
         child_mode_indices_buf[dst] = vec2<i32>(
             src_indices.x + offset_delta,
             src_indices.y + offset_delta,
@@ -378,6 +479,8 @@ fn clone_genome_modes(
         parent_make_adhesion_flags[dst] = parent_make_adhesion_flags[src];
         child_a_keep_adhesion_flags[dst] = child_a_keep_adhesion_flags[src];
         child_b_keep_adhesion_flags[dst] = child_b_keep_adhesion_flags[src];
+        child_a_after_split_keep_adhesion_flags[dst] = child_a_after_split_keep_adhesion_flags[src];
+        child_b_after_split_keep_adhesion_flags[dst] = child_b_after_split_keep_adhesion_flags[src];
         glueocyte_env_adhesion_flags[dst] = glueocyte_env_adhesion_flags[src];
 
         // oculocyte_params: 1 vec4<u32> per mode
@@ -396,11 +499,28 @@ fn clone_genome_modes(
         adhesion_settings_v2[dst] = adhesion_settings_v2[src];
 
         // signal_settings: 5 separate vec4<f32> sub-buffers per mode
+        // v0: [division_signal_channel, division_signal_threshold, division_signal_invert, apoptosis_signal_channel] — no mode indices
+        // v1: [apoptosis_signal_threshold, apoptosis_signal_invert, signal_child_a_channel, signal_child_a_threshold] — no mode indices
+        // v2: [signal_child_a_mode_above(abs), signal_child_a_mode_below(abs), signal_child_b_channel, signal_child_b_threshold]
+        // v3: [signal_child_b_mode_above(abs), signal_child_b_mode_below(abs), mode_switch_signal_channel, mode_switch_signal_threshold]
+        // v4: [mode_switch_target(abs), mode_switch_invert, padding, padding]
+        // Remap all absolute mode indices with offset_delta; -1.0 means unused.
         signal_settings_v0[dst] = signal_settings_v0[src];
         signal_settings_v1[dst] = signal_settings_v1[src];
-        signal_settings_v2[dst] = signal_settings_v2[src];
-        signal_settings_v3[dst] = signal_settings_v3[src];
-        signal_settings_v4[dst] = signal_settings_v4[src];
+        let src_ss_v2 = signal_settings_v2[src];
+        var dst_ss_v2 = src_ss_v2;
+        if (src_ss_v2.x >= 0.0) { dst_ss_v2.x = src_ss_v2.x + f32(offset_delta); }
+        if (src_ss_v2.y >= 0.0) { dst_ss_v2.y = src_ss_v2.y + f32(offset_delta); }
+        signal_settings_v2[dst] = dst_ss_v2;
+        let src_ss_v3 = signal_settings_v3[src];
+        var dst_ss_v3 = src_ss_v3;
+        if (src_ss_v3.x >= 0.0) { dst_ss_v3.x = src_ss_v3.x + f32(offset_delta); }
+        if (src_ss_v3.y >= 0.0) { dst_ss_v3.y = src_ss_v3.y + f32(offset_delta); }
+        signal_settings_v3[dst] = dst_ss_v3;
+        let src_ss_v4 = signal_settings_v4[src];
+        var dst_ss_v4 = src_ss_v4;
+        if (src_ss_v4.x >= 0.0) { dst_ss_v4.x = src_ss_v4.x + f32(offset_delta); }
+        signal_settings_v4[dst] = dst_ss_v4;
     }
 }
 
@@ -446,7 +566,29 @@ fn apply_mutation(
                 case 0u: { v[comp_idx] = clamp(v[comp_idx] + delta, entry.min_value, entry.max_value); }
                 case 1u: { v[comp_idx] = clamp(round(v[comp_idx] + delta), entry.min_value, entry.max_value); }
                 case 2u: { v[comp_idx] = select(1.0, 0.0, v[comp_idx] > 0.5); }
-                case 3u: { v[comp_idx] = clamp(round(v[comp_idx] + delta), 0.0, f32(mode_count - 1u)); }
+                case 3u: {
+                    // MODE_INDEX_CLAMP: nudge by delta, clamped to [0, mode_count-1].
+                    // For mode_properties_v4 (vec_idx == 4), components y (.y=1) and z (.z=2)
+                    // store mode_a_after_splits and mode_b_after_splits as ABSOLUTE mode indices.
+                    // We must derive the current local index (or use 0 if currently -1/unused),
+                    // clamp within [0, mode_count-1], then store as absolute = dst_base + local.
+                    if (vec_idx == 4u && (comp_idx == 1u || comp_idx == 2u)) {
+                        // Convert absolute (or -1) to local, apply delta, store as absolute.
+                        let current_local = select(
+                            i32(v[comp_idx]) - i32(dst_base),
+                            0,
+                            v[comp_idx] < 0.0  // -1 = unused, treat as local 0
+                        );
+                        let new_local = clamp(
+                            i32(round(f32(current_local) + delta)),
+                            0,
+                            i32(mode_count) - 1
+                        );
+                        v[comp_idx] = f32(i32(dst_base) + new_local);
+                    } else {
+                        v[comp_idx] = clamp(round(v[comp_idx] + delta), 0.0, f32(mode_count - 1u));
+                    }
+                }
                 default: {}
             }
             switch (vec_idx) {
@@ -693,7 +835,23 @@ fn apply_mutation(
                 case 3u: { v = genome_mode_data_v3[mode_abs]; }
                 default: { v = genome_mode_data_v4[mode_abs]; }
             }
-            v[comp_idx] = clamp(v[comp_idx] + delta, entry.min_value, entry.max_value);
+            if (entry.data_type == 9u) {
+                // QUAT_SNAP: snap to a discrete rotation relative to the parent split direction.
+                // The parent split quat lives in genome_mode_data_v4 for this same mode.
+                // For v0–v3 (child orientations): result = quat_mul(snap_offset, split_quat)
+                // For v4 (the split direction itself): result = snap_offset (world-relative)
+                let snap_offset = snap_quaternion(cell_id, salt_base + 700u);
+                if (vec_idx == 4u) {
+                    // Mutating the split direction itself — snap in world space
+                    v = snap_offset;
+                } else {
+                    // Snap child orientation relative to the parent split direction
+                    let split_quat = genome_mode_data_v4[mode_abs];
+                    v = quat_mul(snap_offset, split_quat);
+                }
+            } else {
+                v[comp_idx] = clamp(v[comp_idx] + delta, entry.min_value, entry.max_value);
+            }
             switch (vec_idx) {
                 case 0u: { genome_mode_data_v0[mode_abs] = v; }
                 case 1u: { genome_mode_data_v1[mode_abs] = v; }
@@ -868,10 +1026,10 @@ fn apply_mutation(
                         v.z = channel_f;
                         if (v.w == 0.0) { v.w = 5.0; }
                         signal_settings_v1[receiver_abs] = v;
-                        // Also set mode_above to a random mode if currently -1
+                        // Also set mode_above to a random mode if currently -1 (store as absolute)
                         var v2 = signal_settings_v2[receiver_abs];
                         if (v2.x < 0.0) {
-                            v2.x = f32(rng_u32(cell_id, salt_base + 830u) % mode_count);
+                            v2.x = f32(dst_base + rng_u32(cell_id, salt_base + 830u) % mode_count);
                         }
                         signal_settings_v2[receiver_abs] = v2;
                     }
@@ -881,10 +1039,10 @@ fn apply_mutation(
                         v.z = channel_f;
                         if (v.w == 0.0) { v.w = 5.0; }
                         signal_settings_v2[receiver_abs] = v;
-                        // Also set mode_above to a random mode if currently -1
+                        // Also set mode_above to a random mode if currently -1 (store as absolute)
                         var v3 = signal_settings_v3[receiver_abs];
                         if (v3.x < 0.0) {
-                            v3.x = f32(rng_u32(cell_id, salt_base + 840u) % mode_count);
+                            v3.x = f32(dst_base + rng_u32(cell_id, salt_base + 840u) % mode_count);
                         }
                         signal_settings_v3[receiver_abs] = v3;
                     }
@@ -894,10 +1052,10 @@ fn apply_mutation(
                         v.z = channel_f;
                         if (v.w == 0.0) { v.w = 5.0; }
                         signal_settings_v3[receiver_abs] = v;
-                        // Also set mode_switch_target to a random mode if currently -1
+                        // Also set mode_switch_target to a random mode if currently -1 (store as absolute)
                         var v4 = signal_settings_v4[receiver_abs];
                         if (v4.x < 0.0) {
-                            v4.x = f32(rng_u32(cell_id, salt_base + 850u) % mode_count);
+                            v4.x = f32(dst_base + rng_u32(cell_id, salt_base + 850u) % mode_count);
                         }
                         signal_settings_v4[receiver_abs] = v4;
                     }
@@ -923,8 +1081,28 @@ fn apply_mutation(
                     case 1u: { v[comp] = clamp(round(v[comp] + delta), entry.min_value, entry.max_value); }
                     // Boolean flip (inverts)
                     case 2u: { v[comp] = select(1.0, 0.0, v[comp] > 0.5); }
-                    // Mode index clamp
-                    case 3u: { v[comp] = clamp(round(v[comp] + delta), 0.0, f32(mode_count - 1u)); }
+                    // MODE_INDEX_CLAMP: signal_settings v2.x/y, v3.x/y, v4.x store ABSOLUTE mode indices.
+                    // Convert current absolute (or -1=unused) to local, apply delta, store as absolute.
+                    case 3u: {
+                        let is_abs_field = (sub_buf == 2u && (comp == 0u || comp == 1u))
+                                       || (sub_buf == 3u && (comp == 0u || comp == 1u))
+                                       || (sub_buf == 4u && comp == 0u);
+                        if (is_abs_field) {
+                            let cur_local = select(
+                                i32(v[comp]) - i32(dst_base),
+                                0,
+                                v[comp] < 0.0
+                            );
+                            let new_local = clamp(
+                                i32(round(f32(cur_local) + delta)),
+                                0,
+                                i32(mode_count) - 1
+                            );
+                            v[comp] = f32(i32(dst_base) + new_local);
+                        } else {
+                            v[comp] = clamp(round(v[comp] + delta), 0.0, f32(mode_count - 1u));
+                        }
+                    }
                     default: {}
                 }
 

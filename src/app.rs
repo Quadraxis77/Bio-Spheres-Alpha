@@ -676,6 +676,7 @@ impl App {
             gpu_scene.water_drag_strength = self.ui.state.world_settings.water_drag_strength;
             gpu_scene.radiation_level = self.ui.state.world_settings.radiation_level;
             gpu_scene.subtle_mutations = self.ui.state.world_settings.subtle_mutations;
+            gpu_scene.standalone_burn_multiplier = self.ui.state.world_settings.standalone_burn_multiplier;
             // Sync radiation level and mutation mode to mutation system
             if let Some(mutation_system) = &mut gpu_scene.mutation_system {
                 mutation_system.set_radiation_level(self.ui.state.world_settings.radiation_level);

@@ -201,6 +201,11 @@ pub struct WorldSettings {
     /// When true, mutations make small color perturbations instead of full re-rolls
     #[serde(default)]
     pub subtle_mutations: bool,
+
+    /// Nutrient burn multiplier for standalone cells (no active adhesions).
+    /// 1.0 = no penalty, 2.0 = double consumption (default), higher = harsher isolation tax.
+    #[serde(default = "default_standalone_burn_multiplier")]
+    pub standalone_burn_multiplier: f32,
 }
 
 impl Default for WorldSettings {
@@ -214,6 +219,7 @@ impl Default for WorldSettings {
             water_drag_strength: 0.0,
             radiation_level: 0.0,
             subtle_mutations: false,
+            standalone_burn_multiplier: 2.0,
         }
     }
 }
@@ -359,6 +365,10 @@ fn default_water_drag_strength() -> f32 {
 
 fn default_acceleration_damping() -> f32 {
     0.98
+}
+
+fn default_standalone_burn_multiplier() -> f32 {
+    2.0
 }
 
 fn default_organism_grid_resolution() -> u32 {

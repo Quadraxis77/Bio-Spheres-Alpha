@@ -62,10 +62,10 @@ struct PhysicsParams {
     cell_capacity: u32,        // Maximum cells that can exist
     gravity_mode: u32,         // 0=X, 1=Y, 2=Z, 3=radial (toward origin)
     angular_damping: f32,      // fraction of angular velocity retained per second (velocity_update.wgsl _pad1)
-    _gravity_pad: f32,
+    standalone_burn_multiplier: f32, // nutrient burn multiplier for cells with no adhesions
     
     // Padding to 256 bytes (192 bytes = 48 floats)
-    _padding: [f32; 48],
+    _padding: [f32; 47],
 }
 
 /// Grid resolution: 128³ = 2,097,152 grid cells
@@ -101,6 +101,7 @@ pub fn execute_gpu_physics_step(
     adhesion_buffers: &super::AdhesionBuffers,
     _cell_count_hint: u32,
     constraint_iterations: u32,
+    standalone_burn_multiplier: f32,
 ) {
     // Rotate to next buffer set
     let current_index = triple_buffers.rotate_buffers();
@@ -125,8 +126,8 @@ pub fn execute_gpu_physics_step(
         cell_capacity: triple_buffers.capacity,
         gravity_mode,
         angular_damping: 0.94,
-        _gravity_pad: 0.0,
-        _padding: [0.0; 48],
+        standalone_burn_multiplier,
+        _padding: [0.0; 47],
     };
     queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
     
@@ -349,8 +350,8 @@ pub fn execute_gpu_mechanics_step(
         cell_capacity: triple_buffers.capacity,
         gravity_mode,
         angular_damping: 0.94,
-        _gravity_pad: 0.0,
-        _padding: [0.0; 48],
+        standalone_burn_multiplier: 2.0,
+        _padding: [0.0; 47],
     };
     queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
 

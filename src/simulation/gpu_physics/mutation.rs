@@ -79,6 +79,13 @@ pub mod data_type {
     ///   0 = division gating, 1 = apoptosis, 2 = child_a routing,
     ///   3 = child_b routing, 4 = mode switching
     pub const SIGNAL_WIRE: u32 = 8;
+    /// Quaternion snap: replaces the entire quaternion (vec4) at element_offset/4 with
+    /// a randomly chosen snap target. Snap tier is chosen by weighted RNG:
+    ///   ~60% → cardinal (90° axes: ±X, ±Y, ±Z, identity)
+    ///   ~30% → 45° diagonal (half-turns between cardinals)
+    ///   ~10% → 15° fine (small rotations around each axis)
+    /// element_offset encodes which vec4 sub-buffer (0=v0, 4=v1, 8=v2, 12=v3, 16=v4).
+    pub const QUAT_SNAP: u32 = 9;
 }
 
 /// Buffer IDs matching the WGSL switch cases
@@ -437,6 +444,10 @@ impl MutationSystem {
                 Self::storage_rw_entry(28),
                 // binding 29: regulation_params (vec4<u32> per mode)
                 Self::storage_rw_entry(29),
+                // binding 30: child_a_after_split_keep_adhesion_flags
+                Self::storage_rw_entry(30),
+                // binding 31: child_b_after_split_keep_adhesion_flags
+                Self::storage_rw_entry(31),
             ],
         });
 
@@ -949,10 +960,10 @@ impl MutationSystem {
                 weight: 0.5, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
             },
-            // parent_make_adhesion: boolean flip
+            // parent_make_adhesion: boolean flip (high weight — adhesion is key to multicellularity)
             MutationParamEntry {
                 buffer_id: buffer_id::PARENT_MAKE_ADHESION, element_offset: 0,
-                weight: 0.5, min_delta: 0.0, max_delta: 0.0,
+                weight: 3.0, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
             },
             // child_a_keep_adhesion: boolean flip
@@ -1150,126 +1161,40 @@ impl MutationSystem {
                 min_value: 0.0, max_value: 39.0, data_type: data_type::MODE_INDEX_CLAMP,
             },
 
-            // --- Child orientations (quaternion component nudges) ---
-            // Small perturbations to individual XYZW components of child_a_orientation.
-            // Stored in genome_mode_data_v0 (offsets 0–3).
+            // --- Child orientations / split directions (quaternion snap) ---
+            // Each entry snaps the entire quaternion to a cardinal/45°/15° direction.
+            // Weighted: ~60% cardinal (90°), ~30% 45° diagonal, ~10% 15° fine.
+            // element_offset encodes the vec4 sub-buffer index × 4 (0, 4, 8, 12, 16).
 
-            // child_a orientation X
+            // child_a orientation (genome_mode_data_v0, offsets 0–3)
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 0,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                weight: 2.0, min_delta: 0.0, max_delta: 0.0,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::QUAT_SNAP,
             },
-            // child_a orientation Y
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 1,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // child_a orientation Z
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 2,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // child_a orientation W
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 3,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-
-            // child_b orientation X (genome_mode_data_v1, offsets 4–7)
+            // child_b orientation (genome_mode_data_v1, offsets 4–7)
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 4,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                weight: 2.0, min_delta: 0.0, max_delta: 0.0,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::QUAT_SNAP,
             },
-            // child_b orientation Y
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 5,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // child_b orientation Z
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 6,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // child_b orientation W
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 7,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-
-            // --- Child after-split orientations (genome_mode_data_v2/v3, offsets 8–15) ---
-            // child_a_split_orientation XYZW
+            // child_a split orientation (genome_mode_data_v2, offsets 8–11)
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 8,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                weight: 2.0, min_delta: 0.0, max_delta: 0.0,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::QUAT_SNAP,
             },
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 9,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 10,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 11,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            // child_b_split_orientation XYZW
+            // child_b split orientation (genome_mode_data_v3, offsets 12–15)
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 12,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                weight: 2.0, min_delta: 0.0, max_delta: 0.0,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::QUAT_SNAP,
             },
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 13,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 14,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 15,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-
-            // --- Parent split direction quaternion (genome_mode_data_v4, offsets 16–19) ---
-            // Encodes parent_split_direction pitch/yaw as a quaternion. Mutating these
-            // components changes the axis along which the parent cell splits.
+            // parent split direction (genome_mode_data_v4, offsets 16–19)
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 16,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 17,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 18,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
-            },
-            MutationParamEntry {
-                buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 19,
-                weight: 1.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: -1.0, max_value: 1.0, data_type: data_type::CONTINUOUS_F32,
+                weight: 2.0, min_delta: 0.0, max_delta: 0.0,
+                min_value: -1.0, max_value: 1.0, data_type: data_type::QUAT_SNAP,
             },
 
             // --- Adhesion settings (buffer_id 11) ---
@@ -1956,6 +1881,8 @@ impl MutationSystem {
         signal_settings_v3_buffer: &wgpu::Buffer,
         signal_settings_v4_buffer: &wgpu::Buffer,
         regulation_params_buffer: &wgpu::Buffer,
+        child_a_after_split_keep_adhesion_flags_buffer: &wgpu::Buffer,
+        child_b_after_split_keep_adhesion_flags_buffer: &wgpu::Buffer,
     ) {
         self.params_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Mutation Params Bind Group"),
@@ -2015,6 +1942,8 @@ impl MutationSystem {
                 wgpu::BindGroupEntry { binding: 27, resource: signal_settings_v3_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 28, resource: signal_settings_v4_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 29, resource: regulation_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 30, resource: child_a_after_split_keep_adhesion_flags_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 31, resource: child_b_after_split_keep_adhesion_flags_buffer.as_entire_binding() },
             ],
         }));
     }

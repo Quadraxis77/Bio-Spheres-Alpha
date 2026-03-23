@@ -138,6 +138,9 @@ pub struct GpuCellDataExtraction {
     
     /// Cached extracted data (from last successful readback)
     cached_data: Option<InspectedCellData>,
+    
+    /// Pending map_async receiver — Some means a mapping is in flight
+    map_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
 
 impl GpuCellDataExtraction {
@@ -322,6 +325,7 @@ impl GpuCellDataExtraction {
             state_bind_group,
             output_bind_group,
             cached_data: None,
+            map_receiver: None,
         }
     }
     
@@ -378,43 +382,45 @@ impl GpuCellDataExtraction {
     /// This method should be called each frame to check for completed async readbacks.
     /// Returns Some(data) if extraction is complete, None if still in progress.
     pub fn poll_extraction(&mut self, device: &wgpu::Device) -> Option<InspectedCellData> {
-        // Start new readback if none is pending
-        let slice = self.readback_buffer.slice(..);
-        let (sender, receiver) = std::sync::mpsc::channel();
+        if self.map_receiver.is_none() {
+            // No mapping in flight — start one
+            let slice = self.readback_buffer.slice(..);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                sender.send(result).ok();
+            });
+            self.map_receiver = Some(receiver);
+        }
         
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            sender.send(result).ok();
-        });
-        
-        // Poll device to process the map request
+        // Poll device to advance async work
         let _ = device.poll(wgpu::PollType::Poll);
         
-        // Check if mapping completed
-        if let Ok(Ok(())) = receiver.try_recv() {
-            // Mapping completed, read the data
+        // Check if the in-flight mapping completed
+        let completed = if let Some(ref rx) = self.map_receiver {
+            matches!(rx.try_recv(), Ok(Ok(())))
+        } else {
+            false
+        };
+        
+        if completed {
+            self.map_receiver = None;
+            
+            let slice = self.readback_buffer.slice(..);
             let view = slice.get_mapped_range();
             let data_bytes: &[u8] = &view;
             
             if data_bytes.len() >= std::mem::size_of::<InspectedCellData>() {
                 let data: InspectedCellData = *bytemuck::from_bytes(&data_bytes[..std::mem::size_of::<InspectedCellData>()]);
-                
-                // Unmap the buffer
                 drop(view);
                 self.readback_buffer.unmap();
-                
-                // Cache the data
                 self.cached_data = Some(data);
-
                 return Some(data);
             } else {
-                // Invalid data size
                 drop(view);
                 self.readback_buffer.unmap();
-                return None;
             }
         }
         
-        // Mapping is still pending or failed
         None
     }
     

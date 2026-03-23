@@ -29,7 +29,7 @@ struct PhysicsParams {
     cell_capacity: u32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
+    standalone_burn_multiplier: f32,
 }
 
 // Physics bind group (group 0) - standard 6-binding layout
@@ -216,6 +216,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Base metabolism: consume nutrients to stay alive (1.0 nutrients/sec)
         let mode_v3 = mode_properties_v3[mode_idx];
         var nutrient_loss = BASE_METABOLISM_RATE * params.delta_time;
+
+        // Isolation penalty: cells with no active adhesion connections burn nutrients twice as fast.
+        // Count active adhesions for this cell.
+        var adhesion_count = 0u;
+        let adhesion_base_idx = cell_idx;
+        let adh_list = adhesion_indices[cell_idx];
+        for (var ai = 0; ai < 20; ai++) {
+            let adh_idx = adh_list[ai];
+            if (adh_idx >= 0 && u32(adh_idx) < arrayLength(&adhesion_connections) &&
+                adhesion_connections[u32(adh_idx)].is_active != 0u) {
+                adhesion_count++;
+            }
+        }
+        if (adhesion_count == 0u) {
+            nutrient_loss *= params.standalone_burn_multiplier;
+        }
 
         // Additional consumption from swim force (Flagellocytes only)
         let swim_force = mode_v1.z; // mode_properties_v1.z = swim_force

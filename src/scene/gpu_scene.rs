@@ -158,6 +158,8 @@ pub struct GpuScene {
     pub radiation_level: f32,
     /// When true, mutations make small color perturbations instead of full re-rolls
     pub subtle_mutations: bool,
+    /// Nutrient burn multiplier for standalone cells (no active adhesions)
+    pub standalone_burn_multiplier: f32,
     /// Per-fluid-type lateral flow probabilities for fluid simulation (0.0 to 1.0)
     /// Index: 0=Empty (unused), 1=Water, 2=Lava, 3=Steam
     pub lateral_flow_probabilities: [f32; 4],
@@ -486,6 +488,7 @@ impl GpuScene {
             water_drag_strength: 0.0,
             radiation_level: 0.0,
             subtle_mutations: false,
+            standalone_burn_multiplier: 2.0,
             lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
             condensation_probability: 0.1,
             vaporization_probability: 0.1,
@@ -1170,6 +1173,7 @@ impl GpuScene {
             &self.adhesion_buffers,
             self.current_cell_count,
             self.constraint_iterations,
+            self.standalone_burn_multiplier,
         );
         
         // Increment frame counter for time-based shader logic
@@ -4151,6 +4155,8 @@ impl GpuScene {
                 &self.gpu_triple_buffers.signal_settings_v3,
                 &self.gpu_triple_buffers.signal_settings_v4,
                 &self.gpu_triple_buffers.regulation_params,
+                &self.gpu_triple_buffers.child_a_after_split_keep_adhesion_flags,
+                &self.gpu_triple_buffers.child_b_after_split_keep_adhesion_flags,
             );
 
             // Rebuild GC bind group (for genome recycling)
