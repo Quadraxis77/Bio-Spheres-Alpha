@@ -4,7 +4,7 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, GpuAdhesionLineRenderer, GpuSurfaceNets, InstanceBuilder, NutrientParticleRenderer, OrganismSkinRenderer, SteamParticleRenderer, SunRenderer, TailRenderer, VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
+use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, DepthOfFieldRenderer, GpuAdhesionLineRenderer, GpuSurfaceNets, InstanceBuilder, NutrientParticleRenderer, OrganismSkinRenderer, SteamParticleRenderer, SunRenderer, TailRenderer, VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
@@ -256,6 +256,12 @@ pub struct GpuScene {
     pub volumetric_fog_renderer: Option<VolumetricFogRenderer>,
     /// Whether to show volumetric fog
     pub show_volumetric_fog: bool,
+    /// Depth of field renderer
+    pub dof_renderer: Option<DepthOfFieldRenderer>,
+    /// Whether depth of field is enabled
+    pub show_dof: bool,
+    /// Surface format (needed for DoF resize)
+    surface_format: wgpu::TextureFormat,
     /// Procedural sun renderer
     pub sun_renderer: Option<SunRenderer>,
     /// Whether to show the procedural sun
@@ -546,6 +552,9 @@ impl GpuScene {
             cached_photocyte_system_bind_group: None,
             volumetric_fog_renderer: None,
             show_volumetric_fog: false,
+            dof_renderer: None,
+            show_dof: false,
+            surface_format: surface_config.format,
             sun_renderer: None,
             show_sun: true,
             sun_intensity: 10.0,
@@ -2929,6 +2938,10 @@ impl GpuScene {
         let volumetric_fog_renderer = VolumetricFogRenderer::new(device, surface_format, self.renderer.width, self.renderer.height);
         self.volumetric_fog_renderer = Some(volumetric_fog_renderer);
         
+        // Create depth of field renderer (with half-res support)
+        let dof_renderer = DepthOfFieldRenderer::new(device, surface_format, self.renderer.width, self.renderer.height);
+        self.dof_renderer = Some(dof_renderer);
+        
         // Create procedural sun renderer
         let mut sun_renderer = SunRenderer::new(device, surface_format);
         sun_renderer.resize(self.renderer.width, self.renderer.height);
@@ -3975,6 +3988,16 @@ impl GpuScene {
             sun.sun_color = editor_state.sun_color;
             sun.sun_angular_radius = editor_state.sun_angular_radius;
         }
+        
+        // Update depth of field parameters
+        self.show_dof = editor_state.show_dof;
+        if let Some(ref mut dof) = self.dof_renderer {
+            dof.enabled = editor_state.show_dof;
+            dof.focal_distance = editor_state.dof_focal_distance;
+            dof.focal_range = editor_state.dof_focal_range;
+            dof.max_blur_radius = editor_state.dof_max_blur_radius;
+            dof.blur_strength = editor_state.dof_blur_strength;
+        }
     }
     
     /// Apply cave parameters from editor state
@@ -4541,12 +4564,30 @@ impl Scene for GpuScene {
             self.current_cell_count, // Live cell count for dispatch scaling
         );
 
+        // When DoF is enabled, render the scene to an intermediate texture so the
+        // DoF shader can read it. Otherwise render directly to the swapchain.
+        let dof_enabled = self.show_dof && self.dof_renderer.is_some();
+        // Extract the DoF scene target view pointer before any mutable borrows.
+        // SAFETY: The texture view lives as long as self.dof_renderer, which lives for
+        // the entire render() call. We just need to avoid holding &self across &mut self.
+        let dof_scene_view: Option<*const wgpu::TextureView> = if dof_enabled {
+            Some(self.dof_renderer.as_ref().unwrap().scene_target_view() as *const _)
+        } else {
+            None
+        };
+        let scene_target: &wgpu::TextureView = if let Some(ptr) = dof_scene_view {
+            // SAFETY: dof_renderer is not dropped or moved during render()
+            unsafe { &*ptr }
+        } else {
+            view
+        };
+
         // Clear pass
         {
             let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("GPU Scene Clear Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
+                    view: scene_target,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -4582,7 +4623,7 @@ impl Scene for GpuScene {
         self.renderer.render_with_encoder(
             &mut encoder,
             queue,
-            view,
+            scene_target,
             &self.instance_builder,
             visible_count,
             self.camera.position(),
@@ -4603,7 +4644,7 @@ impl Scene for GpuScene {
             device,
             queue,
             &mut encoder,
-            view,
+            scene_target,
             &self.renderer.depth_view,
             self.instance_builder.get_instance_buffer(),
             self.instance_builder.get_indirect_buffer(),  // Use total visible count, not per-type
@@ -4638,7 +4679,7 @@ impl Scene for GpuScene {
             cave_renderer.render(
                 &mut encoder,
                 queue,
-                view,
+                scene_target,
                 &self.renderer.depth_view,
                 self.camera.position(),
                 self.camera.rotation,
@@ -4659,7 +4700,7 @@ impl Scene for GpuScene {
                 sun_renderer.render(
                     &mut encoder,
                     queue,
-                    view,
+                    scene_target,
                     &self.renderer.depth_view,
                     device,
                     view_proj,
@@ -4679,7 +4720,7 @@ impl Scene for GpuScene {
             self.world_sphere_renderer.render(
                 &mut encoder,
                 queue,
-                view,
+                scene_target,
                 &self.renderer.depth_view,
                 self.camera.position(),
                 self.camera.rotation,
@@ -4694,7 +4735,7 @@ impl Scene for GpuScene {
                 let mut voxel_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Voxel Rendering Pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view,
+                        view: scene_target,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Load, // Preserve previous rendering
@@ -4744,7 +4785,7 @@ impl Scene for GpuScene {
                     renderer.render(
                         &mut encoder,
                         queue,
-                        view,
+                        scene_target,
                         &self.renderer.depth_view,
                         self.camera.position(),
                         self.camera.rotation,
@@ -4776,7 +4817,7 @@ impl Scene for GpuScene {
                 gpu_surface_nets.render(
                     &mut encoder,
                     queue,
-                    view,
+                    scene_target,
                     &self.renderer.depth_view,
                     self.camera.position(),
                     self.camera.rotation,
@@ -4791,7 +4832,7 @@ impl Scene for GpuScene {
 
                 steam_particle_renderer.render(
                     &mut encoder,
-                    view,
+                    scene_target,
                     &self.renderer.depth_view,
                     camera_bind_group,
                     render_bind_group,
@@ -4806,7 +4847,7 @@ impl Scene for GpuScene {
 
                 water_particle_renderer.render(
                     &mut encoder,
-                    view,
+                    scene_target,
                     &self.renderer.depth_view,
                     camera_bind_group,
                     render_bind_group,
@@ -4821,7 +4862,7 @@ impl Scene for GpuScene {
 
                 nutrient_particle_renderer.render(
                     &mut encoder,
-                    view,
+                    scene_target,
                     &self.renderer.depth_view,
                     camera_bind_group,
                     render_bind_group,
@@ -4841,7 +4882,7 @@ impl Scene for GpuScene {
                 let mut adhesion_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("GPU Adhesion Lines Pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view,
+                        view: scene_target,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Load, // Preserve cell rendering
@@ -4887,7 +4928,7 @@ impl Scene for GpuScene {
                 self.volumetric_fog_renderer.as_mut().unwrap().render(
                     &mut encoder,
                     queue,
-                    view,
+                    scene_target,
                     depth_view,
                     device,
                     lf_buffer,
@@ -4901,6 +4942,21 @@ impl Scene for GpuScene {
                     lf_radius,
                 );
             }
+        }
+
+        // Render depth of field if enabled (post-process: reads scene_target, writes to swapchain)
+        if dof_enabled {
+            let depth_view = &self.renderer.depth_view;
+            let cam_pos = self.camera.position();
+            self.dof_renderer.as_mut().unwrap().render(
+                &mut encoder,
+                queue,
+                view,
+                depth_view,
+                device,
+                view_proj,
+                cam_pos,
+            );
         }
 
         
@@ -4990,6 +5046,11 @@ impl Scene for GpuScene {
         // Resize volumetric fog renderer (recreates half-res texture)
         if let Some(ref mut fog_renderer) = self.volumetric_fog_renderer {
             fog_renderer.resize(device, width, height);
+        }
+        
+        // Resize depth of field renderer (recreates intermediate textures)
+        if let Some(ref mut dof_renderer) = self.dof_renderer {
+            dof_renderer.resize(device, width, height, self.surface_format);
         }
     }
 

@@ -309,6 +309,18 @@ pub struct GenomeEditorState {
     /// Flag to indicate light params need GPU update
     pub light_params_dirty: bool,
     
+    // Depth of field settings
+    /// Whether depth of field is enabled
+    pub show_dof: bool,
+    /// Focal distance from camera (world units)
+    pub dof_focal_distance: f32,
+    /// Range around focal distance that stays sharp (world units)
+    pub dof_focal_range: f32,
+    /// Maximum blur radius in pixels
+    pub dof_max_blur_radius: f32,
+    /// Blur intensity multiplier
+    pub dof_blur_strength: f32,
+    
     // Sun renderer settings
     /// Whether the procedural sun is visible
     pub show_sun: bool,
@@ -538,6 +550,11 @@ impl GenomeEditorState {
             photocyte_mass_per_second,
             photocyte_min_light_threshold,
             light_params_dirty: true,
+            show_dof: false,
+            dof_focal_distance: 50.0,
+            dof_focal_range: 30.0,
+            dof_max_blur_radius: 8.0,
+            dof_blur_strength: 1.0,
             show_sun,
             sun_color,
             sun_angular_radius,

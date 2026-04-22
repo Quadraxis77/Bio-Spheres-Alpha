@@ -1390,6 +1390,32 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
             .step_by(0.001).fixed_decimals(3)).changed();
     }
     
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("Depth of Field");
+    ui.add_space(4.0);
+    
+    changed |= ui.checkbox(&mut context.editor_state.show_dof, "Enable Depth of Field").changed();
+    
+    if context.editor_state.show_dof {
+        ui.add_space(4.0);
+        ui.label("Focal Distance:");
+        changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_focal_distance, 5.0..=500.0)
+            .step_by(1.0).fixed_decimals(0)).changed();
+        
+        ui.label("Focal Range:");
+        changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_focal_range, 1.0..=200.0)
+            .step_by(1.0).fixed_decimals(0)).changed();
+        
+        ui.label("Max Blur Radius:");
+        changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_max_blur_radius, 1.0..=24.0)
+            .step_by(0.5).fixed_decimals(1)).changed();
+        
+        ui.label("Blur Strength:");
+        changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_blur_strength, 0.0..=3.0)
+            .step_by(0.05).fixed_decimals(2)).changed();
+    }
+    
     // Apply sun settings to GPU
     if sun_changed {
         changed = true;

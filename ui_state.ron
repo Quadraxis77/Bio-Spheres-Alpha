@@ -19,16 +19,16 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "LeftPanel",
                 "NameTypeEditor",
-                "BottomPanel",
-                "Viewport",
-                "CircleSliders",
-                "Modes",
-                "QuaternionBall",
                 "TimeSlider",
                 "SceneManager",
+                "LeftPanel",
+                "Viewport",
+                "Modes",
+                "BottomPanel",
                 "RightPanel",
+                "QuaternionBall",
+                "CircleSliders",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -49,9 +49,9 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "Viewport",
                 "SceneManager",
                 "RightPanel",
+                "Viewport",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -75,7 +75,7 @@
     lod_threshold_high: 50.0,
     lod_debug_colors: false,
     world_settings: (
-        cell_capacity: 100000,
+        cell_capacity: 75000,
         gravity: 25.0,
         gravity_mode: 1,
         constraint_iterations: 3,
@@ -83,7 +83,6 @@
         water_drag_strength: 0.0,
         radiation_level: 0.031622775,
         subtle_mutations: false,
-        standalone_burn_multiplier: 10.0,
         world_radius: 200.0,
     ),
     fluid_settings: (
