@@ -814,7 +814,16 @@ fn apply_mutation(
 
         // buffer_id 3-5: boolean flag buffers
         case 3u: {
-            parent_make_adhesion_flags[mode_abs] = select(1u, 0u, parent_make_adhesion_flags[mode_abs] > 0u);
+            // Biased flip: adhesion-on is strongly favoured for multicellularity.
+            // If currently OFF  → always flip to ON.
+            // If currently ON   → only flip to OFF ~10% of the time.
+            let adhesion_currently_on = parent_make_adhesion_flags[mode_abs] > 0u;
+            let flip_off = rng_f32(cell_id, salt_base + 350u) < 0.1;
+            parent_make_adhesion_flags[mode_abs] = select(
+                select(1u, 0u, flip_off),  // currently on: flip off only 10% of the time
+                1u,                         // currently off: always flip to on
+                adhesion_currently_on
+            );
         }
         case 4u: {
             child_a_keep_adhesion_flags[mode_abs] = select(1u, 0u, child_a_keep_adhesion_flags[mode_abs] > 0u);

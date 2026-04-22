@@ -161,8 +161,10 @@ fn grid_to_world(x: u32, y: u32, z: u32) -> vec3<f32> {
 }
 
 fn is_in_bounds(pos: vec3<f32>) -> bool {
-    let threshold = params.world_radius * 0.98;
-    return dot(pos, pos) < threshold * threshold;
+    // Inset by one voxel so fluid is pushed slightly inside the solid mask,
+    // preventing air-gap bubbles around curved cave surfaces.
+    let inset = params.world_radius - params.cell_size;
+    return dot(pos, pos) < inset * inset;
 }
 
 // Get the effective gravity direction for a voxel.
@@ -288,7 +290,7 @@ fn should_condense_steam(gid: vec3<u32>) -> bool {
     // Check if steam voxel is near the spherical world boundary (edge of simulation)
     let world_pos = grid_to_world(gid.x, gid.y, gid.z);
     let distance_from_center = length(world_pos);
-    let boundary_threshold = params.world_radius * 0.95; // Near boundary threshold
+    let boundary_threshold = params.world_radius - params.cell_size;
     let near_boundary = distance_from_center > boundary_threshold;
     
     // Check if steam voxel is adjacent to solid surfaces
@@ -431,7 +433,8 @@ fn water_is_supported(gid: vec3<u32>) -> bool {
 fn is_at_sphere_boundary(gid: vec3<u32>) -> bool {
     let world_pos = grid_to_world(gid.x, gid.y, gid.z);
     let distance_from_center = length(world_pos);
-    let boundary_threshold = params.world_radius * 0.95; // 95% of world radius
+    // Match the is_in_bounds inset so boundary sliding kicks in at the fluid edge
+    let boundary_threshold = params.world_radius - params.cell_size;
     return distance_from_center >= boundary_threshold;
 }
 

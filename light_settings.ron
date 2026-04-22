@@ -23,7 +23,7 @@
     shadow_strength: 1.0,
     shadow_quality: 0.0,
     caustic_intensity: 1.0,
-    caustic_scale: 0.5,
+    caustic_scale: 0.1,
     caustic_speed: 1.0,
     photocyte_mass_per_second: 0.3,
     photocyte_min_light_threshold: 0.05,

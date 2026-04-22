@@ -158,8 +158,6 @@ pub struct GpuScene {
     pub radiation_level: f32,
     /// When true, mutations make small color perturbations instead of full re-rolls
     pub subtle_mutations: bool,
-    /// Nutrient burn multiplier for standalone cells (no active adhesions)
-    pub standalone_burn_multiplier: f32,
     /// Per-fluid-type lateral flow probabilities for fluid simulation (0.0 to 1.0)
     /// Index: 0=Empty (unused), 1=Water, 2=Lava, 3=Steam
     pub lateral_flow_probabilities: [f32; 4],
@@ -307,7 +305,18 @@ impl GpuScene {
         surface_config: &wgpu::SurfaceConfiguration,
         capacity: u32,
     ) -> Self {
-        let config = PhysicsConfig::default();
+        Self::with_capacity_and_radius(device, queue, surface_config, capacity, PhysicsConfig::default().sphere_radius)
+    }
+
+    pub fn with_capacity_and_radius(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_config: &wgpu::SurfaceConfiguration,
+        capacity: u32,
+        world_radius: f32,
+    ) -> Self {
+        let mut config = PhysicsConfig::default();
+        config.sphere_radius = world_radius;
 
         let renderer = CellRenderer::new(device, queue, surface_config, capacity as usize);
         
@@ -488,7 +497,6 @@ impl GpuScene {
             water_drag_strength: 0.0,
             radiation_level: 0.0,
             subtle_mutations: false,
-            standalone_burn_multiplier: 2.0,
             lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
             condensation_probability: 0.1,
             vaporization_probability: 0.1,
@@ -1173,7 +1181,6 @@ impl GpuScene {
             &self.adhesion_buffers,
             self.current_cell_count,
             self.constraint_iterations,
-            self.standalone_burn_multiplier,
         );
         
         // Increment frame counter for time-based shader logic

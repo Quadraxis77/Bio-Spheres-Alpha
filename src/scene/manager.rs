@@ -83,7 +83,7 @@ impl SceneManager {
             }
             SimulationMode::Gpu => {
                 if self.gpu_scene.is_none() {
-                    let mut gpu_scene = GpuScene::with_capacity(device, queue, config, cell_capacity);
+                    let mut gpu_scene = GpuScene::with_capacity_and_radius(device, queue, config, cell_capacity, world_diameter * 0.5);
                     // Initialize cave system automatically
                     let cave_initialized = gpu_scene.initialize_cave_system(device, queue, config.format, world_diameter);
                     
@@ -155,15 +155,15 @@ impl SceneManager {
         capacity: u32,
         editor_state: &crate::ui::panel_context::GenomeEditorState,
     ) {
-        // Only recreate if capacity actually changed
+        // Only recreate if capacity or world radius actually changed
         if let Some(ref scene) = self.gpu_scene {
-            if scene.capacity() == capacity {
+            if scene.capacity() == capacity && (scene.config.sphere_radius - world_diameter * 0.5).abs() < 0.5 {
                 return;
             }
         }
         
         log::info!("Recreating GPU scene with capacity: {}", capacity);
-        let mut gpu_scene = GpuScene::with_capacity(device, queue, config, capacity);
+        let mut gpu_scene = GpuScene::with_capacity_and_radius(device, queue, config, capacity, world_diameter * 0.5);
         // Initialize cave system automatically
         let _cave_initialized = gpu_scene.initialize_cave_system(device, queue, config.format, world_diameter);
         

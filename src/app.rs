@@ -676,7 +676,6 @@ impl App {
             gpu_scene.water_drag_strength = self.ui.state.world_settings.water_drag_strength;
             gpu_scene.radiation_level = self.ui.state.world_settings.radiation_level;
             gpu_scene.subtle_mutations = self.ui.state.world_settings.subtle_mutations;
-            gpu_scene.standalone_burn_multiplier = self.ui.state.world_settings.standalone_burn_multiplier;
             // Sync radiation level and mutation mode to mutation system
             if let Some(mutation_system) = &mut gpu_scene.mutation_system {
                 mutation_system.set_radiation_level(self.ui.state.world_settings.radiation_level);
@@ -1214,6 +1213,13 @@ impl App {
                 crate::ui::panel_context::SceneModeRequest::Reset => {
                     // Use capacity from UI slider
                     let capacity = self.ui.state.world_settings.cell_capacity;
+
+                    // Scale cave noise proportionally to world radius (base: scale=100 at radius=200)
+                    let new_radius = self.ui.state.world_settings.world_radius;
+                    self.editor_state.cave_scale = new_radius / 2.0;
+
+                    // Commit world_diameter from the slider value before reset
+                    self.ui.state.world_diameter = new_radius * 2.0;
                     
                     // Recreate GPU scene with appropriate capacity if needed
                     self.scene_manager.recreate_gpu_scene_with_capacity(
@@ -1246,6 +1252,13 @@ impl App {
                 crate::ui::panel_context::SceneModeRequest::ResetCellsOnly => {
                     // Use capacity from UI slider
                     let capacity = self.ui.state.world_settings.cell_capacity;
+
+                    // Scale cave noise proportionally to world radius (base: scale=100 at radius=200)
+                    let new_radius = self.ui.state.world_settings.world_radius;
+                    self.editor_state.cave_scale = new_radius / 2.0;
+
+                    // Commit world_diameter from the slider value before reset
+                    self.ui.state.world_diameter = new_radius * 2.0;
                     
                     // Recreate GPU scene with appropriate capacity if needed
                     self.scene_manager.recreate_gpu_scene_with_capacity(

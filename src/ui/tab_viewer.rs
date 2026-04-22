@@ -3660,8 +3660,23 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     }
     
     let world = &mut state.world_settings;
-    
-    // Cell capacity slider
+
+    // World Radius slider (top, reset-gated)
+    let current_world_radius = context.scene_manager
+        .gpu_scene()
+        .map(|s| s.config.sphere_radius)
+        .unwrap_or(world.world_radius);
+
+    ui.label("World Radius:");
+    ui.add(egui::Slider::new(&mut world.world_radius, 50.0..=300.0).suffix(" units"));
+
+    if (world.world_radius - current_world_radius).abs() > 0.5 {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("⚠ Scene reset required").color(egui::Color32::YELLOW));
+        });
+    }
+
+    ui.add_space(8.0);
     let current_capacity = context.gpu_capacity().unwrap_or(world.cell_capacity);
     let capacity_k = world.cell_capacity / 1000;
     
@@ -3795,14 +3810,6 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         .on_hover_text("When checked, mutations make small color nudges instead of full re-rolls");
 
     ui.add_space(12.0);
-
-    // Isolation section
-    ui.heading("Isolation");
-    ui.separator();
-
-    ui.label("Standalone Cell Burn:");
-    ui.add(egui::Slider::new(&mut world.standalone_burn_multiplier, 1.0..=10.0).text("×"));
-    ui.label(egui::RichText::new("Nutrient burn multiplier for cells with no adhesion connections (1 = no penalty, 2 = double consumption)").small());
 }
 
 /// Render the Help panel showing context-specific controls and shortcuts.
