@@ -1,5 +1,5 @@
 (
-    density: 0.53,
+    density: 0.49,
     scale: 100.0,
     octaves: 2,
     persistence: 0.1,

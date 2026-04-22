@@ -1101,34 +1101,35 @@ impl MutationSystem {
             // Chain-extend via child_a: splices current into T's chain, growing it by 1 node.
             MutationParamEntry {
                 buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 0,
-                weight: 1.0, min_delta: 0.0, max_delta: 0.0,
+                weight: 1.5, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 39.0, data_type: data_type::CHAIN_EXTEND,
             },
             // Chain-extend via child_b.
             MutationParamEntry {
                 buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 1,
-                weight: 1.0, min_delta: 0.0, max_delta: 0.0,
+                weight: 1.5, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 39.0, data_type: data_type::CHAIN_EXTEND,
             },
             // Chain-close: walks child_a up to 8 hops, closes the tail back to current.
             // Longer chains → longer loops. Uses whichever child slot on the tail is free.
+            // High weight — loop closure is the key structural mutation for interesting shapes.
             MutationParamEntry {
                 buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 0,
-                weight: 1.2, min_delta: 0.0, max_delta: 0.0,
+                weight: 2.0, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 39.0, data_type: data_type::CHAIN_CLOSE,
             },
             // Loop-branch: adds a child_b branch from a mode already in a loop, sprouting
             // a new outgoing chain — raw material for a second interconnected loop.
             MutationParamEntry {
                 buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 0,
-                weight: 1.0, min_delta: 0.0, max_delta: 0.0,
+                weight: 1.5, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 39.0, data_type: data_type::LOOP_BRANCH,
             },
             // Loop-merge: cross-connects two separate loop structures by wiring a mode
             // from one loop into another, creating branching interconnected topology.
             MutationParamEntry {
                 buffer_id: buffer_id::CHILD_MODE_INDICES, element_offset: 0,
-                weight: 0.8, min_delta: 0.0, max_delta: 0.0,
+                weight: 1.5, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 39.0, data_type: data_type::LOOP_MERGE,
             },
             // mode_a_after_splits: the mode child_a transitions to after N splits.

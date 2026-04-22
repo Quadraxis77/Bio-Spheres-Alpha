@@ -90,6 +90,9 @@ pub struct GpuSurfaceNets {
     compute_bind_group: wgpu::BindGroup,
     render_bind_group: wgpu::BindGroup,
     
+    // Shadow field (optional, set from gpu_scene after light field init)
+    shadow_bind_group: Option<wgpu::BindGroup>,
+    
     // Configuration
     max_vertices: u32,
     max_indices: u32,
@@ -187,6 +190,7 @@ impl GpuSurfaceNets {
         world_center: Vec3,
         width: u32,
         height: u32,
+        shadow_bind_group_layout: Option<&wgpu::BindGroupLayout>,
     ) -> Self {
         let max_vertices = 1_000_000u32;
         let max_indices = 3_000_000u32;
@@ -520,11 +524,19 @@ impl GpuSurfaceNets {
         });
         
         // Render pipeline layout
-        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Surface Nets Render Layout"),
-            bind_group_layouts: &[&render_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let render_pipeline_layout = if let Some(shadow_layout) = shadow_bind_group_layout {
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Surface Nets Render Layout"),
+                bind_group_layouts: &[&render_bind_group_layout, shadow_layout],
+                push_constant_ranges: &[],
+            })
+        } else {
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Surface Nets Render Layout"),
+                bind_group_layouts: &[&render_bind_group_layout],
+                push_constant_ranges: &[],
+            })
+        };
         
         // Create render pipeline
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -734,6 +746,7 @@ impl GpuSurfaceNets {
             smooth_blend_factor: 0.15,
             compute_bind_group,
             render_bind_group,
+            shadow_bind_group: None,
             max_vertices,
             max_indices,
             world_radius,
@@ -847,6 +860,12 @@ impl GpuSurfaceNets {
     /// Update render params (lighting, colors, etc.)
     pub fn update_render_params(&self, queue: &wgpu::Queue, params: &DensityMeshParams) {
         queue.write_buffer(&self.render_params_buffer, 0, bytemuck::cast_slice(&[*params]));
+    }
+
+    /// Set the shadow bind group for light field shadow sampling.
+    /// Called from gpu_scene after the light field system is initialized.
+    pub fn set_shadow_bind_group(&mut self, bind_group: wgpu::BindGroup) {
+        self.shadow_bind_group = Some(bind_group);
     }
     
     /// Set initial render params from editor state (called once during initialization)
@@ -1029,6 +1048,9 @@ impl GpuSurfaceNets {
         
         render_pass.set_pipeline(&self.render_pipeline);
         render_pass.set_bind_group(0, &self.render_bind_group, &[]);
+        if let Some(ref shadow_bg) = self.shadow_bind_group {
+            render_pass.set_bind_group(1, shadow_bg, &[]);
+        }
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.draw_indexed_indirect(&self.indirect_draw_buffer, 0);

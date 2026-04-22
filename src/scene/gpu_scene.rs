@@ -285,6 +285,8 @@ pub struct GpuScene {
     cached_adhesion_data_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// Whether the cave shadow bind group has been created and set
     cave_shadow_bind_group_set: bool,
+    /// Whether the water surface shadow bind group has been created and set
+    water_shadow_bind_group_set: bool,
     /// Whether genome settings are dirty and need GPU sync
     genomes_dirty: bool,
     /// Uniform buffer for signal sense world params (boundary_radius, light_dir, grid params)
@@ -566,6 +568,7 @@ impl GpuScene {
             env_camera_bind_group_nutrient: None,
             cached_adhesion_data_bind_groups: None,
             cave_shadow_bind_group_set: false,
+            water_shadow_bind_group_set: false,
             genomes_dirty: false,
             signal_sense_world_params_buffer,
             signal_sense_dummy_nutrient_buffer,
@@ -3230,6 +3233,7 @@ impl GpuScene {
             glam::Vec3::ZERO,
             self.renderer.width,
             self.renderer.height,
+            self.light_field_system.as_ref().map(|lf| lf.shadow_bind_group_layout()),
         );
         
         self.gpu_surface_nets = Some(gpu_surface_nets);
@@ -4806,12 +4810,27 @@ impl Scene for GpuScene {
                 );
             }
 
-            if let Some(ref gpu_surface_nets) = self.gpu_surface_nets {
+            if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
                 // Smooth the raw density: spatial blur + temporal blend
                 gpu_surface_nets.smooth_density(&mut encoder);
                 
                 // Run compute shaders to extract mesh from smoothed density buffer
                 gpu_surface_nets.extract_mesh(&mut encoder);
+
+                // Set shadow bind group once (buffers never change, params updated via write_buffer)
+                if !self.water_shadow_bind_group_set {
+                    if let Some(ref light_field) = self.light_field_system {
+                        let shadow_bg = light_field.create_shadow_bind_group(device);
+                        gpu_surface_nets.set_shadow_bind_group(shadow_bg);
+                        self.water_shadow_bind_group_set = true;
+                    }
+                }
+
+                // Ensure shadow params are up-to-date for this frame
+                // (may already be updated by cave renderer, but safe to call again)
+                if let Some(ref light_field) = self.light_field_system {
+                    light_field.update_shadow_params(queue);
+                }
 
                 // Render the extracted mesh
                 gpu_surface_nets.render(

@@ -1,5 +1,6 @@
 // Simple density mesh rendering shader
 // Renders isosurface extracted by GPU surface nets
+// With shadow field sampling from light field system
 
 struct CameraUniform {
     view_proj: mat4x4<f32>,
@@ -36,6 +37,31 @@ var<uniform> camera: CameraUniform;
 @group(0) @binding(1)
 var<uniform> params: RenderParams;
 
+// Shadow field data (from light field system)
+struct ShadowFieldParams {
+    grid_resolution: u32,
+    cell_size: f32,
+    grid_origin_x: f32,
+    grid_origin_y: f32,
+    grid_origin_z: f32,
+    shadow_strength: f32,
+    shadow_enabled: u32,
+    shadow_quality: f32,
+    caustic_intensity: f32,
+    caustic_scale: f32,
+    caustic_speed: f32,
+    time: f32,
+    sun_color_r: f32,
+    sun_color_g: f32,
+    sun_color_b: f32,
+    light_dir_x: f32,
+    light_dir_y: f32,
+    light_dir_z: f32,
+}
+
+@group(1) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
+@group(1) @binding(1) var<storage, read> light_field: array<f32>;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) fluid_type: f32,
@@ -48,6 +74,60 @@ struct VertexOutput {
     @location(1) world_normal: vec3<f32>,
     @location(2) view_dir: vec3<f32>,
     @location(3) fluid_type: f32,
+}
+
+// --- Shadow field sampling ---
+
+// Sample light field at world position with trilinear interpolation
+fn sample_light_field(world_pos: vec3<f32>) -> f32 {
+    if (shadow_params.shadow_enabled == 0u) {
+        return 1.0;
+    }
+    let res = shadow_params.grid_resolution;
+    let fres = f32(res);
+
+    let gx = (world_pos.x - shadow_params.grid_origin_x) / shadow_params.cell_size - 0.5;
+    let gy = (world_pos.y - shadow_params.grid_origin_y) / shadow_params.cell_size - 0.5;
+    let gz = (world_pos.z - shadow_params.grid_origin_z) / shadow_params.cell_size - 0.5;
+
+    if (gx < -0.5 || gx >= fres - 0.5 ||
+        gy < -0.5 || gy >= fres - 0.5 ||
+        gz < -0.5 || gz >= fres - 0.5) {
+        return 1.0;
+    }
+
+    let ix = i32(floor(gx));
+    let iy = i32(floor(gy));
+    let iz = i32(floor(gz));
+    let fx = gx - floor(gx);
+    let fy = gy - floor(gy);
+    let fz = gz - floor(gz);
+
+    let ires = i32(res);
+    let x0 = u32(clamp(ix, 0, ires - 1));
+    let x1 = u32(clamp(ix + 1, 0, ires - 1));
+    let y0 = u32(clamp(iy, 0, ires - 1));
+    let y1 = u32(clamp(iy + 1, 0, ires - 1));
+    let z0 = u32(clamp(iz, 0, ires - 1));
+    let z1 = u32(clamp(iz + 1, 0, ires - 1));
+
+    let c000 = light_field[x0 + y0 * res + z0 * res * res];
+    let c100 = light_field[x1 + y0 * res + z0 * res * res];
+    let c010 = light_field[x0 + y1 * res + z0 * res * res];
+    let c110 = light_field[x1 + y1 * res + z0 * res * res];
+    let c001 = light_field[x0 + y0 * res + z1 * res * res];
+    let c101 = light_field[x1 + y0 * res + z1 * res * res];
+    let c011 = light_field[x0 + y1 * res + z1 * res * res];
+    let c111 = light_field[x1 + y1 * res + z1 * res * res];
+
+    let c00 = mix(c000, c100, fx);
+    let c10 = mix(c010, c110, fx);
+    let c01 = mix(c001, c101, fx);
+    let c11 = mix(c011, c111, fx);
+    let c0 = mix(c00, c10, fy);
+    let c1 = mix(c01, c11, fy);
+
+    return mix(c0, c1, fz);
 }
 
 // --- 3D Perlin noise implementation ---
@@ -208,8 +288,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let base_color = get_fluid_color(in.fluid_type);
     let alpha = get_fluid_alpha(in.fluid_type, params.alpha);
     
-    // Light direction
-    let light_dir = normalize(params.light_dir);
+    // Use shadow field light direction if available, fall back to render params
+    let light_dir = normalize(vec3<f32>(shadow_params.light_dir_x, shadow_params.light_dir_y, shadow_params.light_dir_z));
+    let sun_color = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+    
+    // Sample shadow field at the water surface position
+    // Offset slightly along normal to avoid self-shadowing artifacts
+    let offset_distance = shadow_params.cell_size * 2.0;
+    let shadow_sample_pos = in.world_position + normal * offset_distance;
+    let light_value = sample_light_field(shadow_sample_pos);
+    let shadow = mix(1.0, light_value, shadow_params.shadow_strength);
     
     // Diffuse (Lambert)
     let n_dot_l = max(dot(normal, light_dir), 0.0);
@@ -226,35 +314,37 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Rim lighting
     let rim = pow(1.0 - max(dot(normal, view_dir), 0.0), 2.0) * params.rim;
     
-    // Combine lighting
-    let lighting = params.ambient + diffuse;
-    var final_color = base_color * lighting;
+    // Combine lighting with shadow applied to direct illumination
+    let ambient_light = params.ambient;
+    let direct_light = diffuse * shadow;
+    let lighting = ambient_light + direct_light;
+    var final_color = base_color * sun_color * lighting;
     
-    // Add specular
-    final_color += vec3<f32>(1.0) * specular;
+    // Add specular (also shadowed — no specular highlight in shadow)
+    final_color += sun_color * specular * shadow;
     
-    // Lava emissive glow
+    // Lava emissive glow (unaffected by shadow)
     let ft = u32(in.fluid_type + 0.5);
     if ft == 2u {
-        // Lava glows from within
         final_color += LAVA_COLOR * 0.5;
     }
     
-    // Add reflection approximation
+    // Add reflection approximation (slightly reduced in shadow for realism)
     let sky_color = vec3<f32>(0.6, 0.8, 1.0);
     let reflect_dir = reflect(-view_dir, normal);
     let sky_factor = max(reflect_dir.y, 0.0);
     let reflection = mix(vec3<f32>(0.9, 0.95, 1.0), sky_color, sky_factor);
-    final_color = mix(final_color, reflection, fresnel * params.reflection);
+    let reflection_shadow_factor = mix(0.5, 1.0, shadow); // Reflections partially visible even in shadow
+    final_color = mix(final_color, reflection * reflection_shadow_factor, fresnel * params.reflection);
     
-    // Rim light (colored by fluid type)
+    // Rim light (colored by fluid type, attenuated by shadow)
     let rim_color = mix(vec3<f32>(0.7, 0.85, 1.0), base_color, 0.5);
-    final_color += rim_color * rim;
+    final_color += rim_color * rim * mix(0.3, 1.0, shadow);
     
-    // Subsurface scattering (water only)
+    // Subsurface scattering (water only, attenuated by shadow)
     if ft == 1u {
         let sss = pow(max(dot(view_dir, -light_dir), 0.0), 2.0) * 0.15;
-        final_color += vec3<f32>(0.0, 0.4, 0.6) * sss;
+        final_color += vec3<f32>(0.0, 0.4, 0.6) * sss * shadow;
     }
     
     return vec4<f32>(final_color, alpha);

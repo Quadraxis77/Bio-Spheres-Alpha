@@ -615,72 +615,122 @@ fn apply_mutation(
             let component = entry.element_offset; // 0 = child_a, 1 = child_b
 
             if (entry.data_type == 4u) {
-                // CHAIN_EXTEND: genuinely insert current between T and T's old outgoing target.
+                // CHAIN_EXTEND: append current mode to the end of T's chain via child_a.
                 //
-                // Before: T.child[component] → old_target
-                // After:  T.child[component] → current
-                //         current.child[component] → old_target
+                // Walk T's child_a chain to find the tail (a mode whose child_a is
+                // self-referential or out-of-genome). Then wire tail → current.
+                // Current's child_a is left as-is (self-referential = new chain end).
                 //
-                // This grows the chain by one node each firing without creating a mutual
-                // reference. Loops only form after CHAIN_CLOSE.
+                // This builds genuine linear chains: T → ... → tail → current
+                // Loops only form later via CHAIN_CLOSE.
 
                 let rand_local = rng_u32(cell_id, salt_base + 450u) % mode_count;
                 let target_local = select(rand_local, (rand_local + 1u) % mode_count, rand_local == mode_local);
-                let target_abs = u32(i32(dst_base + target_local));
+                let target_abs = i32(dst_base + target_local);
                 let current_abs = i32(mode_abs);
+                let genome_start = i32(dst_base);
+                let genome_end = i32(dst_base + mode_count);
 
-                // Save T's old outgoing pointer for the chosen component
-                var target_indices = child_mode_indices_buf[target_abs];
-                let old_target = select(target_indices.y, target_indices.x, component == 0u);
-
-                // Wire T → current
-                if (component == 0u) {
-                    target_indices.x = current_abs;
-                } else {
-                    target_indices.y = current_abs;
+                // Walk child_a from target to find the chain tail (up to 8 hops).
+                // A mode is a tail if its child_a is self-referential or out-of-genome.
+                var tail = target_abs;
+                for (var hop = 0u; hop < 8u; hop++) {
+                    let next = child_mode_indices_buf[u32(tail)].x;
+                    // Stop if out-of-genome
+                    if (next < genome_start || next >= genome_end) { break; }
+                    // Stop if self-referential (chain endpoint)
+                    if (next == tail) { break; }
+                    // Stop if we've looped back to current (avoid creating a cycle)
+                    if (next == current_abs) { break; }
+                    // Stop if we've looped back to target (existing loop, don't extend)
+                    if (next == target_abs && hop > 0u) { break; }
+                    tail = next;
                 }
-                child_mode_indices_buf[target_abs] = target_indices;
 
-                // Wire current → old_target (inherit T's old chain)
-                if (component == 0u) {
-                    indices.x = old_target;
-                } else {
-                    indices.y = old_target;
+                // Only extend if tail != current (avoid self-wiring)
+                if (tail != current_abs) {
+                    // Wire tail.child_a → current
+                    var tail_indices = child_mode_indices_buf[u32(tail)];
+                    tail_indices.x = current_abs;
+                    child_mode_indices_buf[u32(tail)] = tail_indices;
+
+                    // Ensure current.child_a is self-referential (chain endpoint).
+                    // Don't overwrite if current already points somewhere useful
+                    // (i.e. only reset if it was self-referential before).
+                    if (indices.x == current_abs) {
+                        // Already self-referential, leave as chain endpoint — no change needed.
+                    }
+                    // If current.child_a pointed to tail, that would create a 2-node loop.
+                    // Break it by making current self-referential instead.
+                    if (indices.x == tail) {
+                        indices.x = current_abs;
+                        child_mode_indices_buf[mode_abs] = indices;
+                    }
                 }
-                child_mode_indices_buf[mode_abs] = indices;
+
+                // Force both children to keep adhesion on the newly inserted mode.
+                // Chain extension is the precursor to loop closure — ensuring zone C
+                // adhesion inheritance early means the loop will have interesting
+                // branching topology from the start when it eventually closes.
+                child_a_keep_adhesion_flags[mode_abs] = 1u;
+                child_b_keep_adhesion_flags[mode_abs] = 1u;
+                parent_make_adhesion_flags[mode_abs] = 1u;
 
             } else if (entry.data_type == 5u) {
-                // CHAIN_CLOSE: walk child_a up to 8 hops, close the tail back to current.
+                // CHAIN_CLOSE: walk child_a from current to find the chain tail,
+                // then wire the tail back to current, forming a multi-mode loop.
                 //
-                // Finds the end of the chain rooted at current and wires it back, producing
-                // a loop whose length equals the chain depth. Uses child_b on the tail if
-                // it points outside the genome (free slot), otherwise overwrites child_a.
-                // This preserves any branch already hanging off the tail's child_b.
+                // A mode whose child_a is self-referential is a chain endpoint (not a loop).
+                // Only next == current_abs means we've found an existing loop.
+                // The walk must traverse at least 2 hops to form a meaningful loop
+                // (A→B→...→tail→A, minimum 3 nodes).
 
                 let current_abs = i32(mode_abs);
+                let genome_start = i32(dst_base);
+                let genome_end = i32(dst_base + mode_count);
                 var cursor = current_abs;
+                var chain_length = 0u;
 
                 for (var hop = 0u; hop < 8u; hop++) {
                     let next = child_mode_indices_buf[u32(cursor)].x;
-                    if (next < i32(dst_base) || next >= i32(dst_base + mode_count)) {
-                        break;
-                    }
-                    if (next == current_abs) {
-                        break; // already a loop, stop
-                    }
+                    // Out-of-genome: chain ends here
+                    if (next < genome_start || next >= genome_end) { break; }
+                    // Self-referential: this mode is a chain endpoint, stop here
+                    if (next == cursor) { break; }
+                    // Back to start: already a loop, nothing to do
+                    if (next == current_abs) { break; }
                     cursor = next;
+                    chain_length += 1u;
                 }
 
-                if (cursor != current_abs) {
+                // Only close if we walked at least 2 hops (3+ node loop)
+                // and cursor isn't already pointing back to current
+                let tail_child_a = child_mode_indices_buf[u32(cursor)].x;
+                let already_loops_back = (tail_child_a == current_abs);
+
+                if (chain_length >= 2u && cursor != current_abs && !already_loops_back) {
                     var tail = child_mode_indices_buf[u32(cursor)];
-                    // Prefer child_b if it's pointing outside the genome (unused slot)
-                    let b_free = tail.y < i32(dst_base) || tail.y >= i32(dst_base + mode_count);
+                    // Prefer child_b if it's self-referential or out-of-genome (unused slot)
+                    let b_self = tail.y == cursor;
+                    let b_out = tail.y < genome_start || tail.y >= genome_end;
+                    let b_free = b_self || b_out;
                     if (b_free) {
                         tail.y = current_abs;
                     } else {
+                        // Overwrite child_a to close the loop
                         tail.x = current_abs;
                     }
                     child_mode_indices_buf[u32(cursor)] = tail;
+
+                    // Force both children to keep adhesion on all modes in the loop.
+                    // This ensures zone C (equatorial) bonds are inherited by both children
+                    // during division, producing the most interesting branching shapes.
+                    child_a_keep_adhesion_flags[mode_abs] = 1u;
+                    child_b_keep_adhesion_flags[mode_abs] = 1u;
+                    parent_make_adhesion_flags[mode_abs] = 1u;
+                    child_a_keep_adhesion_flags[u32(cursor)] = 1u;
+                    child_b_keep_adhesion_flags[u32(cursor)] = 1u;
+                    parent_make_adhesion_flags[u32(cursor)] = 1u;
                 }
 
             } else if (entry.data_type == 6u) {
@@ -701,22 +751,28 @@ fn apply_mutation(
                 if (child_b_is_self) {
                     // Collect the 4-hop reachable set via child_a to avoid branching back
                     // into the immediate loop (we want a genuinely new branch).
+                    // Self-referential child_a means chain endpoint — stop walking.
                     let child_a = indices.x;
                     var reachable_0 = current_abs;
-                    var reachable_1 = child_a;
-                    var reachable_2 = current_abs; // fallback
+                    var reachable_1 = current_abs; // fallback (overwritten if child_a is real)
+                    var reachable_2 = current_abs;
                     var reachable_3 = current_abs;
                     var reachable_4 = current_abs;
 
-                    if (child_a >= i32(dst_base) && child_a < i32(dst_base + mode_count)) {
+                    let a_valid = child_a >= i32(dst_base) && child_a < i32(dst_base + mode_count) && child_a != current_abs;
+                    if (a_valid) {
+                        reachable_1 = child_a;
                         let hop1 = child_mode_indices_buf[u32(child_a)].x;
-                        if (hop1 >= i32(dst_base) && hop1 < i32(dst_base + mode_count)) {
+                        let h1_valid = hop1 >= i32(dst_base) && hop1 < i32(dst_base + mode_count) && hop1 != child_a;
+                        if (h1_valid) {
                             reachable_2 = hop1;
                             let hop2 = child_mode_indices_buf[u32(hop1)].x;
-                            if (hop2 >= i32(dst_base) && hop2 < i32(dst_base + mode_count)) {
+                            let h2_valid = hop2 >= i32(dst_base) && hop2 < i32(dst_base + mode_count) && hop2 != hop1;
+                            if (h2_valid) {
                                 reachable_3 = hop2;
                                 let hop3 = child_mode_indices_buf[u32(hop2)].x;
-                                if (hop3 >= i32(dst_base) && hop3 < i32(dst_base + mode_count)) {
+                                let h3_valid = hop3 >= i32(dst_base) && hop3 < i32(dst_base + mode_count) && hop3 != hop2;
+                                if (h3_valid) {
                                     reachable_4 = hop3;
                                 }
                             }
@@ -734,41 +790,47 @@ fn apply_mutation(
 
                     indices.y = branch_target;
                     child_mode_indices_buf[mode_abs] = indices;
+
+                    // Force both children to keep adhesion on the branch point mode.
+                    // Zone C bonds inherited by both children create the branching
+                    // structures that make loop topologies visually interesting.
+                    child_a_keep_adhesion_flags[mode_abs] = 1u;
+                    child_b_keep_adhesion_flags[mode_abs] = 1u;
+                    parent_make_adhesion_flags[mode_abs] = 1u;
                 }
 
             } else if (entry.data_type == 7u) {
                 // LOOP_MERGE: cross-connect two separate loop structures.
                 //
-                // Use Floyd's tortoise-and-hare algorithm (up to 8 hops) to detect a cycle
-                // and identify a node inside it as the "loop head" L.
-                // Then pick a random mode T that is at least 3 modes away from L in the
-                // flat index space (i.e. likely in a different loop or chain).
-                // Wire T.child_b → L.
-                //
-                // Result: T's lineage now converges on L, merging two previously separate
-                // loop structures into one branching interconnected graph.
+                // Walk child_a from current to detect a real cycle (not self-references).
+                // If a real loop is found, pick a remote mode T and wire T.child_b → loop_head.
+                // If no real loop exists, wire T.child_b → current anyway (creates convergence).
 
                 let current_abs = i32(mode_abs);
                 let genome_start = i32(dst_base);
                 let genome_end = i32(dst_base + mode_count);
 
-                // Floyd's tortoise-and-hare cycle detection, up to 8 hops
+                // Simple cycle detection: walk child_a, track visited via tortoise/hare.
+                // Skip self-referential pointers (they're chain endpoints, not loops).
                 var tortoise = current_abs;
                 var hare = current_abs;
                 var loop_head = current_abs;
                 var found_loop = false;
 
                 for (var hop = 0u; hop < 8u; hop++) {
-                    // Advance tortoise one step
+                    // Advance tortoise one step (skip self-refs)
                     let t_next = child_mode_indices_buf[u32(tortoise)].x;
                     if (t_next < genome_start || t_next >= genome_end) { break; }
+                    if (t_next == tortoise) { break; } // self-ref = chain end
                     tortoise = t_next;
 
-                    // Advance hare two steps
+                    // Advance hare two steps (skip self-refs)
                     let h_next1 = child_mode_indices_buf[u32(hare)].x;
                     if (h_next1 < genome_start || h_next1 >= genome_end) { break; }
+                    if (h_next1 == hare) { break; }
                     let h_next2 = child_mode_indices_buf[u32(h_next1)].x;
                     if (h_next2 < genome_start || h_next2 >= genome_end) { break; }
+                    if (h_next2 == h_next1) { break; }
                     hare = h_next2;
 
                     if (tortoise == hare) {
@@ -778,7 +840,7 @@ fn apply_mutation(
                     }
                 }
 
-                // Fall back to current if no loop found — still useful, just merges into current
+                // Fall back to current if no real loop found
                 if (!found_loop) {
                     loop_head = current_abs;
                 }
@@ -794,6 +856,16 @@ fn apply_mutation(
                 var t_indices = child_mode_indices_buf[t_abs];
                 t_indices.y = loop_head;
                 child_mode_indices_buf[t_abs] = t_indices;
+
+                // Force both children to keep adhesion on the merge point and loop head.
+                // This ensures zone C equatorial bonds propagate through both children,
+                // creating the dense interconnected shapes that emerge from merged loops.
+                child_a_keep_adhesion_flags[t_abs] = 1u;
+                child_b_keep_adhesion_flags[t_abs] = 1u;
+                parent_make_adhesion_flags[t_abs] = 1u;
+                child_a_keep_adhesion_flags[u32(loop_head)] = 1u;
+                child_b_keep_adhesion_flags[u32(loop_head)] = 1u;
+                parent_make_adhesion_flags[u32(loop_head)] = 1u;
 
             } else {
                 // Default: nudge by delta, clamped to genome's mode range
