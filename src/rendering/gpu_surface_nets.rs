@@ -93,6 +93,30 @@ pub struct GpuSurfaceNets {
     // Shadow field (optional, set from gpu_scene after light field init)
     shadow_bind_group: Option<wgpu::BindGroup>,
     
+    // Environment cubemap for reflections (fields kept alive to prevent GPU resource deallocation)
+    #[allow(dead_code)]
+    cubemap_texture: wgpu::Texture,
+    #[allow(dead_code)]
+    cubemap_view: wgpu::TextureView,
+    #[allow(dead_code)]
+    cubemap_sampler: wgpu::Sampler,
+    cubemap_bind_group: wgpu::BindGroup,
+    #[allow(dead_code)]
+    cubemap_bind_group_layout: wgpu::BindGroupLayout,
+    cubemap_generated: bool,
+    
+    // WBOIT (Weighted Blended Order-Independent Transparency)
+    oit_accum_texture: wgpu::Texture,
+    oit_accum_view: wgpu::TextureView,
+    oit_revealage_texture: wgpu::Texture,
+    oit_revealage_view: wgpu::TextureView,
+    oit_composite_pipeline: wgpu::RenderPipeline,
+    oit_composite_bind_group: wgpu::BindGroup,
+    #[allow(dead_code)]
+    oit_composite_bind_group_layout: wgpu::BindGroupLayout,
+    #[allow(dead_code)]
+    oit_sampler: wgpu::Sampler,
+    
     // Configuration
     max_vertices: u32,
     max_indices: u32,
@@ -128,6 +152,9 @@ struct CameraUniform {
     _padding: f32,
 }
 
+/// Cubemap face resolution
+const CUBEMAP_FACE_SIZE: u32 = 2048;
+
 /// Render params for lighting control
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -149,7 +176,7 @@ pub struct DensityMeshParams {
     pub noise_octaves: f32,
     pub noise_lacunarity: f32,
     pub noise_persistence: f32,
-    pub _pad2: f32, // align light_dir to 16-byte boundary
+    pub reflection_brightness: f32,
     pub light_dir: [f32; 3],
     pub _pad: f32,
 }
@@ -174,7 +201,7 @@ impl Default for DensityMeshParams {
             noise_octaves: 3.0,
             noise_lacunarity: 2.0,
             noise_persistence: 0.5,
-            _pad2: 0.0,
+            reflection_brightness: 10.0,
             light_dir: [0.5, 1.0, 0.3],
             _pad: 0.0,
         }
@@ -524,23 +551,72 @@ impl GpuSurfaceNets {
         });
         
         // Render pipeline layout
+        // === Environment cubemap bind group layout (group 2) ===
+        let cubemap_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cubemap Reflection Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::Cube,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
         let render_pipeline_layout = if let Some(shadow_layout) = shadow_bind_group_layout {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Surface Nets Render Layout"),
-                bind_group_layouts: &[&render_bind_group_layout, shadow_layout],
+                bind_group_layouts: &[&render_bind_group_layout, shadow_layout, &cubemap_bind_group_layout],
                 push_constant_ranges: &[],
             })
         } else {
+            // Create a dummy shadow bind group layout matching the shader's group(1) expectations
+            let dummy_shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Dummy Shadow Field Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Surface Nets Render Layout"),
-                bind_group_layouts: &[&render_bind_group_layout],
+                bind_group_layouts: &[&render_bind_group_layout, &dummy_shadow_layout, &cubemap_bind_group_layout],
                 push_constant_ranges: &[],
             })
         };
         
-        // Create render pipeline
+        // Create render pipeline — WBOIT accumulation pass (two render targets)
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Surface Nets Render Pipeline"),
+            label: Some("Surface Nets WBOIT Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &render_shader,
@@ -571,22 +647,42 @@ impl GpuSurfaceNets {
             fragment: Some(wgpu::FragmentState {
                 module: &render_shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState {
-                    color: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::SrcAlpha,
-                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                    alpha: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::One,
-                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &[
+                    // Target 0: Accumulation (Rgba16Float) — additive blend: src*1 + dst*1
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        blend: Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::One,
+                                dst_factor: wgpu::BlendFactor::One,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                            alpha: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::One,
+                                dst_factor: wgpu::BlendFactor::One,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    // Target 1: Revealage (R8Unorm) — multiplicative: dst * (1 - src_alpha)
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::R8Unorm,
+                        blend: Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::Zero,
+                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                            alpha: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::Zero,
+                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                ],
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
@@ -720,6 +816,169 @@ impl GpuSurfaceNets {
             cache: None,
         });
 
+        // === Environment cubemap creation ===
+        let cubemap_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Environment Cubemap"),
+            size: wgpu::Extent3d {
+                width: CUBEMAP_FACE_SIZE,
+                height: CUBEMAP_FACE_SIZE,
+                depth_or_array_layers: 6,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+
+        let cubemap_view = cubemap_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("Environment Cubemap View"),
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        });
+
+        let cubemap_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Environment Cubemap Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let cubemap_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cubemap Reflection Bind Group"),
+            layout: &cubemap_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&cubemap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&cubemap_sampler),
+                },
+            ],
+        });
+
+        // === CPU-generated cubemap uploaded via write_texture (no compute shader needed) ===
+
+        // === WBOIT textures and composite pipeline ===
+        let (oit_accum_texture, oit_accum_view) = Self::create_oit_accum_texture(device, width, height);
+        let (oit_revealage_texture, oit_revealage_view) = Self::create_oit_revealage_texture(device, width, height);
+
+        let oit_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("OIT Composite Sampler"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let oit_composite_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("OIT Composite Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+            ],
+        });
+
+        let oit_composite_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("OIT Composite Bind Group"),
+            layout: &oit_composite_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&oit_accum_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&oit_revealage_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&oit_sampler),
+                },
+            ],
+        });
+
+        let oit_composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("OIT Composite Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/oit_composite.wgsl").into(),
+            ),
+        });
+
+        let oit_composite_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("OIT Composite Pipeline Layout"),
+            bind_group_layouts: &[&oit_composite_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let oit_composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("OIT Composite Pipeline"),
+            layout: Some(&oit_composite_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &oit_composite_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &oit_composite_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState {
+                        // Premultiplied alpha: output.rgb already multiplied by output.a
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         Self {
             reset_pipeline,
             vertex_pipeline,
@@ -747,6 +1006,20 @@ impl GpuSurfaceNets {
             compute_bind_group,
             render_bind_group,
             shadow_bind_group: None,
+            cubemap_texture,
+            cubemap_view,
+            cubemap_sampler,
+            cubemap_bind_group,
+            cubemap_bind_group_layout,
+            cubemap_generated: false,
+            oit_accum_texture,
+            oit_accum_view,
+            oit_revealage_texture,
+            oit_revealage_view,
+            oit_composite_pipeline,
+            oit_composite_bind_group,
+            oit_composite_bind_group_layout,
+            oit_sampler,
             max_vertices,
             max_indices,
             world_radius,
@@ -867,6 +1140,131 @@ impl GpuSurfaceNets {
     pub fn set_shadow_bind_group(&mut self, bind_group: wgpu::BindGroup) {
         self.shadow_bind_group = Some(bind_group);
     }
+
+    /// Generate the static environment cubemap by uploading CPU-generated sky data.
+    /// Called once on first render. Uses queue.write_texture for maximum compatibility.
+    pub fn generate_cubemap(&mut self, queue: &wgpu::Queue) {
+        if self.cubemap_generated {
+            return;
+        }
+        
+        // Procedural sky cubemap — each face has sky gradient + sun + atmospheric scattering
+        let size = CUBEMAP_FACE_SIZE as usize;
+        let light_dir = glam::Vec3::new(0.5, 0.8, 0.3).normalize();
+        
+        for face in 0u32..6 {
+            let mut pixels: Vec<u8> = Vec::with_capacity(size * size * 4);
+            
+            for y in 0..size {
+                for x in 0..size {
+                    let u = (x as f32 + 0.5) / size as f32 * 2.0 - 1.0;
+                    let v = (y as f32 + 0.5) / size as f32 * 2.0 - 1.0;
+                    
+                    let dir = match face {
+                        0 => glam::Vec3::new( 1.0, -v,   -u),
+                        1 => glam::Vec3::new(-1.0, -v,    u),
+                        2 => glam::Vec3::new( u,    1.0,  v),
+                        3 => glam::Vec3::new( u,   -1.0, -v),
+                        4 => glam::Vec3::new( u,   -v,    1.0),
+                        _ => glam::Vec3::new(-u,   -v,   -1.0),
+                    }.normalize();
+                    
+                    let up = dir.y;
+                    let deep = glam::Vec3::new(0.01, 0.02, 0.06);
+                    let horizon = glam::Vec3::new(0.25, 0.40, 0.60);
+                    let zenith = glam::Vec3::new(0.10, 0.25, 0.55);
+                    
+                    let mut color = if up < 0.0 {
+                        let t = (-up).clamp(0.0, 1.0);
+                        horizon * 0.3 * (1.0 - t * t) + deep * (t * t)
+                    } else {
+                        let t = up.clamp(0.0, 1.0);
+                        horizon * (1.0 - t.sqrt()) + zenith * t.sqrt()
+                    };
+                    
+                    // Atmospheric scattering near sun
+                    let sun_dot = dir.dot(light_dir).max(0.0);
+                    color += glam::Vec3::new(1.0, 0.85, 0.6) * sun_dot.powf(8.0) * 0.4;
+                    
+                    // Horizon glow
+                    let glow = (-up.abs() * 6.0).exp() * 0.2;
+                    let glow_tint = glam::Vec3::new(0.5, 0.6, 0.8).lerp(
+                        glam::Vec3::new(1.0, 0.8, 0.5), sun_dot * sun_dot);
+                    color += glow_tint * glow;
+                    
+                    // Sun disc
+                    let sun_radius: f32 = 0.05;
+                    let disc = ((sun_dot - (sun_radius * 1.5).cos()) 
+                        / ((sun_radius * 0.5).cos() - (sun_radius * 1.5).cos()))
+                        .clamp(0.0, 1.0);
+                    color += glam::Vec3::new(1.0, 0.95, 0.8) * disc * 3.0;
+                    
+                    // Corona
+                    let corona = (-(1.0 - sun_dot).max(0.0) * 20.0).exp() * 0.6;
+                    color += glam::Vec3::new(1.0, 0.9, 0.7) * corona;
+                    
+                    // Reinhard tone mapping
+                    color = color / (color + glam::Vec3::ONE);
+                    
+                    // BGRA order for Bgra8UnormSrgb, with sRGB gamma
+                    let r = (color.x.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+                    let g = (color.y.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+                    let b = (color.z.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+                    pixels.push(b);
+                    pixels.push(g);
+                    pixels.push(r);
+                    pixels.push(255u8);
+                }
+            }
+            
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.cubemap_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: 0, y: 0, z: face },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some((size as u32) * 4),
+                    rows_per_image: Some(size as u32),
+                },
+                wgpu::Extent3d {
+                    width: size as u32,
+                    height: size as u32,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        self.cubemap_generated = true;
+    }
+
+    /// Create a texture view for a single cubemap face (for rendering into it).
+    pub fn cubemap_face_view(&self, face: u32) -> wgpu::TextureView {
+        self.cubemap_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some(&format!("Cubemap Face {} View", face)),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            base_array_layer: face,
+            array_layer_count: Some(1),
+            ..Default::default()
+        })
+    }
+
+    /// Get the cubemap face resolution.
+    pub fn cubemap_face_size(&self) -> u32 {
+        CUBEMAP_FACE_SIZE
+    }
+
+    /// Mark the cubemap as needing recapture (e.g. after scene changes).
+    pub fn invalidate_cubemap(&mut self) {
+        self.cubemap_generated = false;
+    }
+
+    /// Mark the cubemap as already generated (prevents fallback fill from overwriting).
+    pub fn mark_cubemap_generated(&mut self) {
+        self.cubemap_generated = true;
+    }
     
     /// Set initial render params from editor state (called once during initialization)
     pub fn set_initial_params(&self, queue: &wgpu::Queue, editor_state: &crate::ui::panel_context::GenomeEditorState) {
@@ -888,7 +1286,7 @@ impl GpuSurfaceNets {
             noise_octaves: editor_state.fluid_noise_octaves as f32,
             noise_lacunarity: editor_state.fluid_noise_lacunarity,
             noise_persistence: editor_state.fluid_noise_persistence,
-            _pad2: 0.0,
+            reflection_brightness: 10.0,
             light_dir: editor_state.light_dir,
             _pad: 0.0,
         };
@@ -995,9 +1393,11 @@ impl GpuSurfaceNets {
         self.counter_staging_buffer.unmap();
     }
     
-    /// Render the extracted mesh
+    /// Render the extracted mesh using WBOIT (Weighted Blended Order-Independent Transparency).
+    /// Pass 1: Render water into accumulation + revealage textures.
+    /// Pass 2: Composite the OIT result over the scene.
     pub fn render(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         target_view: &wgpu::TextureView,
@@ -1005,6 +1405,9 @@ impl GpuSurfaceNets {
         camera_pos: Vec3,
         camera_rotation: glam::Quat,
     ) {
+        // Generate cubemap on first render
+        self.generate_cubemap(queue);
+
         // Update camera
         let view = glam::Mat4::look_at_rh(
             camera_pos,
@@ -1022,44 +1425,142 @@ impl GpuSurfaceNets {
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
         
-        // Render using indirect draw (count comes from GPU buffer)
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Surface Nets Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target_view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
+        // === Pass 1: WBOIT accumulation into offscreen targets ===
+        {
+            let mut oit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Surface Nets WBOIT Pass"),
+                color_attachments: &[
+                    // Target 0: Accumulation — clear to (0,0,0,0)
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &self.oit_accum_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    }),
+                    // Target 1: Revealage — clear to 1.0 (fully transparent = no fragments yet)
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &self.oit_revealage_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    }),
+                ],
+                // Use existing depth buffer (read-only) to occlude water behind opaque geometry
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        
-        render_pass.set_pipeline(&self.render_pipeline);
-        render_pass.set_bind_group(0, &self.render_bind_group, &[]);
-        if let Some(ref shadow_bg) = self.shadow_bind_group {
-            render_pass.set_bind_group(1, shadow_bg, &[]);
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            
+            oit_pass.set_pipeline(&self.render_pipeline);
+            oit_pass.set_bind_group(0, &self.render_bind_group, &[]);
+            if let Some(ref shadow_bg) = self.shadow_bind_group {
+                oit_pass.set_bind_group(1, shadow_bg, &[]);
+            }
+            oit_pass.set_bind_group(2, &self.cubemap_bind_group, &[]);
+            oit_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            oit_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            oit_pass.draw_indexed_indirect(&self.indirect_draw_buffer, 0);
         }
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        render_pass.draw_indexed_indirect(&self.indirect_draw_buffer, 0);
+        
+        // === Pass 2: Composite OIT result over the scene ===
+        {
+            let mut composite_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("OIT Composite Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            
+            composite_pass.set_pipeline(&self.oit_composite_pipeline);
+            composite_pass.set_bind_group(0, &self.oit_composite_bind_group, &[]);
+            composite_pass.draw(0..3, 0..1); // Fullscreen triangle
+        }
     }
     
     /// Resize for new screen dimensions
-    pub fn resize(&mut self, width: u32, height: u32) {
+    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         self.width = width;
         self.height = height;
+        
+        // Recreate OIT textures at new resolution
+        let (accum_tex, accum_view) = Self::create_oit_accum_texture(device, width, height);
+        let (reveal_tex, reveal_view) = Self::create_oit_revealage_texture(device, width, height);
+        self.oit_accum_texture = accum_tex;
+        self.oit_accum_view = accum_view;
+        self.oit_revealage_texture = reveal_tex;
+        self.oit_revealage_view = reveal_view;
+        
+        // Recreate composite bind group with new texture views
+        self.oit_composite_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("OIT Composite Bind Group"),
+            layout: &self.oit_composite_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&self.oit_accum_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&self.oit_revealage_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.oit_sampler),
+                },
+            ],
+        });
+    }
+    
+    fn create_oit_accum_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("OIT Accumulation Texture"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        (texture, view)
+    }
+    
+    fn create_oit_revealage_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("OIT Revealage Texture"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        (texture, view)
     }
     
     /// Get triangle count

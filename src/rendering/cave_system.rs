@@ -587,6 +587,58 @@ impl CaveSystemRenderer {
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.draw_indexed(0..self.index_count, 0, 0..1);
     }
+
+    /// Render the cave with an externally-provided view-projection matrix.
+    /// Used for cubemap face capture where the camera is not the player camera.
+    pub fn render_to_cubemap_face(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        color_view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        view_proj: glam::Mat4,
+        camera_pos: glam::Vec3,
+    ) {
+        let camera_uniform = CameraUniform {
+            view_proj: view_proj.to_cols_array_2d(),
+            camera_pos: camera_pos.to_array(),
+            _padding: 0.0,
+        };
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
+
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Cave Cubemap Face Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: color_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        render_pass.set_bind_group(1, &self.params_bind_group, &[]);
+        if let Some(ref shadow_bg) = self.shadow_bind_group {
+            render_pass.set_bind_group(2, shadow_bg, &[]);
+        }
+        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed(0..self.index_count, 0, 0..1);
+    }
     
     /// Set the shadow bind group (called each frame from gpu_scene)
     pub fn set_shadow_bind_group(&mut self, bind_group: wgpu::BindGroup) {

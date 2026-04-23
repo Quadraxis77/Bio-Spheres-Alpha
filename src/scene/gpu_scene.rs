@@ -287,6 +287,8 @@ pub struct GpuScene {
     cave_shadow_bind_group_set: bool,
     /// Whether the water surface shadow bind group has been created and set
     water_shadow_bind_group_set: bool,
+    /// Whether the reflection cubemap has been captured
+    reflection_cubemap_captured: bool,
     /// Whether genome settings are dirty and need GPU sync
     genomes_dirty: bool,
     /// Uniform buffer for signal sense world params (boundary_radius, light_dir, grid params)
@@ -569,6 +571,7 @@ impl GpuScene {
             cached_adhesion_data_bind_groups: None,
             cave_shadow_bind_group_set: false,
             water_shadow_bind_group_set: false,
+            reflection_cubemap_captured: false,
             genomes_dirty: false,
             signal_sense_world_params_buffer,
             signal_sense_dummy_nutrient_buffer,
@@ -4318,6 +4321,104 @@ impl GpuScene {
             }
         }
     }
+
+    /// Capture the cave system into the water reflection cubemap.
+    /// Renders the cave from the world center into 6 cubemap faces.
+    /// Call once after the cave renderer is initialized.
+    pub fn capture_reflection_cubemap(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) {
+        let surface_nets = match self.gpu_surface_nets {
+            Some(ref mut sn) => sn,
+            None => return,
+        };
+        let cave_renderer = match self.cave_renderer {
+            Some(ref cave) => cave,
+            None => return,
+        };
+
+        let face_size = surface_nets.cubemap_face_size();
+
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Cubemap Capture Depth"),
+            size: wgpu::Extent3d { width: face_size, height: face_size, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let depth_view = depth_texture.create_view(&Default::default());
+
+        // 6 cubemap face directions: +X, -X, +Y, -Y, +Z, -Z
+        let face_directions: [(glam::Vec3, glam::Vec3); 6] = [
+            (glam::Vec3::X,     glam::Vec3::NEG_Y),
+            (glam::Vec3::NEG_X, glam::Vec3::NEG_Y),
+            (glam::Vec3::Y,     glam::Vec3::Z),
+            (glam::Vec3::NEG_Y, glam::Vec3::NEG_Z),
+            (glam::Vec3::Z,     glam::Vec3::NEG_Y),
+            (glam::Vec3::NEG_Z, glam::Vec3::NEG_Y),
+        ];
+
+        let origin = glam::Vec3::ZERO;
+        let proj = glam::Mat4::perspective_rh(
+            std::f32::consts::FRAC_PI_2, 1.0, 0.1, 1000.0,
+        );
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Cubemap Capture Encoder"),
+        });
+
+        for face in 0u32..6 {
+            let (forward, up) = face_directions[face as usize];
+            let view_mat = glam::Mat4::look_at_rh(origin, origin + forward, up);
+            let view_proj = proj * view_mat;
+
+            let face_view = surface_nets.cubemap_face_view(face);
+
+            // Clear face + depth
+            {
+                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Cubemap Face Clear"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &face_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+            }
+
+            // Render cave with correct cubemap projection
+            cave_renderer.render_to_cubemap_face(
+                &mut encoder,
+                queue,
+                &face_view,
+                &depth_view,
+                view_proj,
+                origin,
+            );
+        }
+
+        queue.submit(std::iter::once(encoder.finish()));
+        log::info!("Reflection cubemap captured ({}x{} per face, cave)", face_size, face_size);
+    }
 }
 
 
@@ -4798,6 +4899,19 @@ impl Scene for GpuScene {
             }
         }
 
+        // Capture reflection cubemap once (cave + sun into 6 faces)
+        if !self.reflection_cubemap_captured
+            && self.cave_renderer.is_some()
+            && self.gpu_surface_nets.is_some()
+        {
+            self.capture_reflection_cubemap(device, queue);
+            self.reflection_cubemap_captured = true;
+            // Mark cubemap as generated so the fallback fill doesn't overwrite it
+            if let Some(ref mut sn) = self.gpu_surface_nets {
+                sn.mark_cubemap_generated();
+            }
+        }
+
         // Extract and render GPU density mesh if enabled
         if self.show_gpu_density_mesh {
             // First extract density from fluid simulator to surface nets buffers
@@ -5070,6 +5184,11 @@ impl Scene for GpuScene {
         // Resize depth of field renderer (recreates intermediate textures)
         if let Some(ref mut dof_renderer) = self.dof_renderer {
             dof_renderer.resize(device, width, height, self.surface_format);
+        }
+        
+        // Resize GPU surface nets (recreates OIT textures)
+        if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
+            gpu_surface_nets.resize(device, width, height);
         }
     }
 

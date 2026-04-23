@@ -598,7 +598,7 @@ impl App {
                         noise_octaves: self.editor_state.fluid_noise_octaves as f32,
                         noise_lacunarity: self.editor_state.fluid_noise_lacunarity,
                         noise_persistence: self.editor_state.fluid_noise_persistence,
-                        _pad2: 0.0,
+                        reflection_brightness: self.editor_state.fluid_reflection_brightness,
                         light_dir: self.editor_state.light_dir,
                         _pad: 0.0,
                     };

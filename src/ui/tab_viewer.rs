@@ -1014,6 +1014,85 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             context.editor_state.save_fluid_settings();
         }
     
+    // === Water Surface Lighting & Reflection ===
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("Water Surface Lighting");
+    ui.add_space(4.0);
+
+    ui.label("Ambient:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_ambient, 0.0..=1.0)
+        .step_by(0.01).fixed_decimals(2)).changed() {
+        context.editor_state.save_fluid_render_settings();
+    }
+
+    ui.add_space(4.0);
+    ui.label("Diffuse:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_diffuse, 0.0..=1.0)
+        .step_by(0.01).fixed_decimals(2)).changed() {
+        context.editor_state.save_fluid_render_settings();
+    }
+
+    ui.add_space(4.0);
+    ui.label("Specular:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_specular, 0.0..=2.0)
+        .step_by(0.01).fixed_decimals(2)).changed() {
+        context.editor_state.save_fluid_render_settings();
+    }
+
+    ui.add_space(4.0);
+    ui.label("Shininess:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_shininess, 1.0..=256.0)
+        .step_by(1.0).fixed_decimals(0).logarithmic(true)).changed() {
+        context.editor_state.save_fluid_render_settings();
+    }
+
+    ui.add_space(4.0);
+    ui.label("Rim Light:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_rim, 0.0..=2.0)
+        .step_by(0.01).fixed_decimals(2)).changed() {
+        context.editor_state.save_fluid_render_settings();
+    }
+
+    ui.add_space(4.0);
+    ui.label("Alpha (Transparency):");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_alpha, 0.0..=1.0)
+        .step_by(0.01).fixed_decimals(2)).changed() {
+        context.editor_state.save_fluid_render_settings();
+    }
+
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("Cubemap Reflection");
+    ui.add_space(4.0);
+
+    ui.label("Fresnel Strength:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_fresnel, 0.0..=2.0)
+        .step_by(0.01).fixed_decimals(2)).changed() {
+        context.editor_state.save_fluid_render_settings();
+    }
+
+    ui.add_space(4.0);
+    ui.label("Fresnel Power:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_fresnel_power, 0.5..=10.0)
+        .step_by(0.1).fixed_decimals(1)).changed() {
+        context.editor_state.save_fluid_render_settings();
+    }
+
+    ui.add_space(4.0);
+    ui.label("Reflection Intensity:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_reflection, 0.0..=2.0)
+        .step_by(0.01).fixed_decimals(2)).changed() {
+        context.editor_state.save_fluid_render_settings();
+    }
+
+    ui.add_space(4.0);
+    ui.label("Reflection Brightness:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_reflection_brightness, 1.0..=50.0)
+        .step_by(0.5).fixed_decimals(1)).changed() {
+        context.editor_state.save_fluid_render_settings();
+    }
+
     // === Water Surface Waves ===
     ui.add_space(8.0);
     ui.separator();

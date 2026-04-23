@@ -26,7 +26,7 @@ struct RenderParams {
     noise_octaves: f32,
     noise_lacunarity: f32,
     noise_persistence: f32,
-    _pad2: f32,
+    reflection_brightness: f32,
     light_dir: vec3<f32>,
     _pad: f32,
 }
@@ -62,6 +62,10 @@ struct ShadowFieldParams {
 @group(1) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
 @group(1) @binding(1) var<storage, read> light_field: array<f32>;
 
+// Environment cubemap for reflections
+@group(2) @binding(0) var env_cubemap: texture_cube<f32>;
+@group(2) @binding(1) var env_sampler: sampler;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) fluid_type: f32,
@@ -74,6 +78,7 @@ struct VertexOutput {
     @location(1) world_normal: vec3<f32>,
     @location(2) view_dir: vec3<f32>,
     @location(3) fluid_type: f32,
+    @location(4) geometry_normal: vec3<f32>,  // unperturbed normal for reflection
 }
 
 // --- Shadow field sampling ---
@@ -251,6 +256,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     
     out.world_position = displaced_pos;
     out.world_normal = perturbed_normal;
+    out.geometry_normal = n;
     out.view_dir = normalize(camera.camera_pos - displaced_pos);
     out.clip_position = camera.view_proj * vec4<f32>(displaced_pos, 1.0);
     out.fluid_type = in.fluid_type;
@@ -279,8 +285,13 @@ fn get_fluid_alpha(fluid_type: f32, base_alpha: f32) -> f32 {
     return base_alpha;
 }
 
+struct FragmentOutput {
+    @location(0) accum: vec4<f32>,   // WBOIT accumulation (premultiplied color * weight, weight)
+    @location(1) revealage: vec4<f32>, // WBOIT revealage (1 - alpha product)
+}
+
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput) -> FragmentOutput {
     let normal = normalize(in.world_normal);
     let view_dir = normalize(in.view_dir);
     
@@ -308,7 +319,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let n_dot_h = max(dot(normal, half_dir), 0.0);
     let specular = pow(n_dot_h, params.shininess) * params.specular;
     
-    // Fresnel effect
+    // Fresnel effect (unused — kept as variable for rim light compatibility)
     let fresnel = pow(1.0 - max(dot(normal, view_dir), 0.0), params.fresnel_power) * params.fresnel;
     
     // Rim lighting
@@ -329,13 +340,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         final_color += LAVA_COLOR * 0.5;
     }
     
-    // Add reflection approximation (slightly reduced in shadow for realism)
-    let sky_color = vec3<f32>(0.6, 0.8, 1.0);
-    let reflect_dir = reflect(-view_dir, normal);
-    let sky_factor = max(reflect_dir.y, 0.0);
-    let reflection = mix(vec3<f32>(0.9, 0.95, 1.0), sky_color, sky_factor);
-    let reflection_shadow_factor = mix(0.5, 1.0, shadow); // Reflections partially visible even in shadow
-    final_color = mix(final_color, reflection * reflection_shadow_factor, fresnel * params.reflection);
+    // Sample environment cubemap for mirror reflection
+    // Use geometry normal (not wave-perturbed) for stable, coherent reflections
+    let reflect_normal = normalize(in.geometry_normal);
+    let reflect_dir = reflect(-view_dir, reflect_normal);
+    let env_color = textureSample(env_cubemap, env_sampler, reflect_dir).rgb;
+    // Boost reflection brightness — cave walls are dark, need to be visible in reflection
+    let boosted_env = env_color * params.reflection_brightness;
+    // Mirror blend: at reflection=1.0, surface is pure cubemap; at 0.0, pure lit surface
+    final_color = mix(final_color, boosted_env, params.reflection);
     
     // Rim light (colored by fluid type, attenuated by shadow)
     let rim_color = mix(vec3<f32>(0.7, 0.85, 1.0), base_color, 0.5);
@@ -347,5 +360,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         final_color += vec3<f32>(0.0, 0.4, 0.6) * sss * shadow;
     }
     
-    return vec4<f32>(final_color, alpha);
+    // Mirror reflection makes the surface opaque
+    let final_alpha = clamp(alpha + params.reflection, alpha, 1.0);
+
+    // WBOIT weight function (McGuire & Bavoil 2013)
+    let depth = in.clip_position.z;
+    let w = final_alpha * max(1e-2, min(3e3, 10.0 / (1e-5 + pow(depth / 200.0, 4.0))));
+
+    var out: FragmentOutput;
+    out.accum = vec4<f32>(final_color * w, w);
+    out.revealage = vec4<f32>(final_alpha, 0.0, 0.0, final_alpha);
+    return out;
 }

@@ -247,6 +247,8 @@ pub struct GenomeEditorState {
     pub fluid_fresnel_power: f32,
     /// Reflection strength
     pub fluid_reflection: f32,
+    /// Reflection brightness multiplier
+    pub fluid_reflection_brightness: f32,
     /// Overall alpha/transparency
     pub fluid_alpha: f32,
     /// Rim light strength
@@ -521,6 +523,7 @@ impl GenomeEditorState {
             fluid_fresnel,
             fluid_fresnel_power,
             fluid_reflection,
+            fluid_reflection_brightness: 10.0,
             fluid_alpha,
             fluid_rim,
             fluid_wave_height,
