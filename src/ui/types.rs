@@ -190,9 +190,9 @@ pub struct WorldSettings {
     #[serde(default = "default_acceleration_damping")]
     pub acceleration_damping: f32,
 
-    /// How strongly moving water pushes cells (0.0 = off, 1.0 = strong)
-    #[serde(default = "default_water_drag_strength")]
-    pub water_drag_strength: f32,
+    /// Water viscosity: drag applied to cells moving through water (0.0 = off, 1.0 = heavy drag)
+    #[serde(default = "default_water_drag_strength", alias = "water_drag_strength")]
+    pub water_viscosity: f32,
 
     /// Global radiation level controlling mutation probability per division (0.0 = off, 1.0 = every division mutates)
     #[serde(default)]
@@ -206,6 +206,18 @@ pub struct WorldSettings {
     /// Affects cave scale, fog bounds, fluid grid cell size, and physics boundary.
     #[serde(default = "default_world_radius")]
     pub world_radius: f32,
+
+    /// When enabled, cells with zero adhesion connections burn nutrients faster.
+    /// The multiplier scales metabolism for solo cells (e.g. 3.0 = 3x drain).
+    /// Cells with 1-2 connections get partial penalty; 3+ connections = no penalty.
+    #[serde(default)]
+    pub solo_metabolism_enabled: bool,
+
+    /// Metabolism multiplier for cells with zero adhesion connections.
+    /// Only active when solo_metabolism_enabled is true.
+    /// Range: 1.0 (no penalty) to 10.0 (extreme penalty).
+    #[serde(default = "default_solo_metabolism_multiplier")]
+    pub solo_metabolism_multiplier: f32,
 }
 
 impl Default for WorldSettings {
@@ -216,10 +228,12 @@ impl Default for WorldSettings {
             gravity_mode: 1, // default Y axis
             constraint_iterations: 4,
             acceleration_damping: 0.98,
-            water_drag_strength: 0.0,
+            water_viscosity: 0.0,
             radiation_level: 0.0,
             subtle_mutations: false,
             world_radius: 200.0,
+            solo_metabolism_enabled: false,
+            solo_metabolism_multiplier: 3.0,
         }
     }
 }
@@ -369,6 +383,10 @@ fn default_water_drag_strength() -> f32 {
 
 fn default_acceleration_damping() -> f32 {
     0.98
+}
+
+fn default_solo_metabolism_multiplier() -> f32 {
+    3.0
 }
 
 

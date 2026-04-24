@@ -26,7 +26,7 @@ struct PhysicsParams {
     _gravity_pad1: f32,
 }
 
-// Water grid parameters for buoyancy (must match WaterGridParams in Rust)
+// Water grid parameters for buoyancy and viscosity (must match WaterGridParams in Rust)
 struct WaterGridParams {
     grid_resolution: u32,
     cell_size: f32,
@@ -34,7 +34,7 @@ struct WaterGridParams {
     grid_origin_y: f32,
     grid_origin_z: f32,
     buoyancy_multiplier: f32,
-    water_drag_strength: f32,
+    water_viscosity: f32,
     _pad1: f32,
 }
 
@@ -219,20 +219,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Reduce gravity to 5% when in water (95% less influenced)
         gravity_multiplier = 0.05;
 
-        // Water drag: moving water pushes cells along its flow direction
-        if (water_params.water_drag_strength > 0.0) {
-            let water_flow = sample_water_velocity(pos);
-            let flow_len = length(water_flow);
-            if (flow_len > 0.001) {
-                // Water velocity in world units: direction * cell_size * sub_steps_per_frame / dt
-                // Simplified: use direction * a configurable strength multiplier
-                let water_vel = water_flow * water_params.cell_size * 4.0; // 4 sub-steps per frame
-                // Drag force = coefficient * (water_vel - cell_vel)
-                // This pushes cells toward water velocity (dragged along by current)
-                let drag_coeff = water_params.water_drag_strength * 50.0 * mass;
-                let relative_vel = water_vel - vel;
-                force += drag_coeff * relative_vel;
-            }
+        // Water viscosity: apply drag that opposes cell movement through water.
+        // This slows cells proportional to their velocity, simulating fluid resistance.
+        // Higher viscosity = thicker fluid = more drag on moving cells.
+        if (water_params.water_viscosity > 0.0) {
+            // Viscous drag force = -coefficient * velocity
+            // Scale: viscosity 1.0 → drag_coeff ~80 (heavy syrup-like resistance)
+            let drag_coeff = water_params.water_viscosity * 80.0 * mass;
+            force -= drag_coeff * vel;
         }
     }
 

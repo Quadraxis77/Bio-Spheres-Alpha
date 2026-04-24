@@ -85,7 +85,7 @@ pub struct WaterGridParams {
     pub grid_origin_y: f32,
     pub grid_origin_z: f32,
     pub buoyancy_multiplier: f32,  // How strongly to reverse gravity in water (1.0 = full reversal)
-    pub water_drag_strength: f32,  // How strongly moving water pushes cells (0.0 = off, 1.0 = strong)
+    pub water_viscosity: f32,      // Drag applied to cells moving through water (0.0 = off, 1.0 = heavy drag)
     pub _pad1: f32,
 }
 
@@ -453,7 +453,7 @@ impl GpuFluidSimulator {
             grid_origin_y: grid_origin.y,
             grid_origin_z: grid_origin.z,
             buoyancy_multiplier: 1.0,  // Full gravity reversal in water
-            water_drag_strength: 0.0,  // Default off, set by UI
+            water_viscosity: 0.0,  // Default off, set by UI
             _pad1: 0.0,
         };
 
@@ -1020,16 +1020,16 @@ impl GpuFluidSimulator {
             grid_origin_y: grid_origin.y,
             grid_origin_z: grid_origin.z,
             buoyancy_multiplier: multiplier,
-            water_drag_strength: 0.0,  // Will be set separately
+            water_viscosity: 0.0,  // Will be set separately
             _pad1: 0.0,
         };
 
         queue.write_buffer(&self.water_grid_params_buffer, 0, bytemuck::cast_slice(&[water_grid_params]));
     }
 
-    /// Update water drag strength (how strongly moving water pushes cells)
+    /// Update water viscosity (drag applied to cells moving through water)
     pub fn set_water_drag_strength(&self, queue: &wgpu::Queue, strength: f32) {
-        // water_drag_strength is at byte offset 24 in WaterGridParams (field index 6, after 6 f32s)
+        // water_viscosity is at byte offset 24 in WaterGridParams (field index 6, after 6 f32s)
         let offset = 6 * std::mem::size_of::<f32>() as u64;
         queue.write_buffer(&self.water_grid_params_buffer, offset, bytemuck::cast_slice(&[strength]));
     }

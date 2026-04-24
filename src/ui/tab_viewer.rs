@@ -3844,10 +3844,26 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     
     ui.add_space(8.0);
     
-    // Water drag strength
-    ui.label("Water Drag:");
-    ui.add(egui::Slider::new(&mut world.water_drag_strength, 0.0..=1.0).text("strength"));
-    ui.label(egui::RichText::new("How strongly moving water pushes cells (0 = off, higher = stronger current force)").small());
+    // Water viscosity
+    ui.label("Water Viscosity:");
+    ui.add(egui::Slider::new(&mut world.water_viscosity, 0.0..=1.0).text("viscosity"));
+    ui.label(egui::RichText::new("Drag applied to cells moving through water (0 = off, higher = thicker fluid)").small());
+
+    ui.add_space(12.0);
+
+    // Biology section
+    ui.heading("Biology");
+    ui.separator();
+
+    ui.checkbox(&mut world.solo_metabolism_enabled, "Solo cell metabolism penalty");
+    ui.label(egui::RichText::new("Cells with fewer adhesion connections burn nutrients faster, favoring multicellular organisms").small());
+
+    if world.solo_metabolism_enabled {
+        ui.add_space(4.0);
+        ui.label("Metabolism Multiplier:");
+        ui.add(egui::Slider::new(&mut world.solo_metabolism_multiplier, 1.5..=10.0).text("×"));
+        ui.label(egui::RichText::new("Solo cells (0 connections) drain at this rate. Gradient: 1 conn = partial, 3+ = normal").small());
+    }
 
     ui.add_space(12.0);
 

@@ -62,7 +62,7 @@ struct PhysicsParams {
     cell_capacity: u32,        // Maximum cells that can exist
     gravity_mode: u32,         // 0=X, 1=Y, 2=Z, 3=radial (toward origin)
     angular_damping: f32,      // fraction of angular velocity retained per second (velocity_update.wgsl _pad1)
-    _pad2: f32,
+    solo_metabolism_multiplier: f32, // Metabolism multiplier for solo cells (1.0 = off, >1.0 = increased drain)
     
     // Padding to 256 bytes (192 bytes = 48 floats)
     _padding: [f32; 47],
@@ -101,6 +101,7 @@ pub fn execute_gpu_physics_step(
     adhesion_buffers: &super::AdhesionBuffers,
     _cell_count_hint: u32,
     constraint_iterations: u32,
+    solo_metabolism_multiplier: f32,
 ) {
     // Rotate to next buffer set
     let current_index = triple_buffers.rotate_buffers();
@@ -125,7 +126,7 @@ pub fn execute_gpu_physics_step(
         cell_capacity: triple_buffers.capacity,
         gravity_mode,
         angular_damping: 0.94,
-        _pad2: 0.0,
+        solo_metabolism_multiplier,
         _padding: [0.0; 47],
     };
     queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
@@ -349,7 +350,7 @@ pub fn execute_gpu_mechanics_step(
         cell_capacity: triple_buffers.capacity,
         gravity_mode,
         angular_damping: 0.94,
-        _pad2: 0.0,
+        solo_metabolism_multiplier: 1.0, // Not used in mechanics step
         _padding: [0.0; 47],
     };
     queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));

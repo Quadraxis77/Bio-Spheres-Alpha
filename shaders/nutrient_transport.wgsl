@@ -29,7 +29,7 @@ struct PhysicsParams {
     cell_capacity: u32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
+    solo_metabolism_multiplier: f32,
 }
 
 // Physics bind group (group 0) - standard 6-binding layout
@@ -235,6 +235,27 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         if (effective_swim_speed > 0.0) {
             nutrient_loss += effective_swim_speed * SWIM_CONSUMPTION_RATE * params.delta_time;
+        }
+
+        // Solo cell metabolism penalty: cells with fewer adhesion connections burn
+        // nutrients faster. Multiplier interpolates from solo_metabolism_multiplier
+        // (at 0 connections) to 1.0 (at 3+ connections).
+        // When solo_metabolism_multiplier == 1.0, the feature is effectively disabled.
+        if (params.solo_metabolism_multiplier > 1.0) {
+            let adhesion_list = adhesion_indices[cell_idx];
+            var active_adhesion_count = 0u;
+            for (var j = 0; j < 20; j++) {
+                let adh_idx = adhesion_list[j];
+                if (adh_idx >= 0 && adh_idx < i32(arrayLength(&adhesion_connections))) {
+                    if (adhesion_connections[adh_idx].is_active != 0u) {
+                        active_adhesion_count++;
+                    }
+                }
+            }
+            // Gradient: 0 connections = full multiplier, 1-2 = partial, 3+ = no penalty
+            let t = min(f32(active_adhesion_count), 3.0) / 3.0;
+            let metabolism_scale = mix(params.solo_metabolism_multiplier, 1.0, t);
+            nutrient_loss *= metabolism_scale;
         }
 
         // Apply nutrient consumption as an atomic delta (NOT atomicStore!)

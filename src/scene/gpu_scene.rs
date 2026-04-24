@@ -152,8 +152,11 @@ pub struct GpuScene {
     pub surface_pressure: f32,
     /// Global velocity damping factor (0.0-1.0, higher = less damping, lower = more drag)
     pub acceleration_damping: f32,
-    /// How strongly moving water pushes cells (0.0 = off, 1.0 = strong)
-    pub water_drag_strength: f32,
+    /// Water viscosity: drag applied to cells moving through water (0.0 = off, 1.0 = heavy drag)
+    pub water_viscosity: f32,
+    /// Metabolism multiplier for solo cells (1.0 = disabled/no penalty, >1.0 = increased drain).
+    /// When 1.0, feature is off. When >1.0, cells with zero adhesions burn nutrients faster.
+    pub solo_metabolism_multiplier: f32,
     /// Global radiation level controlling mutation probability per division (0.0 = off, 1.0 = always)
     pub radiation_level: f32,
     /// When true, mutations make small color perturbations instead of full re-rolls
@@ -504,7 +507,8 @@ impl GpuScene {
             constraint_iterations: 4,
             surface_pressure: 0.5,
             acceleration_damping: 0.98,
-            water_drag_strength: 0.0,
+            water_viscosity: 0.0,
+            solo_metabolism_multiplier: 1.0,
             radiation_level: 0.0,
             subtle_mutations: false,
             lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
@@ -1196,6 +1200,7 @@ impl GpuScene {
             &self.adhesion_buffers,
             self.current_cell_count,
             self.constraint_iterations,
+            self.solo_metabolism_multiplier,
         );
         
         // Increment frame counter for time-based shader logic
@@ -3559,7 +3564,7 @@ impl GpuScene {
         if let Some(ref simulator) = self.fluid_simulator {
             simulator.set_gravity_mode(self.gravity_mode);
             simulator.set_surface_pressure(self.surface_pressure);
-            simulator.set_water_drag_strength(queue, self.water_drag_strength);
+            simulator.set_water_drag_strength(queue, self.water_viscosity);
             simulator.step(device, queue, encoder, dt, self.gravity, [self.gravity_mode == 0, self.gravity_mode == 1, self.gravity_mode == 2], self.lateral_flow_probabilities, self.condensation_probability, self.vaporization_probability);
             // Update water bitfield for cell physics (compressed 32x for fast lookup)
             simulator.update_water_bitfield(device, encoder);

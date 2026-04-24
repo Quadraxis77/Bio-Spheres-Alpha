@@ -3184,7 +3184,7 @@ impl GpuPhysicsPipelines {
                     grid_origin_y: f32,
                     grid_origin_z: f32,
                     buoyancy_multiplier: f32,
-                    water_drag_strength: f32,
+                    water_viscosity: f32,
                     _pad1: f32,
                 }
 
@@ -3195,7 +3195,7 @@ impl GpuPhysicsPipelines {
                     grid_origin_y: 0.0,
                     grid_origin_z: 0.0,
                     buoyancy_multiplier: 0.0,
-                    water_drag_strength: 0.0,
+                    water_viscosity: 0.0,
                     _pad1: 0.0,
                 };
 

@@ -673,7 +673,12 @@ impl App {
             gpu_scene.surface_pressure = self.ui.state.fluid_settings.surface_pressure;
             gpu_scene.constraint_iterations = self.ui.state.world_settings.constraint_iterations;
             gpu_scene.acceleration_damping = self.ui.state.world_settings.acceleration_damping;
-            gpu_scene.water_drag_strength = self.ui.state.world_settings.water_drag_strength;
+            gpu_scene.water_viscosity = self.ui.state.world_settings.water_viscosity;
+            gpu_scene.solo_metabolism_multiplier = if self.ui.state.world_settings.solo_metabolism_enabled {
+                self.ui.state.world_settings.solo_metabolism_multiplier
+            } else {
+                1.0 // 1.0 means no penalty (feature disabled)
+            };
             gpu_scene.radiation_level = self.ui.state.world_settings.radiation_level;
             gpu_scene.subtle_mutations = self.ui.state.world_settings.subtle_mutations;
             // Sync radiation level and mutation mode to mutation system
