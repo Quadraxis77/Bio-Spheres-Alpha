@@ -9,7 +9,7 @@
     reflection: 1.0,
     alpha: 0.35,
     rim: 0.7,
-    wave_height: 1.4,
+    wave_height: 3.0,
     wave_speed: 2.0,
     noise_scale: 0.06,
     noise_octaves: 1.0,

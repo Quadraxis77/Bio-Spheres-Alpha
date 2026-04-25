@@ -126,12 +126,15 @@ fn has_nutrient(voxel_index: u32) -> bool {
 
 // Try to consume nutrient from voxel (atomic compare-exchange)
 // Returns true if successfully consumed
+// Sets voxel to 2 (consumed/depleted) instead of 0 (empty) so the populate
+// shader won't immediately refill it — the nutrient stays gone until the
+// noise pattern drifts away and resets the voxel back to 0.
 fn try_consume_nutrient(voxel_index: u32) -> bool {
     if (voxel_index == 0xFFFFFFFFu) {
         return false;
     }
-    // Try to atomically change from 1 (has nutrient) to 0 (empty)
-    let result = atomicCompareExchangeWeak(&nutrient_voxels[voxel_index], 1u, 0u);
+    // Try to atomically change from 1 (has nutrient) to 2 (consumed/depleted)
+    let result = atomicCompareExchangeWeak(&nutrient_voxels[voxel_index], 1u, 2u);
     return result.exchanged;
 }
 

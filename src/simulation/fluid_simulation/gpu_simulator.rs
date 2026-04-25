@@ -1040,7 +1040,7 @@ impl GpuFluidSimulator {
     }
 
     /// Populate nutrients in water voxels using drifting noise pattern
-    /// Called every frame to create rolling/drifting nutrient zones
+    /// Called every physics step to keep supply balanced with phagocyte consumption
     pub fn populate_nutrients(&self, _device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, nutrient_density: f32) {
         let world_diameter = self.world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;

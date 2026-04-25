@@ -30,7 +30,7 @@ struct NutrientParticleCounter {
 @group(0) @binding(2) var<storage, read_write> counter: NutrientParticleCounter;
 @group(0) @binding(3) var<storage, read> solid_mask: array<u32>;
 @group(0) @binding(4) var<uniform> params: NutrientExtractParams;
-@group(0) @binding(5) var<storage, read> nutrient_voxels: array<u32>;  // 1 = has nutrient, 0 = empty
+@group(0) @binding(5) var<storage, read> nutrient_voxels: array<u32>;  // 0 = empty, 1 = has nutrient, 2 = consumed
 
 // Atomic counter helper
 fn atomic_increment() -> u32 {

@@ -132,7 +132,7 @@ fn dda_march_food(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> boo
         if (any(cell_i < vec3<i32>(0)) || any(cell_i >= vec3<i32>(res))) { break; }
 
         let vi = u32(cell_i.x + cell_i.y * res + cell_i.z * res * res);
-        if (nutrient_voxels[vi] != 0u) { return true; }
+        if (nutrient_voxels[vi] == 1u) { return true; }  // Only sense active nutrients (1), not consumed (2)
 
         // Advance to next voxel
         if (t_max.x < t_max.y && t_max.x < t_max.z) {

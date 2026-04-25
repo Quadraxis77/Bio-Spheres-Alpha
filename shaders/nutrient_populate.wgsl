@@ -1,6 +1,9 @@
 // Nutrient Population Shader
 // Uses noise to populate nutrient voxels in water areas
-// Run once on initialization or periodically to replenish nutrients
+// Runs every physics step to keep nutrient supply balanced with phagocyte consumption.
+// At high sim speeds (Nx), the physics loop runs N steps per frame; phagocytes
+// consume voxels each step, so this shader must also run each step to reset
+// consumed voxels back to available.
 
 struct NutrientPopulateParams {
     grid_resolution: u32,
@@ -177,10 +180,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Use density parameter to control threshold
     let threshold = 1.0 - params.nutrient_density;
     
-    // Nutrient present if noise exceeds threshold
+    // Nutrient states: 0 = empty, 1 = has nutrient, 2 = consumed by phagocyte
+    // Spawning respects consumption: consumed voxels (state 2) are not refilled
+    // until the noise pattern drifts away and back, creating a natural replenishment cycle.
     if (noise > threshold) {
-        atomicStore(&nutrient_voxels[voxel_index], 1u);
+        // Noise says nutrient should be here.
+        // Set voxel to 1 (has nutrient) regardless of current state.
+        // This resets consumed voxels (state 2) back to available so that
+        // phagocyte intake scales with sim speed — without this, a voxel
+        // consumed in physics step 1 stays depleted for all remaining steps
+        // in the same frame, capping intake at 1 voxel/frame regardless of
+        // how many physics steps run.
+        let current = atomicLoad(&nutrient_voxels[voxel_index]);
+        if (current != 1u) {
+            atomicStore(&nutrient_voxels[voxel_index], 1u);
+        }
     } else {
+        // Noise says no nutrient here — reset voxel to empty (0).
+        // This clears both active nutrients (1) and consumed markers (2),
+        // allowing the voxel to be repopulated when the noise drifts back.
         atomicStore(&nutrient_voxels[voxel_index], 0u);
     }
 }

@@ -285,6 +285,9 @@ fn rng_signed_f32(unique_id: u32, salt: u32) -> f32 {
 // Available slots = tail - head (both wrap at u32 max, subtraction still correct).
 // GC resets next_genome_id to user_genome_count each cycle so the monotonic
 // path re-fills IDs that haven't been recycled into the free ring yet.
+// The monotonic path skips IDs with ref_count > 0 to avoid colliding with
+// active genomes — collisions would corrupt genome_meta and leak mode buffer
+// space, eventually exhausting next_mode_offset and stopping all mutations.
 // ============================================================
 
 fn allocate_genome_slot() -> u32 {
@@ -303,13 +306,31 @@ fn allocate_genome_slot() -> u32 {
     // Ring empty — undo the head increment and fall through to monotonic path
     atomicSub(&genome_ring_state[0], 1u);
 
-    let new_id = atomicAdd(&genome_ring_state[2], 1u);
-    if (new_id < mutation_params.genome_ring_capacity) {
-        return new_id;
+    // Monotonic path: try successive IDs, skipping any that are still active.
+    // After GC resets next_genome_id to user_genome_count, some IDs in the range
+    // may belong to genomes still referenced by living cells. Blindly returning
+    // those IDs would cause the caller to overwrite their genome_meta (corrupting
+    // the active genome) and allocate a fresh mode range from next_mode_offset
+    // instead of reusing the recycled one — leaking mode buffer space until
+    // next_mode_offset hits MAX_TOTAL_MODES and all mutations silently stop.
+    for (var attempt = 0u; attempt < 64u; attempt++) {
+        let new_id = atomicAdd(&genome_ring_state[2], 1u);
+        if (new_id >= mutation_params.genome_ring_capacity) {
+            // Exhausted — undo and signal failure
+            atomicSub(&genome_ring_state[2], 1u);
+            return 0xFFFFFFFFu;
+        }
+
+        // Check if this slot is actually free (ref_count == 0 and mode_count == 0,
+        // or never used at all). Active genomes have ref_count > 0.
+        let ref_count = atomicLoad(&genome_ref_counts[new_id]);
+        if (ref_count == 0u) {
+            return new_id;
+        }
+        // Otherwise this ID is still in use — skip it and try the next one.
     }
 
-    // Monotonic path also exhausted — undo and signal failure
-    atomicSub(&genome_ring_state[2], 1u);
+    // Couldn't find a free slot in 64 attempts — give up for this frame.
     return 0xFFFFFFFFu;
 }
 

@@ -1148,6 +1148,13 @@ impl GpuScene {
         // when the readback lags behind the actual GPU state.
 
         // Execute pure GPU physics pipeline (7 compute shader stages + cave collision if enabled)
+        // Repopulate nutrient voxels each physics step so phagocyte intake scales with
+        // sim speed. At Nx speed the physics loop runs N steps per frame; phagocytes
+        // consume voxel nutrients each step via atomic CAS (1→2), so populate must
+        // also run each step to reset consumed voxels back to available.
+        if let Some(ref simulator) = self.fluid_simulator {
+            simulator.populate_nutrients(device, queue, encoder, self.nutrient_density);
+        }
         // Run phagocyte nutrient consumption BEFORE physics so nutrients are available for transport
         self.run_phagocyte_consumption(device, encoder, queue);
         // Run photocyte light consumption each physics step (reads pre-computed light field)
@@ -3569,9 +3576,10 @@ impl GpuScene {
             // Update water bitfield for cell physics (compressed 32x for fast lookup)
             simulator.update_water_bitfield(device, encoder);
             
-            // Populate nutrients every frame with drifting noise pattern
-            // The shader uses time to create rolling/drifting nutrient zones
-            simulator.populate_nutrients(device, queue, encoder, self.nutrient_density);
+            // NOTE: Nutrient population moved into run_physics() so it executes every
+            // physics step. At high sim speeds the physics loop runs N steps per frame;
+            // phagocytes consume voxel nutrients each step, so populate must also run
+            // each step to reset consumed voxels and keep supply balanced with demand.
         }
     }
 
