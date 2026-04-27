@@ -171,6 +171,11 @@ pub struct GpuScene {
     pub nutrient_density: f32,  // Controls threshold for nutrient spawning
     /// Current cell count (tracked on GPU, no CPU canonical state)
     pub current_cell_count: u32,
+    /// Total cell slots used (high water mark from GPU readback).
+    /// Unlike current_cell_count (live), this includes dead-but-not-yet-recycled slots.
+    /// Physics dispatch must cover all slots up to this value so that metabolism
+    /// runs on every live cell regardless of its index.
+    total_cell_slots: u32,
     /// Next cell ID for deterministic cell creation
     next_cell_id: u32,
     /// Tail renderer for flagellocyte cells
@@ -516,6 +521,7 @@ impl GpuScene {
             vaporization_probability: 0.1,
             nutrient_density: 0.2,  // Default nutrient density (20% of 0.5 range)
             current_cell_count: 0,
+            total_cell_slots: 0,
             next_cell_id: 0,
             tail_renderer,
             cave_renderer,
@@ -602,6 +608,7 @@ impl GpuScene {
     /// Reset the simulation to initial state.
     pub fn reset(&mut self, queue: &wgpu::Queue) {
         self.current_cell_count = 0;
+        self.total_cell_slots = 0;
         self.next_cell_id = 0;
         self.current_time = 0.0;
         self.time_accumulator = 0.0;
@@ -1205,7 +1212,7 @@ impl GpuScene {
             self.cave_renderer.as_ref(),
             self.cave_physics_bind_groups.as_ref(),
             &self.adhesion_buffers,
-            self.current_cell_count,
+            self.total_cell_slots,
             self.constraint_iterations,
             self.solo_metabolism_multiplier,
         );
@@ -1274,7 +1281,7 @@ impl GpuScene {
             self.cave_renderer.as_ref(),
             self.cave_physics_bind_groups.as_ref(),
             &self.adhesion_buffers,
-            self.current_cell_count,
+            self.total_cell_slots,
             self.constraint_iterations,
         );
         
@@ -2023,6 +2030,7 @@ impl GpuScene {
             // Update local tracking
             let cell_index = self.current_cell_count as usize;
             self.current_cell_count += 1;
+            self.total_cell_slots = self.total_cell_slots.max(self.current_cell_count);
             self.next_cell_id += 1;
             
             Some(cell_index)
@@ -4636,7 +4644,7 @@ impl Scene for GpuScene {
                 &self.gpu_triple_buffers,
                 &self.cached_bind_groups,
                 self.has_oculocytes,
-                self.current_cell_count,
+                self.total_cell_slots,
                 self.max_signal_hops,
             );
         }
@@ -4679,7 +4687,7 @@ impl Scene for GpuScene {
             self.lod_threshold_medium,
             self.lod_threshold_high,
             self.lod_debug_colors,
-            self.current_cell_count, // Live cell count for dispatch scaling
+            self.total_cell_slots, // Total slots for dispatch scaling (live cells can be at any index)
         );
 
         // When DoF is enabled, render the scene to an intermediate texture so the
@@ -5129,6 +5137,7 @@ impl Scene for GpuScene {
         // Poll for cell count readback completion and update current_cell_count
         if let Some((total, live)) = self.gpu_triple_buffers.poll_cell_count(device) {
             self.current_cell_count = live;
+            self.total_cell_slots = total;
             
             // CRITICAL FIX: Reset high water mark when all cells are dead.
             // cell_count_buffer[0] is a high water mark that never decreases when cells die.

@@ -309,9 +309,27 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         
         // Clear division flag
         division_flags[cell_idx] = 0u;
+        
+        // Zero mass, velocity, and nutrients so the cell is fully inert.
+        // Mass < 0.5 is the dead-cell guard used by spatial grid build,
+        // collision detection, position update, and velocity update.
+        // Nutrients must be zeroed to prevent any shader from seeing stale
+        // nutrient data and accidentally treating this slot as alive.
+        let pos = positions_out[cell_idx].xyz;
+        positions_out[cell_idx] = vec4<f32>(pos, 0.0);
+        velocities_out[cell_idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        atomicStore(&nutrients_buffer[cell_idx], 0i);
     } else if (should_die) {
         // Already dead, ensure division flag is clear
         division_flags[cell_idx] = 0u;
+        
+        // Re-zero mass and nutrients each frame for cells that were already dead.
+        // This catches cells that died before this fix was added, and also
+        // guards against any shader accidentally writing mass or nutrients back
+        // (e.g. a stale copy from the previous triple-buffer set).
+        let pos = positions_out[cell_idx].xyz;
+        positions_out[cell_idx] = vec4<f32>(pos, 0.0);
+        atomicStore(&nutrients_buffer[cell_idx], 0i);
     }
 }
 

@@ -155,7 +155,12 @@ pub fn execute_gpu_physics_step(
     
     // PERFORMANCE: Dispatch based on actual cell count, not full capacity.
     // At 100K cells, this reduces dispatch from 1024 to ~390 workgroups (2.6x reduction).
-    // Use max(live_count, 1) to avoid zero dispatch, and add small buffer for divisions.
+    // CRITICAL: Must use the HIGH WATER MARK (total slots used), not the live count.
+    // Dead cells can be at any index — they're not compacted to the end. Using the
+    // live count would skip cells at higher indices, preventing their metabolism from
+    // running, so they'd never lose nutrients and never die.
+    // We read cell_count_buffer[0] via the async readback's `total` field, but since
+    // that can lag a few frames we fall back to capacity when the hint is 0.
     let effective_cell_count = (_cell_count_hint.max(1) + 255) / 256 * 256; // Round up to workgroup boundary
     let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
     
