@@ -987,7 +987,7 @@ impl GenomeEditorState {
         fn default_caustic_intensity() -> f32 { 0.5 }
         fn default_caustic_scale() -> f32 { 8.0 }
         fn default_caustic_speed() -> f32 { 1.0 }
-        fn default_photocyte_mass() -> f32 { 0.3 }
+        fn default_photocyte_mass() -> f32 { 0.012 }
         fn default_photocyte_threshold() -> f32 { 0.05 }
         
         let path = PathBuf::from("light_settings.ron");
@@ -1075,7 +1075,7 @@ impl GenomeEditorState {
             8.0,                // caustic_scale
             1.0,                // caustic_speed
             // Photocyte settings
-            0.2,                // photocyte_mass_per_second (20 nutrients/sec at full light)
+            0.012,              // photocyte_mass_per_second (scaled by sun_intensity at sync)
             0.05,               // photocyte_min_light_threshold
         )
     }

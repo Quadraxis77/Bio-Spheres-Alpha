@@ -1387,6 +1387,18 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
         }
     });
     
+    ui.add_space(4.0);
+    ui.label("Sun Brightness:");
+    let brightness_changed = ui.add(egui::Slider::new(&mut context.editor_state.sun_intensity, 0.0..=20.0)
+        .step_by(0.1).fixed_decimals(1)).changed();
+    if brightness_changed {
+        changed = true;
+        // Sync immediately so photocyte gain rate updates
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            gpu_scene.sun_intensity = context.editor_state.sun_intensity;
+        }
+    }
+    
     // === Procedural Sun ===
     ui.add_space(8.0);
     ui.separator();
@@ -1416,9 +1428,6 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
             .step_by(0.005).fixed_decimals(3)).changed();
         
         ui.add_space(4.0);
-        ui.label("Sun Brightness:");
-        sun_changed |= ui.add(egui::Slider::new(&mut context.editor_state.sun_intensity, 0.01..=50.0)
-            .logarithmic(true).fixed_decimals(2)).changed();
     }
     
     // === Surface Shadows ===

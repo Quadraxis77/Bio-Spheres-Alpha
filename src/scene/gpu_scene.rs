@@ -3987,7 +3987,7 @@ impl GpuScene {
             light_field.set_absorption_solid(editor_state.light_field_absorption_solid);
             light_field.set_absorption_cell(editor_state.light_field_absorption_cell);
             light_field.set_ambient_floor(editor_state.light_field_ambient_floor);
-            light_field.set_mass_per_second(editor_state.photocyte_mass_per_second);
+            light_field.set_mass_per_second(editor_state.photocyte_mass_per_second * editor_state.sun_intensity);
             light_field.set_min_light_threshold(editor_state.photocyte_min_light_threshold);
             light_field.set_shadow_enabled(editor_state.shadow_enabled);
             light_field.set_shadow_strength(editor_state.shadow_strength);

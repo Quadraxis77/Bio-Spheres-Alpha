@@ -123,7 +123,7 @@ fn sample_light(world_pos: vec3<f32>) -> f32 {
     
     // Bounds check and sample single voxel
     if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
-        return 1.0; // Out of bounds = full light
+        return 0.0; // Out of bounds = no light
     }
     
     let idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
@@ -164,25 +164,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Nutrient cap: 2x split_nutrient_threshold
     let max_nutrients = split_nutrient_thresholds[cell_idx] * 2.0;
     
-    // Sample light intensity at cell position (trilinear interpolated)
+    // Sample light field — used only as a binary shadow/occluded test.
+    // The actual nutrient gain rate comes from mass_per_second_full_light
+    // (which is base_rate * sun_intensity, set on the CPU).
     let light_intensity = sample_light(pos);
+    let in_light = light_intensity >= photocyte_params.min_light_threshold;
+    
+    // Convert mass_per_second to nutrients per second (multiply by 100)
+    let nutrient_rate = photocyte_params.mass_per_second_full_light * 100.0;
     
     var new_nutrients = current_nutrients;
     
-    if (light_intensity >= photocyte_params.min_light_threshold) {
-        // In light: gain nutrients proportional to light intensity
-        let effective_intensity = (light_intensity - photocyte_params.min_light_threshold) 
-                                / (1.0 - photocyte_params.min_light_threshold);
-        // Convert mass_per_second to nutrients per second (multiply by 100)
-        let nutrient_gain_rate = photocyte_params.mass_per_second_full_light * 100.0;
-        let nutrient_gain = nutrient_gain_rate * effective_intensity * params.delta_time;
+    if (in_light) {
+        // In light: gain nutrients at the full rate from the brightness setting
+        let nutrient_gain = nutrient_rate * params.delta_time;
         new_nutrients = min(current_nutrients + nutrient_gain, max_nutrients);
     } else {
-        // In shadow: metabolic cost — photocytes slowly lose nutrients without light
-        // Loss rate is half of max gain rate
-        let nutrient_loss_rate = photocyte_params.mass_per_second_full_light * 100.0 * 0.5;
-        let nutrient_loss = nutrient_loss_rate * params.delta_time;
-        new_nutrients = max(current_nutrients - nutrient_loss, 1.0);  // Don't go below death threshold
+        // In shadow: lose nutrients (half the gain rate)
+        let nutrient_loss = nutrient_rate * 0.5 * params.delta_time;
+        new_nutrients = max(current_nutrients - nutrient_loss, 1.0);
     }
     
     // Only write if nutrients actually changed
