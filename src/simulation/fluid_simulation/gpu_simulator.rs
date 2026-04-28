@@ -101,6 +101,12 @@ pub struct NutrientPopulateParams {
     pub world_radius: f32,
     pub nutrient_density: f32,
     pub time: f32,
+    pub delta_time: f32,
+    pub epoch_duration: f32,
+    pub epoch_spacing: f32,
+    pub spawn_end: f32,
+    pub despawn_start: f32,
+    pub _pad: [f32; 3],
 }
 
 /// GPU Fluid Simulator
@@ -539,8 +545,14 @@ impl GpuFluidSimulator {
             grid_origin_y: grid_origin.y,
             grid_origin_z: grid_origin.z,
             world_radius,
-            nutrient_density: 0.3,  // Default density
+            nutrient_density: 0.3,
             time: 0.0,
+            delta_time: 0.016,
+            epoch_duration: 10.0,
+            epoch_spacing: 7.0,
+            spawn_end: 0.4,
+            despawn_start: 0.6,
+            _pad: [0.0; 3],
         };
 
         let nutrient_populate_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1041,12 +1053,22 @@ impl GpuFluidSimulator {
 
     /// Populate nutrients in water voxels using drifting noise pattern
     /// Called every physics step to keep supply balanced with phagocyte consumption
-    pub fn populate_nutrients(&self, _device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, nutrient_density: f32) {
+    pub fn populate_nutrients(
+        &self,
+        _device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        nutrient_density: f32,
+        delta_time: f32,
+        epoch_duration: f32,
+        epoch_spacing: f32,
+        spawn_end: f32,
+        despawn_start: f32,
+    ) {
         let world_diameter = self.world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
 
-        // Update params
         let params = NutrientPopulateParams {
             grid_resolution: GRID_RESOLUTION,
             cell_size,
@@ -1056,6 +1078,12 @@ impl GpuFluidSimulator {
             world_radius: self.world_radius,
             nutrient_density,
             time: self.time.get(),
+            delta_time,
+            epoch_duration,
+            epoch_spacing,
+            spawn_end,
+            despawn_start,
+            _pad: [0.0; 3],
         };
         queue.write_buffer(&self.nutrient_populate_params_buffer, 0, bytemuck::cast_slice(&[params]));
 

@@ -133,6 +133,10 @@ var<storage, read_write> genome_ids: array<u32>;
 @group(1) @binding(3)
 var<storage, read_write> mode_indices: array<u32>;
 
+// Per-cell cell_types (read_write — mutation updates this when cell type changes)
+@group(1) @binding(4)
+var<storage, read_write> cell_types: array<u32>;
+
 // Group 2: Genome mode buffers (read_write for cloning + mutation)
 // mode_properties split into 5 vec4 sub-buffers (16 bytes/mode each, max 8M modes = 128 MB each)
 @group(2) @binding(0)
@@ -913,8 +917,8 @@ fn apply_mutation(
             let adhesion_currently_on = parent_make_adhesion_flags[mode_abs] > 0u;
             let flip_off = rng_f32(cell_id, salt_base + 350u) < 0.1;
             parent_make_adhesion_flags[mode_abs] = select(
-                select(1u, 0u, flip_off),  // currently on: flip off only 10% of the time
                 1u,                         // currently off: always flip to on
+                select(1u, 0u, flip_off),   // currently on: flip off only 10% of the time
                 adhesion_currently_on
             );
         }
@@ -1400,5 +1404,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let log_idx = atomicAdd(&mutation_log_count[0], 1u);
     if (log_idx < arrayLength(&mutation_log)) {
         mutation_log[log_idx] = vec4<u32>(cell_idx, new_genome_id, param_idx, mutation_params.current_frame);
+    }
+
+    // Sync per-cell cell_types from the (possibly mutated) mode_cell_types.
+    // Division already stamped the OLD type before the mutation ran, so we must
+    // overwrite it here for shaders that read the per-cell buffer (phagocyte_consume,
+    // photocyte_light, build_instances, etc.).
+    let final_mode = mode_indices[cell_idx];
+    if (final_mode < arrayLength(&mode_cell_types)) {
+        cell_types[cell_idx] = mode_cell_types[final_mode];
     }
 }

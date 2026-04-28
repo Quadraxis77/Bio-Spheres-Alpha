@@ -917,10 +917,85 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         context.editor_state.save_fluid_settings();
     }
     
+    // === Nutrients ===
+    ui.separator();
+    ui.heading("Nutrients");
+    ui.separator();
+
+    ui.label("Density:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_density, 0.0..=0.5)
+        .step_by(0.01)
+        .fixed_decimals(2)
+        .text("density")
+    ).changed() {
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            gpu_scene.nutrient_density = context.editor_state.nutrient_density;
+        }
+        context.editor_state.save_fluid_settings();
+    }
+
+    ui.label("Epoch Duration:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_epoch_duration, 2.0..=30.0)
+        .step_by(0.5)
+        .fixed_decimals(1)
+        .suffix("s")
+        .text("cycle length")
+    ).changed() {
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            gpu_scene.nutrient_epoch_duration = context.editor_state.nutrient_epoch_duration;
+        }
+    }
+
+    ui.label("Epoch Spacing:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_epoch_spacing, 1.0..=30.0)
+        .step_by(0.5)
+        .fixed_decimals(1)
+        .suffix("s")
+        .text("overlap gap")
+    ).changed() {
+        // Clamp spacing to not exceed duration
+        context.editor_state.nutrient_epoch_spacing = context.editor_state.nutrient_epoch_spacing
+            .min(context.editor_state.nutrient_epoch_duration);
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            gpu_scene.nutrient_epoch_spacing = context.editor_state.nutrient_epoch_spacing;
+        }
+    }
+
+    ui.label("Spawn Ramp:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_spawn_end, 0.05..=0.9)
+        .step_by(0.05)
+        .fixed_decimals(2)
+        .text("spawn end")
+    ).changed() {
+        // Ensure spawn_end < despawn_start
+        if context.editor_state.nutrient_spawn_end >= context.editor_state.nutrient_despawn_start {
+            context.editor_state.nutrient_despawn_start = (context.editor_state.nutrient_spawn_end + 0.05).min(0.95);
+        }
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            gpu_scene.nutrient_spawn_end = context.editor_state.nutrient_spawn_end;
+            gpu_scene.nutrient_despawn_start = context.editor_state.nutrient_despawn_start;
+        }
+    }
+
+    ui.label("Despawn Ramp:");
+    if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_despawn_start, 0.1..=0.95)
+        .step_by(0.05)
+        .fixed_decimals(2)
+        .text("despawn start")
+    ).changed() {
+        // Ensure despawn_start > spawn_end
+        if context.editor_state.nutrient_despawn_start <= context.editor_state.nutrient_spawn_end {
+            context.editor_state.nutrient_spawn_end = (context.editor_state.nutrient_despawn_start - 0.05).max(0.05);
+        }
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            gpu_scene.nutrient_spawn_end = context.editor_state.nutrient_spawn_end;
+            gpu_scene.nutrient_despawn_start = context.editor_state.nutrient_despawn_start;
+        }
+    }
+
     // Surface pressure control for radial fluid mode
     ui.separator();
     ui.heading("Fluid Physics");
-    ui.separator();
     
     // Only show surface pressure when gravity mode is radial
     if state.world_settings.gravity_mode == 3 {
@@ -993,22 +1068,6 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                     context.editor_state.fluid_condensation_probability,
                     context.editor_state.fluid_vaporization_probability
                 );
-            }
-            // Save fluid settings
-            context.editor_state.save_fluid_settings();
-        }
-    
-    // Nutrient density for particle spawning
-    ui.add_space(4.0);
-    ui.label("Nutrient Density:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_density, 0.0..=0.5)
-        .step_by(0.01)
-        .fixed_decimals(2)
-        .text("Density (0.0 = sparse, 0.5 = dense)")
-        ).changed() {
-            // Update GPU scene nutrient density
-            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                gpu_scene.nutrient_density = context.editor_state.nutrient_density;
             }
             // Save fluid settings
             context.editor_state.save_fluid_settings();

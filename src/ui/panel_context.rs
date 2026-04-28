@@ -196,6 +196,14 @@ pub struct GenomeEditorState {
     pub fluid_vaporization_probability: f32,
     /// Nutrient particle density for noise-based spawning (0.0 to 1.0)
     pub nutrient_density: f32,
+    /// Nutrient epoch duration in seconds
+    pub nutrient_epoch_duration: f32,
+    /// Nutrient epoch spacing in seconds (< duration = overlap)
+    pub nutrient_epoch_spacing: f32,
+    /// Fraction of epoch for spawn ramp (0.0–1.0)
+    pub nutrient_spawn_end: f32,
+    /// Fraction of epoch where despawn starts (0.0–1.0)
+    pub nutrient_despawn_start: f32,
     
     // Fluid visualization
     pub fluid_show_voxel_grid: bool,
@@ -495,6 +503,10 @@ impl GenomeEditorState {
             fluid_condensation_probability,
             fluid_vaporization_probability,
             nutrient_density,
+            nutrient_epoch_duration: 10.0,
+            nutrient_epoch_spacing: 7.0,
+            nutrient_spawn_end: 0.4,
+            nutrient_despawn_start: 0.6,
             fluid_show_voxel_grid: true,
             fluid_show_solid_only: false,
             fluid_show_wireframe: false,

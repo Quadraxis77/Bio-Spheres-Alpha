@@ -692,6 +692,10 @@ impl App {
             gpu_scene.condensation_probability = self.editor_state.fluid_condensation_probability;
             gpu_scene.vaporization_probability = self.editor_state.fluid_vaporization_probability;
             gpu_scene.nutrient_density = self.editor_state.nutrient_density;
+            gpu_scene.nutrient_epoch_duration = self.editor_state.nutrient_epoch_duration;
+            gpu_scene.nutrient_epoch_spacing = self.editor_state.nutrient_epoch_spacing;
+            gpu_scene.nutrient_spawn_end = self.editor_state.nutrient_spawn_end;
+            gpu_scene.nutrient_despawn_start = self.editor_state.nutrient_despawn_start;
 
             // Set culling mode based on enabled flags
             let culling_mode = match (self.ui.state.frustum_enabled, self.ui.state.occlusion_enabled) {
@@ -1586,8 +1590,37 @@ impl ApplicationHandler for AppState {
 pub fn run() {
     env_logger::init();
     
+    // Write embedded default .ron settings next to the executable when the
+    // files don't already exist.  This ensures a freshly-extracted build
+    // starts with the settings that were current at compile time, while
+    // still allowing the user to override them by editing the files.
+    extract_default_settings();
+    
     let event_loop = EventLoop::new().unwrap();
     let mut state = AppState { app: None };
     
     event_loop.run_app(&mut state).unwrap();
+}
+
+/// Writes embedded .ron files to disk if they don't already exist.
+fn extract_default_settings() {
+    const EMBEDDED_DEFAULTS: &[(&str, &str)] = &[
+        ("cave_settings.ron",          include_str!("../cave_settings.ron")),
+        ("cell_visuals.ron",           include_str!("../cell_visuals.ron")),
+        ("fluid_settings.ron",         include_str!("../fluid_settings.ron")),
+        ("light_settings.ron",         include_str!("../light_settings.ron")),
+        ("sun_settings.ron",           include_str!("../sun_settings.ron")),
+        ("fluid_render_settings.ron",  include_str!("../fluid_render_settings.ron")),
+    ];
+
+    for (filename, content) in EMBEDDED_DEFAULTS {
+        let path = std::path::Path::new(filename);
+        if !path.exists() {
+            if let Err(e) = std::fs::write(path, content) {
+                log::warn!("Failed to write default {}: {}", filename, e);
+            } else {
+                log::info!("Extracted default {}", filename);
+            }
+        }
+    }
 }

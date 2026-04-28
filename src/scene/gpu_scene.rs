@@ -169,6 +169,14 @@ pub struct GpuScene {
     pub vaporization_probability: f32,  // Water to Steam
     /// Nutrient particle density for noise-based spawning (0.0 to 1.0)
     pub nutrient_density: f32,  // Controls threshold for nutrient spawning
+    /// Nutrient epoch duration in seconds (how long one nutrient pattern lasts)
+    pub nutrient_epoch_duration: f32,
+    /// Nutrient epoch spacing in seconds (time between epoch starts; < duration = overlap)
+    pub nutrient_epoch_spacing: f32,
+    /// Fraction of epoch spent ramping up spawns (0.0–1.0)
+    pub nutrient_spawn_end: f32,
+    /// Fraction of epoch where despawn ramp begins (0.0–1.0, must be > spawn_end)
+    pub nutrient_despawn_start: f32,
     /// Current cell count (tracked on GPU, no CPU canonical state)
     pub current_cell_count: u32,
     /// Total cell slots used (high water mark from GPU readback).
@@ -519,7 +527,11 @@ impl GpuScene {
             lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
             condensation_probability: 0.1,
             vaporization_probability: 0.1,
-            nutrient_density: 0.2,  // Default nutrient density (20% of 0.5 range)
+            nutrient_density: 0.2,
+            nutrient_epoch_duration: 10.0,
+            nutrient_epoch_spacing: 7.0,
+            nutrient_spawn_end: 0.4,
+            nutrient_despawn_start: 0.6,
             current_cell_count: 0,
             total_cell_slots: 0,
             next_cell_id: 0,
@@ -1160,7 +1172,14 @@ impl GpuScene {
         // consume voxel nutrients each step via atomic CAS (1→2), so populate must
         // also run each step to reset consumed voxels back to available.
         if let Some(ref simulator) = self.fluid_simulator {
-            simulator.populate_nutrients(device, queue, encoder, self.nutrient_density);
+            simulator.populate_nutrients(
+                device, queue, encoder,
+                self.nutrient_density, delta_time,
+                self.nutrient_epoch_duration,
+                self.nutrient_epoch_spacing,
+                self.nutrient_spawn_end,
+                self.nutrient_despawn_start,
+            );
         }
         // Run phagocyte nutrient consumption BEFORE physics so nutrients are available for transport
         self.run_phagocyte_consumption(device, encoder, queue);
@@ -3594,7 +3613,14 @@ impl GpuScene {
     /// Force immediate repopulation of nutrients (e.g., after density change)
     pub fn repopulate_nutrients(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
         if let Some(ref simulator) = self.fluid_simulator {
-            simulator.populate_nutrients(device, queue, encoder, self.nutrient_density);
+            simulator.populate_nutrients(
+                device, queue, encoder,
+                self.nutrient_density, 0.016,
+                self.nutrient_epoch_duration,
+                self.nutrient_epoch_spacing,
+                self.nutrient_spawn_end,
+                self.nutrient_despawn_start,
+            );
             log::info!("Nutrients repopulated with density: {}", self.nutrient_density);
         }
     }
@@ -4185,6 +4211,7 @@ impl GpuScene {
                 device,
                 &self.gpu_triple_buffers.genome_ids,
                 &self.gpu_triple_buffers.mode_indices,
+                &self.gpu_triple_buffers.cell_types,
                 &self.gpu_triple_buffers.mode_properties_v0,
                 &self.gpu_triple_buffers.mode_properties_v1,
                 &self.gpu_triple_buffers.mode_properties_v2,

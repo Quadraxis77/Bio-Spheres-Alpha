@@ -390,6 +390,17 @@ impl MutationSystem {
                     },
                     count: None,
                 },
+                // binding 4: cell_types (read_write — mutation updates per-cell type after mode change)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -983,7 +994,7 @@ impl MutationSystem {
             // Test=0 is excluded; shader does (rng % max_value) + 1 → [1, 7] = Flagellocyte–Oculocyte
             MutationParamEntry {
                 buffer_id: buffer_id::MODE_CELL_TYPES, element_offset: 0,
-                weight: 0.3, min_delta: 0.0, max_delta: 0.0,
+                weight: 8.0, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 7.0, data_type: data_type::INTEGER,
             },
 
@@ -1854,6 +1865,7 @@ impl MutationSystem {
         device: &wgpu::Device,
         genome_ids_buffer: &wgpu::Buffer,
         mode_indices_buffer: &wgpu::Buffer,
+        cell_types_buffer: &wgpu::Buffer,
         mode_properties_v0: &wgpu::Buffer,
         mode_properties_v1: &wgpu::Buffer,
         mode_properties_v2: &wgpu::Buffer,
@@ -1906,6 +1918,7 @@ impl MutationSystem {
                 wgpu::BindGroupEntry { binding: 1, resource: self.mutation_candidate_count_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: genome_ids_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: mode_indices_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: cell_types_buffer.as_entire_binding() },
             ],
         }));
 
