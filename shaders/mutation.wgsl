@@ -386,10 +386,12 @@ fn snap_quaternion(cell_id: u32, salt: u32) -> vec4<f32> {
             default:  { return vec4<f32>(h,   -h,  0.0, 0.0); }           // 180° X-Y diagonal
         }
     } else if (tier_r < 0.90) {
-        // --- 45° diagonal rotations (8 orientations) ---
-        // Rotations of 45° around the four body diagonals (±X±Y±Z axes)
-        let s = 0.5;   // sin(22.5°) ≈ 0.3827, but for 45° half-angle: sin(22.5°)
-        // Use exact 45° around X, Y, Z axes and their combinations
+        // --- 45° diagonal rotations (12 orientations) ---
+        // Rotations of 45° around single axes (X/Y/Z) and 45° around diagonal axes ((X+Y)/√2, etc.)
+        // For diagonal axes we need the axis to be unit length: (1,1,0)/√2 has normalization 1/√2.
+        // q = (sin(θ/2)*axis.x, sin(θ/2)*axis.y, sin(θ/2)*axis.z, cos(θ/2))
+        // For 45° around (1,1,0)/√2: components are (s45/√2, s45/√2, 0, c45) — magnitude = 1.0 ✓
+        let s = 0.7071067811865476; // 1/√2 — axis normalization factor for diagonal axes
         let c45 = 0.9238795325112867; // cos(22.5°)
         let s45 = 0.3826834323650898; // sin(22.5°)
         let n = idx % 12u;
@@ -942,19 +944,11 @@ fn apply_mutation(
                 default: { v = genome_mode_data_v4[mode_abs]; }
             }
             if (entry.data_type == 9u) {
-                // QUAT_SNAP: snap to a discrete rotation relative to the parent split direction.
-                // The parent split quat lives in genome_mode_data_v4 for this same mode.
-                // For v0–v3 (child orientations): result = quat_mul(snap_offset, split_quat)
-                // For v4 (the split direction itself): result = snap_offset (world-relative)
-                let snap_offset = snap_quaternion(cell_id, salt_base + 700u);
-                if (vec_idx == 4u) {
-                    // Mutating the split direction itself — snap in world space
-                    v = snap_offset;
-                } else {
-                    // Snap child orientation relative to the parent split direction
-                    let split_quat = genome_mode_data_v4[mode_abs];
-                    v = quat_mul(snap_offset, split_quat);
-                }
+                // QUAT_SNAP: replace the quaternion with a snapped orientation.
+                // Division applies: parent_rotation * split_rotation * child_orientation
+                // So child_orientation is a LOCAL rotation — just use the snap directly.
+                // For the split direction (v4), it's also a local rotation in parent space.
+                v = snap_quaternion(cell_id, salt_base + 700u);
             } else {
                 v[comp_idx] = clamp(v[comp_idx] + delta, entry.min_value, entry.max_value);
             }

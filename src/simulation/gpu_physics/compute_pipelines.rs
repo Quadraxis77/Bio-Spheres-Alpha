@@ -221,8 +221,10 @@ pub struct CachedBindGroups {
     pub collision_force_accum: [wgpu::BindGroup; 3],
     /// Position update force accum bind group (same for all frames)
     pub position_update_force_accum: wgpu::BindGroup,
-    /// Velocity update angular bind group (same for all frames)
-    pub velocity_update_angular: wgpu::BindGroup,
+    /// Velocity update angular bind groups for each buffer index [0, 1, 2]
+    /// Each uses rotations[buffer_index] so angular velocity integration reads/writes
+    /// the same rotation buffer that physics is currently processing.
+    pub velocity_update_angular: [wgpu::BindGroup; 3],
     /// Nutrient system bind group (same for all frames)
     pub nutrient_system: wgpu::BindGroup,
     /// Nutrient transport bind group (same for all frames, includes mode properties)
@@ -1261,8 +1263,14 @@ impl GpuPhysicsPipelines {
             None,
         );
         
-        // Velocity update angular bind group (same for all frames)
-        let velocity_update_angular = self.create_velocity_update_angular_bind_group(device, adhesion_buffers, buffers);
+        // Velocity update angular bind groups — one per rotation buffer index.
+        // The shader reads/writes rotations[buffer_index] in-place, so we must
+        // bind the correct buffer for whichever index is active this frame.
+        let velocity_update_angular = [
+            self.create_velocity_update_angular_bind_group(device, adhesion_buffers, buffers, 0),
+            self.create_velocity_update_angular_bind_group(device, adhesion_buffers, buffers, 1),
+            self.create_velocity_update_angular_bind_group(device, adhesion_buffers, buffers, 2),
+        ];
         
         // Nutrient transport bind groups (same for all frames)
         let nutrient_system = self.create_nutrient_system_bind_group(device, buffers);
@@ -3261,11 +3269,15 @@ impl GpuPhysicsPipelines {
     }
     
     /// Create velocity update angular bind group (Group 1 in velocity_update shader)
+    /// `buffer_index` selects which rotation buffer (0/1/2) the shader reads/writes.
+    /// Must match `current_index` at dispatch time so angular velocity integration
+    /// operates on the same rotation data that physics is processing this frame.
     fn create_velocity_update_angular_bind_group(
         &self,
         device: &wgpu::Device,
         adhesion_buffers: &super::AdhesionBuffers,
         triple_buffers: &GpuTripleBufferSystem,
+        buffer_index: usize,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Velocity Update Angular Bind Group"),
@@ -3289,7 +3301,7 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: triple_buffers.rotations[0].as_entire_binding(),
+                    resource: triple_buffers.rotations[buffer_index].as_entire_binding(),
                 },
             ],
         })

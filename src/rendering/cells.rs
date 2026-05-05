@@ -203,12 +203,12 @@ impl CellRenderer {
         // This ensures the pipeline always has a valid group(1) even without a light field system.
         let dummy_shadow_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy Shadow Params Buffer"),
-            size: 72, // ShadowFieldParams is 72 bytes (18 x f32)
+            size: 80, // ShadowFieldParams is 80 bytes (20 x f32)
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         // Write shadow_enabled = 0 so shadows are disabled by default
-        queue.write_buffer(&dummy_shadow_params_buffer, 0, &[0u8; 72]);
+        queue.write_buffer(&dummy_shadow_params_buffer, 0, &[0u8; 80]);
         
         let dummy_light_field_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy Light Field Buffer"),

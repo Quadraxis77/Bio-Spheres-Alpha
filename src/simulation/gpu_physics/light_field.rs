@@ -86,6 +86,9 @@ pub struct ShadowFieldParams {
     pub light_dir_x: f32,
     pub light_dir_y: f32,
     pub light_dir_z: f32,
+    // Moss parameters
+    pub moss_parallax_depth: f32,
+    pub moss_scale: f32,
 }
 
 /// GPU Light Field System
@@ -144,6 +147,11 @@ pub struct LightFieldSystem {
 
     // Cave-specific shadow bind group layout (includes water bitfield)
     cave_shadow_bind_group_layout: wgpu::BindGroupLayout,
+
+    // Moss parallax depth (passed to cave shader via ShadowFieldParams)
+    moss_parallax_depth: f32,
+    // Moss texture scale (higher = finer detail)
+    moss_scale: f32,
 
     // Grid params (cached)
     world_radius: f32,
@@ -582,6 +590,17 @@ impl LightFieldSystem {
                         },
                         count: None,
                     },
+                    // Binding 3: moss_density (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -620,6 +639,8 @@ impl LightFieldSystem {
             time: 0.0,
             sun_color: [1.0, 1.0, 1.0],
             cave_shadow_bind_group_layout,
+            moss_parallax_depth: 0.08,
+            moss_scale: 0.15,
             world_radius,
             cell_size,
             grid_origin,
@@ -734,6 +755,16 @@ impl LightFieldSystem {
         self.caustic_speed = speed;
     }
 
+    /// Set moss parallax depth for cave shader
+    pub fn set_moss_parallax_depth(&mut self, depth: f32) {
+        self.moss_parallax_depth = depth;
+    }
+
+    /// Set moss texture scale for cave shader
+    pub fn set_moss_scale(&mut self, scale: f32) {
+        self.moss_scale = scale;
+    }
+
     /// Set sun/light color
     pub fn set_sun_color(&mut self, color: [f32; 3]) {
         self.sun_color = color;
@@ -772,8 +803,8 @@ impl LightFieldSystem {
         })
     }
 
-    /// Create the cave shadow bind group (includes water density for caustics)
-    pub fn create_cave_shadow_bind_group(&self, device: &wgpu::Device, water_density_buffer: &wgpu::Buffer) -> wgpu::BindGroup {
+    /// Create the cave shadow bind group (includes water density for caustics and moss density)
+    pub fn create_cave_shadow_bind_group(&self, device: &wgpu::Device, water_density_buffer: &wgpu::Buffer, moss_density_buffer: &wgpu::Buffer) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cave Shadow Field Bind Group"),
             layout: &self.cave_shadow_bind_group_layout,
@@ -789,6 +820,10 @@ impl LightFieldSystem {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: water_density_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: moss_density_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -815,6 +850,8 @@ impl LightFieldSystem {
             light_dir_x: self.light_dir[0],
             light_dir_y: self.light_dir[1],
             light_dir_z: self.light_dir[2],
+            moss_parallax_depth: self.moss_parallax_depth,
+            moss_scale: self.moss_scale,
         };
         queue.write_buffer(&self.shadow_field_params_buffer, 0, bytemuck::bytes_of(&params));
     }

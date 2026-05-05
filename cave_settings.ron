@@ -1,5 +1,5 @@
 (
-    density: 0.65,
+    density: 0.62,
     scale: 100.0,
     octaves: 2,
     persistence: 0.1,
@@ -7,4 +7,15 @@
     smoothness: 0.0,
     seed: 8076,
     resolution: 128,
+    show_moss: true,
+    moss_growth_rate: 0.15,
+    moss_erosion_rate: 0.3,
+    moss_decay_rate: 0.05,
+    moss_min_light: 0.05,
+    moss_nutrient_per_moss: 200.0,
+    moss_graze_cooldown: 5.0,
+    moss_wetness_evaporation: 0.02,
+    moss_parallax_depth: 0.04,
+    moss_scale: 0.02,
+    moss_water_radius: 20.0,
 )

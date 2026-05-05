@@ -8,7 +8,7 @@ use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, DepthOfFie
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
-use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, execute_signal_system, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem};
+use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, execute_signal_system, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem, MossSystem};
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
@@ -254,6 +254,16 @@ pub struct GpuScene {
     phagocyte_nutrient_bind_group: Option<wgpu::BindGroup>,
     /// Cached phagocyte consumption physics bind groups (one per triple buffer index)
     phagocyte_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
+    /// Moss system for cave wall vegetation (growth, erosion, consumption)
+    pub moss_system: Option<MossSystem>,
+    /// Whether to show moss on cave walls
+    pub show_moss: bool,
+    /// Cached moss growth bind group (buffers don't change)
+    moss_growth_bind_group: Option<wgpu::BindGroup>,
+    /// Cached moss consumption physics bind groups (one per triple buffer index)
+    moss_consume_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
+    /// Cached moss consumption moss bind group (shared across frames)
+    moss_consume_moss_bind_group: Option<wgpu::BindGroup>,
     /// Organism label system — GPU-driven connected-component labeling
     pub organism_label_system: Option<crate::simulation::gpu_physics::OrganismLabelSystem>,
     /// Mutation system — GPU-driven genome mutation during cell division
@@ -569,6 +579,11 @@ impl GpuScene {
             phagocyte_consumption: None,
             phagocyte_nutrient_bind_group: None,
             phagocyte_physics_bind_groups: None,
+            moss_system: None,
+            show_moss: true,
+            moss_growth_bind_group: None,
+            moss_consume_physics_bind_groups: None,
+            moss_consume_moss_bind_group: None,
             organism_label_system,
             mutation_system,
             light_field_system: None,
@@ -1183,6 +1198,8 @@ impl GpuScene {
         }
         // Run phagocyte nutrient consumption BEFORE physics so nutrients are available for transport
         self.run_phagocyte_consumption(device, encoder, queue);
+        // Run moss consumption (phagocytes eating moss) alongside nutrient consumption
+        self.run_moss_consumption(device, encoder, queue);
         // Run photocyte light consumption each physics step (reads pre-computed light field)
         self.run_photocyte_light_consumption(device, encoder, queue);
         
@@ -2978,6 +2995,9 @@ impl GpuScene {
         }
 
         self.light_field_system = Some(light_field_system);
+
+        // Initialize moss system now that light field is available
+        self.initialize_moss_system(device);
         
         // Create volumetric fog renderer (with half-res support)
         let volumetric_fog_renderer = VolumetricFogRenderer::new(device, surface_format, self.renderer.width, self.renderer.height);
@@ -3566,6 +3586,9 @@ impl GpuScene {
         // Initialize phagocyte consumption system
         self.initialize_phagocyte_consumption(device);
 
+        // Initialize moss system for cave wall vegetation
+        self.initialize_moss_system(device);
+
         log::info!("GPU fluid simulator initialized with solid mask, water bitfield, and nutrient particles for cell buoyancy");
     }
 
@@ -3590,6 +3613,106 @@ impl GpuScene {
 
             self.phagocyte_consumption = Some(consumption_system);
             log::info!("Phagocyte consumption system initialized");
+        }
+    }
+
+    /// Initialize the moss system for cave wall vegetation
+    fn initialize_moss_system(&mut self, device: &wgpu::Device) {
+        if self.moss_system.is_some() {
+            return;
+        }
+
+        // Moss requires fluid simulator (for fluid_state, water_velocity) and light field
+        if self.fluid_simulator.is_some() && self.light_field_system.is_some() {
+            let world_diameter = self.config.sphere_radius * 2.0;
+            let grid_resolution = 128u32;
+            let cell_size = world_diameter / grid_resolution as f32;
+            let grid_origin = [-world_diameter / 2.0, -world_diameter / 2.0, -world_diameter / 2.0];
+
+            let moss = MossSystem::new(device, grid_resolution, cell_size, grid_origin);
+            self.moss_system = Some(moss);
+            // Force cave shadow bind group rebuild to include moss buffer
+            self.cave_shadow_bind_group_set = false;
+            log::info!("Moss system initialized");
+        }
+    }
+
+    /// Run moss growth/erosion compute pass
+    fn run_moss_growth(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, delta_time: f32) {
+        if !self.show_moss {
+            return;
+        }
+
+        let (moss, fluid_sim, light_field) = match (&self.moss_system, &self.fluid_simulator, &self.light_field_system) {
+            (Some(m), Some(f), Some(l)) => (m, f, l),
+            _ => return,
+        };
+
+        // Create growth bind group if not cached
+        if self.moss_growth_bind_group.is_none() {
+            self.moss_growth_bind_group = Some(moss.create_growth_bind_group(
+                device,
+                fluid_sim.solid_mask_buffer(),
+                light_field.light_field_buffer(),
+                fluid_sim.current_state_buffer(),
+                fluid_sim.water_velocity_buffer(),
+            ));
+        }
+
+        if let Some(ref growth_bg) = self.moss_growth_bind_group {
+            moss.run_growth(encoder, queue, growth_bg, delta_time, self.config.sphere_radius);
+        }
+    }
+
+    /// Run moss consumption compute pass (phagocytes eating moss)
+    fn run_moss_consumption(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
+        if !self.show_moss {
+            return;
+        }
+
+        let moss = match &self.moss_system {
+            Some(m) => m,
+            None => return,
+        };
+
+        // Cache physics bind groups (one per triple buffer index)
+        if self.moss_consume_physics_bind_groups.is_none() {
+            self.moss_consume_physics_bind_groups = Some([
+                moss.create_consume_physics_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.physics_params,
+                    &self.gpu_triple_buffers.position_and_mass[0],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+                moss.create_consume_physics_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.physics_params,
+                    &self.gpu_triple_buffers.position_and_mass[1],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+                moss.create_consume_physics_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.physics_params,
+                    &self.gpu_triple_buffers.position_and_mass[2],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+            ]);
+        }
+
+        // Cache moss bind group
+        if self.moss_consume_moss_bind_group.is_none() {
+            self.moss_consume_moss_bind_group = Some(moss.create_consume_moss_bind_group(
+                device,
+                &self.gpu_triple_buffers.cell_types,
+                &self.gpu_triple_buffers.nutrients_buffer,
+                &self.gpu_triple_buffers.split_nutrient_thresholds,
+                &self.gpu_triple_buffers.death_flags,
+            ));
+        }
+
+        let output_idx = self.gpu_triple_buffers.output_buffer_index();
+        if let (Some(ref physics_bgs), Some(ref moss_bg)) = (&self.moss_consume_physics_bind_groups, &self.moss_consume_moss_bind_group) {
+            moss.run_consumption(encoder, queue, &physics_bgs[output_idx], moss_bg, self.gpu_triple_buffers.capacity);
         }
     }
 
@@ -3995,6 +4118,8 @@ impl GpuScene {
             light_field.set_caustic_intensity(editor_state.caustic_intensity);
             light_field.set_caustic_scale(editor_state.caustic_scale);
             light_field.set_caustic_speed(editor_state.caustic_speed);
+            light_field.set_moss_parallax_depth(editor_state.moss_parallax_depth);
+            light_field.set_moss_scale(editor_state.moss_scale);
             light_field.set_sun_color([
                 editor_state.sun_color[0] * editor_state.sun_intensity,
                 editor_state.sun_color[1] * editor_state.sun_intensity,
@@ -4597,6 +4722,12 @@ impl Scene for GpuScene {
             self.run_light_field(device, &mut encoder, queue);
         }
 
+        // Run moss growth/erosion after light field (reads light_field) and fluid sim (reads fluid_state, water_velocity)
+        if !self.paused && self.show_moss {
+            let dt = self.config.fixed_timestep;
+            self.run_moss_growth(device, &mut encoder, queue, dt);
+        }
+
         // Write dragged cell index to cell_count_buffer[2] so position_update shader can skip it
         queue.write_buffer(
             &self.gpu_triple_buffers.cell_count_buffer,
@@ -4824,7 +4955,10 @@ impl Scene for GpuScene {
                     let density_buf = self.gpu_surface_nets.as_ref()
                         .map(|sn| sn.smoothed_density_buffer())
                         .unwrap_or(light_field.dummy_water_density());
-                    let shadow_bg = light_field.create_cave_shadow_bind_group(device, density_buf);
+                    let moss_buf = self.moss_system.as_ref()
+                        .map(|ms| ms.moss_density_buffer())
+                        .unwrap_or(light_field.dummy_water_density());
+                    let shadow_bg = light_field.create_cave_shadow_bind_group(device, density_buf, moss_buf);
                     cave_renderer.set_shadow_bind_group(shadow_bg);
                     self.cave_shadow_bind_group_set = true;
                 }

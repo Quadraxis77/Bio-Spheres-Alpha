@@ -882,6 +882,130 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             }
         }
     }
+
+    // ============================================================
+    // Moss Settings
+    // ============================================================
+    ui.add_space(10.0);
+    ui.separator();
+    ui.heading("🌿 Moss");
+    ui.add_space(5.0);
+
+    if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+        // Enable/disable toggle
+        let mut show_moss = gpu_scene.show_moss;
+        let mut moss_changed = false;
+        if ui.checkbox(&mut show_moss, "Enable Moss").changed() {
+            gpu_scene.show_moss = show_moss;
+            context.editor_state.show_moss = show_moss;
+            moss_changed = true;
+        }
+
+        if show_moss {
+            if let Some(ref mut moss) = gpu_scene.moss_system {
+                ui.add_space(5.0);
+                ui.label("Growth & Spread");
+                ui.add_space(3.0);
+
+                ui.label("Growth Rate:");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_growth_rate, 0.01..=1.0)
+                    .text("per sec")).changed() {
+                    moss.growth_rate = context.editor_state.moss_growth_rate;
+                    moss_changed = true;
+                }
+
+                ui.add_space(2.0);
+                ui.label("Min Light Level:");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_min_light, 0.0..=0.5)
+                    .text("threshold")).changed() {
+                    moss.min_light = context.editor_state.moss_min_light;
+                    moss_changed = true;
+                }
+
+                ui.add_space(2.0);
+                ui.label("Water Radius (voxels):");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_water_radius, 2.0..=50.0)
+                    .text("voxels")).changed() {
+                    moss.water_radius = context.editor_state.moss_water_radius;
+                    moss_changed = true;
+                }
+
+                ui.add_space(2.0);
+                ui.label("Decay Rate:");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_decay_rate, 0.0..=0.5)
+                    .text("per sec")).changed() {
+                    moss.decay_rate = context.editor_state.moss_decay_rate;
+                    moss_changed = true;
+                }
+
+                ui.add_space(8.0);
+                ui.label("Erosion");
+                ui.add_space(3.0);
+
+                ui.label("Water Erosion Rate:");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_erosion_rate, 0.0..=2.0)
+                    .text("per sec")).changed() {
+                    moss.erosion_rate = context.editor_state.moss_erosion_rate;
+                    moss_changed = true;
+                }
+
+                ui.add_space(2.0);
+                ui.label("Wetness Evaporation:");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_wetness_evaporation, 0.001..=0.2)
+                    .logarithmic(true)
+                    .text("per sec")).changed() {
+                    moss.wetness_evaporation = context.editor_state.moss_wetness_evaporation;
+                    moss_changed = true;
+                }
+
+                ui.add_space(8.0);
+                ui.label("Consumption (Phagocytes)");
+                ui.add_space(3.0);
+
+                ui.label("Graze Cooldown:");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_consume_rate, 1.0..=30.0)
+                    .text("seconds")).changed() {
+                    moss.graze_cooldown = context.editor_state.moss_consume_rate;
+                    moss_changed = true;
+                }
+
+                ui.add_space(2.0);
+                ui.label("Nutrients per Moss:");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_nutrient_per_moss, 1.0..=200.0)
+                    .text("nutrients")).changed() {
+                    moss.nutrient_per_moss = context.editor_state.moss_nutrient_per_moss;
+                    moss_changed = true;
+                }
+
+                ui.add_space(8.0);
+                ui.label("Appearance");
+                ui.add_space(3.0);
+
+                ui.label("Texture Scale:");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_scale, 0.02..=0.5)
+                    .text("scale")).changed() {
+                    context.editor_state.light_params_dirty = true;
+                    moss_changed = true;
+                }
+
+                ui.add_space(2.0);
+                ui.label("Parallax Depth:");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_parallax_depth, 0.0..=0.3)
+                    .text("depth")).changed() {
+                    context.editor_state.light_params_dirty = true;
+                    moss_changed = true;
+                }
+            } else {
+                ui.add_space(5.0);
+                ui.label("Moss system not yet initialized.");
+                ui.label("Requires fluid simulation and light field.");
+            }
+        }
+
+        if moss_changed {
+            context.editor_state.save_cave_settings();
+        }
+    }
 }
 
 /// Render the Fluid Settings panel for fluid simulation controls and visualization.

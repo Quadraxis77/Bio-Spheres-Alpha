@@ -359,6 +359,32 @@ pub struct GenomeEditorState {
     // Organism skin settings
     /// Whether organism skins are enabled
     pub show_organism_skins: bool,
+
+    // Moss system settings
+    /// Whether moss is enabled on cave walls
+    pub show_moss: bool,
+    /// Moss growth rate (units per second at full light)
+    pub moss_growth_rate: f32,
+    /// Moss erosion rate from water flow (units per second)
+    pub moss_erosion_rate: f32,
+    /// Moss decay rate when conditions not met (units per second)
+    pub moss_decay_rate: f32,
+    /// Minimum light level for moss growth
+    pub moss_min_light: f32,
+    /// Nutrients gained per unit of moss consumed by phagocytes
+    pub moss_nutrient_per_moss: f32,
+    /// Moss consumption rate by phagocytes (units per second)
+    pub moss_consume_rate: f32,
+    /// Wetness evaporation rate (how fast moisture memory fades)
+    pub moss_wetness_evaporation: f32,
+    /// Parallax depth scale for moss visual effect
+    pub moss_parallax_depth: f32,
+    /// Moss texture scale (higher = finer detail)
+    pub moss_scale: f32,
+    /// Water search radius in voxels for moss growth
+    pub moss_water_radius: f32,
+    /// Flag to sync moss params to GPU
+    pub moss_params_dirty: bool,
     /// Skin radius scale (multiplier on cell radius for skin thickness)
     pub skin_radius_scale: f32,
     /// Iso level for organism skin surface extraction
@@ -406,7 +432,10 @@ impl GenomeEditorState {
     /// Create a new genome editor state with default values.
     pub fn new() -> Self {
         let (cave_density, cave_scale, cave_octaves, cave_persistence, cave_threshold, 
-             cave_smoothness, cave_seed, cave_resolution) = Self::load_cave_settings();
+             cave_smoothness, cave_seed, cave_resolution,
+             show_moss, moss_growth_rate, moss_erosion_rate, moss_decay_rate,
+             moss_min_light, moss_nutrient_per_moss, moss_consume_rate,
+             moss_wetness_evaporation, moss_parallax_depth, moss_scale, moss_water_radius) = Self::load_cave_settings();
         
         let (fluid_gravity, fluid_gravity_x, fluid_gravity_y, fluid_gravity_z, 
              fluid_vorticity_epsilon, fluid_pressure_iterations, fluid_lateral_flow_probabilities,
@@ -581,6 +610,18 @@ impl GenomeEditorState {
             caustic_scale,
             caustic_speed,
             show_organism_skins: false,
+            show_moss,
+            moss_growth_rate,
+            moss_erosion_rate,
+            moss_decay_rate,
+            moss_min_light,
+            moss_nutrient_per_moss,
+            moss_consume_rate,
+            moss_wetness_evaporation,
+            moss_parallax_depth,
+            moss_scale,
+            moss_water_radius,
+            moss_params_dirty: false,
             skin_radius_scale: 5.0,
             skin_iso_level: 0.3,
             skin_base_color: [0.85, 0.55, 0.35],
@@ -619,6 +660,17 @@ impl GenomeEditorState {
             self.cave_smoothness,
             self.cave_seed,
             self.cave_resolution,
+            self.show_moss,
+            self.moss_growth_rate,
+            self.moss_erosion_rate,
+            self.moss_decay_rate,
+            self.moss_min_light,
+            self.moss_nutrient_per_moss,
+            self.moss_consume_rate,
+            self.moss_wetness_evaporation,
+            self.moss_parallax_depth,
+            self.moss_scale,
+            self.moss_water_radius,
         ) {
             log::error!("Failed to save cave settings: {}", e);
         }
@@ -653,6 +705,17 @@ impl GenomeEditorState {
         smoothness: f32,
         seed: u32,
         resolution: u32,
+        show_moss: bool,
+        moss_growth_rate: f32,
+        moss_erosion_rate: f32,
+        moss_decay_rate: f32,
+        moss_min_light: f32,
+        moss_nutrient_per_moss: f32,
+        moss_graze_cooldown: f32,
+        moss_wetness_evaporation: f32,
+        moss_parallax_depth: f32,
+        moss_scale: f32,
+        moss_water_radius: f32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct CaveSettings {
@@ -664,6 +727,17 @@ impl GenomeEditorState {
             smoothness: f32,
             seed: u32,
             resolution: u32,
+            show_moss: bool,
+            moss_growth_rate: f32,
+            moss_erosion_rate: f32,
+            moss_decay_rate: f32,
+            moss_min_light: f32,
+            moss_nutrient_per_moss: f32,
+            moss_graze_cooldown: f32,
+            moss_wetness_evaporation: f32,
+            moss_parallax_depth: f32,
+            moss_scale: f32,
+            moss_water_radius: f32,
         }
         
         let settings = CaveSettings {
@@ -675,6 +749,17 @@ impl GenomeEditorState {
             smoothness,
             seed,
             resolution,
+            show_moss,
+            moss_growth_rate,
+            moss_erosion_rate,
+            moss_decay_rate,
+            moss_min_light,
+            moss_nutrient_per_moss,
+            moss_graze_cooldown,
+            moss_wetness_evaporation,
+            moss_parallax_depth,
+            moss_scale,
+            moss_water_radius,
         };
         
         let path = PathBuf::from("cave_settings.ron");
@@ -735,7 +820,8 @@ impl GenomeEditorState {
     }
     
     /// Load cave settings from disk, or return defaults if file doesn't exist.
-    pub fn load_cave_settings() -> (f32, f32, u32, f32, f32, f32, u32, u32) {
+    pub fn load_cave_settings() -> (f32, f32, u32, f32, f32, f32, u32, u32,
+                                     bool, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
         #[derive(serde::Deserialize)]
         struct CaveSettings {
             density: f32,
@@ -747,9 +833,42 @@ impl GenomeEditorState {
             seed: u32,
             #[serde(default = "default_resolution")]
             resolution: u32,
+            #[serde(default = "default_show_moss")]
+            show_moss: bool,
+            #[serde(default = "default_moss_growth_rate")]
+            moss_growth_rate: f32,
+            #[serde(default = "default_moss_erosion_rate")]
+            moss_erosion_rate: f32,
+            #[serde(default = "default_moss_decay_rate")]
+            moss_decay_rate: f32,
+            #[serde(default = "default_moss_min_light")]
+            moss_min_light: f32,
+            #[serde(default = "default_moss_nutrient_per_moss")]
+            moss_nutrient_per_moss: f32,
+            #[serde(default = "default_moss_graze_cooldown")]
+            moss_graze_cooldown: f32,
+            #[serde(default = "default_moss_wetness_evaporation")]
+            moss_wetness_evaporation: f32,
+            #[serde(default = "default_moss_parallax_depth")]
+            moss_parallax_depth: f32,
+            #[serde(default = "default_moss_scale")]
+            moss_scale: f32,
+            #[serde(default = "default_moss_water_radius")]
+            moss_water_radius: f32,
         }
         
         fn default_resolution() -> u32 { 128 }
+        fn default_show_moss() -> bool { true }
+        fn default_moss_growth_rate() -> f32 { 0.15 }
+        fn default_moss_erosion_rate() -> f32 { 0.3 }
+        fn default_moss_decay_rate() -> f32 { 0.05 }
+        fn default_moss_min_light() -> f32 { 0.05 }
+        fn default_moss_nutrient_per_moss() -> f32 { 50.0 }
+        fn default_moss_graze_cooldown() -> f32 { 5.0 }
+        fn default_moss_wetness_evaporation() -> f32 { 0.02 }
+        fn default_moss_parallax_depth() -> f32 { 0.08 }
+        fn default_moss_scale() -> f32 { 0.15 }
+        fn default_moss_water_radius() -> f32 { 20.0 }
         
         let path = PathBuf::from("cave_settings.ron");
         
@@ -767,6 +886,17 @@ impl GenomeEditorState {
                                 settings.smoothness,
                                 settings.seed,
                                 settings.resolution,
+                                settings.show_moss,
+                                settings.moss_growth_rate,
+                                settings.moss_erosion_rate,
+                                settings.moss_decay_rate,
+                                settings.moss_min_light,
+                                settings.moss_nutrient_per_moss,
+                                settings.moss_graze_cooldown,
+                                settings.moss_wetness_evaporation,
+                                settings.moss_parallax_depth,
+                                settings.moss_scale,
+                                settings.moss_water_radius,
                             );
                         }
                         Err(e) => {
@@ -781,7 +911,8 @@ impl GenomeEditorState {
         }
         
         // Return defaults
-        (0.5, 100.0, 2u32, 0.5, 1.0, 0.0, 12345u32, 128u32)
+        (0.5, 100.0, 2u32, 0.5, 1.0, 0.0, 12345u32, 128u32,
+         true, 0.15, 0.3, 0.05, 0.05, 50.0, 5.0, 0.02, 0.08, 0.15, 20.0)
     }
     
     /// Save light settings to disk.

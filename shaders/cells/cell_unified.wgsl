@@ -51,6 +51,8 @@ struct ShadowFieldParams {
     light_dir_x: f32,
     light_dir_y: f32,
     light_dir_z: f32,
+    moss_parallax_depth: f32,
+    moss_scale: f32,
 }
 
 @group(1) @binding(0) var<uniform> shadow_params: ShadowFieldParams;

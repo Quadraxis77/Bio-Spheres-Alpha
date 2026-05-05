@@ -241,12 +241,14 @@ pub fn execute_gpu_physics_step(
         }
         
         // Stage 7: Angular velocity integration (256 threads)
-        // Applies accumulated torques to angular velocities and rotations
+        // Applies accumulated torques to angular velocities and rotations.
+        // Must use the bind group that targets rotations[current_index] so that
+        // angular integration runs on the same buffer physics is processing this frame.
         compute_pass.set_pipeline(&pipelines.velocity_update);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.velocity_update_angular, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.velocity_update_angular[current_index], &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-        
+
         // Stage 7.5: Adhesion constraint sub-stepping (N additional iterations)
         // Each iteration re-evaluates adhesion forces against latest positions and
         // applies corrections directly to output buffers. Dramatically increases
@@ -447,7 +449,7 @@ pub fn execute_gpu_mechanics_step(
         // Stage 7: Angular velocity integration
         compute_pass.set_pipeline(&pipelines.velocity_update);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.velocity_update_angular, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.velocity_update_angular[current_index], &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 7.5: Adhesion constraint sub-stepping (N additional iterations)

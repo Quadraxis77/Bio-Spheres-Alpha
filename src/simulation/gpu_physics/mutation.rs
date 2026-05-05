@@ -1181,31 +1181,31 @@ impl MutationSystem {
             // child_a orientation (genome_mode_data_v0, offsets 0–3)
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 0,
-                weight: 2.0, min_delta: 0.0, max_delta: 0.0,
+                weight: 10.0, min_delta: 0.0, max_delta: 0.0,
                 min_value: -1.0, max_value: 1.0, data_type: data_type::QUAT_SNAP,
             },
             // child_b orientation (genome_mode_data_v1, offsets 4–7)
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 4,
-                weight: 2.0, min_delta: 0.0, max_delta: 0.0,
+                weight: 10.0, min_delta: 0.0, max_delta: 0.0,
                 min_value: -1.0, max_value: 1.0, data_type: data_type::QUAT_SNAP,
             },
             // child_a split orientation (genome_mode_data_v2, offsets 8–11)
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 8,
-                weight: 2.0, min_delta: 0.0, max_delta: 0.0,
+                weight: 10.0, min_delta: 0.0, max_delta: 0.0,
                 min_value: -1.0, max_value: 1.0, data_type: data_type::QUAT_SNAP,
             },
             // child_b split orientation (genome_mode_data_v3, offsets 12–15)
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 12,
-                weight: 2.0, min_delta: 0.0, max_delta: 0.0,
+                weight: 10.0, min_delta: 0.0, max_delta: 0.0,
                 min_value: -1.0, max_value: 1.0, data_type: data_type::QUAT_SNAP,
             },
             // parent split direction (genome_mode_data_v4, offsets 16–19)
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_MODE_DATA, element_offset: 16,
-                weight: 2.0, min_delta: 0.0, max_delta: 0.0,
+                weight: 10.0, min_delta: 0.0, max_delta: 0.0,
                 min_value: -1.0, max_value: 1.0, data_type: data_type::QUAT_SNAP,
             },
 
