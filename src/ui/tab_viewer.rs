@@ -908,7 +908,8 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 ui.add_space(3.0);
 
                 ui.label("Growth Rate:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_growth_rate, 0.01..=1.0)
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_growth_rate, 0.001..=1.0)
+                    .logarithmic(true)
                     .text("per sec")).changed() {
                     moss.growth_rate = context.editor_state.moss_growth_rate;
                     moss_changed = true;
@@ -932,7 +933,8 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
 
                 ui.add_space(2.0);
                 ui.label("Decay Rate:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_decay_rate, 0.0..=0.5)
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_decay_rate, 0.001..=0.5)
+                    .logarithmic(true)
                     .text("per sec")).changed() {
                     moss.decay_rate = context.editor_state.moss_decay_rate;
                     moss_changed = true;

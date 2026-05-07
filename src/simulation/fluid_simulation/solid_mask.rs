@@ -70,6 +70,14 @@ impl SolidMaskGenerator {
         let world_center = Vec3::from(params.world_center);
         let dist_from_center = (pos - world_center).length();
         
+        // Treat the world sphere boundary as a solid wall for fluid containment.
+        // This prevents water from accumulating in the gap between the sphere
+        // boundary and the cave generation radius, which caused a visible sheet
+        // of water clinging to the world sphere when the water level dropped.
+        if dist_from_center >= self.world_radius {
+            return true;
+        }
+
         // Extend cave generation 3 units beyond world sphere (same as cave system)
         let cave_generation_radius = params.world_radius + 3.0;
         let sphere_sdf = dist_from_center - cave_generation_radius;

@@ -591,9 +591,6 @@ fn radial_move(gid: vec3<u32>) {
                 let n_state = atomicLoad(&voxels[n_idx]);
                 if get_fluid_type(n_state) != 0u { continue; }
 
-                // World bounds
-                if !is_in_bounds(grid_to_world(u32(nx), u32(ny), u32(nz))) { continue; }
-
                 // Alignment score: dot(neighbor_direction, force_direction)
                 let dir = vec3<f32>(f32(dx), f32(dy), f32(dz));
                 let dir_len = length(dir);
@@ -752,8 +749,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                                 continue;
                             } else if scan_type == 0u {
                                 // Empty cell - this is the target (don't skip through empty space)
-                                let world_pos = grid_to_world(u32(sx), u32(sy), u32(sz));
-                                if is_in_bounds(world_pos) {
+                                if !is_solid(u32(sx), u32(sy), u32(sz)) {
                                     target_y = step;
                                     break; // Found empty space, stop scanning
                                 }
@@ -826,8 +822,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                 continue;
             } else if scan_type == 0u {
                 // Empty cell - this is the target (don't skip through empty space)
-                let world_pos = grid_to_world(u32(sx), u32(sy), u32(sz));
-                if is_in_bounds(world_pos) {
+                if !is_solid(u32(sx), u32(sy), u32(sz)) {
                     target_y = step;
                     break; // Found empty space, stop scanning
                 }
@@ -1072,7 +1067,6 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
     // For non-gravity directions: Use configurable probability for lateral spreading
     if abs(alignment) <= 0.5 {
         // Water can only move laterally if it's supported (touching other water or solids)
-        // Exception: water at sphere boundary can slide off like cave walls
         // Exception: radial mode — water on the shell surface must flow freely to round out
         if params.gravity_mode != 3u && (a_is_water || b_is_water) {
             var a_supported = true;
@@ -1080,18 +1074,10 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
             
             if a_is_water {
                 a_supported = water_is_supported(gid);
-                // If water is at sphere boundary and not supported, allow it to slide off
-                if !a_supported && is_at_sphere_boundary(gid) {
-                    a_supported = true; // Allow lateral movement away from boundary
-                }
             }
             
             if b_is_water {
                 b_supported = water_is_supported(vec3<u32>(u32(nx), u32(ny), u32(nz)));
-                // If water is at sphere boundary and not supported, allow it to slide off
-                if !b_supported && is_at_sphere_boundary(vec3<u32>(u32(nx), u32(ny), u32(nz))) {
-                    b_supported = true; // Allow lateral movement away from boundary
-                }
             }
             
             if !a_supported || !b_supported {
@@ -1130,12 +1116,8 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
         }
     }
 
-    // Check world boundaries for both cells
-    let world_a = grid_to_world(gid.x, gid.y, gid.z);
-    let world_b = grid_to_world(u32(nx), u32(ny), u32(nz));
-    if !is_in_bounds(world_a) || !is_in_bounds(world_b) {
-        return;
-    }
+    // World sphere boundary is handled by the solid mask (same as cave walls),
+    // so no separate is_in_bounds check is needed here.
 
     // Atomic swap using compare-and-exchange
     // First try to claim cell A
