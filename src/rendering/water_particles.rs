@@ -17,6 +17,16 @@ pub struct WaterParticle {
     pub animation: [f32; 4],
 }
 
+/// Render params uniform for the water particle render shader
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct WaterRenderParams {
+    pub gravity_mode: u32,
+    pub _pad0: u32,
+    pub _pad1: u32,
+    pub _pad2: u32,
+}
+
 /// Parameters for water extraction compute shader
 /// Note: WGSL requires 16-byte struct alignment due to vec3<f32>, so total size must be 48 bytes
 #[repr(C)]
@@ -29,7 +39,8 @@ pub struct ExtractParams {
     pub grid_origin: [f32; 3],
     pub world_radius: f32,  // World boundary radius
     pub prominence_factor: f32,  // How prominent to make water particles (0.0-1.0)
-    pub _padding: [f32; 3],      // Pad to 48 bytes for WGSL struct alignment
+    pub gravity_mode: u32,  // 0=X, 1=Y, 2=Z, 3=radial
+    pub _padding: [f32; 2],      // Pad to 48 bytes for WGSL struct alignment
 }
 
 /// Particle counter (for atomic counting in compute shader)
@@ -53,6 +64,7 @@ pub struct WaterParticleRenderer {
     counter_buffer: wgpu::Buffer,
     counter_staging_buffer: wgpu::Buffer,
     params_buffer: wgpu::Buffer,
+    render_params_buffer: wgpu::Buffer,
 
     // Bind group layouts
     camera_bind_group_layout: wgpu::BindGroupLayout,
@@ -63,6 +75,7 @@ pub struct WaterParticleRenderer {
     time: f32,
     particle_count: u32,
     prominence_factor: f32,  // How prominent water particles should be
+    gravity_mode: u32,       // Current gravity mode for elongation
     width: u32,
     height: u32,
 }
@@ -126,6 +139,14 @@ impl WaterParticleRenderer {
             mapped_at_creation: false,
         });
 
+        // Create render params buffer (gravity_mode for elongation)
+        let render_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Water Render Params"),
+            size: std::mem::size_of::<WaterRenderParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Create extract compute bind group layout
         let extract_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Water Extract Bind Group Layout"),
@@ -185,6 +206,17 @@ impl WaterParticleRenderer {
                     },
                     count: None,
                 },
+                // Water velocity buffer (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -204,10 +236,21 @@ impl WaterParticleRenderer {
             cache: None,
         });
 
-        // Create render bind group layout (for params uniform in fragment shader)
+        // Create render bind group layout (for render params uniform)
         let render_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Water Render Bind Group Layout"),
-            entries: &[],  // No bindings needed - we removed params from render shader
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         // Create render pipeline layout
@@ -326,12 +369,14 @@ impl WaterParticleRenderer {
             counter_buffer,
             counter_staging_buffer,
             params_buffer,
+            render_params_buffer,
             camera_bind_group_layout,
             render_bind_group_layout,
             max_particles,
             time: 0.0,
             particle_count: 0,
             prominence_factor: 0.0,  // Default subtle prominence
+            gravity_mode: 1,         // Default Y axis
             width,
             height,
         }
@@ -343,6 +388,7 @@ impl WaterParticleRenderer {
         device: &wgpu::Device,
         fluid_state_buffer: &wgpu::Buffer,
         solid_mask_buffer: &wgpu::Buffer,
+        water_velocity_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Water Extract Bind Group"),
@@ -368,6 +414,10 @@ impl WaterParticleRenderer {
                     binding: 4,
                     resource: self.params_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: water_velocity_buffer.as_entire_binding(),
+                },
             ],
         })
     }
@@ -377,7 +427,12 @@ impl WaterParticleRenderer {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Water Render Bind Group"),
             layout: &self.render_bind_group_layout,
-            entries: &[],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.render_params_buffer.as_entire_binding(),
+                },
+            ],
         })
     }
 
@@ -389,6 +444,11 @@ impl WaterParticleRenderer {
     /// Get current prominence factor
     pub fn prominence_factor(&self) -> f32 {
         self.prominence_factor
+    }
+
+    /// Set gravity mode for droplet elongation (0=X, 1=Y, 2=Z, 3=radial)
+    pub fn set_gravity_mode(&mut self, mode: u32) {
+        self.gravity_mode = mode;
     }
 
     /// Run compute shader to extract water particles from fluid state
@@ -417,9 +477,19 @@ impl WaterParticleRenderer {
             grid_origin: grid_origin.to_array(),
             world_radius,
             prominence_factor: self.prominence_factor,
-            _padding: [0.0; 3],
+            gravity_mode: self.gravity_mode,
+            _padding: [0.0; 2],
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
+
+        // Update render params (gravity_mode for elongation in render shader)
+        let render_params = WaterRenderParams {
+            gravity_mode: self.gravity_mode,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+        queue.write_buffer(&self.render_params_buffer, 0, bytemuck::cast_slice(&[render_params]));
 
         // Run compute shader
         {

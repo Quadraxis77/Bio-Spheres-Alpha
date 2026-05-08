@@ -5,7 +5,7 @@ struct WaterParticle {
     position: vec3<f32>,
     size: f32,
     color: vec4<f32>,
-    animation: vec4<f32>,
+    animation: vec4<f32>,  // x=time_offset, y=velocity_x, z=velocity_y, w=velocity_z
 }
 
 struct ExtractParams {
@@ -16,7 +16,9 @@ struct ExtractParams {
     grid_origin: vec3<f32>,
     world_radius: f32,  // World boundary radius
     prominence_factor: f32,  // How prominent to make water particles (0.0-1.0)
-    _padding: f32,
+    gravity_mode: u32,  // 0=X, 1=Y, 2=Z, 3=radial
+    _pad0: f32,
+    _pad1: f32,
 }
 
 // Atomic counter for particle count
@@ -30,6 +32,7 @@ struct ParticleCounter {
 @group(0) @binding(2) var<storage, read_write> counter: ParticleCounter;
 @group(0) @binding(3) var<storage, read> solid_mask: array<u32>;
 @group(0) @binding(4) var<uniform> params: ExtractParams;
+@group(0) @binding(5) var<storage, read> water_velocity: array<u32>;
 
 // Check if a voxel is solid
 fn is_solid(x: u32, y: u32, z: u32) -> bool {
@@ -127,6 +130,22 @@ fn grid_index(x: u32, y: u32, z: u32) -> u32 {
     return x + y * res + z * res * res;
 }
 
+// Decode a packed velocity u32 into a direction vector.
+// Encoding: 2 bits per axis. 0b00=0, 0b01=+1, 0b10=-1.
+fn decode_velocity_component(v: u32) -> f32 {
+    if v == 1u { return 1.0; }
+    if v == 2u { return -1.0; }
+    return 0.0;
+}
+
+fn decode_water_velocity(packed: u32) -> vec3<f32> {
+    if packed == 0u { return vec3<f32>(0.0); }
+    let dx = decode_velocity_component(packed & 3u);
+    let dy = decode_velocity_component((packed >> 2u) & 3u);
+    let dz = decode_velocity_component((packed >> 4u) & 3u);
+    return vec3<f32>(dx, dy, dz);
+}
+
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let res = params.grid_resolution;
@@ -175,12 +194,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Water color: blue with consistent transparency
     particle.color = vec4<f32>(0.2, 0.5, 0.8, 0.3);
 
-    // Animation data (time offset based on position for variation)
+    // Sample water velocity at this voxel
+    let vel = decode_water_velocity(water_velocity[idx]);
+
+    // Animation data: x=time offset for shimmer, yzw=velocity direction for elongation
     particle.animation = vec4<f32>(
         params.time + f32(global_id.x) * 0.05,
-        params.prominence_factor,
-        f32(global_id.y) * 0.05,
-        f32(global_id.z) * 0.05
+        vel.x,
+        vel.y,
+        vel.z
     );
 
     particles[particle_idx] = particle;

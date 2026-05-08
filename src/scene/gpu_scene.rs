@@ -4041,7 +4041,7 @@ impl GpuScene {
         if let (Some(ref particle_renderer), Some(ref fluid_sim)) =
             (&self.water_particle_renderer, &self.fluid_simulator) {
             self.water_extract_bind_group = Some(
-                particle_renderer.create_extract_bind_group(device, fluid_sim.current_state_buffer(), fluid_sim.solid_mask_buffer())
+                particle_renderer.create_extract_bind_group(device, fluid_sim.current_state_buffer(), fluid_sim.solid_mask_buffer(), fluid_sim.water_velocity_buffer())
             );
             log::info!("Water extract bind group created");
         }
@@ -4057,6 +4057,11 @@ impl GpuScene {
     ) {
         // Ensure bind group exists
         self.ensure_water_extract_bind_group(device);
+
+        // Update gravity mode on the particle renderer
+        if let Some(ref mut particle_renderer) = self.water_particle_renderer {
+            particle_renderer.set_gravity_mode(self.gravity_mode);
+        }
 
         if let (Some(ref mut particle_renderer), Some(ref fluid_sim), Some(ref extract_bind_group)) =
             (&mut self.water_particle_renderer, &self.fluid_simulator, &self.water_extract_bind_group) {
