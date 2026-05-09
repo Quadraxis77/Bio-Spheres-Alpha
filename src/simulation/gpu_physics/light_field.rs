@@ -89,6 +89,20 @@ pub struct ShadowFieldParams {
     // Moss parameters
     pub moss_parallax_depth: f32,
     pub moss_scale: f32,
+    // Moss appearance parameters
+    pub moss_noise_type: u32,        // 0=value, 1=worley/cellular, 2=ridged
+    pub moss_noise_frequency: f32,   // primary noise frequency (default 18.0)
+    pub moss_noise_lacunarity: f32,  // frequency multiplier between octaves (default 2.5)
+    pub moss_height_sharpness_low: f32,  // smoothstep lower bound (default 0.25)
+    pub moss_height_sharpness_high: f32, // smoothstep upper bound (default 0.7)
+    pub moss_bump_strength: f32,     // normal map intensity (default 5.0)
+    pub moss_color_dark_r: f32,
+    pub moss_color_dark_g: f32,
+    pub moss_color_dark_b: f32,
+    pub moss_color_bright_r: f32,
+    pub moss_color_bright_g: f32,
+    pub moss_color_bright_b: f32,
+    pub _pad_moss: [f32; 2],         // padding for alignment
 }
 
 /// GPU Light Field System
@@ -152,6 +166,15 @@ pub struct LightFieldSystem {
     moss_parallax_depth: f32,
     // Moss texture scale (higher = finer detail)
     moss_scale: f32,
+    // Moss appearance parameters
+    moss_noise_type: u32,
+    moss_noise_frequency: f32,
+    moss_noise_lacunarity: f32,
+    moss_height_sharpness_low: f32,
+    moss_height_sharpness_high: f32,
+    moss_bump_strength: f32,
+    moss_color_dark: [f32; 3],
+    moss_color_bright: [f32; 3],
 
     // Grid params (cached)
     world_radius: f32,
@@ -641,6 +664,14 @@ impl LightFieldSystem {
             cave_shadow_bind_group_layout,
             moss_parallax_depth: 0.08,
             moss_scale: 0.15,
+            moss_noise_type: 0,
+            moss_noise_frequency: 18.0,
+            moss_noise_lacunarity: 2.5,
+            moss_height_sharpness_low: 0.25,
+            moss_height_sharpness_high: 0.7,
+            moss_bump_strength: 5.0,
+            moss_color_dark: [0.06, 0.12, 0.04],
+            moss_color_bright: [0.20, 0.38, 0.10],
             world_radius,
             cell_size,
             grid_origin,
@@ -765,6 +796,46 @@ impl LightFieldSystem {
         self.moss_scale = scale;
     }
 
+    /// Set moss noise type (0=value, 1=worley, 2=ridged)
+    pub fn set_moss_noise_type(&mut self, noise_type: u32) {
+        self.moss_noise_type = noise_type;
+    }
+
+    /// Set moss noise primary frequency
+    pub fn set_moss_noise_frequency(&mut self, freq: f32) {
+        self.moss_noise_frequency = freq;
+    }
+
+    /// Set moss noise lacunarity (frequency multiplier between octaves)
+    pub fn set_moss_noise_lacunarity(&mut self, lac: f32) {
+        self.moss_noise_lacunarity = lac;
+    }
+
+    /// Set moss height sharpness lower bound (smoothstep threshold)
+    pub fn set_moss_height_sharpness_low(&mut self, val: f32) {
+        self.moss_height_sharpness_low = val;
+    }
+
+    /// Set moss height sharpness upper bound (smoothstep threshold)
+    pub fn set_moss_height_sharpness_high(&mut self, val: f32) {
+        self.moss_height_sharpness_high = val;
+    }
+
+    /// Set moss bump/normal map strength
+    pub fn set_moss_bump_strength(&mut self, val: f32) {
+        self.moss_bump_strength = val;
+    }
+
+    /// Set moss dark (base/shadow) color
+    pub fn set_moss_color_dark(&mut self, color: [f32; 3]) {
+        self.moss_color_dark = color;
+    }
+
+    /// Set moss bright (tip/highlight) color
+    pub fn set_moss_color_bright(&mut self, color: [f32; 3]) {
+        self.moss_color_bright = color;
+    }
+
     /// Set sun/light color
     pub fn set_sun_color(&mut self, color: [f32; 3]) {
         self.sun_color = color;
@@ -852,6 +923,19 @@ impl LightFieldSystem {
             light_dir_z: self.light_dir[2],
             moss_parallax_depth: self.moss_parallax_depth,
             moss_scale: self.moss_scale,
+            moss_noise_type: self.moss_noise_type,
+            moss_noise_frequency: self.moss_noise_frequency,
+            moss_noise_lacunarity: self.moss_noise_lacunarity,
+            moss_height_sharpness_low: self.moss_height_sharpness_low,
+            moss_height_sharpness_high: self.moss_height_sharpness_high,
+            moss_bump_strength: self.moss_bump_strength,
+            moss_color_dark_r: self.moss_color_dark[0],
+            moss_color_dark_g: self.moss_color_dark[1],
+            moss_color_dark_b: self.moss_color_dark[2],
+            moss_color_bright_r: self.moss_color_bright[0],
+            moss_color_bright_g: self.moss_color_bright[1],
+            moss_color_bright_b: self.moss_color_bright[2],
+            _pad_moss: [0.0; 2],
         };
         queue.write_buffer(&self.shadow_field_params_buffer, 0, bytemuck::bytes_of(&params));
     }

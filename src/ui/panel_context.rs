@@ -381,6 +381,22 @@ pub struct GenomeEditorState {
     pub moss_parallax_depth: f32,
     /// Moss texture scale (higher = finer detail)
     pub moss_scale: f32,
+    /// Moss noise type (0=value, 1=worley, 2=ridged)
+    pub moss_noise_type: u32,
+    /// Moss noise primary frequency
+    pub moss_noise_frequency: f32,
+    /// Moss noise lacunarity (frequency multiplier between octaves)
+    pub moss_noise_lacunarity: f32,
+    /// Moss height sharpness lower bound (smoothstep)
+    pub moss_height_sharpness_low: f32,
+    /// Moss height sharpness upper bound (smoothstep)
+    pub moss_height_sharpness_high: f32,
+    /// Moss bump/normal map strength
+    pub moss_bump_strength: f32,
+    /// Moss dark (base/shadow) color RGB
+    pub moss_color_dark: [f32; 3],
+    /// Moss bright (tip/highlight) color RGB
+    pub moss_color_bright: [f32; 3],
     /// Water search radius in voxels for moss growth
     pub moss_water_radius: f32,
     /// Flag to sync moss params to GPU
@@ -435,7 +451,10 @@ impl GenomeEditorState {
              cave_smoothness, cave_seed, cave_resolution,
              show_moss, moss_growth_rate, moss_erosion_rate, moss_decay_rate,
              moss_min_light, moss_nutrient_per_moss, moss_consume_rate,
-             moss_wetness_evaporation, moss_parallax_depth, moss_scale, moss_water_radius) = Self::load_cave_settings();
+             moss_wetness_evaporation, moss_parallax_depth, moss_scale, moss_water_radius,
+             moss_noise_type, moss_noise_frequency, moss_noise_lacunarity,
+             moss_height_sharpness_low, moss_height_sharpness_high, moss_bump_strength,
+             moss_color_dark, moss_color_bright) = Self::load_cave_settings();
         
         let (fluid_gravity, fluid_gravity_x, fluid_gravity_y, fluid_gravity_z, 
              fluid_vorticity_epsilon, fluid_pressure_iterations, fluid_lateral_flow_probabilities,
@@ -620,6 +639,14 @@ impl GenomeEditorState {
             moss_wetness_evaporation,
             moss_parallax_depth,
             moss_scale,
+            moss_noise_type,
+            moss_noise_frequency,
+            moss_noise_lacunarity,
+            moss_height_sharpness_low,
+            moss_height_sharpness_high,
+            moss_bump_strength,
+            moss_color_dark,
+            moss_color_bright,
             moss_water_radius,
             moss_params_dirty: false,
             skin_radius_scale: 5.0,
@@ -671,6 +698,14 @@ impl GenomeEditorState {
             self.moss_parallax_depth,
             self.moss_scale,
             self.moss_water_radius,
+            self.moss_noise_type,
+            self.moss_noise_frequency,
+            self.moss_noise_lacunarity,
+            self.moss_height_sharpness_low,
+            self.moss_height_sharpness_high,
+            self.moss_bump_strength,
+            self.moss_color_dark,
+            self.moss_color_bright,
         ) {
             log::error!("Failed to save cave settings: {}", e);
         }
@@ -716,6 +751,14 @@ impl GenomeEditorState {
         moss_parallax_depth: f32,
         moss_scale: f32,
         moss_water_radius: f32,
+        moss_noise_type: u32,
+        moss_noise_frequency: f32,
+        moss_noise_lacunarity: f32,
+        moss_height_sharpness_low: f32,
+        moss_height_sharpness_high: f32,
+        moss_bump_strength: f32,
+        moss_color_dark: [f32; 3],
+        moss_color_bright: [f32; 3],
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct CaveSettings {
@@ -738,6 +781,14 @@ impl GenomeEditorState {
             moss_parallax_depth: f32,
             moss_scale: f32,
             moss_water_radius: f32,
+            moss_noise_type: u32,
+            moss_noise_frequency: f32,
+            moss_noise_lacunarity: f32,
+            moss_height_sharpness_low: f32,
+            moss_height_sharpness_high: f32,
+            moss_bump_strength: f32,
+            moss_color_dark: [f32; 3],
+            moss_color_bright: [f32; 3],
         }
         
         let settings = CaveSettings {
@@ -760,6 +811,14 @@ impl GenomeEditorState {
             moss_parallax_depth,
             moss_scale,
             moss_water_radius,
+            moss_noise_type,
+            moss_noise_frequency,
+            moss_noise_lacunarity,
+            moss_height_sharpness_low,
+            moss_height_sharpness_high,
+            moss_bump_strength,
+            moss_color_dark,
+            moss_color_bright,
         };
         
         let path = PathBuf::from("cave_settings.ron");
@@ -820,8 +879,10 @@ impl GenomeEditorState {
     }
     
     /// Load cave settings from disk, or return defaults if file doesn't exist.
+    #[allow(clippy::type_complexity)]
     pub fn load_cave_settings() -> (f32, f32, u32, f32, f32, f32, u32, u32,
-                                     bool, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
+                                     bool, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32,
+                                     u32, f32, f32, f32, f32, f32, [f32; 3], [f32; 3]) {
         #[derive(serde::Deserialize)]
         struct CaveSettings {
             density: f32,
@@ -855,6 +916,22 @@ impl GenomeEditorState {
             moss_scale: f32,
             #[serde(default = "default_moss_water_radius")]
             moss_water_radius: f32,
+            #[serde(default = "default_moss_noise_type")]
+            moss_noise_type: u32,
+            #[serde(default = "default_moss_noise_frequency")]
+            moss_noise_frequency: f32,
+            #[serde(default = "default_moss_noise_lacunarity")]
+            moss_noise_lacunarity: f32,
+            #[serde(default = "default_moss_height_sharpness_low")]
+            moss_height_sharpness_low: f32,
+            #[serde(default = "default_moss_height_sharpness_high")]
+            moss_height_sharpness_high: f32,
+            #[serde(default = "default_moss_bump_strength")]
+            moss_bump_strength: f32,
+            #[serde(default = "default_moss_color_dark")]
+            moss_color_dark: [f32; 3],
+            #[serde(default = "default_moss_color_bright")]
+            moss_color_bright: [f32; 3],
         }
         
         fn default_resolution() -> u32 { 128 }
@@ -869,6 +946,14 @@ impl GenomeEditorState {
         fn default_moss_parallax_depth() -> f32 { 0.08 }
         fn default_moss_scale() -> f32 { 0.15 }
         fn default_moss_water_radius() -> f32 { 20.0 }
+        fn default_moss_noise_type() -> u32 { 0 }
+        fn default_moss_noise_frequency() -> f32 { 18.0 }
+        fn default_moss_noise_lacunarity() -> f32 { 2.5 }
+        fn default_moss_height_sharpness_low() -> f32 { 0.25 }
+        fn default_moss_height_sharpness_high() -> f32 { 0.7 }
+        fn default_moss_bump_strength() -> f32 { 5.0 }
+        fn default_moss_color_dark() -> [f32; 3] { [0.06, 0.12, 0.04] }
+        fn default_moss_color_bright() -> [f32; 3] { [0.20, 0.38, 0.10] }
         
         let path = PathBuf::from("cave_settings.ron");
         
@@ -897,6 +982,14 @@ impl GenomeEditorState {
                                 settings.moss_parallax_depth,
                                 settings.moss_scale,
                                 settings.moss_water_radius,
+                                settings.moss_noise_type,
+                                settings.moss_noise_frequency,
+                                settings.moss_noise_lacunarity,
+                                settings.moss_height_sharpness_low,
+                                settings.moss_height_sharpness_high,
+                                settings.moss_bump_strength,
+                                settings.moss_color_dark,
+                                settings.moss_color_bright,
                             );
                         }
                         Err(e) => {
@@ -912,7 +1005,8 @@ impl GenomeEditorState {
         
         // Return defaults
         (0.5, 100.0, 2u32, 0.5, 1.0, 0.0, 12345u32, 128u32,
-         true, 0.15, 0.3, 0.05, 0.05, 50.0, 5.0, 0.02, 0.08, 0.15, 20.0)
+         true, 0.15, 0.3, 0.05, 0.05, 50.0, 5.0, 0.02, 0.08, 0.15, 20.0,
+         0, 18.0, 2.5, 0.25, 0.7, 5.0, [0.06, 0.12, 0.04], [0.20, 0.38, 0.10])
     }
     
     /// Save light settings to disk.

@@ -201,14 +201,15 @@ impl CellRenderer {
         
         // Create a default dummy shadow bind group (shadow disabled, empty light field)
         // This ensures the pipeline always has a valid group(1) even without a light field system.
+        let shadow_params_size = std::mem::size_of::<crate::simulation::gpu_physics::light_field::ShadowFieldParams>() as u64;
         let dummy_shadow_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy Shadow Params Buffer"),
-            size: 80, // ShadowFieldParams is 80 bytes (20 x f32)
+            size: shadow_params_size,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         // Write shadow_enabled = 0 so shadows are disabled by default
-        queue.write_buffer(&dummy_shadow_params_buffer, 0, &[0u8; 80]);
+        queue.write_buffer(&dummy_shadow_params_buffer, 0, &vec![0u8; shadow_params_size as usize]);
         
         let dummy_light_field_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy Light Field Buffer"),

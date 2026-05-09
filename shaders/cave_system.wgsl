@@ -111,6 +111,21 @@ struct ShadowFieldParams {
     light_dir_z: f32,
     moss_parallax_depth: f32,
     moss_scale: f32,
+    // Moss appearance parameters
+    moss_noise_type: u32,
+    moss_noise_frequency: f32,
+    moss_noise_lacunarity: f32,
+    moss_height_sharpness_low: f32,
+    moss_height_sharpness_high: f32,
+    moss_bump_strength: f32,
+    moss_color_dark_r: f32,
+    moss_color_dark_g: f32,
+    moss_color_dark_b: f32,
+    moss_color_bright_r: f32,
+    moss_color_bright_g: f32,
+    moss_color_bright_b: f32,
+    _pad_moss_0: f32,
+    _pad_moss_1: f32,
 }
 
 @group(2) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
@@ -385,22 +400,66 @@ fn sample_moss_density(world_pos: vec3<f32>) -> f32 {
 // Procedural moss height map for parallax occlusion mapping
 // Returns height in [0, 1] where 1 = tallest moss tuft
 // ============================================================
+
+// Worley (cellular) noise for moss
+fn worley_noise(uv: vec2<f32>) -> f32 {
+    let i = floor(uv);
+    let f = fract(uv);
+    var min_dist = 1.0;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let neighbor = vec2<f32>(f32(x), f32(y));
+            let cell_offset = i + neighbor;
+            // Deterministic random point per cell
+            let point = vec2<f32>(
+                fract(sin(dot(cell_offset, vec2<f32>(127.1, 311.7))) * 43758.5453),
+                fract(sin(dot(cell_offset, vec2<f32>(269.5, 183.3))) * 43758.5453)
+            );
+            let diff = neighbor + point - f;
+            let dist = length(diff);
+            min_dist = min(min_dist, dist);
+        }
+    }
+    return min_dist;
+}
+
 fn moss_height(uv: vec2<f32>) -> f32 {
-    // Multi-octave noise for organic clumpy moss texture
-    let n1 = noise(uv * 18.0);           // Large clumps
-    let n2 = noise(uv * 45.0 + 7.3);     // Medium detail
-    let n3 = noise(uv * 95.0 + 13.7);    // Fine fuzz
-    let n4 = noise(uv * 180.0 + 29.1);   // Very fine grain
-    // Weighted blend: large shapes dominate, fine detail adds fuzz
-    var h = n1 * 0.4 + n2 * 0.3 + n3 * 0.2 + n4 * 0.1;
+    let freq = shadow_params.moss_noise_frequency;
+    let lac = shadow_params.moss_noise_lacunarity;
+    let noise_type = shadow_params.moss_noise_type;
+
+    var h: f32;
+
+    if (noise_type == 1u) {
+        // Worley/cellular noise: creates rounded clumps with clear gaps
+        let n1 = 1.0 - worley_noise(uv * freq);
+        let n2 = 1.0 - worley_noise(uv * freq * lac + 7.3);
+        let n3 = 1.0 - worley_noise(uv * freq * lac * lac + 13.7);
+        h = n1 * 0.5 + n2 * 0.3 + n3 * 0.2;
+    } else if (noise_type == 2u) {
+        // Ridged noise: creates sharp ridges and valleys
+        let n1 = abs(noise(uv * freq) * 2.0 - 1.0);
+        let n2 = abs(noise(uv * freq * lac + 7.3) * 2.0 - 1.0);
+        let n3 = abs(noise(uv * freq * lac * lac + 13.7) * 2.0 - 1.0);
+        h = (1.0 - n1) * 0.5 + (1.0 - n2) * 0.3 + (1.0 - n3) * 0.2;
+    } else {
+        // Value noise (default): organic clumpy texture
+        let n1 = noise(uv * freq);
+        let n2 = noise(uv * freq * lac + 7.3);
+        let n3 = noise(uv * freq * lac * lac + 13.7);
+        let n4 = noise(uv * freq * lac * lac * lac + 29.1);
+        h = n1 * 0.4 + n2 * 0.3 + n3 * 0.2 + n4 * 0.1;
+    }
+
     // Sharpen to create distinct tufts with gaps between them
-    h = smoothstep(0.25, 0.7, h);
+    h = smoothstep(shadow_params.moss_height_sharpness_low, shadow_params.moss_height_sharpness_high, h);
     return h;
 }
 
 // Procedural moss normal from height map (central differences)
 // Produces strong tangent-space normals for visible surface texture
-fn moss_normal_from_height(uv: vec2<f32>, bump_strength: f32) -> vec3<f32> {
+fn moss_normal_from_height(uv: vec2<f32>) -> vec3<f32> {
+    let bump_strength = shadow_params.moss_bump_strength;
     // Sample at multiple scales for rich detail
     let eps_fine = 0.0005;
     let eps_coarse = 0.002;
@@ -426,10 +485,11 @@ fn moss_normal_from_height(uv: vec2<f32>, bump_strength: f32) -> vec3<f32> {
 
 // Moss color: varies from dark base to bright tips with per-position variation
 fn moss_color(uv: vec2<f32>, height_val: f32) -> vec3<f32> {
-    // Base colors
-    let dark_moss = vec3<f32>(0.06, 0.12, 0.04);   // Deep shadow green
-    let mid_moss = vec3<f32>(0.12, 0.22, 0.06);     // Mid green
-    let bright_moss = vec3<f32>(0.20, 0.38, 0.10);   // Bright tip green
+    // Colors from uniform parameters
+    let dark_moss = vec3<f32>(shadow_params.moss_color_dark_r, shadow_params.moss_color_dark_g, shadow_params.moss_color_dark_b);
+    let bright_moss = vec3<f32>(shadow_params.moss_color_bright_r, shadow_params.moss_color_bright_g, shadow_params.moss_color_bright_b);
+    // Mid color is average of dark and bright
+    let mid_moss = mix(dark_moss, bright_moss, 0.4);
 
     // Height-based gradient: dark at base, bright at tips
     var col = mix(dark_moss, mid_moss, smoothstep(0.0, 0.4, height_val));
@@ -607,9 +667,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let m_color = moss_color(parallax_uv, h);
 
         // Get moss normal perturbation from height map
-        // bump_strength controls how pronounced the surface texture appears
-        let bump_strength = 5.0;
-        let moss_n = moss_normal_from_height(parallax_uv, bump_strength);
+        // bump_strength is now read from uniform inside the function
+        let moss_n = moss_normal_from_height(parallax_uv);
 
         // Transform moss normal from tangent space to world space
         let world_moss_normal = normalize(

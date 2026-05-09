@@ -997,6 +997,91 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                     context.editor_state.light_params_dirty = true;
                     moss_changed = true;
                 }
+
+                ui.add_space(5.0);
+                ui.label("Noise Type:");
+                let noise_labels = ["Value Noise", "Worley (Cellular)", "Ridged"];
+                let mut noise_type = context.editor_state.moss_noise_type as usize;
+                egui::ComboBox::from_id_salt("moss_noise_type")
+                    .selected_text(noise_labels[noise_type.min(2)])
+                    .show_ui(ui, |ui| {
+                        for (i, label) in noise_labels.iter().enumerate() {
+                            if ui.selectable_value(&mut noise_type, i, *label).changed() {
+                                context.editor_state.moss_noise_type = noise_type as u32;
+                                context.editor_state.light_params_dirty = true;
+                            }
+                        }
+                    });
+                if noise_type as u32 != context.editor_state.moss_noise_type {
+                    context.editor_state.moss_noise_type = noise_type as u32;
+                    context.editor_state.light_params_dirty = true;
+                    moss_changed = true;
+                }
+
+                ui.add_space(2.0);
+                ui.label("Noise Frequency:");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_noise_frequency, 4.0..=80.0)
+                    .logarithmic(true)
+                    .text("freq")).changed() {
+                    context.editor_state.light_params_dirty = true;
+                    moss_changed = true;
+                }
+
+                ui.add_space(2.0);
+                ui.label("Noise Lacunarity:");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_noise_lacunarity, 1.5..=5.0)
+                    .text("lac")).changed() {
+                    context.editor_state.light_params_dirty = true;
+                    moss_changed = true;
+                }
+
+                ui.add_space(2.0);
+                ui.label("Height Sharpness (low):");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_height_sharpness_low, 0.0..=0.5)
+                    .text("low")).changed() {
+                    context.editor_state.light_params_dirty = true;
+                    moss_changed = true;
+                }
+
+                ui.add_space(2.0);
+                ui.label("Height Sharpness (high):");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_height_sharpness_high, 0.3..=1.0)
+                    .text("high")).changed() {
+                    context.editor_state.light_params_dirty = true;
+                    moss_changed = true;
+                }
+
+                ui.add_space(2.0);
+                ui.label("Bump Strength:");
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_bump_strength, 0.0..=15.0)
+                    .text("bump")).changed() {
+                    context.editor_state.light_params_dirty = true;
+                    moss_changed = true;
+                }
+
+                ui.add_space(5.0);
+                ui.label("Colors");
+                ui.add_space(3.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Dark (base):");
+                    let mut color = context.editor_state.moss_color_dark;
+                    if ui.color_edit_button_rgb(&mut color).changed() {
+                        context.editor_state.moss_color_dark = color;
+                        context.editor_state.light_params_dirty = true;
+                        moss_changed = true;
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Bright (tips):");
+                    let mut color = context.editor_state.moss_color_bright;
+                    if ui.color_edit_button_rgb(&mut color).changed() {
+                        context.editor_state.moss_color_bright = color;
+                        context.editor_state.light_params_dirty = true;
+                        moss_changed = true;
+                    }
+                });
             } else {
                 ui.add_space(5.0);
                 ui.label("Moss system not yet initialized.");

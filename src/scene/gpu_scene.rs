@@ -4125,6 +4125,14 @@ impl GpuScene {
             light_field.set_caustic_speed(editor_state.caustic_speed);
             light_field.set_moss_parallax_depth(editor_state.moss_parallax_depth);
             light_field.set_moss_scale(editor_state.moss_scale);
+            light_field.set_moss_noise_type(editor_state.moss_noise_type);
+            light_field.set_moss_noise_frequency(editor_state.moss_noise_frequency);
+            light_field.set_moss_noise_lacunarity(editor_state.moss_noise_lacunarity);
+            light_field.set_moss_height_sharpness_low(editor_state.moss_height_sharpness_low);
+            light_field.set_moss_height_sharpness_high(editor_state.moss_height_sharpness_high);
+            light_field.set_moss_bump_strength(editor_state.moss_bump_strength);
+            light_field.set_moss_color_dark(editor_state.moss_color_dark);
+            light_field.set_moss_color_bright(editor_state.moss_color_bright);
             light_field.set_sun_color([
                 editor_state.sun_color[0] * editor_state.sun_intensity,
                 editor_state.sun_color[1] * editor_state.sun_intensity,

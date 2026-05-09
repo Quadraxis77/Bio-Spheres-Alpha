@@ -53,6 +53,21 @@ struct ShadowFieldParams {
     light_dir_z: f32,
     moss_parallax_depth: f32,
     moss_scale: f32,
+    // Moss appearance parameters
+    moss_noise_type: u32,
+    moss_noise_frequency: f32,
+    moss_noise_lacunarity: f32,
+    moss_height_sharpness_low: f32,
+    moss_height_sharpness_high: f32,
+    moss_bump_strength: f32,
+    moss_color_dark_r: f32,
+    moss_color_dark_g: f32,
+    moss_color_dark_b: f32,
+    moss_color_bright_r: f32,
+    moss_color_bright_g: f32,
+    moss_color_bright_b: f32,
+    _pad_moss_0: f32,
+    _pad_moss_1: f32,
 }
 
 @group(1) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
