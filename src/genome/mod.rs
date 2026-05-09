@@ -219,8 +219,8 @@ impl Default for ModeSettings {
             child_b_after_split_orientation: Quat::IDENTITY, // Default orientation for Child B after max splits
             child_a_after_split_keep_adhesion: true, // Default: keep adhesion for Child A after max splits
             child_b_after_split_keep_adhesion: true, // Default: keep adhesion for Child B after max splits
-            glueocyte_cell_adhesion: true,  // Default: cell adhesion enabled
-            glueocyte_env_adhesion: false,     // Default: environment adhesion disabled
+            glueocyte_cell_adhesion: false,  // Default: cell adhesion disabled
+            glueocyte_env_adhesion: true,      // Default: environment adhesion enabled
             swim_force: 0.5, // Default swim force for flagellocytes
             flagellocyte_use_signal: false, // Default: fixed speed mode
             flagellocyte_signal_channel: 0, // Default: channel 0

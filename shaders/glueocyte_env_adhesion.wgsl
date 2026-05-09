@@ -242,6 +242,7 @@ const SPRING_STRENGTH: f32 = 80.0;
 const SPRING_DAMPING: f32 = 8.0;
 const CONTACT_THRESHOLD: f32 = 3.0;
 const GLUEOCYTE_CELL_TYPE: u32 = 6u;
+const BREAK_FORCE: f32 = 500.0;
 
 fn float_to_fixed(v: f32) -> i32 {
     return i32(v * FIXED_POINT_SCALE);
@@ -289,6 +290,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let anchor_pos = anchor.xyz;
         let delta = anchor_pos - pos;
         let spring_force = delta * SPRING_STRENGTH;
+
+        // Break the anchor if spring force exceeds threshold
+        let force_mag = length(spring_force);
+        if (force_mag > BREAK_FORCE) {
+            env_anchors[cell_idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+            return;
+        }
+
         let damping_force = -vel * SPRING_DAMPING;
         let total_force = spring_force + damping_force;
 

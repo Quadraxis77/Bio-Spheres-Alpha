@@ -409,6 +409,15 @@ pub struct CanonicalState {
     /// Final list of divisions that will actually be processed.
     pub filtered_divisions_buffer: Vec<usize>,
 
+    // === Adhesion Break Cooldown ===
+    // Prevents Glueocyte cells from immediately re-forming a bond after it breaks
+    // under strain. Without this, broken bonds are instantly re-created because
+    // the cells are still overlapping when form_glueocyte_contact_bonds runs.
+
+    /// Recently broken cell pairs: (cell_id_a, cell_id_b, expiry_time)
+    /// Glueocyte bond formation skips pairs that appear here until expiry.
+    pub adhesion_break_cooldowns: Vec<(u32, u32, f32)>,
+
     // === Sister Cell Immunity ===
     // Prevents Glueocyte cells from immediately bonding to their sister cell
     // after division, unless the parent had parent_make_adhesion enabled.
@@ -545,6 +554,9 @@ impl CanonicalState {
             // Sister immunity — no immunity by default
             sister_cell_id: vec![u32::MAX; capacity],
             sister_expiry: vec![0.0; capacity],
+
+            // Adhesion break cooldown — no cooldowns initially
+            adhesion_break_cooldowns: Vec::new(),
 
             // Environment adhesion — no anchors by default
             env_anchor_pos: vec![Vec3::ZERO; capacity],
