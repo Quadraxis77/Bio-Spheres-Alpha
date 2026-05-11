@@ -982,6 +982,14 @@ impl GpuScene {
                 cilia_speed_below: 0.5,
                 cilia_speed_above: 0.0,
                 cilia_threshold: 1.0,
+                myocyte_contraction: 0.5,
+                myocyte_use_signal: false,
+                myocyte_signal_channel: 0,
+                myocyte_contraction_above: 0.5,
+                myocyte_contraction_below: 0.0,
+                myocyte_threshold: 1.0,
+                myocyte_pulse_rate: 1.0,
+                myocyte_pulse_phase: 0,
                 child_a: crate::genome::ChildSettings {
                     mode_number: child_a_local,
                     orientation: qa,
@@ -1823,6 +1831,9 @@ impl GpuScene {
         // Update cilia mode properties for this genome's modes only
         self.gpu_triple_buffers.incremental_sync_cilia_mode_properties(queue, &genome, global_start_index);
         
+        // Update myocyte mode properties for this genome's modes only
+        self.gpu_triple_buffers.incremental_sync_myocyte_mode_properties(queue, &genome, global_start_index);
+        
         // Update child mode indices for this genome's modes only
         self.gpu_triple_buffers.incremental_sync_child_mode_indices(device, genome_id, global_start_index, mode_count);
         
@@ -1940,6 +1951,9 @@ impl GpuScene {
         
         // Sync cilia mode properties for cilia_force shader (v5, v6)
         self.gpu_triple_buffers.sync_cilia_mode_properties(queue, &self.genomes);
+        
+        // Sync myocyte mode properties for muscle_contraction shader (v7, v8)
+        self.gpu_triple_buffers.sync_myocyte_mode_properties(queue, &self.genomes);
         
         // Sync mode cell types lookup table (for deriving cell_type from mode_index)
         self.gpu_triple_buffers.sync_mode_cell_types(queue, &self.genomes);

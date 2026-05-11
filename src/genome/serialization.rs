@@ -198,6 +198,22 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cilia_threshold: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub myocyte_contraction: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub myocyte_use_signal: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub myocyte_signal_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub myocyte_contraction_above: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub myocyte_contraction_below: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub myocyte_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub myocyte_pulse_rate: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub myocyte_pulse_phase: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_b: Option<SerializableChildSettings>,
@@ -377,6 +393,14 @@ fn mode_to_serializable(
         cilia_speed_below: diff_f32(mode.cilia_speed_below, default.cilia_speed_below),
         cilia_speed_above: diff_f32(mode.cilia_speed_above, default.cilia_speed_above),
         cilia_threshold: diff_f32(mode.cilia_threshold, default.cilia_threshold),
+        myocyte_contraction: diff_f32(mode.myocyte_contraction, default.myocyte_contraction),
+        myocyte_use_signal: diff_bool(mode.myocyte_use_signal, default.myocyte_use_signal),
+        myocyte_signal_channel: diff_i32(mode.myocyte_signal_channel, default.myocyte_signal_channel),
+        myocyte_contraction_above: diff_f32(mode.myocyte_contraction_above, default.myocyte_contraction_above),
+        myocyte_contraction_below: diff_f32(mode.myocyte_contraction_below, default.myocyte_contraction_below),
+        myocyte_threshold: diff_f32(mode.myocyte_threshold, default.myocyte_threshold),
+        myocyte_pulse_rate: diff_f32(mode.myocyte_pulse_rate, default.myocyte_pulse_rate),
+        myocyte_pulse_phase: diff_i32(mode.myocyte_pulse_phase, default.myocyte_pulse_phase),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(&mode.adhesion_settings, &default.adhesion_settings),
@@ -457,6 +481,14 @@ impl SerializableModeSettings {
             || self.cilia_speed_below.is_some()
             || self.cilia_speed_above.is_some()
             || self.cilia_threshold.is_some()
+            || self.myocyte_contraction.is_some()
+            || self.myocyte_use_signal.is_some()
+            || self.myocyte_signal_channel.is_some()
+            || self.myocyte_contraction_above.is_some()
+            || self.myocyte_contraction_below.is_some()
+            || self.myocyte_threshold.is_some()
+            || self.myocyte_pulse_rate.is_some()
+            || self.myocyte_pulse_phase.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -718,6 +750,30 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.cilia_threshold {
         mode.cilia_threshold = v;
+    }
+    if let Some(v) = ser.myocyte_contraction {
+        mode.myocyte_contraction = v;
+    }
+    if let Some(v) = ser.myocyte_use_signal {
+        mode.myocyte_use_signal = v;
+    }
+    if let Some(v) = ser.myocyte_signal_channel {
+        mode.myocyte_signal_channel = v;
+    }
+    if let Some(v) = ser.myocyte_contraction_above {
+        mode.myocyte_contraction_above = v;
+    }
+    if let Some(v) = ser.myocyte_contraction_below {
+        mode.myocyte_contraction_below = v;
+    }
+    if let Some(v) = ser.myocyte_threshold {
+        mode.myocyte_threshold = v;
+    }
+    if let Some(v) = ser.myocyte_pulse_rate {
+        mode.myocyte_pulse_rate = v;
+    }
+    if let Some(v) = ser.myocyte_pulse_phase {
+        mode.myocyte_pulse_phase = v;
     }
     if let Some(ref child_a) = ser.child_a {
         apply_child_settings(&mut mode.child_a, child_a);

@@ -118,6 +118,11 @@ var<storage, read_write> angular_velocities_out: array<vec4<f32>>;
 @group(2) @binding(4)
 var<storage, read> genome_orientations: array<vec4<f32>>;
 
+// Per-cell muscle contraction values (0.0 = relaxed, 1.0 = fully contracted)
+// Each cell only controls its own half of the adhesion bond
+@group(2) @binding(5)
+var<storage, read> muscle_contraction: array<f32>;
+
 const PI: f32 = 3.14159265359;
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 
@@ -221,6 +226,8 @@ fn compute_substep_forces(
     connection: AdhesionConnection,
     settings: AdhesionSettings,
     is_cell_a: bool,
+    contraction_a: f32,
+    contraction_b: f32,
 ) -> array<vec3<f32>, 2> {
     var force = vec3<f32>(0.0);
     var torque = vec3<f32>(0.0);
@@ -233,6 +240,7 @@ fn compute_substep_forces(
 
     let adhesion_dir = delta_pos / dist;
     let rest_length = settings.rest_length;
+    let effective_rest_length = rest_length * max(1.0 - contraction_a * 0.5 - contraction_b * 0.5, 0.0);
 
     // Transform anchor directions to world space using current physics rotations
     // so that adhesion structure rotates with the cells rather than being locked to world orientation.
@@ -248,8 +256,8 @@ fn compute_substep_forces(
     }
 
     // Geometric spring force: anchor-defined target positions
-    let target_b = pos_a + anchor_a * rest_length;
-    let target_a = pos_b + anchor_b * rest_length;
+    let target_b = pos_a + anchor_a * effective_rest_length;
+    let target_a = pos_b + anchor_b * effective_rest_length;
     let error_a = target_a - pos_a;
     let error_b = target_b - pos_b;
     let geo_force_on_a = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness;
@@ -426,10 +434,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             ang_vel_a = other_ang_vel; ang_vel_b = my_ang_vel;
         }
 
+        // Read per-cell muscle contraction values
+        let contraction_cell_a = muscle_contraction[connection.cell_a_index];
+        let contraction_cell_b = muscle_contraction[connection.cell_b_index];
+
         let result = compute_substep_forces(
             pos_a, pos_b, vel_a, vel_b,
             rot_a, rot_b, ang_vel_a, ang_vel_b,
-            connection, settings, is_cell_a
+            connection, settings, is_cell_a,
+            contraction_cell_a, contraction_cell_b
         );
 
         total_force += result[0];

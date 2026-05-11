@@ -164,6 +164,22 @@ pub fn execute_gpu_physics_step(
     let effective_cell_count = (_cell_count_hint.max(1) + 255) / 256 * 256; // Round up to workgroup boundary
     let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
     
+    // Muscle contraction pass: compute per-cell contraction values BEFORE the main physics pass.
+    // Running in a separate compute pass ensures a pipeline barrier so all writes to
+    // muscle_contraction_buffer are visible to adhesion_physics and adhesion_substep.
+    {
+        let mut contraction_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Muscle Contraction Pass"),
+            timestamp_writes: None,
+        });
+        contraction_pass.set_pipeline(&pipelines.muscle_contraction);
+        contraction_pass.set_bind_group(0, &cached_bind_groups.muscle_contraction_group0, &[]);
+        contraction_pass.set_bind_group(1, &cached_bind_groups.muscle_contraction_group1, &[]);
+        contraction_pass.set_bind_group(2, &cached_bind_groups.muscle_contraction_group2, &[]);
+        contraction_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+    }
+    // Implicit pipeline barrier: contraction writes are now visible to the physics pass.
+
     // Execute compute shader stages
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -392,6 +408,20 @@ pub fn execute_gpu_mechanics_step(
         encoder.clear_buffer(&adhesion_buffers.torque_accum_x, 0, None);
         encoder.clear_buffer(&adhesion_buffers.torque_accum_y, 0, None);
         encoder.clear_buffer(&adhesion_buffers.torque_accum_z, 0, None);
+    }
+
+    // Muscle contraction pass: separate compute pass ensures pipeline barrier
+    // so contraction values are visible to adhesion_physics and adhesion_substep.
+    {
+        let mut contraction_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Muscle Contraction Pass (Drag)"),
+            timestamp_writes: None,
+        });
+        contraction_pass.set_pipeline(&pipelines.muscle_contraction);
+        contraction_pass.set_bind_group(0, &cached_bind_groups.muscle_contraction_group0, &[]);
+        contraction_pass.set_bind_group(1, &cached_bind_groups.muscle_contraction_group1, &[]);
+        contraction_pass.set_bind_group(2, &cached_bind_groups.muscle_contraction_group2, &[]);
+        contraction_pass.dispatch_workgroups(cell_workgroups, 1, 1);
     }
 
     {

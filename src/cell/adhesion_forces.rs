@@ -69,6 +69,8 @@ pub fn compute_adhesion_forces(
             connections.twist_reference_a[i],
             connections.twist_reference_b[i],
             settings,
+            0.0,
+            0.0,
         );
 
         // Check break condition before applying forces
@@ -106,6 +108,7 @@ pub fn compute_adhesion_forces_parallel(
     forces: &mut [Vec3],
     torques: &mut [Vec3],
     current_time: f32,
+    muscle_contractions: &[f32],
 ) -> Vec<usize> {
     const BREAK_GRACE_PERIOD: f32 = 0.5;
     use rayon::prelude::*;
@@ -130,6 +133,10 @@ pub fn compute_adhesion_forces_parallel(
             
             let settings = &mode_settings[mode_idx];
             
+            // Get per-cell muscle contraction values
+            let contraction_a = if cell_a_idx < muscle_contractions.len() { muscle_contractions[cell_a_idx] } else { 0.0 };
+            let contraction_b = if cell_b_idx < muscle_contractions.len() { muscle_contractions[cell_b_idx] } else { 0.0 };
+            
             let (force_a, torque_a, force_b, torque_b, spring_force_mag) = compute_adhesion_force_pair(
                 positions[cell_a_idx],
                 velocities[cell_a_idx],
@@ -148,6 +155,8 @@ pub fn compute_adhesion_forces_parallel(
                 connections.twist_reference_a[i],
                 connections.twist_reference_b[i],
                 settings,
+                contraction_a,
+                contraction_b,
             );
 
             // Bond breaks: signal with Some(i), zero forces
@@ -202,6 +211,8 @@ fn compute_adhesion_force_pair(
     twist_ref_a: Quat,
     twist_ref_b: Quat,
     settings: &AdhesionSettings,
+    contraction_a: f32,
+    contraction_b: f32,
 ) -> (Vec3, Vec3, Vec3, Vec3, f32) {
     let mut force_a = Vec3::ZERO;
     let mut torque_a = Vec3::ZERO;
@@ -216,6 +227,11 @@ fn compute_adhesion_force_pair(
 
     let adhesion_dir = delta_pos / dist;
     let rest_length = settings.rest_length;
+    
+    // Per-cell contraction: each cell's contraction reduces the total rest length by half.
+    // One myocyte at full contraction (1.0) shortens the bond by 50%.
+    // Two myocytes at full contraction shorten it to zero.
+    let effective_rest_length = rest_length * (1.0 - contraction_a * 0.5 - contraction_b * 0.5).max(0.0);
 
     // Transform anchor directions to world space using GENOME orientations
     // (not physics rotations) so structures are defined purely by genome data.
@@ -245,8 +261,9 @@ fn compute_adhesion_force_pair(
     };
 
     // Geometric spring force: anchor-defined target positions (matches GPU)
-    let target_b = pos_a + anchor_a * rest_length;
-    let target_a = pos_b + anchor_b * rest_length;
+    // Each cell uses its own contracted reach for its anchor
+    let target_b = pos_a + anchor_a * effective_rest_length;
+    let target_a = pos_b + anchor_b * effective_rest_length;
     let error_a = target_a - pos_a;
     let error_b = target_b - pos_b;
     let geo_force_on_a = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness;
@@ -373,6 +390,7 @@ pub fn compute_adhesion_substep(
     mode_settings: &[AdhesionSettings],
     cell_count: usize,
     dt: f32,
+    muscle_contractions: &[f32],
 ) {
     const MAX_FORCE: f32 = 5000.0;
     const MAX_TORQUE: f32 = 500.0;
@@ -402,6 +420,9 @@ pub fn compute_adhesion_substep(
         let settings = &mode_settings[mode_idx];
 
         // Compute substep forces for this pair
+        let contraction_a = if cell_a_idx < muscle_contractions.len() { muscle_contractions[cell_a_idx] } else { 0.0 };
+        let contraction_b = if cell_b_idx < muscle_contractions.len() { muscle_contractions[cell_b_idx] } else { 0.0 };
+        
         let (force_a, torque_a, force_b, torque_b) = compute_substep_force_pair(
             positions[cell_a_idx],
             velocities[cell_a_idx],
@@ -418,6 +439,8 @@ pub fn compute_adhesion_substep(
             connections.twist_reference_a[i],
             connections.twist_reference_b[i],
             settings,
+            contraction_a,
+            contraction_b,
         );
 
         cell_forces[cell_a_idx] += force_a;
@@ -512,6 +535,8 @@ fn compute_substep_force_pair(
     twist_ref_a: Quat,
     twist_ref_b: Quat,
     settings: &AdhesionSettings,
+    contraction_a: f32,
+    contraction_b: f32,
 ) -> (Vec3, Vec3, Vec3, Vec3) {
     let mut force_a = Vec3::ZERO;
     let mut torque_a = Vec3::ZERO;
@@ -526,6 +551,7 @@ fn compute_substep_force_pair(
 
     let adhesion_dir = delta_pos / dist;
     let rest_length = settings.rest_length;
+    let effective_rest_length = rest_length * (1.0 - contraction_a * 0.5 - contraction_b * 0.5).max(0.0);
 
     // Geometric spring using GENOME orientations (matches GPU)
     let genome_anchor_a = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
@@ -540,8 +566,8 @@ fn compute_substep_force_pair(
     };
 
     // Anchor-based geometric spring force (matches GPU, NOT the simple distance spring)
-    let target_b = pos_a + genome_anchor_a * rest_length;
-    let target_a = pos_b + genome_anchor_b * rest_length;
+    let target_b = pos_a + genome_anchor_a * effective_rest_length;
+    let target_a = pos_b + genome_anchor_b * effective_rest_length;
     let error_a = target_a - pos_a;
     let error_b = target_b - pos_b;
     let geo_force = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness;
@@ -692,6 +718,8 @@ pub fn compute_adhesion_forces_batched(
                 connections.twist_reference_a[i],
                 connections.twist_reference_b[i],
                 settings,
+                0.0,
+                0.0,
             );
             
             // Skip bond if it exceeds break force (but not during grace period)

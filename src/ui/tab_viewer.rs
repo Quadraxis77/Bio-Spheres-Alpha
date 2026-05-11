@@ -1971,6 +1971,14 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     cilia_speed_below: 0.5,
                     cilia_speed_above: 0.0,
                     cilia_threshold: 1.0,
+                    myocyte_contraction: 0.5,
+                    myocyte_use_signal: false,
+                    myocyte_signal_channel: 0,
+                    myocyte_contraction_above: 0.5,
+                    myocyte_contraction_below: 0.0,
+                    myocyte_threshold: 1.0,
+                    myocyte_pulse_rate: 1.0,
+                    myocyte_pulse_phase: 0,
                     buoyancy_force: 0.5, // Default buoyancy force for buoyocytes
                     oculocyte_sense_type: 0,
                     oculocyte_signal_channel: 0,
@@ -2586,6 +2594,96 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     ui.add_space(4.0);
                     ui.checkbox(&mut mode.cilia_push_bonded, "Push Organism Cells");
+                });
+            } else if mode.cell_type == 9 { // Myocyte (cell_type == 9)
+                group_container(ui, "Myocyte Functions", egui::Color32::from_rgb(200, 140, 140), |ui| {
+                    // Mode toggle
+                    ui.horizontal(|ui| {
+                        ui.label("Contraction Mode:");
+                        if ui.selectable_label(!mode.myocyte_use_signal, "Pulse").clicked() {
+                            mode.myocyte_use_signal = false;
+                        }
+                        if ui.selectable_label(mode.myocyte_use_signal, "Signal").clicked() {
+                            mode.myocyte_use_signal = true;
+                        }
+                    });
+
+                    ui.separator();
+
+                    if !mode.myocyte_use_signal {
+                        // Phased timer mode
+                        ui.label("Pulse Phase:");
+                        ui.horizontal(|ui| {
+                            if ui.selectable_label(mode.myocyte_pulse_phase == 0, "Pulse A").clicked() {
+                                mode.myocyte_pulse_phase = 0;
+                            }
+                            if ui.selectable_label(mode.myocyte_pulse_phase == 1, "Pulse B").clicked() {
+                                mode.myocyte_pulse_phase = 1;
+                            }
+                        });
+
+                        ui.label("Pulse Rate (cycles/sec):");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.myocyte_pulse_rate, 0.1..=10.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.myocyte_pulse_rate).speed(0.01).range(0.1..=10.0));
+                        });
+
+                        ui.label("Contraction:");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.myocyte_contraction, 0.0..=1.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.myocyte_contraction).speed(0.01).range(0.0..=1.0));
+                        });
+                    } else {
+                        // Signal-based contraction mode
+                        {
+                            let myo_ch_labels = ["Ch 0", "Ch 1", "Ch 2", "Ch 3", "Ch 4", "Ch 5", "Ch 6", "Ch 7",
+                                                 "Ch 8", "Ch 9", "Ch 10", "Ch 11", "Ch 12", "Ch 13", "Ch 14", "Ch 15"];
+                            let myo_ch_idx = (mode.myocyte_signal_channel as usize).min(15);
+                            ui.horizontal(|ui| {
+                                ui.label("Channel:");
+                                egui::ComboBox::from_id_salt("myocyte_signal_channel")
+                                    .selected_text(myo_ch_labels[myo_ch_idx])
+                                    .show_ui(ui, |ui| {
+                                        for (i, label) in myo_ch_labels.iter().enumerate() {
+                                            ui.selectable_value(&mut mode.myocyte_signal_channel, i as i32, *label);
+                                        }
+                                    });
+                            });
+                        }
+
+                        ui.label("Contraction Below (signal < threshold):");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.myocyte_contraction_below, 0.0..=1.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.myocyte_contraction_below).speed(0.01).range(0.0..=1.0));
+                        });
+
+                        ui.label("Contraction Above (signal >= threshold):");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.myocyte_contraction_above, 0.0..=1.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.myocyte_contraction_above).speed(0.01).range(0.0..=1.0));
+                        });
+
+                        ui.label("Threshold:");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.myocyte_threshold, -100.0..=100.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.myocyte_threshold).speed(0.1).range(-100.0..=100.0));
+                        });
+                    }
                 });
             }
 

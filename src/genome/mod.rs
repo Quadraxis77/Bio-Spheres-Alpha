@@ -146,6 +146,16 @@ pub struct ModeSettings {
     // Membrane settings
     pub membrane_stiffness: f32, // Cell membrane stiffness for collision response (0.0 = no repulsion, higher = more rigid)
 
+    // Myocyte settings
+    pub myocyte_contraction: f32, // Contraction amount during active pulse phase (0.0 = no contraction, 1.0 = full contraction)
+    pub myocyte_use_signal: bool, // If true, contraction is signal-driven; if false, uses phased timer
+    pub myocyte_signal_channel: i32, // Which signal channel to read (0-15)
+    pub myocyte_contraction_above: f32, // Contraction amount when signal >= threshold (0.0 to 1.0)
+    pub myocyte_contraction_below: f32, // Contraction amount when signal < threshold (0.0 to 1.0)
+    pub myocyte_threshold: f32, // Signal threshold for contraction switching
+    pub myocyte_pulse_rate: f32, // Pulse oscillation rate in cycles per second (0.1 to 10.0)
+    pub myocyte_pulse_phase: i32, // Which pulse phase to contract on (0 = Pulse A, 1 = Pulse B)
+
     // Regulation signal emission: any cell mode can emit a signal on channels 8-15
     pub regulation_emit_channel: i32, // Channel to emit on (-1 = disabled, 8-15 = regulation channel)
     pub regulation_emit_value: f32, // Signal value to emit (0.0 to 2047.0)
@@ -250,6 +260,14 @@ impl Default for ModeSettings {
             oculocyte_signal_hops: 3, // Default: 3 hops
             oculocyte_ray_length: 20.0, // Default: 20 units ray length
             membrane_stiffness: 250.0, // Default: moderate membrane stiffness
+            myocyte_contraction: 0.5, // Default: 50% contraction
+            myocyte_use_signal: false, // Default: pulse timer mode (works without signals)
+            myocyte_signal_channel: 0, // Default: channel 0
+            myocyte_contraction_above: 0.5, // Default: contract when signal received
+            myocyte_contraction_below: 0.0, // Default: relaxed when no signal
+            myocyte_threshold: 1.0, // Default: threshold of 1.0
+            myocyte_pulse_rate: 1.0, // Default: 1 cycle per second
+            myocyte_pulse_phase: 0, // Default: pulse A
             regulation_emit_channel: -1, // Disabled by default
             regulation_emit_value: 10.0, // Default: 10 signal value
             regulation_emit_hops: 3, // Default: 3 hops

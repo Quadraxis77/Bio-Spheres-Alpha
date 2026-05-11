@@ -289,6 +289,16 @@ impl PreviewState {
             mode.cilia_speed_below.to_bits().hash(&mut hasher);
             mode.cilia_speed_above.to_bits().hash(&mut hasher);
             mode.cilia_threshold.to_bits().hash(&mut hasher);
+            
+            // Hash myocyte settings
+            mode.myocyte_contraction.to_bits().hash(&mut hasher);
+            mode.myocyte_use_signal.hash(&mut hasher);
+            mode.myocyte_signal_channel.hash(&mut hasher);
+            mode.myocyte_contraction_above.to_bits().hash(&mut hasher);
+            mode.myocyte_contraction_below.to_bits().hash(&mut hasher);
+            mode.myocyte_threshold.to_bits().hash(&mut hasher);
+            mode.myocyte_pulse_rate.to_bits().hash(&mut hasher);
+            mode.myocyte_pulse_phase.hash(&mut hasher);
         }
         
         hasher.finish()

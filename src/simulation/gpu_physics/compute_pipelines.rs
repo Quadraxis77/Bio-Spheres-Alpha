@@ -248,6 +248,14 @@ pub struct CachedBindGroups {
     /// Cilia force spatial bind group (same for all frames)
     pub cilia_force_spatial: wgpu::BindGroup,
 
+    // Muscle contraction bind groups
+    /// Muscle contraction group 0: physics params + cell_count_buffer
+    pub muscle_contraction_group0: wgpu::BindGroup,
+    /// Muscle contraction group 1: mode_indices, mode_cell_types, type_behaviors, signal_flags, v7, v8
+    pub muscle_contraction_group1: wgpu::BindGroup,
+    /// Muscle contraction group 2: adhesion_connections, adhesion_settings_v0, adhesion_settings_v0_original, cell_adhesion_indices, adhesion_counts
+    pub muscle_contraction_group2: wgpu::BindGroup,
+
     // Signal system bind groups
     /// Signal flags bind group (Group 0 shared by all signal shaders)
     pub signal_flags: wgpu::BindGroup,
@@ -318,6 +326,9 @@ pub struct GpuPhysicsPipelines {
 
     // Cilia force pipeline (applies contact-dependent surface propulsion for Ciliocyte cells)
     pub cilia_force: wgpu::ComputePipeline,
+
+    // Muscle contraction pipeline (modifies adhesion rest lengths for Myocyte cells)
+    pub muscle_contraction: wgpu::ComputePipeline,
     
     // Bind group layouts
     pub physics_layout: wgpu::BindGroupLayout,
@@ -384,6 +395,11 @@ pub struct GpuPhysicsPipelines {
     // Cilia force bind group layouts
     pub cilia_force_cell_data_layout: wgpu::BindGroupLayout,
     pub cilia_force_spatial_layout: wgpu::BindGroupLayout,
+
+    // Muscle contraction bind group layouts
+    pub muscle_contraction_group0_layout: wgpu::BindGroupLayout,
+    pub muscle_contraction_group1_layout: wgpu::BindGroupLayout,
+    pub muscle_contraction_group2_layout: wgpu::BindGroupLayout,
 
     // Glueocyte env adhesion bind group layouts
     pub env_adhesion_force_accum_layout: wgpu::BindGroupLayout,
@@ -726,6 +742,124 @@ impl GpuPhysicsPipelines {
             "Cilia Force",
         );
 
+        // Muscle contraction pipeline (modifies adhesion rest lengths for Myocyte cells)
+        // Group 0: physics params + cell_count_buffer
+        // Group 1: mode_indices, mode_cell_types, type_behaviors, signal_flags, mode_properties_v7, mode_properties_v8
+        // Group 2: adhesion_connections, adhesion_settings_v0 (read_write), adhesion_settings_v0_original (read), cell_adhesion_indices, adhesion_counts
+        let muscle_contraction_group0_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Muscle Contraction Group 0 Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let muscle_contraction_group1_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Muscle Contraction Group 1 Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let muscle_contraction_group2_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Muscle Contraction Group 2 Layout"),
+            entries: &[
+                // Binding 0: Per-cell muscle contraction output (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let muscle_contraction = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/muscle_contraction.wgsl"),
+            "main",
+            &[&muscle_contraction_group0_layout, &muscle_contraction_group1_layout, &muscle_contraction_group2_layout],
+            "Muscle Contraction",
+        );
+
         // Signal system bind group layouts
         let signal_flags_layout = Self::create_signal_flags_bind_group_layout(device);
         let signal_sense_cell_data_layout = Self::create_signal_sense_cell_data_bind_group_layout(device);
@@ -782,6 +916,7 @@ impl GpuPhysicsPipelines {
             swim_force,
             glueocyte_env_adhesion,
             cilia_force,
+            muscle_contraction,
             physics_layout,
             spatial_grid_layout,
             lifecycle_layout,
@@ -818,6 +953,9 @@ impl GpuPhysicsPipelines {
             swim_force_cell_data_layout,
             cilia_force_cell_data_layout,
             cilia_force_spatial_layout,
+            muscle_contraction_group0_layout,
+            muscle_contraction_group1_layout,
+            muscle_contraction_group2_layout,
             env_adhesion_force_accum_layout,
             env_adhesion_mode_data_layout,
             cave_params_layout,
@@ -1174,6 +1312,10 @@ impl GpuPhysicsPipelines {
                     binding: 4,
                     resource: buffers.genome_orientations.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.muscle_contraction_buffer.as_entire_binding(),
+                },
             ],
         })
     }
@@ -1326,6 +1468,35 @@ impl GpuPhysicsPipelines {
         let cilia_force_cell_data = self.create_cilia_force_cell_data_bind_group(device, buffers, adhesion_buffers);
         let cilia_force_spatial = self.create_cilia_force_spatial_bind_group(device, buffers, organism_label_buffer, None);
 
+        // Muscle contraction bind groups
+        let muscle_contraction_group0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Muscle Contraction Group 0"),
+            layout: &self.muscle_contraction_group0_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: buffers.physics_params.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: buffers.cell_count_buffer.as_entire_binding() },
+            ],
+        });
+        let muscle_contraction_group1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Muscle Contraction Group 1"),
+            layout: &self.muscle_contraction_group1_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: buffers.mode_indices.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: buffers.mode_cell_types.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: buffers.behavior_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: adhesion_buffers.signal_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: buffers.mode_properties_v7.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: buffers.mode_properties_v8.as_entire_binding() },
+            ],
+        });
+        let muscle_contraction_group2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Muscle Contraction Group 2"),
+            layout: &self.muscle_contraction_group2_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: buffers.muscle_contraction_buffer.as_entire_binding() },
+            ],
+        });
+
         // Glueocyte env adhesion bind groups
         let env_adhesion_force_accum = [
             self.create_env_adhesion_force_accum_bind_group(device, adhesion_buffers, buffers, 0),
@@ -1378,6 +1549,9 @@ impl GpuPhysicsPipelines {
             cilia_force_force_accum,
             cilia_force_cell_data,
             cilia_force_spatial,
+            muscle_contraction_group0,
+            muscle_contraction_group1,
+            muscle_contraction_group2,
             env_adhesion_force_accum,
             env_adhesion_mode_data,
             signal_flags,
@@ -2305,6 +2479,17 @@ impl GpuPhysicsPipelines {
                 // Binding 4: Genome orientations (read-only) - pure genome-derived orientations for adhesion
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: Per-cell muscle contraction values (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },

@@ -123,8 +123,10 @@ pub struct GpuCellTypeBehaviorFlags {
     pub applies_buoyancy: u32,
     /// If 1, cell applies cilia contact force
     pub applies_cilia_force: u32,
+    /// If 1, cell applies muscle contraction to adhesion rest lengths
+    pub applies_muscle_contraction: u32,
     /// Padding to 64 bytes for alignment
-    pub _padding: [u32; 8],
+    pub _padding: [u32; 7],
 }
 
 impl Default for GpuCellTypeBehaviorFlags {
@@ -138,7 +140,8 @@ impl Default for GpuCellTypeBehaviorFlags {
             is_storage_cell: 0,
             applies_buoyancy: 0,
             applies_cilia_force: 0,
-            _padding: [0; 8],
+            applies_muscle_contraction: 0,
+            _padding: [0; 7],
         }
     }
 }
@@ -359,11 +362,12 @@ pub enum CellType {
     Glueocyte = 6,
     Oculocyte = 7,
     Ciliocyte = 8,
+    Myocyte = 9,
 }
 
 impl CellType {
     /// Number of registered cell types. Update when adding new types.
-    pub const COUNT: usize = 9;
+    pub const COUNT: usize = 10;
 
     /// Maximum number of cell types supported by GPU buffers.
     pub const MAX_TYPES: usize = 30;
@@ -380,6 +384,7 @@ impl CellType {
             CellType::Glueocyte,
             CellType::Oculocyte,
             CellType::Ciliocyte,
+            CellType::Myocyte,
         ]
     }
 
@@ -400,12 +405,13 @@ impl CellType {
             CellType::Glueocyte => "Glueocyte",
             CellType::Oculocyte => "Oculocyte",
             CellType::Ciliocyte => "Ciliocyte",
+            CellType::Myocyte => "Myocyte",
         }
     }
 
     /// Get all cell type names as a slice.
     pub const fn names() -> &'static [&'static str] {
-        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte", "Buoyocyte", "Glueocyte", "Oculocyte", "Ciliocyte"]
+        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte", "Buoyocyte", "Glueocyte", "Oculocyte", "Ciliocyte", "Myocyte"]
     }
 
     /// Convert from integer index to cell type.
@@ -420,6 +426,7 @@ impl CellType {
             6 => Some(CellType::Glueocyte),
             7 => Some(CellType::Oculocyte),
             8 => Some(CellType::Ciliocyte),
+            9 => Some(CellType::Myocyte),
             _ => None,
         }
     }
@@ -449,7 +456,8 @@ impl CellType {
                 is_storage_cell: 0,
                 applies_buoyancy: 0,
                 applies_cilia_force: 0,
-                _padding: [0; 8],
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
             },
             CellType::Flagellocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,  // Respect split interval
@@ -460,7 +468,8 @@ impl CellType {
                 is_storage_cell: 0,
                 applies_buoyancy: 0,
                 applies_cilia_force: 0,
-                _padding: [0; 8],
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
             },
             CellType::Phagocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,
@@ -471,7 +480,8 @@ impl CellType {
                 is_storage_cell: 0,
                 applies_buoyancy: 0,
                 applies_cilia_force: 0,
-                _padding: [0; 8],
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
             },
             CellType::Photocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,
@@ -482,7 +492,8 @@ impl CellType {
                 is_storage_cell: 0,
                 applies_buoyancy: 0,
                 applies_cilia_force: 0,
-                _padding: [0; 8],
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
             },
             CellType::Lipocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,
@@ -493,7 +504,8 @@ impl CellType {
                 is_storage_cell: 1,
                 applies_buoyancy: 0,
                 applies_cilia_force: 0,
-                _padding: [0; 8],
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
             },
             CellType::Buoyocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,
@@ -504,7 +516,8 @@ impl CellType {
                 is_storage_cell: 0,
                 applies_buoyancy: 1,
                 applies_cilia_force: 0,
-                _padding: [0; 8],
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
             },
             CellType::Glueocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,
@@ -515,7 +528,8 @@ impl CellType {
                 is_storage_cell: 0,
                 applies_buoyancy: 0,
                 applies_cilia_force: 0,
-                _padding: [0; 8],
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
             },
             CellType::Oculocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,
@@ -526,7 +540,8 @@ impl CellType {
                 is_storage_cell: 0,
                 applies_buoyancy: 0,
                 applies_cilia_force: 0,
-                _padding: [0; 8],
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
             },
             CellType::Ciliocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,
@@ -537,7 +552,20 @@ impl CellType {
                 is_storage_cell: 0,
                 applies_buoyancy: 0,
                 applies_cilia_force: 1,
-                _padding: [0; 8],
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
+            },
+            CellType::Myocyte => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 0,
+                applies_swim_force: 0,
+                uses_texture_atlas: 0,
+                has_procedural_tail: 0,
+                gains_mass_from_light: 0,
+                is_storage_cell: 0,
+                applies_buoyancy: 0,
+                applies_cilia_force: 0,
+                applies_muscle_contraction: 1,
+                _padding: [0; 7],
             },
         }
     }
@@ -569,6 +597,12 @@ impl CellType {
                 mode.nutrient_priority = 2.0;
                 mode.max_cell_size = 2.0;
                 mode.split_mass = 3.1;
+            }
+            CellType::Myocyte => {
+                mode.nutrient_priority = 2.0;
+                mode.max_cell_size = 2.0;
+                mode.split_mass = 3.1;
+                mode.myocyte_contraction = 0.5;
             }
             _ => {}
         }

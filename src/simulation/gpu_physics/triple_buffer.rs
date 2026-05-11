@@ -348,6 +348,12 @@ pub struct GpuTripleBufferSystem {
     pub mode_properties_v5: wgpu::Buffer,
     pub mode_properties_v6: wgpu::Buffer,
     
+    /// Mode properties v7 for myocyte parameters (16 bytes per mode)
+    /// v7: [myocyte_contraction, myocyte_use_signal as f32, myocyte_signal_channel as f32, myocyte_threshold]
+    /// v8: [myocyte_contraction_above, myocyte_contraction_below, 0.0, 0.0]
+    pub mode_properties_v7: wgpu::Buffer,
+    pub mode_properties_v8: wgpu::Buffer,
+    
     /// Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
     /// Used by shaders to derive cell_type from mode_index (always up-to-date with genome settings)
     pub mode_cell_types: wgpu::Buffer,
@@ -390,6 +396,12 @@ pub struct GpuTripleBufferSystem {
     /// Per-cell environment adhesion anchor: Vec4(anchor_x, anchor_y, anchor_z, is_active)
     /// w=1.0 means anchor is active, w=0.0 means no anchor.
     pub env_anchor_buffer: wgpu::Buffer,
+
+    /// Per-cell muscle contraction value (one f32 per cell).
+    /// Written by muscle_contraction shader each frame, read by adhesion_physics shader.
+    /// Value 0.0 = relaxed (full rest length), 1.0 = fully contracted (zero length).
+    /// Each cell only controls its own half of the adhesion bond.
+    pub muscle_contraction_buffer: wgpu::Buffer,
 
     /// Per-mode glueocyte environment adhesion flags (one u32 per mode)
     pub glueocyte_env_adhesion_flags: wgpu::Buffer,
@@ -589,6 +601,10 @@ impl GpuTripleBufferSystem {
         let mode_properties_v5 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V5");
         let mode_properties_v6 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V6");
         
+        // Mode properties v7–v8 for myocyte parameters (16 bytes per mode each)
+        let mode_properties_v7 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V7");
+        let mode_properties_v8 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V8");
+        
         // Mode cell types: one u32 per mode - lookup table for deriving cell_type from mode_index
         let mode_cell_types = Self::create_storage_buffer(device, max_modes * 4, "Mode Cell Types");
         
@@ -606,6 +622,13 @@ impl GpuTripleBufferSystem {
 
         // Per-mode glueocyte env adhesion flags (one u32 per mode)
         let glueocyte_env_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Glueocyte Env Adhesion Flags");
+
+        // Per-cell muscle contraction value (one f32 per cell, zero-initialized = relaxed)
+        let muscle_contraction_buffer = Self::create_zero_initialized_storage_buffer(
+            device,
+            capacity as u64 * 4, // f32 = 4 bytes per cell
+            "Muscle Contraction Buffer",
+        );
 
         // Per-mode oculocyte parameters: vec4<u32> per mode (sense_type, sense_range_bits, signal_hops, signal_channel)
         let oculocyte_params = Self::create_storage_buffer(device, max_modes * 16, "Oculocyte Params");
@@ -685,9 +708,12 @@ impl GpuTripleBufferSystem {
             mode_properties_v4,
             mode_properties_v5,
             mode_properties_v6,
+            mode_properties_v7,
+            mode_properties_v8,
             mode_cell_types,
             behavior_flags,
             env_anchor_buffer,
+            muscle_contraction_buffer,
             glueocyte_env_adhesion_flags,
             oculocyte_params,
             regulation_params,
@@ -1246,6 +1272,64 @@ impl GpuTripleBufferSystem {
             let offset = (global_start_index * 16) as u64; // 16 bytes per mode per sub-buffer
             queue.write_buffer(&self.mode_properties_v5, offset, bytemuck::cast_slice(&v5));
             queue.write_buffer(&self.mode_properties_v6, offset, bytemuck::cast_slice(&v6));
+        }
+    }
+
+    /// Sync myocyte mode properties for the muscle_contraction shader.
+    /// Data is written into 2 separate vec4 sub-buffers (v7, v8), each 16 bytes/mode.
+    /// v7: [myocyte_contraction, myocyte_use_signal as f32, myocyte_signal_channel as f32, myocyte_threshold]
+    /// v8: [myocyte_contraction_above, myocyte_contraction_below, myocyte_pulse_rate, myocyte_pulse_phase as f32]
+    pub fn sync_myocyte_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let mut v7: Vec<[f32; 4]> = Vec::new();
+        let mut v8: Vec<[f32; 4]> = Vec::new();
+
+        for genome in genomes {
+            for mode in &genome.modes {
+                v7.push([
+                    mode.myocyte_contraction,
+                    if mode.myocyte_use_signal { 1.0 } else { 0.0 },
+                    mode.myocyte_signal_channel as f32,
+                    mode.myocyte_threshold,
+                ]);
+                v8.push([
+                    mode.myocyte_contraction_above,
+                    mode.myocyte_contraction_below,
+                    mode.myocyte_pulse_rate,
+                    mode.myocyte_pulse_phase as f32,
+                ]);
+            }
+        }
+
+        if !v7.is_empty() {
+            queue.write_buffer(&self.mode_properties_v7, 0, bytemuck::cast_slice(&v7));
+            queue.write_buffer(&self.mode_properties_v8, 0, bytemuck::cast_slice(&v8));
+        }
+    }
+
+    /// Incremental sync of myocyte mode properties for a single genome
+    pub fn incremental_sync_myocyte_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
+        let mut v7: Vec<[f32; 4]> = Vec::new();
+        let mut v8: Vec<[f32; 4]> = Vec::new();
+
+        for mode in &genome.modes {
+            v7.push([
+                mode.myocyte_contraction,
+                if mode.myocyte_use_signal { 1.0 } else { 0.0 },
+                mode.myocyte_signal_channel as f32,
+                mode.myocyte_threshold,
+            ]);
+            v8.push([
+                mode.myocyte_contraction_above,
+                mode.myocyte_contraction_below,
+                mode.myocyte_pulse_rate,
+                mode.myocyte_pulse_phase as f32,
+            ]);
+        }
+
+        if !v7.is_empty() {
+            let offset = (global_start_index * 16) as u64; // 16 bytes per mode per sub-buffer
+            queue.write_buffer(&self.mode_properties_v7, offset, bytemuck::cast_slice(&v7));
+            queue.write_buffer(&self.mode_properties_v8, offset, bytemuck::cast_slice(&v8));
         }
     }
 

@@ -83,6 +83,7 @@
 
 pub mod flagellocyte;
 pub mod test_cell;
+pub mod myocyte;
 pub mod phagocyte;
 pub mod photocyte;
 pub mod lipocyte;
@@ -344,5 +345,6 @@ pub fn create_behavior(cell_type: crate::cell::CellType) -> Box<dyn CellBehavior
         crate::cell::CellType::Glueocyte => Box::new(glueocyte::GlueocyteBehavior),
         crate::cell::CellType::Oculocyte => Box::new(oculocyte::OculocyteBehavior),
         crate::cell::CellType::Ciliocyte => Box::new(ciliocyte::CiliocyteBehavior),
+        crate::cell::CellType::Myocyte => Box::new(myocyte::MyocyteBehavior),
     }
 }

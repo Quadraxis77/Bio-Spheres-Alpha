@@ -116,6 +116,11 @@ var<storage, read_write> angular_velocities_out: array<vec4<f32>>;
 @group(2) @binding(4)
 var<storage, read> genome_orientations: array<vec4<f32>>;
 
+// Per-cell muscle contraction values (0.0 = relaxed, 1.0 = fully contracted)
+// Each cell only controls its own half of the adhesion bond
+@group(2) @binding(5)
+var<storage, read> muscle_contraction: array<f32>;
+
 // Force accumulation buffers (group 3) - atomic i32 for multi-adhesion accumulation
 @group(3) @binding(0)
 var<storage, read_write> force_accum_x: array<atomic<i32>>;
@@ -224,6 +229,8 @@ fn compute_adhesion_forces_for_cell(
     connection: AdhesionConnection,
     settings: AdhesionSettings,
     is_cell_a: bool,
+    contraction_a: f32,
+    contraction_b: f32,
     spring_force_mag_out: ptr<function, f32>,
 ) -> array<vec3<f32>, 2> {
     var force = vec3<f32>(0.0);
@@ -239,6 +246,11 @@ fn compute_adhesion_forces_for_cell(
     
     let adhesion_dir = delta_pos / dist;
     let rest_length = settings.rest_length;
+    
+    // Per-cell contraction: each cell's contraction reduces the total rest length by half.
+    // One myocyte at full contraction (1.0) shortens the bond by 50%.
+    // Two myocytes at full contraction shorten it to zero.
+    let effective_rest_length = rest_length * max(1.0 - contraction_a * 0.5 - contraction_b * 0.5, 0.0);
     
     // Transform anchor directions to world space using current physics rotations
     // so that adhesion structure rotates with the cells rather than being locked to world orientation.
@@ -257,8 +269,9 @@ fn compute_adhesion_forces_for_cell(
     // instead of the raw physical direction between cells.
     // This makes genome-defined angles the authority for cell placement,
     // preventing structures from deforming when physics perturbs positions.
-    let target_b = pos_a + anchor_a * rest_length;  // Where B should be according to A's genome anchor
-    let target_a = pos_b + anchor_b * rest_length;  // Where A should be according to B's genome anchor
+    // Each cell uses its own contracted reach for its anchor.
+    let target_b = pos_a + anchor_a * effective_rest_length;  // Where B should be according to A's (contracted) anchor
+    let target_a = pos_b + anchor_b * effective_rest_length;  // Where A should be according to B's (contracted) anchor
     let error_a = target_a - pos_a;
     let error_b = target_b - pos_b;
     
@@ -491,6 +504,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         
         var spring_force_mag: f32 = 0.0;
+        
+        // Read per-cell muscle contraction values
+        let contraction_cell_a = muscle_contraction[connection.cell_a_index];
+        let contraction_cell_b = muscle_contraction[connection.cell_b_index];
+        
         let result = compute_adhesion_forces_for_cell(
             cell_idx,
             pos_a, pos_b,
@@ -499,6 +517,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             ang_vel_a, ang_vel_b,
             connection, settings,
             is_cell_a,
+            contraction_cell_a,
+            contraction_cell_b,
             &spring_force_mag
         );
 

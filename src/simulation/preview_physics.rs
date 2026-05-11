@@ -241,6 +241,62 @@ pub fn integrate_angular_velocities(
     }
 }
 
+/// Apply myocyte contraction: compute per-cell contraction values for Myocyte cells (cell_type == 9)
+///
+/// Each myocyte computes its contraction amount and stores it in state.muscle_contractions.
+/// The adhesion force computation then uses these per-cell values to scale each cell's
+/// half of the bond independently.
+///
+/// In pulse mode: oscillates between contracted and relaxed using a sine wave timer.
+/// Pulse A contracts when sin(time * rate * 2π) >= 0, Pulse B when < 0.
+/// In signal mode: reads a signal channel and contracts based on threshold.
+pub fn apply_myocyte_contraction(state: &mut CanonicalState, genome: &Genome, current_time: f32) {
+    // Write per-cell contraction values. Non-myocyte cells get 0.0 (relaxed).
+    for i in 0..state.cell_count {
+        let mode_index = state.mode_indices[i];
+        let Some(mode) = genome.modes.get(mode_index) else {
+            state.muscle_contractions[i] = 0.0;
+            continue;
+        };
+
+        // Only Myocyte cells (cell_type == 9) get non-zero contraction
+        if mode.cell_type != 9 {
+            state.muscle_contractions[i] = 0.0;
+            continue;
+        }
+
+        // Determine effective contraction amount
+        let contraction = if mode.myocyte_use_signal {
+            // Signal-based mode: read from the specific channel
+            let channel = (mode.myocyte_signal_channel as usize).min(15);
+            let signal_value = state.signal_channels.get(i * 16 + channel)
+                .copied()
+                .flatten()
+                .unwrap_or(0.0);
+            if signal_value >= mode.myocyte_threshold {
+                mode.myocyte_contraction_above
+            } else {
+                mode.myocyte_contraction_below
+            }
+        } else {
+            // Phased timer mode: oscillate based on current_time
+            let wave = (current_time * mode.myocyte_pulse_rate * 2.0 * std::f32::consts::PI).sin();
+            let is_active_phase = if mode.myocyte_pulse_phase == 0 {
+                wave >= 0.0  // Pulse A
+            } else {
+                wave < 0.0   // Pulse B
+            };
+            if is_active_phase {
+                mode.myocyte_contraction
+            } else {
+                0.0
+            }
+        };
+
+        state.muscle_contractions[i] = contraction.clamp(0.0, 1.0);
+    }
+}
+
 /// Apply swim forces for Flagellocyte cells (cell_type == 1)
 /// 
 /// Flagellocytes apply a forward thrust force in their orientation direction.
@@ -719,6 +775,9 @@ pub fn physics_step_with_genome(
     state.update_adhesion_settings_cache(genome);
     state.update_membrane_stiffness_from_genome(genome);
 
+    // Apply myocyte contraction: temporarily modify rest lengths for myocyte cells
+    apply_myocyte_contraction(state, genome, current_time);
+
     if state.adhesion_connections.active_count > 0 && !state.cached_adhesion_settings.is_empty() {
         let bonds_to_break = crate::cell::compute_adhesion_forces_parallel(
             &state.adhesion_connections,
@@ -732,6 +791,7 @@ pub fn physics_step_with_genome(
             &mut state.forces[..state.cell_count],
             &mut state.torques[..state.cell_count],
             current_time,
+            &state.muscle_contractions[..state.cell_count],
         );
         for conn_idx in bonds_to_break {
             state.adhesion_manager.remove_adhesion(&mut state.adhesion_connections, conn_idx);
@@ -785,6 +845,7 @@ pub fn physics_step_with_genome(
                 &state.cached_adhesion_settings,
                 cell_count,
                 dt,
+                &state.muscle_contractions[..cell_count],
             );
         }
     }

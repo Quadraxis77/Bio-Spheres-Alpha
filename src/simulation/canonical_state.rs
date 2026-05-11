@@ -448,6 +448,11 @@ pub struct CanonicalState {
     /// Whether any cell has an active signal (optimization flag to skip rendering checks)
     pub has_any_signal: bool,
 
+    /// Per-cell muscle contraction values (0.0 = relaxed, 1.0 = fully contracted).
+    /// Written by apply_myocyte_contraction each frame, read by adhesion force computation.
+    /// Each cell only controls its own half of the adhesion bond.
+    pub muscle_contractions: Vec<f32>,
+
     /// Track actual signal flow paths for visualization
     /// Maps (source_cell, target_cell) -> true if signal flowed from source to target
     pub signal_flow_tracker: crate::simulation::signal_system::SignalFlowTracker,
@@ -565,6 +570,7 @@ impl CanonicalState {
             // Signal system — all channels null by default
             signal_channels: vec![None; capacity * 16],
             has_any_signal: false,
+            muscle_contractions: vec![0.0; capacity],
             signal_flow_tracker: crate::simulation::signal_system::SignalFlowTracker::new(),
         }
     }
