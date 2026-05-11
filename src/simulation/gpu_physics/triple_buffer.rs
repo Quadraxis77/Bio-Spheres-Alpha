@@ -342,6 +342,12 @@ pub struct GpuTripleBufferSystem {
     pub mode_properties_v3: wgpu::Buffer,
     pub mode_properties_v4: wgpu::Buffer,
     
+    /// Mode properties v5–v6 for cilia parameters (16 bytes per mode each)
+    /// v5: [cilia_speed, cilia_push_bonded as f32, cilia_use_signal as f32, cilia_signal_channel as f32]
+    /// v6: [cilia_speed_below, cilia_speed_above, cilia_threshold, 0.0]
+    pub mode_properties_v5: wgpu::Buffer,
+    pub mode_properties_v6: wgpu::Buffer,
+    
     /// Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
     /// Used by shaders to derive cell_type from mode_index (always up-to-date with genome settings)
     pub mode_cell_types: wgpu::Buffer,
@@ -579,6 +585,10 @@ impl GpuTripleBufferSystem {
         let mode_properties_v3 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V3");
         let mode_properties_v4 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V4");
         
+        // Mode properties v5–v6 for cilia parameters (16 bytes per mode each)
+        let mode_properties_v5 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V5");
+        let mode_properties_v6 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V6");
+        
         // Mode cell types: one u32 per mode - lookup table for deriving cell_type from mode_index
         let mode_cell_types = Self::create_storage_buffer(device, max_modes * 4, "Mode Cell Types");
         
@@ -673,6 +683,8 @@ impl GpuTripleBufferSystem {
             mode_properties_v2,
             mode_properties_v3,
             mode_properties_v4,
+            mode_properties_v5,
+            mode_properties_v6,
             mode_cell_types,
             behavior_flags,
             env_anchor_buffer,
@@ -990,6 +1002,9 @@ impl GpuTripleBufferSystem {
         // Sync mode properties for division (nutrient_gain_rate, max_cell_size, etc.)
         self.sync_mode_properties(queue, genomes);
 
+        // Sync cilia mode properties for cilia_force shader (v5, v6)
+        self.sync_cilia_mode_properties(queue, genomes);
+
         // Sync mode cell types lookup table (for deriving cell_type from mode_index)
         self.sync_mode_cell_types(queue, genomes);
 
@@ -1176,6 +1191,64 @@ impl GpuTripleBufferSystem {
         }
     }
     
+    /// Sync cilia mode properties for the cilia_force shader.
+    /// Data is written into 2 separate vec4 sub-buffers (v5, v6), each 16 bytes/mode.
+    /// v5: [cilia_speed, cilia_push_bonded as f32, cilia_use_signal as f32, cilia_signal_channel as f32]
+    /// v6: [cilia_speed_below, cilia_speed_above, cilia_threshold, 0.0]
+    pub fn sync_cilia_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let mut v5: Vec<[f32; 4]> = Vec::new();
+        let mut v6: Vec<[f32; 4]> = Vec::new();
+
+        for genome in genomes {
+            for mode in &genome.modes {
+                v5.push([
+                    mode.cilia_speed,
+                    if mode.cilia_push_bonded { 1.0 } else { 0.0 },
+                    if mode.cilia_use_signal { 1.0 } else { 0.0 },
+                    mode.cilia_signal_channel as f32,
+                ]);
+                v6.push([
+                    mode.cilia_speed_below,
+                    mode.cilia_speed_above,
+                    mode.cilia_threshold,
+                    0.0,
+                ]);
+            }
+        }
+
+        if !v5.is_empty() {
+            queue.write_buffer(&self.mode_properties_v5, 0, bytemuck::cast_slice(&v5));
+            queue.write_buffer(&self.mode_properties_v6, 0, bytemuck::cast_slice(&v6));
+        }
+    }
+
+    /// Incremental sync of cilia mode properties for a single genome
+    pub fn incremental_sync_cilia_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
+        let mut v5: Vec<[f32; 4]> = Vec::new();
+        let mut v6: Vec<[f32; 4]> = Vec::new();
+
+        for mode in &genome.modes {
+            v5.push([
+                mode.cilia_speed,
+                if mode.cilia_push_bonded { 1.0 } else { 0.0 },
+                if mode.cilia_use_signal { 1.0 } else { 0.0 },
+                mode.cilia_signal_channel as f32,
+            ]);
+            v6.push([
+                mode.cilia_speed_below,
+                mode.cilia_speed_above,
+                mode.cilia_threshold,
+                0.0,
+            ]);
+        }
+
+        if !v5.is_empty() {
+            let offset = (global_start_index * 16) as u64; // 16 bytes per mode per sub-buffer
+            queue.write_buffer(&self.mode_properties_v5, offset, bytemuck::cast_slice(&v5));
+            queue.write_buffer(&self.mode_properties_v6, offset, bytemuck::cast_slice(&v6));
+        }
+    }
+
     /// Sync mode cell types lookup table (cell_type per mode)
     /// This allows shaders to derive cell_type from mode_index, which is always up-to-date
     pub fn sync_mode_cell_types(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {

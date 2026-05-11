@@ -280,6 +280,15 @@ impl PreviewState {
             mode.adhesion_settings.twist_constraint_stiffness.to_bits().hash(&mut hasher);
             mode.adhesion_settings.twist_constraint_damping.to_bits().hash(&mut hasher);
             mode.adhesion_settings.enable_twist_constraint.hash(&mut hasher);
+            
+            // Hash cilia settings
+            mode.cilia_speed.to_bits().hash(&mut hasher);
+            mode.cilia_push_bonded.hash(&mut hasher);
+            mode.cilia_use_signal.hash(&mut hasher);
+            mode.cilia_signal_channel.hash(&mut hasher);
+            mode.cilia_speed_below.to_bits().hash(&mut hasher);
+            mode.cilia_speed_above.to_bits().hash(&mut hasher);
+            mode.cilia_threshold.to_bits().hash(&mut hasher);
         }
         
         hasher.finish()

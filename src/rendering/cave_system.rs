@@ -673,6 +673,11 @@ impl CaveSystemRenderer {
         &self.collision_bind_group
     }
     
+    /// Get cave params buffer for bind group creation (e.g. cilia force spatial group)
+    pub fn cave_params_buffer(&self) -> &wgpu::Buffer {
+        &self.params_buffer
+    }
+    
     /// Get collision pipeline for physics integration
     pub fn collision_pipeline(&self) -> &wgpu::ComputePipeline {
         &self.collision_pipeline

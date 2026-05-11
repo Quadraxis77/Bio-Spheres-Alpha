@@ -240,6 +240,14 @@ pub struct CachedBindGroups {
     /// Glueocyte env adhesion mode data bind group (same for all frames)
     pub env_adhesion_mode_data: wgpu::BindGroup,
 
+    // Cilia force bind groups
+    /// Cilia force force accumulation bind groups for each buffer index [0, 1, 2]
+    pub cilia_force_force_accum: [wgpu::BindGroup; 3],
+    /// Cilia force cell data bind group (same for all frames)
+    pub cilia_force_cell_data: wgpu::BindGroup,
+    /// Cilia force spatial bind group (same for all frames)
+    pub cilia_force_spatial: wgpu::BindGroup,
+
     // Signal system bind groups
     /// Signal flags bind group (Group 0 shared by all signal shaders)
     pub signal_flags: wgpu::BindGroup,
@@ -307,6 +315,9 @@ pub struct GpuPhysicsPipelines {
 
     // Glueocyte environment adhesion pipeline
     pub glueocyte_env_adhesion: wgpu::ComputePipeline,
+
+    // Cilia force pipeline (applies contact-dependent surface propulsion for Ciliocyte cells)
+    pub cilia_force: wgpu::ComputePipeline,
     
     // Bind group layouts
     pub physics_layout: wgpu::BindGroupLayout,
@@ -370,6 +381,10 @@ pub struct GpuPhysicsPipelines {
     pub swim_force_force_accum_layout: wgpu::BindGroupLayout,
     pub swim_force_cell_data_layout: wgpu::BindGroupLayout,
 
+    // Cilia force bind group layouts
+    pub cilia_force_cell_data_layout: wgpu::BindGroupLayout,
+    pub cilia_force_spatial_layout: wgpu::BindGroupLayout,
+
     // Glueocyte env adhesion bind group layouts
     pub env_adhesion_force_accum_layout: wgpu::BindGroupLayout,
     pub env_adhesion_mode_data_layout: wgpu::BindGroupLayout,
@@ -426,6 +441,10 @@ impl GpuPhysicsPipelines {
         // Create swim force bind group layouts
         let swim_force_force_accum_layout = Self::create_swim_force_force_accum_bind_group_layout(device);
         let swim_force_cell_data_layout = Self::create_swim_force_cell_data_bind_group_layout(device);
+
+        // Create cilia force bind group layouts
+        let cilia_force_cell_data_layout = Self::create_cilia_force_cell_data_bind_group_layout(device);
+        let cilia_force_spatial_layout = Self::create_cilia_force_spatial_bind_group_layout(device);
 
         // Create glueocyte env adhesion bind group layouts
         let env_adhesion_force_accum_layout = Self::create_env_adhesion_force_accum_bind_group_layout(device);
@@ -697,6 +716,16 @@ impl GpuPhysicsPipelines {
             "Glueocyte Env Adhesion",
         );
 
+        // Cilia force pipeline (contact-dependent surface propulsion for Ciliocyte cells)
+        // Group 0: physics, Group 1: force_accum+rotations, Group 2: cell/mode data+v5/v6, Group 3: spatial+organism_labels+cave_params
+        let cilia_force = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/cilia_force.wgsl"),
+            "main",
+            &[&physics_layout, &swim_force_force_accum_layout, &cilia_force_cell_data_layout, &cilia_force_spatial_layout],
+            "Cilia Force",
+        );
+
         // Signal system bind group layouts
         let signal_flags_layout = Self::create_signal_flags_bind_group_layout(device);
         let signal_sense_cell_data_layout = Self::create_signal_sense_cell_data_bind_group_layout(device);
@@ -752,6 +781,7 @@ impl GpuPhysicsPipelines {
             adhesion_cleanup,
             swim_force,
             glueocyte_env_adhesion,
+            cilia_force,
             physics_layout,
             spatial_grid_layout,
             lifecycle_layout,
@@ -786,6 +816,8 @@ impl GpuPhysicsPipelines {
             nutrient_apply_layout,
             swim_force_force_accum_layout,
             swim_force_cell_data_layout,
+            cilia_force_cell_data_layout,
+            cilia_force_spatial_layout,
             env_adhesion_force_accum_layout,
             env_adhesion_mode_data_layout,
             cave_params_layout,
@@ -1285,6 +1317,15 @@ impl GpuPhysicsPipelines {
         ];
         let swim_force_cell_data = self.create_swim_force_cell_data_bind_group(device, buffers, adhesion_buffers);
 
+        // Cilia force bind groups
+        let cilia_force_force_accum = [
+            self.create_swim_force_force_accum_bind_group(device, adhesion_buffers, buffers, 0),
+            self.create_swim_force_force_accum_bind_group(device, adhesion_buffers, buffers, 1),
+            self.create_swim_force_force_accum_bind_group(device, adhesion_buffers, buffers, 2),
+        ];
+        let cilia_force_cell_data = self.create_cilia_force_cell_data_bind_group(device, buffers, adhesion_buffers);
+        let cilia_force_spatial = self.create_cilia_force_spatial_bind_group(device, buffers, organism_label_buffer, None);
+
         // Glueocyte env adhesion bind groups
         let env_adhesion_force_accum = [
             self.create_env_adhesion_force_accum_bind_group(device, adhesion_buffers, buffers, 0),
@@ -1334,6 +1375,9 @@ impl GpuPhysicsPipelines {
             nutrient_apply,
             swim_force_force_accum,
             swim_force_cell_data,
+            cilia_force_force_accum,
+            cilia_force_cell_data,
+            cilia_force_spatial,
             env_adhesion_force_accum,
             env_adhesion_mode_data,
             signal_flags,
@@ -4424,6 +4468,197 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry { binding: 7, resource: triple_buffers.mode_cell_types.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 8, resource: triple_buffers.behavior_flags.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 9, resource: adhesion_buffers.signal_flags.as_entire_binding() },
+            ],
+        })
+    }
+
+    /// Create cilia force cell data bind group layout (Group 2 in cilia_force shader)
+    /// Extends swim_force_cell_data_layout with bindings 10, 11 for mode_properties_v5, v6
+    fn create_cilia_force_cell_data_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cilia Force Cell Data Bind Group Layout"),
+            entries: &[
+                // Binding 0: Mode indices (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Cell types (read-only) - DEPRECATED, use mode_cell_types instead
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Bindings 2-6: mode_properties sub-buffers v0-v4
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 6, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 7: Mode cell types
+                wgpu::BindGroupLayoutEntry { binding: 7, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 8: Cell type behavior flags
+                wgpu::BindGroupLayoutEntry { binding: 8, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 9: Signal flags
+                wgpu::BindGroupLayoutEntry { binding: 9, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 10: mode_properties_v5 (cilia params)
+                wgpu::BindGroupLayoutEntry { binding: 10, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 11: mode_properties_v6 (cilia signal params)
+                wgpu::BindGroupLayoutEntry { binding: 11, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        })
+    }
+
+    /// Create cilia force spatial bind group layout (Group 3 in cilia_force shader)
+    /// Contains spatial_grid_counts, spatial_grid_cells, cell_grid_indices, organism_labels, cave_params
+    fn create_cilia_force_spatial_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cilia Force Spatial Bind Group Layout"),
+            entries: &[
+                // Binding 0: spatial_grid_counts (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: spatial_grid_cells (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: cell_grid_indices (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: organism_labels (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 4: cave_params (uniform) - merged from former group 4
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+
+    /// Create cilia force cell data bind group (Group 2 in cilia_force shader)
+    fn create_cilia_force_cell_data_bind_group(
+        &self,
+        device: &wgpu::Device,
+        triple_buffers: &GpuTripleBufferSystem,
+        adhesion_buffers: &super::AdhesionBuffers,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cilia Force Cell Data Bind Group"),
+            layout: &self.cilia_force_cell_data_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: triple_buffers.mode_indices.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: triple_buffers.cell_types.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: triple_buffers.mode_properties_v0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: triple_buffers.mode_properties_v1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: triple_buffers.mode_properties_v2.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: triple_buffers.mode_properties_v3.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: triple_buffers.mode_properties_v4.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: triple_buffers.mode_cell_types.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8, resource: triple_buffers.behavior_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 9, resource: adhesion_buffers.signal_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 10, resource: triple_buffers.mode_properties_v5.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 11, resource: triple_buffers.mode_properties_v6.as_entire_binding() },
+            ],
+        })
+    }
+
+    /// Create cilia force spatial bind group (Group 3 in cilia_force shader)
+    pub fn create_cilia_force_spatial_bind_group(
+        &self,
+        device: &wgpu::Device,
+        triple_buffers: &GpuTripleBufferSystem,
+        organism_label_buffer: Option<&wgpu::Buffer>,
+        cave_params_buffer: Option<&wgpu::Buffer>,
+    ) -> wgpu::BindGroup {
+        // Create a dummy buffer if organism labels aren't available
+        let dummy_label_buffer;
+        let label_buffer = if let Some(buf) = organism_label_buffer {
+            buf
+        } else {
+            dummy_label_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Cilia Force Dummy Organism Label Buffer"),
+                size: triple_buffers.capacity as u64 * 4, // u32 per cell
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            &dummy_label_buffer
+        };
+
+        // Create a dummy cave params uniform buffer if not available
+        let dummy_cave_params_buffer;
+        let cave_buf = if let Some(buf) = cave_params_buffer {
+            buf
+        } else {
+            // CaveParams struct size: 68 bytes data + 752 bytes padding = 820 bytes
+            // Use 832 (next 16-byte aligned size) for safety
+            dummy_cave_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Cilia Force Dummy Cave Params Buffer"),
+                size: 832,
+                usage: wgpu::BufferUsages::UNIFORM,
+                mapped_at_creation: false,
+            });
+            &dummy_cave_params_buffer
+        };
+
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cilia Force Spatial Bind Group"),
+            layout: &self.cilia_force_spatial_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: triple_buffers.spatial_grid_counts.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: triple_buffers.spatial_grid_cells.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: triple_buffers.cell_grid_indices.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: label_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: cave_buf.as_entire_binding() },
             ],
         })
     }

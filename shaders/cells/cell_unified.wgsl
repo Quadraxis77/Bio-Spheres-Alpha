@@ -670,6 +670,7 @@ fn get_internals(cell_type: u32, p: vec3<f32>, r: f32, cell_index: u32) -> vec3<
         case 4u: { return internals_lipocyte(p, r); }
         case 5u: { return internals_buoyocyte(p, r, camera.time, cell_index); }
         case 6u: { return vec3<f32>(0.0); } // handled inline in fs_main using surface dir
+        case 8u: { return vec3<f32>(0.0); } // Ciliocyte: handled inline in fs_main
         default: { return internals_test(p, r); }
     }
 }
@@ -729,6 +730,12 @@ fn get_membrane_params(cell_type: u32) -> MembraneParams {
             m.opacity = 0.45;
             m.rim_power = 2.5;
             m.color_darken = 0.2;
+        }
+        case 8u: { // Ciliocyte — standard membrane, rings are normal perturbation only
+            m.thickness = 0.06;
+            m.opacity = 0.5;
+            m.rim_power = 2.5;
+            m.color_darken = 0.25;
         }
         default: {
             m.thickness = 0.06;
@@ -855,6 +862,35 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     }
 
     // ====================================================================
+    // Ciliocyte (type 8): Rolling ring normal perturbation (LOD >= 1)
+    // type_data_0: x=effective_speed, y=ring_frequency, z=ring_depth, w=ring_speed
+    // Rings scroll along local Z axis proportional to effective_speed.
+    // Static when effective_speed is 0.
+    // ====================================================================
+    if (cell_type == 8u && lod >= 1u) {
+        // Get local-space direction on sphere surface (rotation-aware)
+        let cilia_local_dir = normalize(quat_rotate_inverse(in.rotation,
+            in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
+
+        // Read ring parameters from type_data
+        let effective_speed = in.type_data_0.x;
+        let ring_freq = in.type_data_0.y;
+        let ring_depth = in.type_data_0.z;
+        let ring_speed = in.type_data_0.w;
+
+        // Ring phase: position along forward axis (local Z) + time scroll
+        // When effective_speed is 0, time term vanishes → static rings
+        let phase = cilia_local_dir.z * ring_freq - camera.time * ring_speed * effective_speed;
+
+        // Sinusoidal ring wave (2*PI for full wave per ring unit)
+        let ring_wave = sin(phase * 6.283185);
+
+        // Darken troughs for depth perception
+        let trough_darken = 1.0 - max(0.0, -ring_wave) * ring_depth * 0.5;
+        interior_result = interior_result * trough_darken;
+    }
+
+    // ====================================================================
     // Photocyte (type 3): Inner hex-patterned nucleus sphere (front + back)
     // ====================================================================
     if (cell_type == 3u && lod >= 1u) {
@@ -932,6 +968,25 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
     // Membrane normal (no per-type perturbation currently)
     var perturbed_normal = world_normal_front;
+
+    // Ciliocyte (type 8): Perturb membrane normal to create rolling ridge highlights
+    if (cell_type == 8u && lod >= 1u) {
+        let cilia_norm_local_dir = normalize(quat_rotate_inverse(in.rotation,
+            in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
+
+        let eff_speed = in.type_data_0.x;
+        let r_freq = in.type_data_0.y;
+        let r_depth = in.type_data_0.z;
+        let r_speed = in.type_data_0.w;
+
+        let norm_phase = cilia_norm_local_dir.z * r_freq - camera.time * r_speed * eff_speed;
+        let norm_ring_wave = sin(norm_phase * 6.283185);
+
+        // Perturb normal along the cell's world-space forward axis
+        let forward_world = quat_rotate(in.rotation, vec3<f32>(0.0, 0.0, 1.0));
+        let perturb_strength = r_depth * norm_ring_wave;
+        perturbed_normal = normalize(perturbed_normal + forward_world * perturb_strength);
+    }
 
     // Composite membrane over interior
     var composited = mix(interior_result, membrane_color, membrane_alpha);

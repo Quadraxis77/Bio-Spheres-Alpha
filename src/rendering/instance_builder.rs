@@ -72,6 +72,8 @@ pub struct InstanceBuilder {
     mode_cell_types_buffer: wgpu::Buffer,
     /// Behavior flags per cell type for parameterized shader logic
     behavior_flags_buffer: wgpu::Buffer,
+    /// Mode properties v5 (cilia params): [cilia_speed, cilia_push_bonded, cilia_use_signal, cilia_signal_channel] per mode
+    mode_properties_v5_buffer: wgpu::Buffer,
     
     // Output buffer (instance data for rendering)
     pub instance_buffer: wgpu::Buffer,
@@ -219,6 +221,11 @@ struct GpuCellTypeVisuals {
     goldberg_ridge_strength: f32,
     nucleus_scale: f32,
     _pad: f32,
+    // Cilia ring parameters (used by Ciliocyte cell type)
+    cilia_ring_frequency: f32,
+    cilia_ring_depth: f32,
+    cilia_ring_speed: f32,
+    _pad2: f32,
 }
 
 /// Per-cell instance data for GPU rendering.
@@ -238,10 +245,10 @@ struct GpuCellTypeVisuals {
 ///
 /// Type-specific reserved fields (32 bytes):
 /// - type_data: [f32; 8] - Reserved for type-specific use
-///   - type_data[0]: membrane_noise_scale (Test), flagella_angle (Flagellocyte)
-///   - type_data[1]: membrane_noise_strength (Test), flagella_speed (Flagellocyte)
-///   - type_data[2]: membrane_noise_speed (Test), sensor_direction_x (Neurocyte)
-///   - type_data[3]: membrane_anim_offset (Test), sensor_direction_y (Neurocyte)
+///   - type_data[0]: membrane_noise_scale (Test), flagella_angle (Flagellocyte), effective_speed (Ciliocyte)
+///   - type_data[1]: membrane_noise_strength (Test), flagella_speed (Flagellocyte), cilia_ring_frequency (Ciliocyte)
+///   - type_data[2]: membrane_noise_speed (Test), sensor_direction_x (Neurocyte), cilia_ring_depth (Ciliocyte)
+///   - type_data[3]: membrane_anim_offset (Test), sensor_direction_y (Neurocyte), cilia_ring_speed (Ciliocyte)
 ///   - type_data[4]: sensor_direction_z (Neurocyte)
 ///   - type_data[5-7]: reserved for future use
 #[repr(C)]
@@ -501,6 +508,17 @@ impl InstanceBuilder {
                     },
                     count: None,
                 },
+                // Binding 19: mode_properties_v5 - cilia params per mode (vec4: cilia_speed, push_bonded, use_signal, signal_channel)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 19,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         
@@ -557,6 +575,9 @@ impl InstanceBuilder {
             contents: bytemuck::cast_slice(&flags),
             usage: wgpu::BufferUsages::STORAGE,
         });
+
+        // Mode properties v5: cilia params per mode (16 bytes per mode = 1 vec4)
+        let mode_properties_v5_buffer = Self::create_storage_buffer(device, "Instance Builder Mode Properties V5", mode_capacity * 16);
         
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Builder Output"),
@@ -621,6 +642,7 @@ impl InstanceBuilder {
             mode_properties_buffer,
             mode_cell_types_buffer,
             behavior_flags_buffer,
+            mode_properties_v5_buffer,
             instance_buffer,
             indirect_buffer,
             indirect_buffers,
@@ -1068,6 +1090,11 @@ impl InstanceBuilder {
                 goldberg_ridge_strength: v.goldberg_ridge_strength,
                 nucleus_scale: v.nucleus_scale,
                 _pad: 0.0,
+                // Cilia ring parameters (used by Ciliocyte cell type)
+                cilia_ring_frequency: v.cilia_ring_frequency,
+                cilia_ring_depth: v.cilia_ring_depth,
+                cilia_ring_speed: v.cilia_ring_speed,
+                _pad2: 0.0,
             })
             .collect();
         
@@ -1207,6 +1234,10 @@ impl InstanceBuilder {
                 wgpu::BindGroupEntry {
                     binding: 18,
                     resource: self.mode_emissive_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 19,
+                    resource: self.mode_properties_v5_buffer.as_entire_binding(),
                 },
             ],
         }));
@@ -1650,6 +1681,11 @@ impl InstanceBuilder {
     /// Get the mode properties buffer for external GPU-to-GPU copies (holds mode_properties_v1).
     pub fn mode_properties_buffer(&self) -> &wgpu::Buffer {
         &self.mode_properties_buffer
+    }
+
+    /// Get the mode properties v5 buffer for external GPU-to-GPU copies (holds cilia params).
+    pub fn mode_properties_v5_buffer(&self) -> &wgpu::Buffer {
+        &self.mode_properties_v5_buffer
     }
     
     /// Get the mode cell types buffer for external GPU-to-GPU copies.

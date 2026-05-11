@@ -1964,6 +1964,13 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     flagellocyte_speed_a: 0.5,
                     flagellocyte_speed_b: 0.0,
                     flagellocyte_threshold_c: 1.0,
+                    cilia_speed: 0.5,
+                    cilia_push_bonded: false,
+                    cilia_use_signal: false,
+                    cilia_signal_channel: 0,
+                    cilia_speed_below: 0.5,
+                    cilia_speed_above: 0.0,
+                    cilia_threshold: 1.0,
                     buoyancy_force: 0.5, // Default buoyancy force for buoyocytes
                     oculocyte_sense_type: 0,
                     oculocyte_signal_channel: 0,
@@ -2506,6 +2513,79 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::Slider::new(&mut mode.oculocyte_ray_length, 1.0..=100.0).show_value(false));
                         ui.add(egui::DragValue::new(&mut mode.oculocyte_ray_length).speed(0.1).range(1.0..=100.0));
                     });
+                });
+            } else if mode.cell_type == 8 { // Ciliocyte (cell_type == 8)
+                group_container(ui, "Ciliocyte Functions", egui::Color32::from_rgb(160, 200, 180), |ui| {
+                    // Mode toggle
+                    ui.horizontal(|ui| {
+                        ui.label("Speed Mode:");
+                        if ui.selectable_label(!mode.cilia_use_signal, "Fixed").clicked() {
+                            mode.cilia_use_signal = false;
+                        }
+                        if ui.selectable_label(mode.cilia_use_signal, "Signal").clicked() {
+                            mode.cilia_use_signal = true;
+                        }
+                    });
+
+                    ui.separator();
+
+                    if !mode.cilia_use_signal {
+                        // Fixed speed mode
+                        ui.label("Cilia Speed:");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.cilia_speed, -1.0..=1.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.cilia_speed).speed(0.01).range(-1.0..=1.0));
+                        });
+                    } else {
+                        // Signal-based speed mode
+                        {
+                            let cilia_ch_labels = ["Ch 0", "Ch 1", "Ch 2", "Ch 3", "Ch 4", "Ch 5", "Ch 6", "Ch 7"];
+                            let cilia_ch_idx = (mode.cilia_signal_channel as usize).min(7);
+                            ui.horizontal(|ui| {
+                                ui.label("Channel:");
+                                egui::ComboBox::from_id_salt("cilia_signal_channel")
+                                    .selected_text(cilia_ch_labels[cilia_ch_idx])
+                                    .show_ui(ui, |ui| {
+                                        for (i, label) in cilia_ch_labels.iter().enumerate() {
+                                            ui.selectable_value(&mut mode.cilia_signal_channel, i as i32, *label);
+                                        }
+                                    });
+                            });
+                        }
+
+                        ui.label("Speed Below (signal < threshold):");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.cilia_speed_below, -1.0..=1.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.cilia_speed_below).speed(0.01).range(-1.0..=1.0));
+                        });
+
+                        ui.label("Speed Above (signal >= threshold):");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.cilia_speed_above, -1.0..=1.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.cilia_speed_above).speed(0.01).range(-1.0..=1.0));
+                        });
+
+                        ui.label("Threshold:");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.cilia_threshold, -100.0..=100.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.cilia_threshold).speed(0.1).range(-100.0..=100.0));
+                        });
+                    }
+
+                    ui.add_space(4.0);
+                    ui.checkbox(&mut mode.cilia_push_bonded, "Push Organism Cells");
                 });
             }
 

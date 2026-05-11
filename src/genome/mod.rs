@@ -134,6 +134,15 @@ pub struct ModeSettings {
     pub oculocyte_signal_hops: i32, // How many adhesion hops the signal propagates (1-20)
     pub oculocyte_ray_length: f32, // How far ahead the oculocyte ray reaches (1.0 to 100.0)
     
+    // Ciliocyte settings
+    pub cilia_speed: f32, // Cilia force magnitude (-1.0 to +1.0, for Ciliocyte cells)
+    pub cilia_push_bonded: bool, // Whether to push same-organism cells
+    pub cilia_use_signal: bool, // If true, use signal-based speed; if false, use fixed cilia_speed
+    pub cilia_signal_channel: i32, // Which signal channel to read (0-7, oculocyte channels only)
+    pub cilia_speed_below: f32, // Cilia speed when signal < threshold
+    pub cilia_speed_above: f32, // Cilia speed when signal >= threshold
+    pub cilia_threshold: f32, // Signal threshold for speed switching
+
     // Membrane settings
     pub membrane_stiffness: f32, // Cell membrane stiffness for collision response (0.0 = no repulsion, higher = more rigid)
 
@@ -227,6 +236,13 @@ impl Default for ModeSettings {
             flagellocyte_speed_a: 0.5, // Default: same as swim_force
             flagellocyte_speed_b: 0.0, // Default: stop when signal received
             flagellocyte_threshold_c: 1.0, // Default: threshold of 1.0
+            cilia_speed: 0.5, // Default cilia speed for ciliocytes
+            cilia_push_bonded: false, // Default: don't push same-organism cells
+            cilia_use_signal: false, // Default: fixed speed mode
+            cilia_signal_channel: 0, // Default: channel 0
+            cilia_speed_below: 0.5, // Default: same as cilia_speed
+            cilia_speed_above: 0.0, // Default: stop when signal received
+            cilia_threshold: 1.0, // Default: threshold of 1.0
             buoyancy_force: 0.5, // Default buoyancy force for buoyocytes
             oculocyte_sense_type: 0, // Default: sense cells
             oculocyte_signal_channel: 0, // Default: channel 0

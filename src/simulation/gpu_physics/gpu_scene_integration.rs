@@ -207,6 +207,17 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
+        // Stage 5.55: Cilia force (256 threads) - contact-dependent surface propulsion for Ciliocyte cells
+        // Pushes against neighbors and walls to generate thrust along forward axis
+        if let Some(_cave_renderer) = cave_renderer.as_ref() {
+            compute_pass.set_pipeline(&pipelines.cilia_force);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.cilia_force_force_accum[current_index], &[]);
+            compute_pass.set_bind_group(2, &cached_bind_groups.cilia_force_cell_data, &[]);
+            compute_pass.set_bind_group(3, &cached_bind_groups.cilia_force_spatial, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
+
         // Stage 5.6: Glueocyte environment adhesion (when cave is present)
         // Must run BEFORE position_update so forces are accumulated and applied this frame
         if let (Some(cave_renderer), _) = (cave_renderer.as_ref(), cave_physics_bind_groups.as_ref()) {
@@ -416,6 +427,17 @@ pub fn execute_gpu_mechanics_step(
         compute_pass.set_bind_group(1, &cached_bind_groups.swim_force_force_accum[current_index], &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        // Stage 5.55: Cilia force (256 threads) - contact-dependent surface propulsion for Ciliocyte cells
+        // Pushes against neighbors and walls to generate thrust along forward axis
+        if let Some(_cave_renderer) = cave_renderer.as_ref() {
+            compute_pass.set_pipeline(&pipelines.cilia_force);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.cilia_force_force_accum[current_index], &[]);
+            compute_pass.set_bind_group(2, &cached_bind_groups.cilia_force_cell_data, &[]);
+            compute_pass.set_bind_group(3, &cached_bind_groups.cilia_force_spatial, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
 
         // Stage 5.6: Glueocyte environment adhesion (when cave is present)
         // Must run BEFORE position_update so forces are accumulated and applied this frame

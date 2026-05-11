@@ -184,6 +184,20 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode_switch_invert: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cilia_speed: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cilia_push_bonded: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cilia_use_signal: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cilia_signal_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cilia_speed_below: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cilia_speed_above: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cilia_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_b: Option<SerializableChildSettings>,
@@ -356,6 +370,13 @@ fn mode_to_serializable(
         mode_switch_signal_threshold: diff_f32(mode.mode_switch_signal_threshold, default.mode_switch_signal_threshold),
         mode_switch_target: diff_i32(mode.mode_switch_target, default.mode_switch_target),
         mode_switch_invert: diff_bool(mode.mode_switch_invert, default.mode_switch_invert),
+        cilia_speed: diff_f32(mode.cilia_speed, default.cilia_speed),
+        cilia_push_bonded: diff_bool(mode.cilia_push_bonded, default.cilia_push_bonded),
+        cilia_use_signal: diff_bool(mode.cilia_use_signal, default.cilia_use_signal),
+        cilia_signal_channel: diff_i32(mode.cilia_signal_channel, default.cilia_signal_channel),
+        cilia_speed_below: diff_f32(mode.cilia_speed_below, default.cilia_speed_below),
+        cilia_speed_above: diff_f32(mode.cilia_speed_above, default.cilia_speed_above),
+        cilia_threshold: diff_f32(mode.cilia_threshold, default.cilia_threshold),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(&mode.adhesion_settings, &default.adhesion_settings),
@@ -429,6 +450,13 @@ impl SerializableModeSettings {
             || self.mode_switch_signal_threshold.is_some()
             || self.mode_switch_target.is_some()
             || self.mode_switch_invert.is_some()
+            || self.cilia_speed.is_some()
+            || self.cilia_push_bonded.is_some()
+            || self.cilia_use_signal.is_some()
+            || self.cilia_signal_channel.is_some()
+            || self.cilia_speed_below.is_some()
+            || self.cilia_speed_above.is_some()
+            || self.cilia_threshold.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -669,6 +697,27 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.mode_switch_invert {
         mode.mode_switch_invert = v;
+    }
+    if let Some(v) = ser.cilia_speed {
+        mode.cilia_speed = v;
+    }
+    if let Some(v) = ser.cilia_push_bonded {
+        mode.cilia_push_bonded = v;
+    }
+    if let Some(v) = ser.cilia_use_signal {
+        mode.cilia_use_signal = v;
+    }
+    if let Some(v) = ser.cilia_signal_channel {
+        mode.cilia_signal_channel = v;
+    }
+    if let Some(v) = ser.cilia_speed_below {
+        mode.cilia_speed_below = v;
+    }
+    if let Some(v) = ser.cilia_speed_above {
+        mode.cilia_speed_above = v;
+    }
+    if let Some(v) = ser.cilia_threshold {
+        mode.cilia_threshold = v;
     }
     if let Some(ref child_a) = ser.child_a {
         apply_child_settings(&mut mode.child_a, child_a);

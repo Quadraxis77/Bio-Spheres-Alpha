@@ -37,6 +37,15 @@ struct CellInstance {
     //   type_data_1.y = tail_taper (0.0 - 1.0)
     //   type_data_1.z = tail_segments (4 - 64)
     //   type_data_1.w = reserved
+    // Ciliocyte (cell_type = 8):
+    //   type_data_0.x = effective_speed (cilia_speed from mode_properties_v5)
+    //   type_data_0.y = cilia_ring_frequency (from CellTypeVisuals)
+    //   type_data_0.z = cilia_ring_depth (from CellTypeVisuals)
+    //   type_data_0.w = cilia_ring_speed (from CellTypeVisuals)
+    //   type_data_1.x = reserved (0)
+    //   type_data_1.y = reserved (0)
+    //   type_data_1.z = debug_colors
+    //   type_data_1.w = cell_type
 }
 
 // Mode visual data (from genome)
@@ -70,6 +79,11 @@ struct CellTypeVisuals {
     goldberg_ridge_strength: f32,
     nucleus_scale: f32,
     _pad: f32,
+    // Cilia ring parameters (used by Ciliocyte cell type)
+    cilia_ring_frequency: f32,
+    cilia_ring_depth: f32,
+    cilia_ring_speed: f32,
+    _pad2: f32,
 }
 
 // mode_properties_v1 per mode: [split_mass, nutrient_priority, swim_force, prioritize_when_low]
@@ -83,7 +97,9 @@ struct CellTypeBehaviorFlags {
     has_procedural_tail: u32,
     gains_mass_from_light: u32,
     is_storage_cell: u32,
-    _padding: array<u32, 10>,
+    applies_buoyancy: u32,
+    applies_cilia_force: u32,
+    _padding: array<u32, 8>,
 }
 
 // Frustum plane (normal.xyz, distance)
@@ -186,6 +202,9 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
 
 // Death flags - cells marked for removal by lifecycle system
 @group(0) @binding(17) var<storage, read> death_flags: array<u32>;
+
+// mode_properties_v5 per mode: [cilia_speed, cilia_push_bonded, cilia_use_signal, cilia_signal_channel]
+@group(0) @binding(19) var<storage, read> mode_properties_v5: array<vec4<f32>>;
 
 // ============================================================================
 // Random Number Generation
@@ -530,6 +549,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // [4]=lod_level, [5]=screen_radius, [6]=debug_colors_enabled, [7]=cell_type
         instance.type_data_0 = vec4<f32>(uv_min_x, uv_min_y, uv_max_x, uv_max_y);
         instance.type_data_1 = vec4<f32>(f32(lod_level), clamped_screen_radius, f32(params.lod_debug_colors), f32(cell_type)); // cell_type in .w
+    } else if (behavior.applies_cilia_force != 0u && cell_type < params.cell_type_count) {
+        // Ciliocyte (cell_type 8): pack cilia ring visual parameters
+        // type_data_0: [effective_speed, cilia_ring_frequency, cilia_ring_depth, cilia_ring_speed]
+        // type_data_1: [0, 0, debug_colors, cell_type]
+        let visuals = cell_type_visuals[cell_type];
+
+        // effective_speed: use fixed cilia_speed from mode_properties_v5
+        // Signal evaluation happens on GPU in the cilia_force shader, so we just use the fixed speed here
+        var cilia_speed = 0.0;
+        if (mode_index < arrayLength(&mode_properties_v5)) {
+            cilia_speed = mode_properties_v5[mode_index].x; // v5.x = cilia_speed
+        }
+
+        instance.type_data_0 = vec4<f32>(
+            cilia_speed,
+            visuals.cilia_ring_frequency,
+            visuals.cilia_ring_depth,
+            visuals.cilia_ring_speed
+        );
+        instance.type_data_1 = vec4<f32>(0.0, 0.0, f32(params.lod_debug_colors), f32(cell_type));
     } else {
         // Default: pack Goldberg ridge params for photocytes (and zeros for others)
         // type_data_0: [goldberg_scale, goldberg_ridge_width, goldberg_meander, goldberg_ridge_strength]

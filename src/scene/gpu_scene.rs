@@ -975,6 +975,13 @@ impl GpuScene {
                 mode_switch_signal_threshold: 1.0,
                 mode_switch_target: -1,
                 mode_switch_invert: false,
+                cilia_speed: 0.5,
+                cilia_push_bonded: false,
+                cilia_use_signal: false,
+                cilia_signal_channel: 0,
+                cilia_speed_below: 0.5,
+                cilia_speed_above: 0.0,
+                cilia_threshold: 1.0,
                 child_a: crate::genome::ChildSettings {
                     mode_number: child_a_local,
                     orientation: qa,
@@ -1616,6 +1623,19 @@ impl GpuScene {
                 mode_properties_v1_copy_size,
             );
         }
+
+        // Copy mode properties v5 (16 bytes/mode) - needed for cilia_speed -> ciliocyte visual animation
+        // v5: [cilia_speed, cilia_push_bonded, cilia_use_signal, cilia_signal_channel]
+        let mode_properties_v5_copy_size = (total_modes * 16) as u64;
+        if mode_properties_v5_copy_size > 0 {
+            encoder.copy_buffer_to_buffer(
+                &self.gpu_triple_buffers.mode_properties_v5,
+                0,
+                self.instance_builder.mode_properties_v5_buffer(),
+                0,
+                mode_properties_v5_copy_size,
+            );
+        }
         
         // Copy mode cell types (1 u32 per mode = 4 bytes) - critical for correct cell type rendering
         // This ensures the InstanceBuilder has the same mode_cell_types as GpuTripleBufferSystem
@@ -1754,6 +1774,13 @@ impl GpuScene {
                 || ma.adhesion_settings.twist_constraint_stiffness != mb.adhesion_settings.twist_constraint_stiffness
                 || ma.adhesion_settings.twist_constraint_damping != mb.adhesion_settings.twist_constraint_damping
                 || ma.adhesion_settings.enable_twist_constraint != mb.adhesion_settings.enable_twist_constraint
+                || ma.cilia_speed != mb.cilia_speed
+                || ma.cilia_push_bonded != mb.cilia_push_bonded
+                || ma.cilia_use_signal != mb.cilia_use_signal
+                || ma.cilia_signal_channel != mb.cilia_signal_channel
+                || ma.cilia_speed_below != mb.cilia_speed_below
+                || ma.cilia_speed_above != mb.cilia_speed_above
+                || ma.cilia_threshold != mb.cilia_threshold
             {
                 return false;
             }
@@ -1792,6 +1819,9 @@ impl GpuScene {
         
         // Update mode properties for this genome's modes only
         self.gpu_triple_buffers.incremental_sync_mode_properties(queue, &genome, global_start_index);
+        
+        // Update cilia mode properties for this genome's modes only
+        self.gpu_triple_buffers.incremental_sync_cilia_mode_properties(queue, &genome, global_start_index);
         
         // Update child mode indices for this genome's modes only
         self.gpu_triple_buffers.incremental_sync_child_mode_indices(device, genome_id, global_start_index, mode_count);
@@ -1907,6 +1937,9 @@ impl GpuScene {
         
         // Sync mode properties (nutrient_gain_rate, max_cell_size, etc.) for division
         self.gpu_triple_buffers.sync_mode_properties(queue, &self.genomes);
+        
+        // Sync cilia mode properties for cilia_force shader (v5, v6)
+        self.gpu_triple_buffers.sync_cilia_mode_properties(queue, &self.genomes);
         
         // Sync mode cell types lookup table (for deriving cell_type from mode_index)
         self.gpu_triple_buffers.sync_mode_cell_types(queue, &self.genomes);
@@ -2726,6 +2759,17 @@ impl GpuScene {
         ];
         
         self.cave_physics_bind_groups = Some(bind_groups);
+
+        // Recreate cilia force spatial bind group with real cave params buffer
+        if let Some(ref cave_renderer) = self.cave_renderer {
+            let organism_label_buffer = self.organism_label_system.as_ref().map(|s| &s.label_buffer);
+            self.cached_bind_groups.cilia_force_spatial = self.gpu_physics_pipelines.create_cilia_force_spatial_bind_group(
+                device,
+                &self.gpu_triple_buffers,
+                organism_label_buffer,
+                Some(cave_renderer.cave_params_buffer()),
+            );
+        }
     }
     
     fn create_cave_physics_bind_group(
