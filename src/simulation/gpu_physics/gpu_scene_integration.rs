@@ -717,6 +717,7 @@ pub fn execute_signal_system(
     encoder: &mut wgpu::CommandEncoder,
     pipelines: &GpuPhysicsPipelines,
     triple_buffers: &GpuTripleBufferSystem,
+    adhesion_buffers: &super::AdhesionBuffers,
     cached_bind_groups: &CachedBindGroups,
     has_oculocytes: bool,
     cell_count_hint: u32,
@@ -729,9 +730,8 @@ pub fn execute_signal_system(
     
     let current_index = triple_buffers.current_index();
     
-    // PERFORMANCE: Dispatch based on actual cell count, not full capacity
-    let effective_count = (cell_count_hint.max(1) + 63) / 64 * 64; // Round up to workgroup boundary
-    let signal_workgroups = (effective_count + 63) / 64;
+    // Dispatch size: round up to workgroup boundary (workgroup_size = 64)
+    let signal_workgroups = (cell_count_hint.max(1) + 63) / 64;
 
     // Step 1: Clear signal flags
     {
@@ -757,20 +757,38 @@ pub fn execute_signal_system(
         compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
     }
 
-    // Step 3: Pull-based propagation (one hop per dispatch)
-    // Use actual max hops from genome data instead of fixed 10.
-    // Hop limits are encoded in the signal values themselves, so extra iterations
-    // are no-ops, but skipping them saves dispatch overhead.
+    // Step 3: Double-buffered pull propagation — one hop per dispatch.
+    //
+    // The propagate shader reads from signal_flags (binding 0, read-only) and writes
+    // to signal_flags_next (binding 2, read_write).  After each dispatch we copy
+    // signal_flags_next → signal_flags so the next hop sees the freshly propagated
+    // values.  This eliminates the read-write hazard that existed when both reads and
+    // writes targeted the same buffer (where thread scheduling order determined whether
+    // a relay cell's output was visible to its own neighbors in the same dispatch).
+    //
+    // The signal word's hop-count field naturally limits propagation: a cell with
+    // hops == 0 writes nothing to its neighbors, so extra iterations are no-ops.
+    let signal_buffer_size = adhesion_buffers.signal_flags.size();
     let propagation_iterations = max_signal_hops.clamp(1, 20);
     for _ in 0..propagation_iterations {
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Signal Propagate"),
-            timestamp_writes: None,
-        });
-        compute_pass.set_pipeline(&pipelines.signal_propagate);
-        compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.signal_propagate_adhesion, &[]);
-        compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Signal Propagate"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&pipelines.signal_propagate);
+            compute_pass.set_bind_group(0, &cached_bind_groups.signal_propagate_flags, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.signal_propagate_adhesion, &[]);
+            compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
+        }
+        // Copy signal_flags_next → signal_flags so the next hop reads the updated values.
+        encoder.copy_buffer_to_buffer(
+            &adhesion_buffers.signal_flags_next,
+            0,
+            &adhesion_buffers.signal_flags,
+            0,
+            signal_buffer_size,
+        );
     }
 
     // Step 4: Mode switch — change cell mode_index based on received signal

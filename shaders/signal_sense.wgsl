@@ -306,10 +306,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
 
             if (detected) {
-                // Write signal to the correct channel slot
-                // Format: DDDDDHHHHHVVVVVVVVVVVV (5 bits direction flag, 5 bits hops, 11 bits value)
+                // Write signal to the correct channel slot.
+                // Format: bit16 = source flag, bits 11-15 = hops, bits 0-10 = value
+                // Use atomicStore — the clear pass already zeroed this slot, and only one
+                // oculocyte thread owns each (cell, channel) pair, so there is no contention.
+                // atomicAdd on a packed bitfield would corrupt hops/value/source-flag if two
+                // threads ever wrote the same slot concurrently.
                 let signal_value = (1u << 16u) | (signal_hops << 11u) | 20u; // Source flag + hops + base value
-                atomicAdd(&signal_flags[idx * SIGNAL_CHANNELS + signal_channel], signal_value);
+                atomicStore(&signal_flags[idx * SIGNAL_CHANNELS + signal_channel], signal_value);
             }
         }
     }
@@ -327,9 +331,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let clamped_value = min(u32(max(reg_value, 0.0)), 2047u);
 
         if (clamped_value > 0u && reg_hops > 0u) {
-            // Source flag + hops + value
+            // Source flag + hops + value.
+            // Use atomicStore — the clear pass already zeroed this slot, and each cell
+            // owns exactly one regulation channel, so there is no write contention.
             let signal_packed = (1u << 16u) | (reg_hops << 11u) | clamped_value;
-            atomicAdd(&signal_flags[idx * SIGNAL_CHANNELS + reg_channel], signal_packed);
+            atomicStore(&signal_flags[idx * SIGNAL_CHANNELS + reg_channel], signal_packed);
         }
     }
 }

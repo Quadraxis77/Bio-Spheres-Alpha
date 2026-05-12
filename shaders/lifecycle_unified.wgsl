@@ -268,6 +268,14 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Signal-conditional apoptosis check:
     // If the mode has apoptosis_signal_channel >= 0, check if the cell's signal
     // meets the threshold condition. If so, trigger death.
+    //
+    // Grace period: skip apoptosis for newly born cells for the first 0.1 simulation
+    // seconds after birth. This protects cells born via division from dying before
+    // the signal system (which runs once per frame, AFTER all physics steps) has had
+    // a chance to propagate a survival signal to them. Without this grace period,
+    // a cell born in physics step 1 of a frame would have death_scan run on it in
+    // steps 2-4 of the same frame, all reading last frame's signal_flags where the
+    // new cell's slot was zero (recycled slot, cleared by signal_clear last frame).
     var apoptosis_triggered = false;
     if (!is_dead && !was_dead) {
         let mode_idx = mode_indices[cell_idx];
@@ -278,18 +286,27 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let ss_v1 = signal_settings_v1_read[mode_idx];
                 let apoptosis_threshold = ss_v1.x; // apoptosis_signal_threshold
                 let apoptosis_invert = ss_v1.y;    // apoptosis_signal_invert (0 or 1)
-                
-                // Decode signal value from signal_flags (lower 11 bits = value)
-                // 16 channels per cell: signal_flags_read[cell_idx * 16 + channel]
-                let apoptosis_ch = clamp(u32(apoptosis_channel), 8u, 15u);
-                let raw_signal = signal_flags_read[cell_idx * 16u + apoptosis_ch];
-                let signal_value = f32(raw_signal & 0x7FFu);
-                
-                // Check threshold: if invert=0, trigger when signal >= threshold
-                //                   if invert=1, trigger when signal < threshold
-                // Matches CPU: signal_val = unwrap_or(0.0), then compare against threshold.
-                let above_threshold = signal_value >= apoptosis_threshold;
-                apoptosis_triggered = select(above_threshold, !above_threshold, apoptosis_invert > 0.5);
+
+                // Grace period: newly born cells are exempt from signal-based apoptosis.
+                // 0.1s covers up to ~6 physics steps at 64 Hz, which is enough for the
+                // signal system to run at least once and propagate a survival signal.
+                let birth_time = birth_times[cell_idx];
+                let cell_age = params.current_time - birth_time;
+                let in_grace_period = cell_age < 0.1;
+
+                if (!in_grace_period) {
+                    // Decode signal value from signal_flags (lower 11 bits = value)
+                    // 16 channels per cell: signal_flags_read[cell_idx * 16 + channel]
+                    let apoptosis_ch = clamp(u32(apoptosis_channel), 8u, 15u);
+                    let raw_signal = signal_flags_read[cell_idx * 16u + apoptosis_ch];
+                    let signal_value = f32(raw_signal & 0x7FFu);
+
+                    // Check threshold: if invert=0, trigger when signal >= threshold
+                    //                   if invert=1, trigger when signal < threshold
+                    // Matches CPU: signal_val = unwrap_or(0.0), then compare against threshold.
+                    let above_threshold = signal_value >= apoptosis_threshold;
+                    apoptosis_triggered = select(above_threshold, !above_threshold, apoptosis_invert > 0.5);
+                }
             }
         }
     }

@@ -4964,6 +4964,7 @@ impl Scene for GpuScene {
                 &mut encoder,
                 &self.gpu_physics_pipelines,
                 &self.gpu_triple_buffers,
+                &self.adhesion_buffers,
                 &self.cached_bind_groups,
                 self.has_oculocytes,
                 self.total_cell_slots,
