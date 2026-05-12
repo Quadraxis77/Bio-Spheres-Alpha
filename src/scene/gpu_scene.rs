@@ -941,6 +941,8 @@ impl GpuScene {
                 child_b_after_split_keep_adhesion: false,
                 glueocyte_cell_adhesion: false,
                 glueocyte_env_adhesion: glueocyte_flags[i] != 0,
+                glueocyte_cell_adhesion_signal_channel: -1,
+                glueocyte_cell_adhesion_signal_threshold: 1.0,
                 swim_force: props[6],
                 flagellocyte_use_signal: props[14] > 0.5,
                 flagellocyte_signal_channel: props[10] as i32,
@@ -2055,6 +2057,9 @@ impl GpuScene {
 
         // Sync glueocyte env adhesion flags (one u32 per mode)
         self.gpu_triple_buffers.sync_glueocyte_env_adhesion_flags(queue, &self.genomes);
+
+        // Sync glueocyte cell adhesion flags (4 u32 per mode: enabled, channel, threshold, padding)
+        self.gpu_triple_buffers.sync_glueocyte_cell_adhesion_flags(queue, &self.genomes);
 
         // Sync oculocyte parameters (sense_type, sense_range, signal_hops, signal_channel per mode)
         self.gpu_triple_buffers.sync_oculocyte_params(queue, &self.genomes);

@@ -28,6 +28,11 @@ use bytemuck::{Pod, Zeroable};
 /// Maximum adhesions per cell (reduced from 20 for 200K cell support)
 pub const MAX_ADHESIONS_PER_CELL: usize = 20;
 
+/// Bond origin flag: set on bonds created by glueocyte cell-adhesion (not division/inheritance).
+/// Stored in `GpuAdhesionConnection::bond_flags` bit 0.
+/// Used by the glueocyte cell-adhesion shader to selectively release only its own bonds.
+pub const BOND_FLAG_GLUEOCYTE: u32 = 1 << 0;
+
 /// Legacy constant - buffer sizes now derived dynamically from cell_capacity * MAX_ADHESIONS_PER_CELL / 2
 /// in AdhesionBuffers::new(). Kept for reference only.
 pub const MAX_ADHESION_CONNECTIONS: u32 = 500_000;
@@ -49,8 +54,10 @@ pub struct GpuAdhesionConnection {
     pub zone_a: u32,                // offset 16
     /// Zone classification for cell B (0=ZoneA, 1=ZoneB, 2=ZoneC)
     pub zone_b: u32,                // offset 20
+    /// Bond origin flags: bit 0 = created by glueocyte cell-adhesion (vs division/inheritance)
+    pub bond_flags: u32,            // offset 24
     /// Padding to align anchor_direction_a to 16 bytes
-    pub _align_pad: [u32; 2],       // offset 24-31 (8 bytes)
+    pub _align_pad: u32,            // offset 28
     /// Anchor direction for cell A in local cell space (xyz = direction, w = padding)
     pub anchor_direction_a: [f32; 4],  // offset 32-47 (16 bytes)
     /// Anchor direction for cell B in local cell space (xyz = direction, w = padding)
@@ -78,7 +85,8 @@ impl GpuAdhesionConnection {
             is_active: 0,
             zone_a: 0,
             zone_b: 0,
-            _align_pad: [0, 0],
+            bond_flags: 0,
+            _align_pad: 0,
             anchor_direction_a: [0.0, 0.0, 1.0, 0.0],
             anchor_direction_b: [0.0, 0.0, -1.0, 0.0],
             twist_reference_a: [0.0, 0.0, 0.0, 1.0], // Identity quaternion
@@ -106,7 +114,8 @@ impl GpuAdhesionConnection {
             is_active: 1,
             zone_a: 1, // Zone B (positive split direction)
             zone_b: 0, // Zone A (negative split direction)
-            _align_pad: [0, 0],
+            bond_flags: 0, // division bond — not glueocyte-created
+            _align_pad: 0,
             anchor_direction_a: [anchor_a.x, anchor_a.y, anchor_a.z, 0.0],
             anchor_direction_b: [anchor_b.x, anchor_b.y, anchor_b.z, 0.0],
             twist_reference_a: [twist_ref_a.x, twist_ref_a.y, twist_ref_a.z, twist_ref_a.w],

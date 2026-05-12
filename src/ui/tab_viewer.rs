@@ -1942,6 +1942,8 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     child_b_after_split_keep_adhesion: true,
                     glueocyte_cell_adhesion: false,
                     glueocyte_env_adhesion: true,
+                    glueocyte_cell_adhesion_signal_channel: -1,
+                    glueocyte_cell_adhesion_signal_threshold: 1.0,
                     swim_force: 0.5,
                     flagellocyte_use_signal: false,
                     flagellocyte_signal_channel: 0,
@@ -2369,6 +2371,40 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
             } else if mode.cell_type == 6 { // Glueocyte (cell_type == 6)
                 group_container(ui, "Glueocyte Functions", egui::Color32::from_rgb(140, 200, 140), |ui| {
                     ui.checkbox(&mut mode.glueocyte_cell_adhesion, "Cell Adhesion");
+                    if mode.glueocyte_cell_adhesion {
+                        ui.indent("glue_cell_signal", |ui| {
+                            let channel_labels = ["Ch 0", "Ch 1", "Ch 2", "Ch 3", "Ch 4", "Ch 5", "Ch 6", "Ch 7"];
+                            let has_gate = mode.glueocyte_cell_adhesion_signal_channel >= 0
+                                && mode.glueocyte_cell_adhesion_signal_channel <= 7;
+                            ui.horizontal(|ui| {
+                                ui.label("Signal Gate:");
+                                if ui.selectable_label(!has_gate, "Always On").clicked() {
+                                    mode.glueocyte_cell_adhesion_signal_channel = -1;
+                                }
+                                if ui.selectable_label(has_gate, "Signal").clicked() {
+                                    if !has_gate {
+                                        mode.glueocyte_cell_adhesion_signal_channel = 0;
+                                    }
+                                }
+                            });
+                            if has_gate {
+                                let ch_idx = mode.glueocyte_cell_adhesion_signal_channel.clamp(0, 7) as usize;
+                                egui::ComboBox::from_id_salt("glue_cell_ch")
+                                    .selected_text(channel_labels[ch_idx])
+                                    .show_ui(ui, |ui| {
+                                        for (i, label) in channel_labels.iter().enumerate() {
+                                            if ui.selectable_label(ch_idx == i, *label).clicked() {
+                                                mode.glueocyte_cell_adhesion_signal_channel = i as i32;
+                                            }
+                                        }
+                                    });
+                                ui.add(egui::Slider::new(&mut mode.glueocyte_cell_adhesion_signal_threshold, 0.0..=2047.0)
+                                    .text("Threshold")
+                                    .logarithmic(false));
+                                ui.label("Active when signal ≥ threshold.\nReleases all created bonds when inactive.");
+                            }
+                        });
+                    }
                     ui.checkbox(&mut mode.glueocyte_env_adhesion, "Environment Adhesion");
                 });
             } else if mode.cell_type == 1 { // Flagellocyte (cell_type == 1)

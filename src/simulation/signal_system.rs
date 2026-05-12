@@ -186,14 +186,9 @@ pub fn propagate_signals(
     let mut visited: Vec<bool> = vec![false; state.cell_count];
 
     for emission in emissions {
-        // Check bounds before writing signal to source cell
         if emission.source_cell >= state.cell_count {
             continue;
         }
-
-        let debug_target = 6usize; // Cell we're investigating
-        let debug_source = 1usize; // Suspected emission source
-        let is_debug_emission = emission.source_cell == debug_source;
 
         // Write signal to source cell first (full strength)
         add_signal(state, emission.source_cell, emission.channel, emission.value);
@@ -206,31 +201,8 @@ pub fn propagate_signals(
         for v in visited.iter_mut().take(state.cell_count) {
             *v = false;
         }
-        if emission.source_cell < state.cell_count {
-            visited[emission.source_cell] = true;
-        } else {
-            continue;
-        }
+        visited[emission.source_cell] = true;
         queue.clear();
-
-        if is_debug_emission {
-            println!(
-                "[SIGNAL DEBUG] Emission from cell {} | channel={} value={} hops={}",
-                emission.source_cell, emission.channel, emission.value, emission.hops
-            );
-            // Print all adhesion neighbours of the source
-            let src_neighbors = get_adhesion_neighbors(state, emission.source_cell);
-            println!(
-                "[SIGNAL DEBUG]   Direct neighbours of source {}: {:?}",
-                emission.source_cell, src_neighbors
-            );
-            // Print all adhesion neighbours of the target cell
-            let tgt_neighbors = get_adhesion_neighbors(state, debug_target);
-            println!(
-                "[SIGNAL DEBUG]   Direct neighbours of target {}: {:?}",
-                debug_target, tgt_neighbors
-            );
-        }
 
         // Seed with direct neighbours of source at full strength.
         // Signal senders are marked visited (to block loops) but not written to and not
@@ -241,29 +213,11 @@ pub fn propagate_signals(
                 if neighbor < state.cell_count && !visited[neighbor] {
                     visited[neighbor] = true;
                     if is_signal_sender(state, genome, neighbor, emissions) {
-                        if is_debug_emission {
-                            println!(
-                                "[SIGNAL DEBUG]   Hop-1 neighbour {} is a signal sender — hard stop",
-                                neighbor
-                            );
-                        }
                         continue;
-                    }
-                    if is_debug_emission && neighbor == debug_target {
-                        println!(
-                            "[SIGNAL DEBUG]   *** Writing signal to target {} at HOP 1 (full strength={}) — source {} IS a direct neighbour!",
-                            debug_target, emission.value, emission.source_cell
-                        );
                     }
                     add_signal(state, neighbor, emission.channel, emission.value);
                     state.signal_flow_tracker.add_flow(emission.source_cell, neighbor);
                     if emission.hops > 1 {
-                        if is_debug_emission {
-                            println!(
-                                "[SIGNAL DEBUG]   Enqueuing hop-1 neighbour {} for further spread (remaining_hops={})",
-                                neighbor, emission.hops - 1
-                            );
-                        }
                         queue.push_back((neighbor, emission.hops - 1, emission.value));
                     }
                 }
@@ -271,54 +225,21 @@ pub fn propagate_signals(
         }
 
         while let Some((cell_idx, remaining_hops, signal_strength)) = queue.pop_front() {
-            // Apply attenuation for this hop's outgoing neighbours
             let next_strength = signal_strength * SIGNAL_ATTENUATION_PER_HOP;
             let neighbors = get_adhesion_neighbors(state, cell_idx);
-            if is_debug_emission {
-                println!(
-                    "[SIGNAL DEBUG]   Queue pop: cell={} remaining_hops={} strength={:.4} | neighbours={:?}",
-                    cell_idx, remaining_hops, signal_strength, neighbors
-                );
-            }
             for neighbor in neighbors {
                 if neighbor < state.cell_count && !visited[neighbor] {
                     visited[neighbor] = true;
                     if is_signal_sender(state, genome, neighbor, emissions) {
-                        if is_debug_emission {
-                            println!(
-                                "[SIGNAL DEBUG]     Neighbour {} is a signal sender — hard stop",
-                                neighbor
-                            );
-                        }
                         continue;
-                    }
-                    if is_debug_emission && neighbor == debug_target {
-                        println!(
-                            "[SIGNAL DEBUG]   *** Writing signal to target {} via cell {} at strength={:.4} remaining_hops={}",
-                            debug_target, cell_idx, next_strength, remaining_hops
-                        );
                     }
                     add_signal(state, neighbor, emission.channel, next_strength);
                     state.signal_flow_tracker.add_flow(emission.source_cell, neighbor);
                     if remaining_hops > 1 {
                         queue.push_back((neighbor, remaining_hops - 1, next_strength));
                     }
-                } else if is_debug_emission && neighbor == debug_target {
-                    println!(
-                        "[SIGNAL DEBUG]     Target {} already visited or out of bounds (visited={})",
-                        debug_target,
-                        if neighbor < state.cell_count { visited[neighbor].to_string() } else { "OOB".to_string() }
-                    );
                 }
             }
-        }
-
-        if is_debug_emission {
-            let target_signal = state.signal_channels.get(debug_target * SIGNAL_CHANNELS + emission.channel).copied().flatten();
-            println!(
-                "[SIGNAL DEBUG] After BFS: cell {} channel {} signal = {:?}",
-                debug_target, emission.channel, target_signal
-            );
         }
     }
 

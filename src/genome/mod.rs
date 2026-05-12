@@ -115,6 +115,11 @@ pub struct ModeSettings {
     // Glueocyte settings
     pub glueocyte_cell_adhesion: bool, // Whether this Glueocyte bonds to other cells on contact
     pub glueocyte_env_adhesion: bool,  // Whether this Glueocyte bonds to the environment on contact
+    /// Signal channel that controls cell-adhesion activation (-1 = always active, 0-7 = oculocyte channel).
+    /// When set, the glueocyte only forms new bonds when the signal is above the threshold,
+    /// and releases all glueocyte-created bonds when the signal drops below the threshold.
+    pub glueocyte_cell_adhesion_signal_channel: i32,
+    pub glueocyte_cell_adhesion_signal_threshold: f32,
 
     // Flagellocyte settings
     pub swim_force: f32, // Forward thrust force (0.0 to 1.0, for Flagellocyte cells)
@@ -240,6 +245,8 @@ impl Default for ModeSettings {
             child_b_after_split_keep_adhesion: true, // Default: keep adhesion for Child B after max splits
             glueocyte_cell_adhesion: false,  // Default: cell adhesion disabled
             glueocyte_env_adhesion: true,      // Default: environment adhesion enabled
+            glueocyte_cell_adhesion_signal_channel: -1, // Default: always active (no signal gate)
+            glueocyte_cell_adhesion_signal_threshold: 1.0,
             swim_force: 0.5, // Default swim force for flagellocytes
             flagellocyte_use_signal: false, // Default: fixed speed mode
             flagellocyte_signal_channel: 0, // Default: channel 0

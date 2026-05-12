@@ -240,6 +240,14 @@ pub struct CachedBindGroups {
     /// Glueocyte env adhesion mode data bind group (same for all frames)
     pub env_adhesion_mode_data: wgpu::BindGroup,
 
+    // Glueocyte cell-to-cell adhesion bind groups
+    /// Adhesion buffers bind group (connections, indices, next_id, free_slots, counts)
+    pub cell_adhesion_adhesion: wgpu::BindGroup,
+    /// Spatial grid bind group (read-only view for neighbour queries)
+    pub cell_adhesion_spatial: wgpu::BindGroup,
+    /// Mode/signal data bind group (mode_indices, mode_cell_types, cell_adhesion_flags, signal_flags, rotations, genome_orientations, death_flags)
+    pub cell_adhesion_mode: wgpu::BindGroup,
+
     // Cilia force bind groups
     /// Cilia force force accumulation bind groups for each buffer index [0, 1, 2]
     pub cilia_force_force_accum: [wgpu::BindGroup; 3],
@@ -330,6 +338,10 @@ pub struct GpuPhysicsPipelines {
     // Glueocyte environment adhesion pipeline
     pub glueocyte_env_adhesion: wgpu::ComputePipeline,
 
+    // Glueocyte cell-to-cell adhesion pipelines (bond_create + bond_release entry points)
+    pub glueocyte_cell_adhesion_create: wgpu::ComputePipeline,
+    pub glueocyte_cell_adhesion_release: wgpu::ComputePipeline,
+
     // Cilia force pipeline (applies contact-dependent surface propulsion for Ciliocyte cells)
     pub cilia_force: wgpu::ComputePipeline,
 
@@ -411,6 +423,11 @@ pub struct GpuPhysicsPipelines {
     pub env_adhesion_force_accum_layout: wgpu::BindGroupLayout,
     pub env_adhesion_mode_data_layout: wgpu::BindGroupLayout,
 
+    // Glueocyte cell adhesion bind group layouts
+    pub cell_adhesion_adhesion_layout: wgpu::BindGroupLayout,
+    pub cell_adhesion_spatial_layout: wgpu::BindGroupLayout,
+    pub cell_adhesion_mode_layout: wgpu::BindGroupLayout,
+
     // Cave params bind group layout (uniform buffer at binding 0) - matches CaveSystemRenderer's collision_layout
     pub cave_params_layout: wgpu::BindGroupLayout,
 
@@ -477,6 +494,11 @@ impl GpuPhysicsPipelines {
         // Create glueocyte env adhesion bind group layouts
         let env_adhesion_force_accum_layout = Self::create_env_adhesion_force_accum_bind_group_layout(device);
         let env_adhesion_mode_data_layout = Self::create_env_adhesion_mode_data_bind_group_layout(device);
+
+        // Create glueocyte cell adhesion bind group layouts
+        let cell_adhesion_adhesion_layout = Self::create_cell_adhesion_adhesion_bind_group_layout(device);
+        let cell_adhesion_spatial_layout = Self::create_cell_adhesion_spatial_bind_group_layout(device);
+        let cell_adhesion_mode_layout = Self::create_cell_adhesion_mode_bind_group_layout(device);
 
         // Cave params bind group layout: single uniform buffer at binding 0
         // Matches CaveSystemRenderer's collision_layout exactly
@@ -744,6 +766,23 @@ impl GpuPhysicsPipelines {
             "Glueocyte Env Adhesion",
         );
 
+        // Glueocyte cell-to-cell adhesion pipelines
+        // Group 0: physics, Group 1: adhesion buffers, Group 2: spatial grid, Group 3: mode/signal data
+        let glueocyte_cell_adhesion_create = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/glueocyte_cell_adhesion.wgsl"),
+            "bond_create",
+            &[&physics_layout, &cell_adhesion_adhesion_layout, &cell_adhesion_spatial_layout, &cell_adhesion_mode_layout],
+            "Glueocyte Cell Adhesion Create",
+        );
+        let glueocyte_cell_adhesion_release = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/glueocyte_cell_adhesion.wgsl"),
+            "bond_release",
+            &[&physics_layout, &cell_adhesion_adhesion_layout, &cell_adhesion_spatial_layout, &cell_adhesion_mode_layout],
+            "Glueocyte Cell Adhesion Release",
+        );
+
         // Cilia force pipeline (contact-dependent surface propulsion for Ciliocyte cells)
         // Group 0: physics, Group 1: force_accum+rotations, Group 2: cell/mode data+v5/v6, Group 3: spatial+organism_labels+cave_params
         let cilia_force = Self::create_compute_pipeline(
@@ -954,6 +993,8 @@ impl GpuPhysicsPipelines {
             adhesion_cleanup,
             swim_force,
             glueocyte_env_adhesion,
+            glueocyte_cell_adhesion_create,
+            glueocyte_cell_adhesion_release,
             cilia_force,
             muscle_contraction,
             physics_layout,
@@ -997,6 +1038,9 @@ impl GpuPhysicsPipelines {
             muscle_contraction_group2_layout,
             env_adhesion_force_accum_layout,
             env_adhesion_mode_data_layout,
+            cell_adhesion_adhesion_layout,
+            cell_adhesion_spatial_layout,
+            cell_adhesion_mode_layout,
             cave_params_layout,
             signal_clear,
             signal_sense,
@@ -1548,6 +1592,11 @@ impl GpuPhysicsPipelines {
         ];
         let env_adhesion_mode_data = self.create_env_adhesion_mode_data_bind_group(device, buffers);
 
+        // Glueocyte cell-to-cell adhesion bind groups
+        let cell_adhesion_adhesion = self.create_cell_adhesion_adhesion_bind_group(device, adhesion_buffers);
+        let cell_adhesion_spatial = self.create_cell_adhesion_spatial_bind_group(device, buffers);
+        let cell_adhesion_mode = self.create_cell_adhesion_mode_bind_group(device, buffers, adhesion_buffers);
+
         // Signal system bind groups
         let signal_flags = self.create_signal_flags_bind_group(device, adhesion_buffers, buffers);
         let signal_propagate_flags = self.create_signal_propagate_flags_bind_group(device, adhesion_buffers, buffers);
@@ -1626,6 +1675,9 @@ impl GpuPhysicsPipelines {
             signal_propagate_adhesion,
             mode_switch_group0,
             mode_switch_group1,
+            cell_adhesion_adhesion,
+            cell_adhesion_spatial,
+            cell_adhesion_mode,
         }
     }
     
@@ -5093,6 +5145,121 @@ impl GpuPhysicsPipelines {
                     binding: 2,
                     resource: triple_buffers.glueocyte_env_adhesion_flags.as_entire_binding(),
                 },
+            ],
+        })
+    }
+
+    // ---- Glueocyte cell adhesion bind group layouts ----
+
+    /// Group 1 for glueocyte_cell_adhesion: adhesion connections, cell_adhesion_indices (atomic),
+    /// next_adhesion_id (atomic), free_adhesion_slots, adhesion_counts (atomic).
+    fn create_cell_adhesion_adhesion_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        let rw = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cell Adhesion Adhesion Layout"),
+            entries: &[rw(0), rw(1), rw(2), rw(3), rw(4)],
+        })
+    }
+
+    /// Group 2 for glueocyte_cell_adhesion: spatial grid (read-only).
+    fn create_cell_adhesion_spatial_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        let ro = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cell Adhesion Spatial Layout"),
+            // bindings 0,1,3 match spatial_grid_counts, offsets, cells (skip 2=cell_grid_indices)
+            entries: &[ro(0), ro(1), ro(3)],
+        })
+    }
+
+    /// Group 3 for glueocyte_cell_adhesion: mode_indices, mode_cell_types,
+    /// glueocyte_cell_adhesion_flags, signal_flags, genome_orientations, death_flags.
+    fn create_cell_adhesion_mode_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        let ro = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cell Adhesion Mode Layout"),
+            entries: &[ro(0), ro(1), ro(2), ro(3), ro(4), ro(5)],
+        })
+    }
+
+    // ---- Glueocyte cell adhesion bind group creation ----
+
+    fn create_cell_adhesion_adhesion_bind_group(
+        &self,
+        device: &wgpu::Device,
+        adhesion_buffers: &super::AdhesionBuffers,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cell Adhesion Adhesion Bind Group"),
+            layout: &self.cell_adhesion_adhesion_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: adhesion_buffers.adhesion_connections.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: adhesion_buffers.cell_adhesion_indices.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: adhesion_buffers.next_adhesion_id.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: adhesion_buffers.free_adhesion_slots.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: adhesion_buffers.adhesion_counts.as_entire_binding() },
+            ],
+        })
+    }
+
+    fn create_cell_adhesion_spatial_bind_group(
+        &self,
+        device: &wgpu::Device,
+        triple_buffers: &GpuTripleBufferSystem,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cell Adhesion Spatial Bind Group"),
+            layout: &self.cell_adhesion_spatial_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: triple_buffers.spatial_grid_counts.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: triple_buffers.spatial_grid_offsets.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: triple_buffers.spatial_grid_cells.as_entire_binding() },
+            ],
+        })
+    }
+
+    fn create_cell_adhesion_mode_bind_group(
+        &self,
+        device: &wgpu::Device,
+        triple_buffers: &GpuTripleBufferSystem,
+        adhesion_buffers: &super::AdhesionBuffers,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cell Adhesion Mode Bind Group"),
+            layout: &self.cell_adhesion_mode_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: triple_buffers.mode_indices.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: triple_buffers.mode_cell_types.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: triple_buffers.glueocyte_cell_adhesion_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: adhesion_buffers.signal_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: triple_buffers.genome_orientations.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: triple_buffers.death_flags.as_entire_binding() },
             ],
         })
     }

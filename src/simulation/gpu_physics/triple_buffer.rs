@@ -406,6 +406,14 @@ pub struct GpuTripleBufferSystem {
     /// Per-mode glueocyte environment adhesion flags (one u32 per mode)
     pub glueocyte_env_adhesion_flags: wgpu::Buffer,
 
+    /// Per-mode glueocyte cell-adhesion flags packed as two u32 per mode:
+    ///   [0] = cell_adhesion_enabled (0/1)
+    ///   [1] = signal_channel as u32 (0xFFFFFFFF = disabled / always-active)
+    ///   [2] = signal_threshold as f32 bits
+    ///   [3] = padding
+    /// Stored as a flat array of u32: mode_index * 4 + field_index
+    pub glueocyte_cell_adhesion_flags: wgpu::Buffer,
+
     /// Per-mode oculocyte parameters: [sense_type(u32), ray_length(f32), signal_hops(u32), signal_channel(u32)] = 16 bytes per mode
     pub oculocyte_params: wgpu::Buffer,
 
@@ -623,6 +631,10 @@ impl GpuTripleBufferSystem {
         // Per-mode glueocyte env adhesion flags (one u32 per mode)
         let glueocyte_env_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Glueocyte Env Adhesion Flags");
 
+        // Per-mode glueocyte cell-adhesion flags: 4 u32 per mode
+        // [0]=enabled, [1]=signal_channel (0xFFFFFFFF=disabled), [2]=signal_threshold bits, [3]=padding
+        let glueocyte_cell_adhesion_flags = Self::create_storage_buffer(device, max_modes * 16, "Glueocyte Cell Adhesion Flags");
+
         // Per-cell muscle contraction value (one f32 per cell, zero-initialized = relaxed)
         let muscle_contraction_buffer = Self::create_zero_initialized_storage_buffer(
             device,
@@ -715,6 +727,7 @@ impl GpuTripleBufferSystem {
             env_anchor_buffer,
             muscle_contraction_buffer,
             glueocyte_env_adhesion_flags,
+            glueocyte_cell_adhesion_flags,
             oculocyte_params,
             regulation_params,
             signal_settings_v0,
@@ -1358,6 +1371,32 @@ impl GpuTripleBufferSystem {
             .collect();
         if !flags.is_empty() {
             queue.write_buffer(&self.glueocyte_env_adhesion_flags, 0, bytemuck::cast_slice(&flags));
+        }
+    }
+
+    /// Sync glueocyte cell-adhesion flags (4 u32 per mode across all genomes).
+    /// Layout per mode: [enabled(u32), signal_channel(u32), signal_threshold_bits(u32), padding(u32)]
+    /// signal_channel = 0xFFFFFFFF means "always active" (no signal gate).
+    pub fn sync_glueocyte_cell_adhesion_flags(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let data: Vec<u32> = genomes
+            .iter()
+            .flat_map(|genome| {
+                genome.modes.iter().flat_map(|mode| {
+                    let enabled = if mode.glueocyte_cell_adhesion { 1u32 } else { 0u32 };
+                    let channel = if mode.glueocyte_cell_adhesion_signal_channel >= 0
+                        && mode.glueocyte_cell_adhesion_signal_channel <= 7
+                    {
+                        mode.glueocyte_cell_adhesion_signal_channel as u32
+                    } else {
+                        0xFFFF_FFFFu32 // disabled / always-active
+                    };
+                    let threshold_bits = mode.glueocyte_cell_adhesion_signal_threshold.to_bits();
+                    [enabled, channel, threshold_bits, 0u32]
+                })
+            })
+            .collect();
+        if !data.is_empty() {
+            queue.write_buffer(&self.glueocyte_cell_adhesion_flags, 0, bytemuck::cast_slice(&data));
         }
     }
 

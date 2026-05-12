@@ -244,8 +244,25 @@ pub fn execute_gpu_physics_step(
             compute_pass.set_bind_group(3, cave_renderer.collision_bind_group(), &[]);
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
-        
-        // Stage 6: Position integration (256 threads)
+
+        // Stage 5.7: Glueocyte cell-to-cell adhesion
+        // bond_release runs first so a newly-inactive glueocyte releases its bonds before
+        // bond_create could re-form them in the same step.
+        // bond_create then forms new bonds for active glueocytes that are in contact.
+        // Both passes run unconditionally (no cave dependency).
+        compute_pass.set_pipeline(&pipelines.glueocyte_cell_adhesion_release);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.cell_adhesion_adhesion, &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.cell_adhesion_spatial, &[]);
+        compute_pass.set_bind_group(3, &cached_bind_groups.cell_adhesion_mode, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        compute_pass.set_pipeline(&pipelines.glueocyte_cell_adhesion_create);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.cell_adhesion_adhesion, &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.cell_adhesion_spatial, &[]);
+        compute_pass.set_bind_group(3, &cached_bind_groups.cell_adhesion_mode, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         // Now reads accumulated forces and applies them with proper integration
         // Also handles buoyancy (cells float in water when fluid system is enabled)
         compute_pass.set_pipeline(&pipelines.position_update);
@@ -479,6 +496,21 @@ pub fn execute_gpu_mechanics_step(
             compute_pass.set_bind_group(3, cave_renderer.collision_bind_group(), &[]);
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
+
+        // Stage 5.7: Glueocyte cell-to-cell adhesion (mechanics step)
+        compute_pass.set_pipeline(&pipelines.glueocyte_cell_adhesion_release);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.cell_adhesion_adhesion, &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.cell_adhesion_spatial, &[]);
+        compute_pass.set_bind_group(3, &cached_bind_groups.cell_adhesion_mode, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        compute_pass.set_pipeline(&pipelines.glueocyte_cell_adhesion_create);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.cell_adhesion_adhesion, &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.cell_adhesion_spatial, &[]);
+        compute_pass.set_bind_group(3, &cached_bind_groups.cell_adhesion_mode, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 6: Position integration
         compute_pass.set_pipeline(&pipelines.position_update);
