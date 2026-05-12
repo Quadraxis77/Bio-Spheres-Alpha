@@ -1900,40 +1900,24 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         if reset_clicked {
             // Reset the selected mode to its original default values
             if selected_index < context.genome.modes.len() {
-                // Regenerate the original default color for this mode index
-                let i = selected_index;
-                let hue = (i as f32 * 360.0 / 40.0) % 360.0; // Distribute hues evenly
-                let saturation = 0.7 + (i % 3) as f32 * 0.1; // Vary saturation slightly
-                let value = 0.8 + (i % 2) as f32 * 0.1; // Vary brightness slightly
-                
-                // Convert HSV to RGB (same logic as in Default implementation)
-                let c = value * saturation;
-                let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
-                let m = value - c;
-                
-                let (r_prime, g_prime, b_prime) = if hue < 60.0 {
-                    (c, x, 0.0)
-                } else if hue < 120.0 {
-                    (x, c, 0.0)
-                } else if hue < 180.0 {
-                    (0.0, c, x)
-                } else if hue < 240.0 {
-                    (0.0, x, c)
-                } else if hue < 300.0 {
-                    (x, 0.0, c)
-                } else {
-                    (c, 0.0, x)
-                };
-                
-                let r = ((r_prime + m) * 255.0) as u8;
-                let g = ((g_prime + m) * 255.0) as u8;
-                let b = ((b_prime + m) * 255.0) as u8;
-                
+                // Generate a random color for the reset mode using LCG seeded from system time
+                let seed = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.subsec_nanos())
+                    .unwrap_or(12345);
+                let mut rng = seed as u64;
+                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let r = ((rng >> 33) & 0xFF) as f32 / 255.0;
+                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let g = ((rng >> 33) & 0xFF) as f32 / 255.0;
+                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let b = ((rng >> 33) & 0xFF) as f32 / 255.0;
+
                 // Reset to original default values
                 context.genome.modes[selected_index] = crate::genome::ModeSettings {
                     name: format!("M{}", selected_index + 1), // M1, M2, M3, etc.
                     default_name: format!("M{}", selected_index + 1), // Same as name
-                    color: glam::Vec3::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0), // Convert to Vec3
+                    color: glam::Vec3::new(r, g, b),
                     opacity: 1.0,
                     emissive: 0.0,
                     cell_type: 2, // Default to Phagocyte

@@ -564,8 +564,8 @@ impl GpuTripleBufferSystem {
         
         // Each mode buffer is split into 5 vec4 sub-buffers (16 bytes each) to stay under
         // wgpu's 256 MB/buffer limit. At 8M modes × 16 bytes = 128 MB per sub-buffer.
-        // Must match MAX_TOTAL_MODES in mutation.rs (40 * 200_000 = 8_000_000)
-        let max_modes = 40 * 200_000; // 8,000,000 modes — 128 MB per sub-buffer
+        // Must match MAX_TOTAL_MODES in mutation.rs (8_000_000)
+        let max_modes = 8_000_000u64; // Total mode pool — independent of max modes per genome
         let genome_mode_data_v0 = Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V0");
         let genome_mode_data_v1 = Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V1");
         let genome_mode_data_v2 = Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V2");

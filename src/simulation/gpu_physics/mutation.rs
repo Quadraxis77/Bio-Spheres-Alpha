@@ -16,10 +16,12 @@ const MAX_MUTATION_CANDIDATES: u32 = 8192;
 const MAX_MUTATION_LOG_ENTRIES: u32 = 1024;
 
 /// Maximum genomes the mutation system can allocate
-/// (80K genomes × 40 modes each = 3.2M total modes, bounded by wgpu's 256 MB/buffer limit)
+/// (80K genomes × 80 modes each = 6.4M total modes, bounded by wgpu's 256 MB/buffer limit)
 const GENOME_RING_CAPACITY: u32 = 80_000;
 
-/// Maximum modes across all genomes (must match triple_buffer.rs: 40 * 200_000 = 8_000_000)
+/// Maximum modes across all genomes (must match triple_buffer.rs: 8_000_000)
+/// Total pool size is kept at 8M regardless of max_modes_per_genome — raising the per-genome
+/// limit just means fewer simultaneous genome variants fit before GC reclaims space.
 /// Public so adhesion_buffers can be sized to match, preventing out-of-bounds reads in
 /// adhesion_physics.wgsl when mutated cells have mode_index values beyond the original genome range.
 pub const MAX_TOTAL_MODES: u32 = 8_000_000;
@@ -2118,7 +2120,7 @@ impl MutationSystem {
                 current_frame,
                 param_table_size: self.vulnerability_table.len() as u32,
                 total_mode_count: MAX_TOTAL_MODES,
-                max_modes_per_genome: 40,
+                max_modes_per_genome: 80,
                 genome_ring_capacity: GENOME_RING_CAPACITY,
                 subtle_color_mutation: if self.subtle_mutations { 1 } else { 0 },
             };

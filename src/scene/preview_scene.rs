@@ -61,7 +61,7 @@ impl PreviewScene {
         surface_config: &wgpu::SurfaceConfiguration,
     ) -> Self {
         let capacity = 256; // Preview capacity limit
-        let genome = Genome::default();
+        let genome = Genome::new_with_random_colors();
         let config = PhysicsConfig::default();
         
         let mut state = PreviewState::new(capacity, &config);

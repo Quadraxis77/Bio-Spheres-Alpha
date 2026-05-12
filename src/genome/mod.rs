@@ -305,8 +305,8 @@ impl Default for Genome {
             modes: Vec::new(),
         };
         
-        // Create all 40 modes
-        for i in 0..40 {
+        // Create all 80 modes with evenly distributed hues (stable defaults for serialization)
+        for i in 0..80 {
             let mode_name = format!("M {}", i + 1);  // Start mode numbering from 1
             let mut mode = ModeSettings {
                 name: mode_name.clone(),
@@ -314,8 +314,9 @@ impl Default for Genome {
                 ..Default::default()
             };
 
-            // Generate a color based on the mode number using HSV
-            let hue = (i as f32 / 40.0) * 360.0;
+            // Deterministic color spread — must stay stable so serialization diffs work correctly.
+            // Random colors are assigned by the UI when the user creates a new genome.
+            let hue = (i as f32 / 80.0) * 360.0;
             let (r, g, b) = hue_to_rgb(hue);
             mode.color = Vec3::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
             
@@ -330,12 +331,40 @@ impl Default for Genome {
     }
 }
 
+impl Genome {
+    /// Create a new genome with random colors for each mode.
+    /// Use this for user-facing "new genome" creation.
+    /// Do NOT use this as a serialization baseline — `Default::default()` must stay deterministic.
+    pub fn new_with_random_colors() -> Self {
+        let mut genome = Self::default();
+
+        // Randomize colors using LCG seeded from system time
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(12345);
+        let mut rng = seed as u64;
+
+        for mode in &mut genome.modes {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let r = ((rng >> 33) & 0xFF) as f32 / 255.0;
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let g = ((rng >> 33) & 0xFF) as f32 / 255.0;
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let b = ((rng >> 33) & 0xFF) as f32 / 255.0;
+            mode.color = Vec3::new(r, g, b);
+        }
+
+        genome
+    }
+}
+
 // Helper function to convert HSV hue to RGB
 fn hue_to_rgb(hue: f32) -> (u8, u8, u8) {
     let h = hue / 60.0;
     let c = 1.0;
     let x = 1.0 - (h % 2.0 - 1.0).abs();
-    
+
     let (r, g, b) = if h < 1.0 {
         (c, x, 0.0)
     } else if h < 2.0 {
@@ -349,7 +378,7 @@ fn hue_to_rgb(hue: f32) -> (u8, u8, u8) {
     } else {
         (c, 0.0, x)
     };
-    
+
     // Scale to 100-255 range for better visibility
     let scale = |v: f32| ((v * 155.0) + 100.0) as u8;
     (scale(r), scale(g), scale(b))

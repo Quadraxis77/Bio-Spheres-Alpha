@@ -116,6 +116,16 @@ var<storage, read_write> rotations_1: array<vec4<f32>>;
 @group(1) @binding(3)
 var<storage, read_write> rotations_2: array<vec4<f32>>;
 
+// Triple-buffered angular velocities (all 3 sets for write) - zeroed on insertion
+@group(1) @binding(6)
+var<storage, read_write> angular_velocities_0: array<vec4<f32>>;
+
+@group(1) @binding(7)
+var<storage, read_write> angular_velocities_1: array<vec4<f32>>;
+
+@group(1) @binding(8)
+var<storage, read_write> angular_velocities_2: array<vec4<f32>>;
+
 // Cell state buffers for division system (single buffers, not triple-buffered)
 @group(2) @binding(0)
 var<storage, read_write> birth_times: array<f32>;
@@ -257,6 +267,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     rotations_0[slot] = insertion_params.rotation;
     rotations_1[slot] = insertion_params.rotation;
     rotations_2[slot] = insertion_params.rotation;
+    
+    // Zero angular velocity in ALL THREE triple buffer sets.
+    // Recycled slots retain the dead cell's angular velocity; new slots may have
+    // uninitialized data. Both cases cause phantom spin on newly inserted cells.
+    angular_velocities_0[slot] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    angular_velocities_1[slot] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    angular_velocities_2[slot] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     
     // Initialize genome orientation (same as initial rotation for newly inserted cells)
     genome_orientations[slot] = insertion_params.rotation;

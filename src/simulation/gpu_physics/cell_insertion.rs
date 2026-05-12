@@ -35,6 +35,7 @@ impl GpuCellInsertion {
         params_layout: &wgpu::BindGroupLayout,
         state_layout: &wgpu::BindGroupLayout,
         buffers: &GpuTripleBufferSystem,
+        adhesion_buffers: &super::AdhesionBuffers,
     ) -> Self {
         // Create parameters uniform buffer
         let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -118,6 +119,21 @@ impl GpuCellInsertion {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: buffers.ring_state.as_entire_binding(),
+                },
+                // Binding 6: Angular velocities buffer 0 - zeroed on insertion
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: adhesion_buffers.angular_velocities[0].as_entire_binding(),
+                },
+                // Binding 7: Angular velocities buffer 1 - zeroed on insertion
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: adhesion_buffers.angular_velocities[1].as_entire_binding(),
+                },
+                // Binding 8: Angular velocities buffer 2 - zeroed on insertion
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: adhesion_buffers.angular_velocities[2].as_entire_binding(),
                 },
             ],
         });

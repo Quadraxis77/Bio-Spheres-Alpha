@@ -105,7 +105,7 @@ impl App {
             fps_timer: std::time::Instant::now(),
             editor_state: crate::ui::panel_context::GenomeEditorState::new(),
             mouse_position: (0.0, 0.0),
-            working_genome: crate::genome::Genome::default(),
+            working_genome: crate::genome::Genome::new_with_random_colors(),
             performance: PerformanceMetrics::new(),
             next_frame_time: std::time::Instant::now(),
             test_signal_emissions: Vec::new(),

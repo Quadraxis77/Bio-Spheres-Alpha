@@ -140,7 +140,7 @@ pub struct PreviewState {
 
 impl PreviewState {
     pub fn new(capacity: usize, physics_config: &crate::simulation::physics_config::PhysicsConfig) -> Self {
-        let genome = Genome::default();
+        let genome = Genome::new_with_random_colors();
         let initial_state = InitialState::from_genome(&genome, capacity, physics_config);
         let state = initial_state.to_canonical_state();
         

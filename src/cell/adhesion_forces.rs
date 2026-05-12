@@ -269,10 +269,12 @@ fn compute_adhesion_force_pair(
     let geo_force_on_a = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness;
     let spring_force_mag = geo_force_on_a.length();
 
-    // Linear damping
+    // Linear damping: pure velocity-damping along the bond axis.
+    // Only the component of relative velocity along the bond is damped,
+    // so there is no constant-bias force when cells are stationary.
     let rel_vel = vel_b - vel_a;
-    let damp_mag = 1.0 - settings.linear_spring_damping * rel_vel.dot(adhesion_dir);
-    let damping_force = -adhesion_dir * damp_mag;
+    let rel_vel_along_bond = rel_vel.dot(adhesion_dir);
+    let damping_force = adhesion_dir * (settings.linear_spring_damping * rel_vel_along_bond);
 
     force_a += geo_force_on_a + damping_force;
     force_b -= geo_force_on_a + damping_force;
@@ -324,15 +326,6 @@ fn compute_adhesion_force_pair(
         let twist_damp = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
         torque_a += -twist_spring - twist_damp;
         torque_b +=  twist_spring + twist_damp;
-    }
-
-    // Tangential forces from torques (matches GPU)
-    let total_torque = torque_a + torque_b;
-    let r_squared = delta_pos.length_squared();
-    if r_squared > QUATERNION_EPSILON {
-        let tangential_force = total_torque.cross(delta_pos) / r_squared;
-        force_a += tangential_force;
-        force_b -= tangential_force;
     }
 
     (force_a, torque_a, force_b, torque_b, spring_force_mag)
@@ -391,6 +384,7 @@ pub fn compute_adhesion_substep(
     cell_count: usize,
     dt: f32,
     muscle_contractions: &[f32],
+    angular_damping: f32,
 ) {
     const MAX_FORCE: f32 = 5000.0;
     const MAX_TORQUE: f32 = 500.0;
@@ -487,13 +481,14 @@ pub fn compute_adhesion_substep(
         // Position correction: only apply the velocity *change* (matches GPU: new_pos = my_pos + (new_vel - my_vel) * dt)
         let new_pos = positions[idx] + (new_vel - old_vel) * dt;
 
-        // Angular integration
+        // Angular integration with damping
         let radius = masses[idx].clamp(0.5, 2.0); // calculate_radius_from_mass
         let moment_of_inertia = 0.4 * safe_mass * radius * radius;
         let mut new_ang_vel = angular_velocities[idx];
         if moment_of_inertia > 0.0001 {
             let angular_acceleration = clamped_torque / moment_of_inertia;
-            new_ang_vel = angular_velocities[idx] + angular_acceleration * dt;
+            let angular_damping_factor = angular_damping.powf(dt);
+            new_ang_vel = (angular_velocities[idx] + angular_acceleration * dt) * angular_damping_factor;
         }
 
         // Integrate rotation
@@ -572,10 +567,10 @@ fn compute_substep_force_pair(
     let error_b = target_b - pos_b;
     let geo_force = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness;
 
-    // Linear damping
+    // Linear damping: pure velocity-damping along the bond axis.
     let rel_vel = vel_b - vel_a;
-    let damp_mag = 1.0 - settings.linear_spring_damping * rel_vel.dot(adhesion_dir);
-    let damping_force = -adhesion_dir * damp_mag;
+    let rel_vel_along_bond = rel_vel.dot(adhesion_dir);
+    let damping_force = adhesion_dir * (settings.linear_spring_damping * rel_vel_along_bond);
 
     force_a += geo_force + damping_force;
     force_b -= geo_force + damping_force;
@@ -636,15 +631,6 @@ fn compute_substep_force_pair(
         let twist_damp = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
         torque_a += -twist_spring - twist_damp;
         torque_b +=  twist_spring + twist_damp;
-    }
-
-    // Tangential forces from torques (matches GPU)
-    let total_torque = torque_a + torque_b;
-    let r_squared = delta_pos.length_squared();
-    if r_squared > QUATERNION_EPSILON {
-        let tangential_force = total_torque.cross(delta_pos) / r_squared;
-        force_a += tangential_force;
-        force_b -= tangential_force;
     }
 
     (force_a, torque_a, force_b, torque_b)

@@ -846,6 +846,7 @@ pub fn physics_step_with_genome(
                 cell_count,
                 dt,
                 &state.muscle_contractions[..cell_count],
+                config.angular_damping,
             );
         }
     }

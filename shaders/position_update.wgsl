@@ -219,14 +219,34 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Reduce gravity to 5% when in water (95% less influenced)
         gravity_multiplier = 0.05;
 
-        // Water viscosity: apply drag that opposes cell movement through water.
-        // This slows cells proportional to their velocity, simulating fluid resistance.
-        // Higher viscosity = thicker fluid = more drag on moving cells.
+        // Anisotropic water drag: cells aligned with their forward axis slip through
+        // water efficiently (low axial drag), while broadside motion is heavily resisted
+        // (high lateral drag). This creates a natural selection pressure for flagellocytes
+        // to orient their thrust correctly — swimming aligned is cheap, drifting sideways
+        // bleeds speed fast.
+        //
+        // Axial drag coefficient  ~20x viscosity (streamlined direction)
+        // Lateral drag coefficient ~120x viscosity (broadside resistance, 6:1 ratio)
         if (water_params.water_viscosity > 0.0) {
-            // Viscous drag force = -coefficient * velocity
-            // Scale: viscosity 1.0 → drag_coeff ~80 (heavy syrup-like resistance)
-            let drag_coeff = water_params.water_viscosity * 80.0 * mass;
-            force -= drag_coeff * vel;
+            // Get the cell's forward axis from its rotation quaternion (+Z in local space)
+            let rotation = rotations_in[cell_idx];
+            let qv = rotation.xyz;
+            let local_z = vec3<f32>(0.0, 0.0, 1.0);
+            let uv = cross(qv, local_z);
+            let uuv = cross(qv, uv);
+            let forward = local_z + ((uv * rotation.w) + uuv) * 2.0;
+
+            // Decompose velocity into axial (along body) and lateral (across body) components
+            let vel_axial_mag = dot(vel, forward);
+            let vel_axial   = forward * vel_axial_mag;
+            let vel_lateral = vel - vel_axial;
+
+            // Apply separate drag coefficients to each component
+            let axial_drag_coeff   = water_params.water_viscosity * 20.0 * mass;
+            let lateral_drag_coeff = water_params.water_viscosity * 120.0 * mass;
+
+            force -= axial_drag_coeff   * vel_axial;
+            force -= lateral_drag_coeff * vel_lateral;
         }
     }
 

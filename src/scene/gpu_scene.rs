@@ -4371,6 +4371,7 @@ impl GpuScene {
                 &self.gpu_physics_pipelines.cell_insertion_params_layout,
                 &self.gpu_physics_pipelines.cell_insertion_state_layout,
                 &self.gpu_triple_buffers,
+                &self.adhesion_buffers,
             );
             self.cell_insertion = Some(cell_insertion);
         }

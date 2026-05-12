@@ -23,7 +23,7 @@ struct PhysicsParams {
     enable_thrust_force: i32,
     cell_capacity: u32,
     _pad0: f32,
-    _pad1: f32,
+    angular_damping: f32, // fraction of angular velocity retained per second
     _pad2: f32,
 }
 
@@ -262,10 +262,12 @@ fn compute_substep_forces(
     let error_b = target_b - pos_b;
     let geo_force_on_a = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness;
 
-    // Linear damping
+    // Linear damping: pure velocity-damping along the bond axis.
+    // Only the component of relative velocity along the bond is damped,
+    // so there is no constant-bias force when cells are stationary.
     let rel_vel = vel_b - vel_a;
-    let damp_mag = 1.0 - settings.linear_spring_damping * dot(rel_vel, adhesion_dir);
-    let damping_force = -adhesion_dir * damp_mag;
+    let rel_vel_along_bond = dot(rel_vel, adhesion_dir);
+    let damping_force = adhesion_dir * (settings.linear_spring_damping * rel_vel_along_bond);
 
     if (is_cell_a) {
         force += geo_force_on_a + damping_force;
@@ -325,20 +327,11 @@ fn compute_substep_forces(
         torque_b +=  twist_spring + twist_damp;
     }
 
-    // Set the appropriate torque for this cell before tangential force calculation
+    // Set the appropriate torque for this cell
     if (is_cell_a) {
         torque = torque_a;
     } else {
         torque = torque_b;
-    }
-
-    // Apply tangential forces from torques to maintain organism shape.
-    // F_tangential = torque × delta_pos / |delta_pos|²
-    // Use individual cell torque, not total torque, to allow rolling motion
-    let r_squared = dot(delta_pos, delta_pos);
-    if (r_squared > 0.0001) {
-        let tangential_force = cross(torque, delta_pos) / r_squared;
-        force += tangential_force;
     }
 
     return array<vec3<f32>, 2>(force, torque);
@@ -477,13 +470,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let new_pos = my_pos + (new_vel - my_vel) * dt;
 
-    // Angular integration
+    // Angular integration with damping
     let radius = calculate_radius_from_mass(my_mass);
     let moment_of_inertia = 0.4 * my_mass * radius * radius;
     var new_ang_vel = my_ang_vel;
     if (moment_of_inertia > 0.0001) {
         let angular_acceleration = total_torque / moment_of_inertia;
-        new_ang_vel = my_ang_vel + angular_acceleration * dt;
+        let ang_damp = select(params.angular_damping, 0.94, params.angular_damping < 0.001);
+        let angular_damping_factor = pow(ang_damp, dt);
+        new_ang_vel = (my_ang_vel + angular_acceleration * dt) * angular_damping_factor;
     }
 
     // Integrate rotation
