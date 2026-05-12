@@ -279,16 +279,13 @@ fn compute_adhesion_force_pair(
     force_a += geo_force_on_a + damping_force;
     force_b -= geo_force_on_a + damping_force;
 
-    // Orientation spring: keeps physics rotation aligned with genome rotation.
-    // Compares phys_anchor against the genome-space anchor (not adhesion_dir),
-    // so it's a pure "track genome orientation" spring with no dependency on
-    // live cell positions. Using adhesion_dir here creates a circular dependency:
-    // positions depend on genome anchors, but the orientation spring would then
-    // fight the geometric spring whenever phys_rot diverges from genome_rot,
-    // causing hub cells with multiple bonds to spin to a false equilibrium.
-    let axis_a = phys_anchor_a.cross(anchor_a);
+    // Orientation spring: aligns each cell's anchor toward the live adhesion direction.
+    // Matches GPU adhesion_physics.wgsl: cross(anchor, adhesion_dir) / dot(anchor, adhesion_dir).
+    // This is what enforces the angular shape — it pulls the cell's anchor to point at
+    // its bonded neighbor, creating the rigid inter-cell angle defined by the genome.
+    let axis_a = phys_anchor_a.cross(adhesion_dir);
     let sin_a = axis_a.length();
-    let cos_a = phys_anchor_a.dot(anchor_a);
+    let cos_a = phys_anchor_a.dot(adhesion_dir);
     let angle_a = sin_a.atan2(cos_a);
     if sin_a > QUATERNION_EPSILON {
         let axis_a_norm = axis_a.normalize();
@@ -296,10 +293,10 @@ fn compute_adhesion_force_pair(
         torque_a += -axis_a_norm * ang_vel_a.dot(axis_a_norm) * settings.orientation_spring_damping;
     }
 
-    // Orientation spring for cell B
-    let axis_b = phys_anchor_b.cross(anchor_b);
+    // Orientation spring for cell B: aligns B's anchor toward -adhesion_dir (toward A)
+    let axis_b = phys_anchor_b.cross(-adhesion_dir);
     let sin_b = axis_b.length();
-    let cos_b = phys_anchor_b.dot(anchor_b);
+    let cos_b = phys_anchor_b.dot(-adhesion_dir);
     let angle_b = sin_b.atan2(cos_b);
     if sin_b > QUATERNION_EPSILON {
         let axis_b_norm = axis_b.normalize();
@@ -580,10 +577,11 @@ fn compute_substep_force_pair(
         rotate_vector_by_quaternion(anchor_dir_b, rot_b)
     };
 
-    // Orientation spring for cell A
-    let axis_a = phys_anchor_a.cross(genome_anchor_a);
+    // Orientation spring for cell A: aligns A's anchor toward the live adhesion direction.
+    // Matches GPU adhesion_physics.wgsl orientation spring logic.
+    let axis_a = phys_anchor_a.cross(adhesion_dir);
     let sin_a = axis_a.length();
-    let cos_a = phys_anchor_a.dot(genome_anchor_a);
+    let cos_a = phys_anchor_a.dot(adhesion_dir);
     let angle_a = sin_a.atan2(cos_a);
     if sin_a > QUATERNION_EPSILON {
         let axis_a_norm = axis_a.normalize();
@@ -591,10 +589,10 @@ fn compute_substep_force_pair(
         torque_a += -axis_a_norm * ang_vel_a.dot(axis_a_norm) * settings.orientation_spring_damping;
     }
 
-    // Orientation spring for cell B
-    let axis_b = phys_anchor_b.cross(genome_anchor_b);
+    // Orientation spring for cell B: aligns B's anchor toward -adhesion_dir (toward A)
+    let axis_b = phys_anchor_b.cross(-adhesion_dir);
     let sin_b = axis_b.length();
-    let cos_b = phys_anchor_b.dot(genome_anchor_b);
+    let cos_b = phys_anchor_b.dot(-adhesion_dir);
     let angle_b = sin_b.atan2(cos_b);
     if sin_b > QUATERNION_EPSILON {
         let axis_b_norm = axis_b.normalize();
