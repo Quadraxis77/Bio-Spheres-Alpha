@@ -1172,6 +1172,10 @@ impl App {
             // Sync genome changes and time slider back to the scene if in Preview mode
             if current_mode == crate::ui::types::SimulationMode::Preview {
                 if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut() {
+                    // Sync physics config from UI world settings so constraint_iterations
+                    // and other parameters take effect in the preview physics step.
+                    preview_scene.config.constraint_iterations = self.ui.state.world_settings.constraint_iterations;
+
                     preview_scene.update_genome(&self.working_genome);
                     
                     // Sync time slider to simulation (when dragging or changed)

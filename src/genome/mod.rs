@@ -222,7 +222,7 @@ impl Default for ModeSettings {
             parent_make_adhesion: false,
             split_mass: 1.5,
             split_interval: 1.0,
-            nutrient_gain_rate: 0.3, // Default: gain 0.3 mass per second (increased from 0.2 for better growth)
+            nutrient_gain_rate: 10.0,
             max_cell_size: 2.0, // Default: max size of 2.0 units
             split_ratio: 0.5, // Default: 50/50 split
             nutrient_priority: 1.0, // Default: neutral priority

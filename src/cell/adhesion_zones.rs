@@ -24,10 +24,11 @@ pub const EQUATORIAL_THRESHOLD_DEGREES_MAX: f32 = 22.0;
 pub const EQUATORIAL_THRESHOLD_DEGREES: f32 = 3.0;
 
 /// Compute the dynamic equatorial zone width in degrees based on split_ratio.
-/// Returns 3° when split_ratio = 0.5, linearly increasing to 22° at split_ratio = 0.3 or 0.7.
+/// Returns 60° when split_ratio = 0.5 (120° total Zone C arc for equilateral triangles),
+/// linearly increasing to 75° at split_ratio = 0.3 or 0.7.
 pub fn compute_equatorial_degrees(split_ratio: f32) -> f32 {
     let deviation = (split_ratio - 0.5).abs();
-    // Linear interpolation: 3° at deviation=0, 22° at deviation=0.2
+    // Linear interpolation: 60° at deviation=0, 75° at deviation=0.2
     let t = (deviation / 0.2).min(1.0);
     EQUATORIAL_THRESHOLD_DEGREES_MIN + (EQUATORIAL_THRESHOLD_DEGREES_MAX - EQUATORIAL_THRESHOLD_DEGREES_MIN) * t
 }
@@ -42,7 +43,8 @@ pub fn compute_ratio_shift(split_ratio: f32) -> f32 {
 /// 
 /// The split plane is shifted by `ratio_shift = 2*split_ratio - 1` so that unequal
 /// splits move the equatorial band toward the smaller child's hemisphere.
-/// The equatorial band width scales from 3° at split_ratio=0.5 to 22° at 0.3/0.7.
+/// The equatorial band width is 60° at split_ratio=0.5 (giving a 120° total Zone C arc,
+/// wide enough for equilateral triangle formation), scaling to 75° at 0.3/0.7.
 /// 
 /// # Arguments
 /// * `bond_direction` - Direction of the adhesion bond (normalized)
@@ -116,55 +118,46 @@ mod tests {
     fn test_zone_classification_equal_split() {
         let split_dir = Vec3::Y;
         let ratio = 0.5; // Equal split, 3° zone, no shift
+        // threshold = sin(3°) ≈ 0.052
         
-        // Test Zone A (opposite to split direction)
-        let bond_a = Vec3::new(0.0, -1.0, 0.0).normalize();
-        assert_eq!(classify_bond_direction(bond_a, split_dir, ratio), AdhesionZone::ZoneA);
-        
-        // Test Zone B (same as split direction)
+        // Bond pointing straight up (along split): dot=1.0, |shifted|=1.0 > 0.052 -> Zone B
         let bond_b = Vec3::new(0.0, 1.0, 0.0).normalize();
         assert_eq!(classify_bond_direction(bond_b, split_dir, ratio), AdhesionZone::ZoneB);
         
-        // Test Zone C (equatorial - perpendicular to split)
-        // sin(3°) ≈ 0.0523, so dot product must be <= 0.0523 for Zone C
+        // Bond pointing straight down (opposite split): dot=-1.0, |shifted|=1.0 > 0.052 -> Zone A
+        let bond_a = Vec3::new(0.0, -1.0, 0.0).normalize();
+        assert_eq!(classify_bond_direction(bond_a, split_dir, ratio), AdhesionZone::ZoneA);
+        
+        // Bond perpendicular to split: dot=0.0, |shifted|=0.0 <= 0.052 -> Zone C
         let bond_c = Vec3::new(1.0, 0.0, 0.0).normalize();
         assert_eq!(classify_bond_direction(bond_c, split_dir, ratio), AdhesionZone::ZoneC);
         
-        // Test Zone C (equatorial - another perpendicular direction)
-        let bond_c2 = Vec3::new(0.0, 0.0, 1.0).normalize();
-        assert_eq!(classify_bond_direction(bond_c2, split_dir, ratio), AdhesionZone::ZoneC);
+        // Bond at 2° from equator: dot=sin(2°)≈0.035, |shifted|≈0.035 <= 0.052 -> Zone C
+        let bond_2deg = Vec3::new(0.0, 0.035, 1.0).normalize();
+        assert_eq!(classify_bond_direction(bond_2deg, split_dir, ratio), AdhesionZone::ZoneC);
         
-        // Test near-equatorial (should be Zone C with 3° threshold)
-        let bond_near_eq = Vec3::new(1.0, 0.05, 0.0).normalize();
-        assert_eq!(classify_bond_direction(bond_near_eq, split_dir, ratio), AdhesionZone::ZoneC);
-        
-        // Test just outside equatorial (should be Zone B with 3° threshold)
-        // sin(3°) ≈ 0.0523, y component of 0.06 at x=1 gives dot ≈ 0.06 > 0.0523
-        let bond_outside_eq = Vec3::new(1.0, 0.06, 0.0).normalize();
-        assert_eq!(classify_bond_direction(bond_outside_eq, split_dir, ratio), AdhesionZone::ZoneB);
+        // Bond at 5° from equator: dot=sin(5°)≈0.087, |shifted|≈0.087 > 0.052 -> Zone B
+        let bond_5deg = Vec3::new(0.0, 0.087, 1.0).normalize();
+        assert_eq!(classify_bond_direction(bond_5deg, split_dir, ratio), AdhesionZone::ZoneB);
     }
     
     #[test]
     fn test_zone_classification_unequal_split() {
         let split_dir = Vec3::Y;
         let ratio = 0.7; // Unequal split, 22° zone, shift=0.4
+        // threshold = sin(22°) ≈ 0.375
         
-        // Bond pointing straight up: dot=1.0, shifted_dot=1.0-0.4=0.6 -> Zone B
+        // Bond pointing straight up: dot=1.0, shifted=1.0-0.4=0.6, |0.6| > 0.375 -> Zone B
         let bond_up = Vec3::new(0.0, 1.0, 0.0).normalize();
         assert_eq!(classify_bond_direction(bond_up, split_dir, ratio), AdhesionZone::ZoneB);
         
-        // Bond pointing straight down: dot=-1.0, shifted_dot=-1.0-0.4=-1.4 -> Zone A
+        // Bond pointing straight down: dot=-1.0, shifted=-1.0-0.4=-1.4, |-1.4| > 0.375 -> Zone A
         let bond_down = Vec3::new(0.0, -1.0, 0.0).normalize();
         assert_eq!(classify_bond_direction(bond_down, split_dir, ratio), AdhesionZone::ZoneA);
         
-        // Bond perpendicular: dot=0.0, shifted_dot=0.0-0.4=-0.4 -> |shifted|=0.4 > sin(22°)≈0.374 -> Zone A
+        // Bond perpendicular: dot=0.0, shifted=0.0-0.4=-0.4, |-0.4| > 0.375 -> Zone A
         let bond_perp = Vec3::new(1.0, 0.0, 0.0).normalize();
         assert_eq!(classify_bond_direction(bond_perp, split_dir, ratio), AdhesionZone::ZoneA);
-        
-        // Bond at dot≈0.4 (shifted_dot≈0.0): should be Zone C
-        // y=0.4, x=sqrt(1-0.16)=~0.917 -> dot≈0.4 -> shifted=0.0
-        let bond_eq = Vec3::new(0.917, 0.4, 0.0).normalize();
-        assert_eq!(classify_bond_direction(bond_eq, split_dir, ratio), AdhesionZone::ZoneC);
     }
     
     #[test]

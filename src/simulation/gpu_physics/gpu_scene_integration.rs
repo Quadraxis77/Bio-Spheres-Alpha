@@ -772,4 +772,17 @@ pub fn execute_signal_system(
         compute_pass.set_bind_group(1, &cached_bind_groups.signal_propagate_adhesion, &[]);
         compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
     }
+
+    // Step 4: Mode switch — change cell mode_index based on received signal
+    // Runs after propagation so all cells have their final signal values for this frame.
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Mode Switch"),
+            timestamp_writes: None,
+        });
+        compute_pass.set_pipeline(&pipelines.mode_switch);
+        compute_pass.set_bind_group(0, &cached_bind_groups.mode_switch_group0, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.mode_switch_group1, &[]);
+        compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
+    }
 }

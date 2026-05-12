@@ -312,9 +312,11 @@ fn compute_substep_forces(
         // Relative twist constraint: constrains A's rotation relative to B about the bond axis.
         let birth_relative = quat_multiply(quat_conjugate(connection.twist_reference_b), connection.twist_reference_a);
         let current_relative = quat_multiply(quat_conjugate(rot_b), rot_a);
-        let twist_error_quat = quat_multiply(current_relative, quat_conjugate(birth_relative));
-        let twist_error_aa = quat_to_axis_angle(twist_error_quat);
-        let twist_error_scalar = clamp(twist_error_aa.w * dot(twist_error_aa.xyz, adhesion_axis), -1.57, 1.57);
+        let twist_error_quat = normalize(quat_multiply(current_relative, quat_conjugate(birth_relative)));
+
+        // Extract twist component about the adhesion axis directly from the quaternion's
+        // imaginary part, avoiding the axis-angle double-cover ambiguity.
+        let twist_error_scalar = clamp(dot(twist_error_quat.xyz, adhesion_axis), -1.57, 1.57);
 
         let angular_vel_a_proj = dot(ang_vel_a, adhesion_axis);
         let angular_vel_b_proj = dot(ang_vel_b, adhesion_axis);

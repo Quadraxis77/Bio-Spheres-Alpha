@@ -1,4 +1,4 @@
-use glam::{Vec3, Vec4, Quat};
+use glam::{Vec3, Quat};
 use crate::genome::AdhesionSettings;
 use super::adhesion::AdhesionConnections;
 
@@ -279,11 +279,16 @@ fn compute_adhesion_force_pair(
     force_a += geo_force_on_a + damping_force;
     force_b -= geo_force_on_a + damping_force;
 
-    // Orientation spring for cell A - uses PHYSICS rotation anchors
-    // to detect actual misalignment (genome anchors are fixed, can't detect rotation)
-    let axis_a = phys_anchor_a.cross(adhesion_dir);
+    // Orientation spring: keeps physics rotation aligned with genome rotation.
+    // Compares phys_anchor against the genome-space anchor (not adhesion_dir),
+    // so it's a pure "track genome orientation" spring with no dependency on
+    // live cell positions. Using adhesion_dir here creates a circular dependency:
+    // positions depend on genome anchors, but the orientation spring would then
+    // fight the geometric spring whenever phys_rot diverges from genome_rot,
+    // causing hub cells with multiple bonds to spin to a false equilibrium.
+    let axis_a = phys_anchor_a.cross(anchor_a);
     let sin_a = axis_a.length();
-    let cos_a = phys_anchor_a.dot(adhesion_dir);
+    let cos_a = phys_anchor_a.dot(anchor_a);
     let angle_a = sin_a.atan2(cos_a);
     if sin_a > QUATERNION_EPSILON {
         let axis_a_norm = axis_a.normalize();
@@ -292,9 +297,9 @@ fn compute_adhesion_force_pair(
     }
 
     // Orientation spring for cell B
-    let axis_b = phys_anchor_b.cross(-adhesion_dir);
+    let axis_b = phys_anchor_b.cross(anchor_b);
     let sin_b = axis_b.length();
-    let cos_b = phys_anchor_b.dot(-adhesion_dir);
+    let cos_b = phys_anchor_b.dot(anchor_b);
     let angle_b = sin_b.atan2(cos_b);
     if sin_b > QUATERNION_EPSILON {
         let axis_b_norm = axis_b.normalize();
@@ -314,9 +319,13 @@ fn compute_adhesion_force_pair(
         let birth_relative = (twist_ref_b.conjugate() * twist_ref_a).normalize();
         let current_relative = (rot_b.conjugate() * rot_a).normalize();
         let twist_error_quat = (current_relative * birth_relative.conjugate()).normalize();
-        let axis_angle = quat_to_axis_angle(twist_error_quat);
-        let twist_error_scalar = (axis_angle.w * Vec3::new(axis_angle.x, axis_angle.y, axis_angle.z).dot(adhesion_axis))
-            .clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
+
+        // Extract twist component about the adhesion axis directly from the quaternion's
+        // imaginary part. This avoids the axis-angle double-cover ambiguity that causes
+        // the spring to fire in the wrong direction when the error crosses the hemisphere.
+        // twist_scalar ≈ sin(half_angle) * sign, which is monotone in [-1, 1] for ±180°.
+        let twist_imag = Vec3::new(twist_error_quat.x, twist_error_quat.y, twist_error_quat.z);
+        let twist_error_scalar = twist_imag.dot(adhesion_axis).clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
 
         let angular_vel_a_proj = ang_vel_a.dot(adhesion_axis);
         let angular_vel_b_proj = ang_vel_b.dot(adhesion_axis);
@@ -344,22 +353,6 @@ fn rotate_vector_by_quaternion(v: Vec3, q: Quat) -> Vec3 {
     u * (2.0 * u_dot_v) + v * (s * s - u_dot_u) + u.cross(v) * (2.0 * s)
 }
 
-/// Convert quaternion to axis-angle representation
-/// Optimized with inline hint
-#[inline]
-fn quat_to_axis_angle(q: Quat) -> Vec4 {
-    let w_clamped = q.w.clamp(-1.0, 1.0);
-    let angle = 2.0 * w_clamped.acos();
-    
-    let axis = if angle < 0.001 {
-        Vec3::X
-    } else {
-        let sin_half = (angle * 0.5).sin();
-        Vec3::new(q.x, q.y, q.z) / sin_half
-    };
-    
-    Vec4::new(axis.x, axis.y, axis.z, angle)
-}
 
 
 
@@ -588,9 +581,9 @@ fn compute_substep_force_pair(
     };
 
     // Orientation spring for cell A
-    let axis_a = phys_anchor_a.cross(adhesion_dir);
+    let axis_a = phys_anchor_a.cross(genome_anchor_a);
     let sin_a = axis_a.length();
-    let cos_a = phys_anchor_a.dot(adhesion_dir);
+    let cos_a = phys_anchor_a.dot(genome_anchor_a);
     let angle_a = sin_a.atan2(cos_a);
     if sin_a > QUATERNION_EPSILON {
         let axis_a_norm = axis_a.normalize();
@@ -599,9 +592,9 @@ fn compute_substep_force_pair(
     }
 
     // Orientation spring for cell B
-    let axis_b = phys_anchor_b.cross(-adhesion_dir);
+    let axis_b = phys_anchor_b.cross(genome_anchor_b);
     let sin_b = axis_b.length();
-    let cos_b = phys_anchor_b.dot(-adhesion_dir);
+    let cos_b = phys_anchor_b.dot(genome_anchor_b);
     let angle_b = sin_b.atan2(cos_b);
     if sin_b > QUATERNION_EPSILON {
         let axis_b_norm = axis_b.normalize();
@@ -619,9 +612,11 @@ fn compute_substep_force_pair(
         let birth_relative = (twist_ref_b.conjugate() * twist_ref_a).normalize();
         let current_relative = (rot_b.conjugate() * rot_a).normalize();
         let twist_error_quat = (current_relative * birth_relative.conjugate()).normalize();
-        let axis_angle = quat_to_axis_angle(twist_error_quat);
-        let twist_error_scalar = (axis_angle.w * Vec3::new(axis_angle.x, axis_angle.y, axis_angle.z).dot(adhesion_axis))
-            .clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
+
+        // Extract twist component about the adhesion axis directly from the quaternion's
+        // imaginary part, avoiding the axis-angle double-cover ambiguity.
+        let twist_imag = Vec3::new(twist_error_quat.x, twist_error_quat.y, twist_error_quat.z);
+        let twist_error_scalar = twist_imag.dot(adhesion_axis).clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
 
         let angular_vel_a_proj = ang_vel_a.dot(adhesion_axis);
         let angular_vel_b_proj = ang_vel_b.dot(adhesion_axis);

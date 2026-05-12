@@ -157,6 +157,7 @@ pub fn division_step(
             parent_genome_orientation: Quat,
             #[allow(dead_code)]
             parent_nutrients: f32,
+            parent_radius: f32,
             child_a_pos: Vec3,
             child_b_pos: Vec3,
             child_a_orientation: Quat,
@@ -218,7 +219,11 @@ pub fn division_step(
                 let pitch = mode.parent_split_direction.x.to_radians();
                 let yaw = mode.parent_split_direction.y.to_radians();
                 
-                let split_direction = parent_rotation
+                // Use genome orientation (not physics rotation) so the split axis is
+                // stable across generations. Physics rotation drifts due to torques and
+                // collisions; genome orientation is the pure accumulated split chain and
+                // never drifts, which is what produces evenly-spaced spokes.
+                let split_direction = parent_genome_orientation
                     * Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0)
                     * Vec3::Z;
                 
@@ -357,6 +362,7 @@ pub fn division_step(
                     parent_split_count,
                     parent_genome_orientation,
                     parent_nutrients,
+                    parent_radius,
                     child_a_pos,
                     child_b_pos,
                     child_a_orientation,
@@ -468,7 +474,7 @@ pub fn division_step(
                 data.parent_genome_orientation,
                 current_time,
                 data.parent_split_count,
-                state.radii[data.child_a_slot].max(state.radii[data.child_b_slot]),
+                data.parent_radius,  // Use the saved pre-split parent radius, not the child's post-split radius
             );
             
             // Create sibling adhesion between children if parent_make_adhesion is enabled.
@@ -492,13 +498,15 @@ pub fn division_step(
 
                         // Daughter A anchor: points toward Daughter B (opposite spawn direction)
                         let direction_a_to_b = -spawn_direction_vec;
-                        // Transform to Daughter A's local physics space
-                        let anchor_direction_a = (data.child_a_orientation.inverse() * direction_a_to_b).normalize();
+                        // Transform to Daughter A's local genome space (must use genome orientation,
+                        // not physics orientation, so anchors stay consistent with inherited bonds
+                        // which are also expressed in genome space)
+                        let anchor_direction_a = (data.child_a_genome_orientation.inverse() * direction_a_to_b).normalize();
 
                         // Daughter B anchor: points toward Daughter A (same as spawn direction)
                         let direction_b_to_a = spawn_direction_vec;
-                        // Transform to Daughter B's local physics space
-                        let anchor_direction_b = (data.child_b_orientation.inverse() * direction_b_to_a).normalize();
+                        // Transform to Daughter B's local genome space
+                        let anchor_direction_b = (data.child_b_genome_orientation.inverse() * direction_b_to_a).normalize();
 
                         // Get split directions for zone classification
                         let child_a_mode = genome.modes.get(data.child_a_mode_idx);
@@ -744,7 +752,9 @@ pub fn division_step_multi(
             
             let pitch = mode.parent_split_direction.x.to_radians();
             let yaw = mode.parent_split_direction.y.to_radians();
-            let split_direction = parent_rotation
+            // Use genome orientation (not physics rotation) — same reasoning as the
+            // primary division path above: genome orientation is drift-free.
+            let split_direction = parent_genome_orientation
                 * Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0)
                 * Vec3::Z;
             
@@ -818,10 +828,23 @@ pub fn division_step_multi(
                 (split_mass - 1.0) * 100.0
             } else { 50.0 };
             
-            let child_a_genome_orientation = parent_genome_orientation * mode.child_a.orientation;
-            let child_b_genome_orientation = parent_genome_orientation * mode.child_b.orientation;
-            let child_a_orientation = parent_rotation * mode.child_a.orientation;
-            let child_b_orientation = parent_rotation * mode.child_b.orientation;
+            // Match division_step: compound split_rotation into genome orientations so
+            // adhesion anchor directions are computed in the correct frame across generations.
+            let split_rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+            let child_a_orientation_for_genome = if will_reach_max_splits {
+                mode.child_a_after_split_orientation
+            } else {
+                mode.child_a.orientation
+            };
+            let child_b_orientation_for_genome = if will_reach_max_splits {
+                mode.child_b_after_split_orientation
+            } else {
+                mode.child_b.orientation
+            };
+            let child_a_genome_orientation = parent_genome_orientation * split_rotation * child_a_orientation_for_genome;
+            let child_b_genome_orientation = parent_genome_orientation * split_rotation * child_b_orientation_for_genome;
+            let child_a_orientation = parent_rotation * split_rotation * child_a_orientation_for_genome;
+            let child_b_orientation = parent_rotation * split_rotation * child_b_orientation_for_genome;
             
             division_data_list.push(DivisionData {
                 parent_idx,
@@ -947,11 +970,15 @@ pub fn division_step_multi(
                 // parent_make_adhesion always creates a sibling bond, regardless of keep_adhesion
                 // (matches GPU line 588: only checks make_adhesion flag, not keep flags)
                 if mode.parent_make_adhesion {
-                    let direction_a_to_b_parent_local = -data.split_direction_local;
-                    let direction_b_to_a_parent_local = data.split_direction_local;
-                    
-                    let anchor_direction_a = (mode.child_a.orientation.inverse() * direction_a_to_b_parent_local).normalize();
-                    let anchor_direction_b = (mode.child_b.orientation.inverse() * direction_b_to_a_parent_local).normalize();
+                    // Use the full world-space spawn direction (parent_genome_orientation * split_rotation),
+                    // then transform into each child's genome-local space — matching division_step exactly.
+                    let pitch = mode.parent_split_direction.x.to_radians();
+                    let yaw = mode.parent_split_direction.y.to_radians();
+                    let split_rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+                    let spawn_direction_vec = (data.parent_genome_orientation * split_rotation) * Vec3::Z;
+
+                    let anchor_direction_a = (data.child_a_genome_orientation.inverse() * (-spawn_direction_vec)).normalize();
+                    let anchor_direction_b = (data.child_b_genome_orientation.inverse() * spawn_direction_vec).normalize();
                     
                     let child_a_mode = genome.modes.get(data.child_a_mode_idx);
                     let child_b_mode = genome.modes.get(data.child_b_mode_idx);

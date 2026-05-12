@@ -1796,7 +1796,9 @@ impl GpuScene {
         true
     }
     
-    /// Update has_oculocytes flag based on current genomes
+    /// Update has_oculocytes flag based on current genomes.
+    /// Also activates the signal system for regulation emitters (channels 8-15),
+    /// which use the same signal_flags buffers and propagation pipeline.
     fn update_has_oculocytes(&mut self) {
         use crate::cell::types::CellType;
         let oculocyte_type = CellType::Oculocyte as u32 as i32;
@@ -1807,6 +1809,14 @@ impl GpuScene {
                 if m.cell_type == oculocyte_type {
                     self.has_oculocytes = true;
                     self.max_signal_hops = self.max_signal_hops.max(m.oculocyte_signal_hops.clamp(1, 20) as u32);
+                }
+                // Regulation emitters (channels 8-15) also need the signal system.
+                // Without this, genomes with no oculocytes but with regulation signals
+                // never run signal_clear/sense/propagate, so signal_flags stays zero
+                // and division/apoptosis/mode-switch gates never open.
+                if m.regulation_emit_channel >= 8 {
+                    self.has_oculocytes = true;
+                    self.max_signal_hops = self.max_signal_hops.max(m.regulation_emit_hops.clamp(1, 20) as u32);
                 }
             }
         }
@@ -1857,6 +1867,88 @@ impl GpuScene {
             let offset = (global_start_index * 4) as u64;
             queue.write_buffer(&self.gpu_triple_buffers.glueocyte_env_adhesion_flags, offset, bytemuck::cast_slice(&env_flags));
         }
+
+        // Update signal-conditional settings (division gating, apoptosis, mode switching)
+        // and regulation/oculocyte emission params for this genome's modes only.
+        // These have no incremental variant so we write the full slice for this genome.
+        let genome_ref = &self.genomes[genome_id];
+        let signal_v0: Vec<[f32; 4]> = genome_ref.modes.iter().map(|mode| [
+            mode.division_signal_channel as f32,
+            mode.division_signal_threshold,
+            if mode.division_signal_invert { 1.0 } else { 0.0 },
+            mode.apoptosis_signal_channel as f32,
+        ]).collect();
+        let signal_v1: Vec<[f32; 4]> = genome_ref.modes.iter().map(|mode| [
+            mode.apoptosis_signal_threshold,
+            if mode.apoptosis_signal_invert { 1.0 } else { 0.0 },
+            mode.signal_child_a_channel as f32,
+            mode.signal_child_a_threshold,
+        ]).collect();
+        // v2 and v3 contain child routing mode indices — must remap local → absolute
+        let remap = |local: i32| -> f32 {
+            if local < 0 { -1.0 } else { (global_start_index as i32 + local.max(0)) as f32 }
+        };
+        let signal_v2: Vec<[f32; 4]> = genome_ref.modes.iter().map(|mode| [
+            remap(mode.signal_child_a_mode_above),
+            remap(mode.signal_child_a_mode_below),
+            mode.signal_child_b_channel as f32,
+            mode.signal_child_b_threshold,
+        ]).collect();
+        let signal_v3: Vec<[f32; 4]> = genome_ref.modes.iter().map(|mode| [
+            remap(mode.signal_child_b_mode_above),
+            remap(mode.signal_child_b_mode_below),
+            mode.mode_switch_signal_channel as f32,
+            mode.mode_switch_signal_threshold,
+        ]).collect();
+        let signal_v4: Vec<[f32; 4]> = genome_ref.modes.iter().map(|mode| [
+            remap(mode.mode_switch_target),
+            if mode.mode_switch_invert { 1.0 } else { 0.0 },
+            0.0,
+            0.0,
+        ]).collect();
+        if !signal_v0.is_empty() {
+            let offset = (global_start_index * 16) as u64;
+            queue.write_buffer(&self.gpu_triple_buffers.signal_settings_v0, offset, bytemuck::cast_slice(&signal_v0));
+            queue.write_buffer(&self.gpu_triple_buffers.signal_settings_v1, offset, bytemuck::cast_slice(&signal_v1));
+            queue.write_buffer(&self.gpu_triple_buffers.signal_settings_v2, offset, bytemuck::cast_slice(&signal_v2));
+            queue.write_buffer(&self.gpu_triple_buffers.signal_settings_v3, offset, bytemuck::cast_slice(&signal_v3));
+            queue.write_buffer(&self.gpu_triple_buffers.signal_settings_v4, offset, bytemuck::cast_slice(&signal_v4));
+        }
+        // Regulation params: [channel(u32), value_bits(u32), hops(u32), padding(u32)]
+        let reg_params: Vec<[u32; 4]> = genome_ref.modes.iter().map(|mode| {
+            let channel = if mode.regulation_emit_channel < 0 {
+                0xFFFFFFFFu32
+            } else {
+                (mode.regulation_emit_channel as u32).clamp(8, 15)
+            };
+            [
+                channel,
+                mode.regulation_emit_value.clamp(0.0, 2047.0).to_bits(),
+                mode.regulation_emit_hops.clamp(1, 20) as u32,
+                0u32,
+            ]
+        }).collect();
+        if !reg_params.is_empty() {
+            let offset = (global_start_index * 16) as u64;
+            queue.write_buffer(&self.gpu_triple_buffers.regulation_params, offset, bytemuck::cast_slice(&reg_params));
+        }
+
+        // Oculocyte params: [sense_type(u32), ray_length_bits(u32), hops(u32), channel(u32)]
+        let oculo_params: Vec<[u32; 4]> = genome_ref.modes.iter().map(|mode| {
+            [
+                mode.oculocyte_sense_type.clamp(0, 4) as u32,
+                mode.oculocyte_ray_length.to_bits(),
+                mode.oculocyte_signal_hops.clamp(1, 20) as u32,
+                mode.oculocyte_signal_channel.clamp(0, 7) as u32,
+            ]
+        }).collect();
+        if !oculo_params.is_empty() {
+            let offset = (global_start_index * 16) as u64;
+            queue.write_buffer(&self.gpu_triple_buffers.oculocyte_params, offset, bytemuck::cast_slice(&oculo_params));
+        }
+
+        // Refresh has_oculocytes / max_signal_hops in case oculocyte or regulation settings changed
+        self.update_has_oculocytes();
         
         log::info!("Incrementally synced genome {} (modes: {} at global index {})", 
             genome_id, mode_count, global_start_index);

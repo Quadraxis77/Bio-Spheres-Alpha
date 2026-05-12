@@ -313,6 +313,7 @@ const ZONE_B: u32 = 1u;  // Positive dot (same as split)
 const ZONE_C: u32 = 2u;  // Equatorial (perpendicular to split)
 
 // Dynamic equatorial zone: 3° at split_ratio=0.5, 22° at split_ratio=0.3 or 0.7
+// Matches CPU EQUATORIAL_THRESHOLD_DEGREES_MIN/MAX in adhesion_zones.rs
 const EQUATORIAL_DEG_MIN: f32 = 3.0;
 const EQUATORIAL_DEG_MAX: f32 = 22.0;
 

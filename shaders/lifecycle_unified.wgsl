@@ -287,12 +287,9 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 
                 // Check threshold: if invert=0, trigger when signal >= threshold
                 //                   if invert=1, trigger when signal < threshold
+                // Matches CPU: signal_val = unwrap_or(0.0), then compare against threshold.
                 let above_threshold = signal_value >= apoptosis_threshold;
-                let condition_met = select(above_threshold, !above_threshold, apoptosis_invert > 0.5);
-                
-                // Only trigger if there IS a signal (raw_signal > 0) or if inverted (no signal = trigger)
-                let has_signal = raw_signal > 0u;
-                apoptosis_triggered = select(condition_met && has_signal, condition_met, apoptosis_invert > 0.5);
+                apoptosis_triggered = select(above_threshold, !above_threshold, apoptosis_invert > 0.5);
             }
         }
     }
@@ -401,12 +398,10 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             
             // Check threshold: if invert=0, allow division when signal >= threshold
             //                   if invert=1, allow division when signal < threshold
+            // Matches CPU: signal_val = unwrap_or(0.0), then compare against threshold.
+            // No separate has_signal guard — a zero signal simply fails a positive threshold.
             let above_threshold = signal_value >= div_threshold;
-            let gate_open = select(above_threshold, !above_threshold, div_invert > 0.5);
-            
-            // Gate requires signal presence (unless inverted — no signal = gate open)
-            let has_signal = raw_signal > 0u;
-            let division_allowed = select(gate_open && has_signal, gate_open, div_invert > 0.5);
+            let division_allowed = select(above_threshold, !above_threshold, div_invert > 0.5);
             
             if (!division_allowed) {
                 division_flags[cell_idx] = 0u;

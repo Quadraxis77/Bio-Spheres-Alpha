@@ -24,7 +24,7 @@ struct AdhesionConnection {
 
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const SIGNAL_CHANNELS: u32 = 16u;
-const SIGNAL_ATTENUATION_PER_HOP: f32 = 0.8; // 80% signal strength retained per hop
+const SIGNAL_ATTENUATION_PER_HOP: f32 = 0.5; // 50% signal strength retained per hop (matches CPU)
 
 @group(0) @binding(0)
 var<storage, read_write> signal_flags: array<atomic<u32>>;
@@ -72,6 +72,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Find the best neighbor for this channel: highest remaining hops
         var best_hops = 0u;
         var best_value = 0u;
+        var best_source_flag = 0u; // bit 16 of the neighbor's signal word (set = direct source)
         let adhesion_base = idx * MAX_ADHESIONS_PER_CELL;
 
         for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
@@ -94,26 +95,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let neighbor_signal = atomicLoad(&signal_flags[neighbor * SIGNAL_CHANNELS + ch]);
 
             // Decode hop count and value from signal
-            // Format: DDDDDHHHHHVVVVVVVVVVVV (5 bits direction flag, 5 bits hops, 11 bits value)
+            // Format: bit16 = source flag, bits 11-15 = hops, bits 0-10 = value
             let neighbor_hops = (neighbor_signal >> 11u) & 31u;
             let neighbor_value = neighbor_signal & 2047u;
+            let neighbor_source_flag = neighbor_signal & (1u << 16u);
 
             // Keep hops and value from the same neighbor so they stay semantically paired.
             if (neighbor_hops > 0u && neighbor_value > 0u) {
                 if (neighbor_hops > best_hops || (neighbor_hops == best_hops && neighbor_value > best_value)) {
                     best_hops = neighbor_hops;
                     best_value = neighbor_value;
+                    best_source_flag = neighbor_source_flag;
                 }
             }
         }
 
         // If a propagatable neighbor was found, write signal to this cell (once only).
         if (best_value > 0u && best_hops > 0u) {
-            let attenuated_value = best_value * u32(SIGNAL_ATTENUATION_PER_HOP * 1000.0) / 1000u;
-            let attenuated = max(1u, attenuated_value);
+            // Match CPU BFS behavior: direct neighbors of the source (hop 1) receive full
+            // strength. Further hops attenuate at 50% per hop.
+            // The source flag (bit 16) is set only on the emitter cell itself. A neighbor
+            // whose signal still has bit 16 set is a direct source — no attenuation.
+            let is_direct_source = (best_source_flag != 0u);
+            let propagated_value = select(
+                max(1u, best_value * u32(SIGNAL_ATTENUATION_PER_HOP * 1000.0) / 1000u),
+                best_value,
+                is_direct_source
+            );
 
             let new_hops = best_hops - 1u;
-            let encoded_signal = (new_hops << 11u) | attenuated;
+            let encoded_signal = (new_hops << 11u) | propagated_value;
 
             atomicStore(&signal_flags[my_base + ch], encoded_signal);
         }

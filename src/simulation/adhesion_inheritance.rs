@@ -112,11 +112,6 @@ pub fn inherit_adhesions_on_division(
         .map(|m| m.split_ratio).unwrap_or(0.5);
     let parent_split_ratio = parent_mode.split_ratio;
 
-    // Fixed geometry constants
-    const FIXED_RADIUS: f32 = 1.0;
-    let rest_length = 1.0_f32;
-    let center_to_center_dist = rest_length + FIXED_RADIUS + FIXED_RADIUS;
-
     // Track adhesion counts for each child
     let mut child_a_adhesion_count: usize = 0;
     let mut child_b_adhesion_count: usize = 0;
@@ -163,8 +158,16 @@ pub fn inherit_adhesions_on_division(
             continue;
         }
 
-        // Neighbor position in parent frame (from stored anchor direction)
-        let neighbor_pos_parent_frame = parent_anchor_dir * center_to_center_dist;
+        // Neighbor position in parent frame: use rest_length as the distance, matching
+        // the geometric spring equilibrium. The spring enforces equilibrium at rest_length
+        // (displacement = (anchor_a - anchor_b) * L/2, and since anchors are antiparallel,
+        // |displacement| = rest_length). Using rest_length + radii here would estimate the
+        // neighbor at the wrong distance, causing anchor directions to point slightly off and
+        // producing variable bond lengths across inherited bonds.
+        let conn_rest_length = genome.modes.get(state.adhesion_connections.mode_index[connection_idx])
+            .map(|m| m.adhesion_settings.rest_length)
+            .unwrap_or(1.0);
+        let neighbor_pos_parent_frame = parent_anchor_dir * conn_rest_length;
 
         // Relative rotation for neighbor anchor calculation (genome-pure)
         let neighbor_genome_orientation = state.genome_orientations[neighbor_idx];
@@ -176,8 +179,12 @@ pub fn inherit_adhesions_on_division(
             let child_anchor = calculate_child_anchor_direction(
                 child_a_pos_parent_frame, neighbor_pos_parent_frame, child_a_orientation_delta,
             );
-            let dir_to_child = (child_a_pos_parent_frame - neighbor_pos_parent_frame).normalize_or_zero();
-            let neighbor_anchor = (relative_rotation * dir_to_child).normalize();
+            // Neighbor anchor must be exactly antiparallel to child anchor in world space
+            // so the geometric spring equilibrium lands at exactly rest_length.
+            // child_anchor is in child's local space; rotate to world via child_orientation_delta,
+            // negate, then rotate into neighbor's local space via relative_rotation.
+            let child_anchor_world = child_a_orientation_delta * child_anchor;
+            let neighbor_anchor = (relative_rotation * (-child_anchor_world)).normalize();
 
             if parent_is_a {
                 state.adhesion_connections.anchor_direction_a[connection_idx] = child_anchor;
@@ -205,8 +212,9 @@ pub fn inherit_adhesions_on_division(
             let child_anchor = calculate_child_anchor_direction(
                 child_b_pos_parent_frame, neighbor_pos_parent_frame, child_b_orientation_delta,
             );
-            let dir_to_child = (child_b_pos_parent_frame - neighbor_pos_parent_frame).normalize_or_zero();
-            let neighbor_anchor = (relative_rotation * dir_to_child).normalize();
+            // Enforce antiparallel anchors for correct rest_length equilibrium.
+            let child_anchor_world = child_b_orientation_delta * child_anchor;
+            let neighbor_anchor = (relative_rotation * (-child_anchor_world)).normalize();
 
             if parent_is_a {
                 state.adhesion_connections.cell_a_index[connection_idx] = child_b_idx;
@@ -238,8 +246,9 @@ pub fn inherit_adhesions_on_division(
             let child_a_anchor = calculate_child_anchor_direction(
                 child_a_pos_parent_frame, neighbor_pos_parent_frame, child_a_orientation_delta,
             );
-            let dir_to_child_a = (child_a_pos_parent_frame - neighbor_pos_parent_frame).normalize_or_zero();
-            let neighbor_anchor_to_a = (relative_rotation * dir_to_child_a).normalize();
+            // Enforce antiparallel anchors for correct rest_length equilibrium.
+            let child_a_anchor_world = child_a_orientation_delta * child_a_anchor;
+            let neighbor_anchor_to_a = (relative_rotation * (-child_a_anchor_world)).normalize();
 
             if parent_is_a {
                 state.adhesion_connections.anchor_direction_a[connection_idx] = child_a_anchor;
@@ -264,8 +273,9 @@ pub fn inherit_adhesions_on_division(
             let child_b_anchor = calculate_child_anchor_direction(
                 child_b_pos_parent_frame, neighbor_pos_parent_frame, child_b_orientation_delta,
             );
-            let dir_to_child_b = (child_b_pos_parent_frame - neighbor_pos_parent_frame).normalize_or_zero();
-            let neighbor_anchor_to_b = (relative_rotation * dir_to_child_b).normalize();
+            // Enforce antiparallel anchors for correct rest_length equilibrium.
+            let child_b_anchor_world = child_b_orientation_delta * child_b_anchor;
+            let neighbor_anchor_to_b = (relative_rotation * (-child_b_anchor_world)).normalize();
 
             // Find a free connection slot for the duplicate
             let dup_idx = find_free_connection_slot(&state.adhesion_connections);
