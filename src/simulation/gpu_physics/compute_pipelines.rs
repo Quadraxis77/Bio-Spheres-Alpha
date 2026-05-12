@@ -3279,6 +3279,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 7: Angular velocities (read-only for rolling friction)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -3510,6 +3521,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: triple_buffers.rotations[buffer_index].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: adhesion_buffers.angular_velocities[buffer_index].as_entire_binding(),
                 },
             ],
         })

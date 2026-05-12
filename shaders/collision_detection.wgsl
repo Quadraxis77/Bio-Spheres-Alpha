@@ -103,9 +103,16 @@ var<storage, read_write> torque_accum_z: array<atomic<i32>>;
 @group(2) @binding(6)
 var<storage, read> rotations: array<vec4<f32>>;
 
+// Angular velocities for rolling friction (read-only; written by velocity_update)
+@group(2) @binding(7)
+var<storage, read> angular_velocities: array<vec4<f32>>;
+
 const MAX_CELLS_PER_GRID: u32 = 16u;
 const PI: f32 = 3.14159265359;
 const FIXED_POINT_SCALE: f32 = 1000.0;
+// Rolling/sliding friction coefficient.
+// Applied as Coulomb friction: F_friction = FRICTION_COEFF * F_normal (clamped to prevent slip reversal).
+const FRICTION_COEFF: f32 = 0.3;
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     return clamp(mass, 0.5, 2.0);
@@ -287,8 +294,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 if (dist > 0.0001) {
                     coll_normal = delta / dist;
                 } else {
-                    // Cells at same position - use cell index to determine separation direction
-                    // This ensures deterministic behavior
                     if (cell_idx > other_idx) {
                         coll_normal = vec3<f32>(1.0, 0.0, 0.0);
                     } else {
@@ -300,12 +305,49 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let other_stiffness = stiffnesses[other_idx];
                 let combined_stiffness = (my_stiffness + other_stiffness) * 0.5;
                 
-                // Spring force with damping
+                // Normal spring force with damping
                 let other_vel = velocities_in[other_idx].xyz;
                 let relative_vel = vel - other_vel;
-                let damping = dot(relative_vel, coll_normal) * 0.5;
+                let normal_damping = dot(relative_vel, coll_normal) * 0.5;
+                let normal_force_mag = coll_penetration * combined_stiffness - normal_damping;
                 
-                force += coll_normal * (coll_penetration * combined_stiffness - damping);
+                force += coll_normal * normal_force_mag;
+
+                // ---- Rolling / sliding friction ----
+                // Contact point vectors from each cell centre to the contact point.
+                // The contact point lies on the surface of cell A (self) toward cell B.
+                let r_a = -coll_normal * radius;          // from A centre to contact
+                let r_b =  coll_normal * other_radius;    // from B centre to contact
+
+                // Surface velocity at the contact point for each cell:
+                //   v_contact = v_linear + omega × r
+                let omega_a = angular_velocities[cell_idx].xyz;
+                let omega_b = angular_velocities[other_idx].xyz;
+                let v_contact_a = vel   + cross(omega_a, r_a);
+                let v_contact_b = other_vel + cross(omega_b, r_b);
+
+                // Relative slip velocity at the contact point
+                let v_slip = v_contact_a - v_contact_b;
+
+                // Remove the normal component — only the tangential part drives friction
+                let v_slip_tangential = v_slip - dot(v_slip, coll_normal) * coll_normal;
+                let slip_speed = length(v_slip_tangential);
+
+                if (slip_speed > 0.0001) {
+                    // Coulomb friction: magnitude capped at μ * |F_normal|
+                    let friction_dir = -v_slip_tangential / slip_speed;
+                    let friction_mag = min(
+                        FRICTION_COEFF * abs(normal_force_mag),
+                        slip_speed * combined_stiffness * 0.1  // viscous cap to prevent over-correction
+                    );
+                    let friction_force = friction_dir * friction_mag;
+
+                    // Apply tangential friction force to this cell's linear force
+                    force += friction_force;
+
+                    // Torque on this cell: τ = r_a × F_friction
+                    torque += cross(r_a, friction_force);
+                }
             }
         }
     }

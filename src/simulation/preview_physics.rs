@@ -110,6 +110,8 @@ pub fn compute_collision_forces(state: &mut CanonicalState, collision_pairs: &[C
         state.torques[i] = Vec3::ZERO;
     }
 
+    const FRICTION_COEFF: f32 = 0.3;
+
     for pair in collision_pairs {
         let idx_a = pair.index_a;
         let idx_b = pair.index_b;
@@ -134,6 +136,41 @@ pub fn compute_collision_forces(state: &mut CanonicalState, collision_pairs: &[C
 
         state.forces[idx_b] += force;
         state.forces[idx_a] -= force;
+
+        // ---- Rolling / sliding friction ----
+        // Contact point vectors from each cell centre to the contact point.
+        // pair.normal points from A toward B, so the contact point is on A's surface.
+        let radius_a = state.radii[idx_a];
+        let radius_b = state.radii[idx_b];
+        let r_a = -pair.normal * radius_a; // from A centre to contact
+        let r_b =  pair.normal * radius_b; // from B centre to contact
+
+        // Surface velocity at the contact point for each cell:
+        //   v_contact = v_linear + omega × r
+        let omega_a = state.angular_velocities[idx_a];
+        let omega_b = state.angular_velocities[idx_b];
+        let v_contact_a = state.velocities[idx_a] + omega_a.cross(r_a);
+        let v_contact_b = state.velocities[idx_b] + omega_b.cross(r_b);
+
+        // Relative slip velocity at the contact point, tangential component only
+        let v_slip = v_contact_a - v_contact_b;
+        let v_slip_tangential = v_slip - v_slip.dot(pair.normal) * pair.normal;
+        let slip_speed = v_slip_tangential.length();
+
+        if slip_speed > 0.0001 {
+            let friction_dir = -v_slip_tangential / slip_speed;
+            let friction_mag = (FRICTION_COEFF * total_force_magnitude.abs())
+                .min(slip_speed * combined_stiffness * 0.1);
+            let friction_force = friction_dir * friction_mag;
+
+            // Apply tangential friction force to both cells
+            state.forces[idx_a] += friction_force;
+            state.forces[idx_b] -= friction_force;
+
+            // Torque on each cell: τ = r × F_friction
+            state.torques[idx_a] += r_a.cross(friction_force);
+            state.torques[idx_b] += r_b.cross(-friction_force);
+        }
     }
 }
 
