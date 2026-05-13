@@ -283,6 +283,19 @@ impl Genome {
         Ok(genome)
     }
 
+    /// Serialise this genome to a YAML string (for embedding in snapshots).
+    pub fn to_yaml_string(&self) -> Result<String, GenomeSerializeError> {
+        let serializable = self.to_serializable();
+        let yaml = serde_yaml::to_string(&serializable)?;
+        Ok(yaml)
+    }
+
+    /// Deserialise a genome from a YAML string (for restoring from snapshots).
+    pub fn from_yaml_string(yaml: &str) -> Result<Self, GenomeDeserializeError> {
+        let serializable: SerializableGenome = serde_yaml::from_str(yaml)?;
+        Self::from_serializable(serializable)
+    }
+
     /// Convert to serializable format, only including modified modes.
     fn to_serializable(&self) -> SerializableGenome {
         let default_genome = Genome::default();

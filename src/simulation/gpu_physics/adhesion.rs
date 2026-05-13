@@ -24,6 +24,7 @@
 //! - _padding: u32 - Padding to 104 bytes
 
 use bytemuck::{Pod, Zeroable};
+use serde::{Deserialize, Serialize};
 
 /// Maximum adhesions per cell (reduced from 20 for 200K cell support)
 pub const MAX_ADHESIONS_PER_CELL: usize = 20;
@@ -40,7 +41,7 @@ pub const MAX_ADHESION_CONNECTIONS: u32 = 500_000;
 /// Adhesion connection structure (exactly 96 bytes)
 /// Matches the reference implementation for GPU compatibility
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable, Serialize, Deserialize)]
 pub struct GpuAdhesionConnection {
     /// Index of first cell in the connection
     pub cell_a_index: u32,          // offset 0
@@ -297,7 +298,7 @@ impl AdhesionSlotAllocator {
 /// Per-cell adhesion indices array
 /// Each cell can have up to MAX_ADHESIONS_PER_CELL connections
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable, Serialize, Deserialize)]
 pub struct CellAdhesionIndices {
     /// Indices into adhesion_connections array (-1 = no connection)
     pub indices: [i32; MAX_ADHESIONS_PER_CELL],

@@ -247,6 +247,17 @@ impl UiSystem {
                     .ui(ui, |ui| {
                         show_windows_menu(ui, &mut ui_state_copy, dock_manager);
                     });
+
+                // Save / Load menu — only shown in GPU mode
+                if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu {
+                    let config2 = MenuConfig::new()
+                        .close_behavior(PopupCloseBehavior::CloseOnClickOutside);
+                    MenuButton::new("Save / Load")
+                        .config(config2)
+                        .ui(ui, |ui| {
+                            show_save_load_menu(ui, &mut ui_state_copy);
+                        });
+                }
                 
                 // Help button next to Windows dropdown
                 if ui.button("❓ Help").clicked() {
@@ -422,6 +433,56 @@ impl UiSystem {
                             }
                         });
                     });
+            }
+
+            // ── Saving popup ──────────────────────────────────────────────────
+            // Frame 1: popup renders, pending_save_ready is false — no request yet.
+            // Frame 2: popup still visible, pending_save_ready becomes true — fire request.
+            // This guarantees the user sees the overlay before the blocking GPU work.
+            if ui_state_copy.show_saving_popup {
+                egui::Window::new("💾 Saving Sphere…")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(&self.ctx, |ui| {
+                        ui.add_space(4.0);
+                        ui.label("Reading simulation state from GPU…");
+                        ui.add_space(8.0);
+                        ui.label("This may take a moment for large simulations.");
+                        ui.add_space(4.0);
+                    });
+
+                if ui_state_copy.pending_save_ready {
+                    // Popup has already been painted once — now fire the work.
+                    *scene_request = crate::ui::panel_context::SceneModeRequest::SaveSnapshot;
+                } else {
+                    // First frame: mark ready so the request fires next frame.
+                    ui_state_copy.pending_save_ready = true;
+                }
+            }
+
+            // ── Loading popup ─────────────────────────────────────────────────
+            // The file path was already chosen in the menu item click.
+            // Frame 1: popup renders with path stored in pending_load_path.
+            // Frame 2: path is taken and LoadSnapshot request is fired.
+            if ui_state_copy.show_loading_popup {
+                egui::Window::new("📂 Loading Sphere…")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(&self.ctx, |ui| {
+                        ui.add_space(4.0);
+                        ui.label("Restoring simulation state…");
+                        ui.add_space(8.0);
+                        ui.label("Uploading cell and fluid data to GPU.");
+                        ui.add_space(4.0);
+                    });
+
+                if let Some(path) = ui_state_copy.pending_load_path.take() {
+                    // Path present — fire the restore request.
+                    *scene_request = crate::ui::panel_context::SceneModeRequest::LoadSnapshot(path);
+                }
+                // app.rs clears show_loading_popup once the work completes.
             }
         }
         
@@ -847,4 +908,49 @@ fn open_panel(tree: &mut egui_dock::DockState<crate::ui::panel::Panel>, panel: &
     // Create a new floating window with the panel
     // Ensure we always pass a non-empty vector to prevent crashes
     let _surface_index = tree.add_window(vec![*panel]);
+}
+
+/// Show the Save / Load menu.
+///
+/// For **save**: sets `show_saving_popup = true`.  The popup renders for one
+/// frame, then `app.rs` fires the GPU readback + file dialog on the next frame.
+///
+/// For **load**: opens the native file picker immediately (it's a quick dialog,
+/// not blocking GPU work), stores the chosen path in `pending_load_path`, and
+/// sets `show_loading_popup = true`.  The popup renders for one frame, then
+/// `app.rs` fires the restore work on the next frame.
+fn show_save_load_menu(
+    ui: &mut egui::Ui,
+    ui_state: &mut GlobalUiState,
+) {
+    if ui
+        .button("💾  Save Sphere…")
+        .on_hover_text("Save the current simulation state to a .sphere file")
+        .clicked()
+    {
+        ui.close_kind(egui::UiKind::Menu);
+        ui_state.show_saving_popup = true;
+        ui_state.pending_save_ready = false;
+    }
+
+    if ui
+        .button("📂  Load Sphere…")
+        .on_hover_text("Restore a previously saved simulation state from a .sphere file")
+        .clicked()
+    {
+        ui.close_kind(egui::UiKind::Menu);
+        // Open the file picker here — it's a quick OS dialog and doesn't
+        // involve any GPU work, so blocking is fine at this point.
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("Load Sphere")
+            .add_filter("Bio-Spheres Sphere", &["sphere"])
+            .set_directory("genomes")
+            .pick_file()
+        {
+            // Store the path and show the popup.  The actual restore work
+            // fires on the next frame once the popup has been painted.
+            ui_state.pending_load_path = Some(path);
+            ui_state.show_loading_popup = true;
+        }
+    }
 }

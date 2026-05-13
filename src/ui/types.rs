@@ -535,6 +535,23 @@ pub struct GlobalUiState {
     #[serde(skip)]
     pub show_reset_dialog: bool,
 
+    /// Whether the "Saving…" progress popup is shown
+    #[serde(skip)]
+    pub show_saving_popup: bool,
+
+    /// Whether the "Loading…" progress popup is shown
+    #[serde(skip)]
+    pub show_loading_popup: bool,
+
+    /// Path chosen by the load file dialog, waiting for the popup to render
+    /// before the actual restore work begins.
+    #[serde(skip)]
+    pub pending_load_path: Option<std::path::PathBuf>,
+
+    /// Whether the save work is ready to start (popup has rendered at least once).
+    #[serde(skip)]
+    pub pending_save_ready: bool,
+
     /// Requested mode change (processed by main app loop)
     #[serde(skip)]
     pub mode_request: Option<SimulationMode>,
@@ -574,6 +591,10 @@ impl Default for GlobalUiState {
             show_low_fps_dialog: false,
             suppress_low_fps_dialog: false,
             show_reset_dialog: false,
+            show_saving_popup: false,
+            show_loading_popup: false,
+            pending_load_path: None,
+            pending_save_ready: false,
             mode_request: None,
         }
     }

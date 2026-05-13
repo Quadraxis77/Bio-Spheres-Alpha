@@ -15,7 +15,7 @@ use std::path::PathBuf;
 ///
 /// Panels can request a scene mode change by setting this value.
 /// The main application loop will process the request and switch scenes.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum SceneModeRequest {
     /// No change requested
     #[default]
@@ -42,6 +42,10 @@ pub enum SceneModeRequest {
     RegenerateFluidMesh,
     /// Request to read back a mutated genome from GPU and load it into the editor
     LoadGenomeFromGpu(u32),
+    /// Request to save a GPU scene snapshot (path chosen by file dialog)
+    SaveSnapshot,
+    /// Request to restore a GPU scene snapshot from the given path
+    LoadSnapshot(std::path::PathBuf),
 }
 
 impl SceneModeRequest {

@@ -54,6 +54,17 @@ use winit::{
     window::{Window, WindowId},
 };
 
+/// Action deferred until after the current frame is presented to the screen.
+///
+/// Save/load operations involve blocking GPU readbacks or large data uploads.
+/// Running them before `output.present()` means the "Saving…" / "Loading…"
+/// popup never appears on screen.  By deferring to post-present we guarantee
+/// the user sees the overlay for at least one frame.
+enum DeferredAction {
+    SaveSphere,
+    LoadSphere(std::path::PathBuf),
+}
+
 pub struct App {
     window: Arc<Window>,
     queue: wgpu::Queue,
@@ -78,6 +89,8 @@ pub struct App {
     test_signal_emissions: Vec<crate::simulation::signal_system::SignalEmission>,
     /// Flag to trigger resimulation when test signals change
     test_signals_changed: bool,
+    /// Deferred post-present action (save/load sphere — runs after frame is on screen)
+    deferred_action: Option<DeferredAction>,
     device: wgpu::Device,
     surface: wgpu::Surface<'static>,
 }
@@ -110,6 +123,7 @@ impl App {
             next_frame_time: std::time::Instant::now(),
             test_signal_emissions: Vec::new(),
             test_signals_changed: false,
+            deferred_action: None,
             device,
             surface,
         }
@@ -1365,6 +1379,16 @@ impl App {
                         }
                     }
                 }
+                crate::ui::panel_context::SceneModeRequest::SaveSnapshot => {
+                    // Defer the actual work until after output.present() so the
+                    // "Saving…" popup is visible on screen before we block.
+                    self.deferred_action = Some(DeferredAction::SaveSphere);
+                }
+                crate::ui::panel_context::SceneModeRequest::LoadSnapshot(path) => {
+                    // Defer the actual work until after output.present() so the
+                    // "Loading…" popup is visible on screen before we block.
+                    self.deferred_action = Some(DeferredAction::LoadSphere(path));
+                }
                 _ => {
                     if let Some(target_mode) = scene_request.target_mode() {
                         self.ui.state.request_mode_switch(target_mode);
@@ -1446,6 +1470,60 @@ impl App {
         self.queue.submit(std::iter::once(encoder.finish()));
         
         output.present();
+
+        // ── Execute deferred save/load action ─────────────────────────────────
+        // This runs AFTER present() so the "Saving…" / "Loading…" popup is
+        // already visible on screen before the blocking work begins.
+        if let Some(action) = self.deferred_action.take() {
+            match action {
+                DeferredAction::SaveSphere => {
+                    if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                        let was_paused = gpu_scene.paused;
+                        gpu_scene.paused = true;
+
+                        match gpu_scene.save_snapshot(&self.device, &self.queue) {
+                            Ok(snapshot) => {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .set_title("Save Sphere")
+                                    .add_filter("Bio-Spheres Sphere", &["sphere"])
+                                    .set_directory("genomes")
+                                    .set_file_name("simulation.sphere")
+                                    .save_file()
+                                {
+                                    match snapshot.save_to_file(&path) {
+                                        Ok(()) => log::info!("Sphere saved to {:?}", path),
+                                        Err(e) => log::error!("Failed to write sphere: {}", e),
+                                    }
+                                }
+                            }
+                            Err(e) => log::error!("Failed to capture sphere: {}", e),
+                        }
+
+                        gpu_scene.paused = was_paused;
+                    }
+                    self.ui.state.show_saving_popup = false;
+                    self.ui.state.pending_save_ready = false;
+                    // Request a redraw so the popup disappears immediately.
+                    self.window.request_redraw();
+                }
+                DeferredAction::LoadSphere(path) => {
+                    if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                        match crate::scene::GpuSceneSnapshot::load_from_file(&path) {
+                            Ok(snapshot) => {
+                                gpu_scene.paused = true;
+                                match gpu_scene.restore_from_snapshot(&self.queue, &snapshot) {
+                                    Ok(()) => log::info!("Sphere loaded from {:?}", path),
+                                    Err(e) => log::error!("Failed to restore sphere: {}", e),
+                                }
+                            }
+                            Err(e) => log::error!("Failed to load sphere file: {}", e),
+                        }
+                    }
+                    self.ui.state.show_loading_popup = false;
+                    self.window.request_redraw();
+                }
+            }
+        }
         
         // FPS counter
         self.frame_count += 1;
@@ -1534,13 +1612,23 @@ impl ApplicationHandler for AppState {
         let width = size.width.max(1);
         let height = size.height.max(1);
         
+        // Prefer Opaque alpha mode to prevent the OS compositor from blending the
+        // swapchain against the desktop. Using a non-Opaque mode (e.g. PreMultiplied)
+        // causes pixels with alpha < 1.0 to show desktop content through the window,
+        // which appears as a random semi-transparent ghost overlay of the scene.
+        let alpha_mode = if surface_caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
+            wgpu::CompositeAlphaMode::Opaque
+        } else {
+            surface_caps.alpha_modes[0]
+        };
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width,
             height,
             present_mode: wgpu::PresentMode::Immediate,
-            alpha_mode: surface_caps.alpha_modes[0],
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };

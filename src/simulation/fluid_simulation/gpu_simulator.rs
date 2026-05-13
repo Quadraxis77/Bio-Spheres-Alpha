@@ -194,7 +194,7 @@ impl GpuFluidSimulator {
         let state_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Fluid State Buffer"),
             size: buffer_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
@@ -533,7 +533,7 @@ impl GpuFluidSimulator {
         let nutrient_voxels_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Nutrient Voxels Buffer"),
             size: nutrient_buffer_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
@@ -865,6 +865,16 @@ impl GpuFluidSimulator {
         self.surface_pressure.set(pressure);
     }
 
+    /// Get the current simulation time (seconds).
+    pub fn time(&self) -> f32 {
+        self.time.get()
+    }
+
+    /// Set the simulation time (used when restoring from a snapshot).
+    pub fn set_time(&self, t: f32) {
+        self.time.set(t);
+    }
+
     /// Step the simulation - 100% GPU with zero CPU logic
     /// Uses the caller's command encoder to avoid a separate queue.submit (GPU sync point)
     pub fn step(&self, _device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, dt: f32, gravity_magnitude: f32, gravity_dir: [bool; 3], lateral_flow_probabilities: [f32; 4], condensation_probability: f32, vaporization_probability: f32) {
@@ -1096,5 +1106,101 @@ impl GpuFluidSimulator {
         pass.set_pipeline(&self.nutrient_populate_pipeline);
         pass.set_bind_group(0, &self.cached_nutrient_bind_group, &[]);
         pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+    }
+}
+
+// ── Snapshot support ──────────────────────────────────────────────────────────
+
+impl GpuFluidSimulator {
+    /// Read back the fluid voxel state and nutrient voxels from the GPU.
+    ///
+    /// Returns `(fluid_voxels, nutrient_voxels)` — each a `Vec<u32>` of length
+    /// `TOTAL_VOXELS` (128³ = 2,097,152 elements, 8 MB each).
+    ///
+    /// This is a **blocking** operation: it submits a copy command, polls the
+    /// device until complete, and maps the staging buffers synchronously.
+    pub fn snapshot_voxels(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> (Vec<u32>, Vec<u32>) {
+        let byte_size = (TOTAL_VOXELS * std::mem::size_of::<u32>()) as u64;
+
+        // Create staging buffers for readback.
+        let fluid_staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Fluid State Snapshot Staging"),
+            size: byte_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let nutrient_staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Nutrient Voxels Snapshot Staging"),
+            size: byte_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Copy GPU → staging.
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Fluid Snapshot Encoder"),
+        });
+        encoder.copy_buffer_to_buffer(&self.state_buffer, 0, &fluid_staging, 0, byte_size);
+        encoder.copy_buffer_to_buffer(&self.nutrient_voxels_buffer, 0, &nutrient_staging, 0, byte_size);
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Map and read fluid state.
+        let fluid_voxels = {
+            let slice = fluid_staging.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            let _ = rx.recv();
+            let data = slice.get_mapped_range();
+            let voxels: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
+            drop(data);
+            fluid_staging.unmap();
+            voxels
+        };
+
+        // Map and read nutrient state.
+        let nutrient_voxels = {
+            let slice = nutrient_staging.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            let _ = rx.recv();
+            let data = slice.get_mapped_range();
+            let voxels: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
+            drop(data);
+            nutrient_staging.unmap();
+            voxels
+        };
+
+        (fluid_voxels, nutrient_voxels)
+    }
+
+    /// Restore fluid and nutrient voxel state from snapshot data.
+    ///
+    /// Writes the provided voxel arrays directly into the GPU buffers via
+    /// `queue.write_buffer`.  The arrays must each have exactly `TOTAL_VOXELS`
+    /// elements.
+    pub fn restore_voxels(
+        &self,
+        queue: &wgpu::Queue,
+        fluid_voxels: &[u32],
+        nutrient_voxels: &[u32],
+    ) {
+        assert_eq!(
+            fluid_voxels.len(), TOTAL_VOXELS,
+            "fluid_voxels length {} != TOTAL_VOXELS {}",
+            fluid_voxels.len(), TOTAL_VOXELS,
+        );
+        assert_eq!(
+            nutrient_voxels.len(), TOTAL_VOXELS,
+            "nutrient_voxels length {} != TOTAL_VOXELS {}",
+            nutrient_voxels.len(), TOTAL_VOXELS,
+        );
+        queue.write_buffer(&self.state_buffer, 0, bytemuck::cast_slice(fluid_voxels));
+        queue.write_buffer(&self.nutrient_voxels_buffer, 0, bytemuck::cast_slice(nutrient_voxels));
     }
 }

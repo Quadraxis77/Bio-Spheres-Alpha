@@ -89,17 +89,17 @@ pub struct GpuScene {
     /// Genomes for cell behavior (growth, division) - supports multiple genomes
     pub genomes: Vec<Genome>,
     /// Whether any genome has an oculocyte mode (for signal system gating)
-    has_oculocytes: bool,
+    pub(super) has_oculocytes: bool,
     /// Maximum signal hops across all oculocyte modes in all genomes (for signal propagation dispatch count)
-    max_signal_hops: u32,
+    pub(super) max_signal_hops: u32,
     /// Genome buffer manager for per-genome GPU resources
     pub genome_buffer_manager: GenomeBufferManager,
     /// Cached parent_make_adhesion flags from genome modes for quick lookup during division
-    parent_make_adhesion_flags: Vec<bool>,
+    pub(super) parent_make_adhesion_flags: Vec<bool>,
     /// Accumulated time for fixed timestep physics
     time_accumulator: f32,
     /// Current frame counter (for shader time-based logic)
-    current_frame: i32,
+    pub(super) current_frame: i32,
     /// Whether this is the first frame (no Hi-Z data yet)
     first_frame: bool,
     /// Whether GPU readbacks are enabled (cell count, etc.)
@@ -183,9 +183,9 @@ pub struct GpuScene {
     /// Unlike current_cell_count (live), this includes dead-but-not-yet-recycled slots.
     /// Physics dispatch must cover all slots up to this value so that metabolism
     /// runs on every live cell regardless of its index.
-    total_cell_slots: u32,
+    pub(super) total_cell_slots: u32,
     /// Next cell ID for deterministic cell creation
-    next_cell_id: u32,
+    pub(super) next_cell_id: u32,
     /// Tail renderer for flagellocyte cells
     pub tail_renderer: TailRenderer,
     /// Cave system renderer for procedural cave generation and collision
@@ -316,7 +316,7 @@ pub struct GpuScene {
     /// Whether the reflection cubemap has been captured
     reflection_cubemap_captured: bool,
     /// Whether genome settings are dirty and need GPU sync
-    genomes_dirty: bool,
+    pub(super) genomes_dirty: bool,
     /// Uniform buffer for signal sense world params (boundary_radius, light_dir, grid params)
     signal_sense_world_params_buffer: wgpu::Buffer,
     /// Dummy nutrient buffer (used when fluid simulator is not yet initialized)

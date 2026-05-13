@@ -472,6 +472,89 @@ impl AdhesionBuffers {
         }
     }
     
+    // ── Snapshot support ──────────────────────────────────────────────────────
+
+    /// Return a clone of the CPU-side connections cache for snapshot serialisation.
+    ///
+    /// This is the authoritative CPU mirror of the adhesion GPU buffer and is
+    /// always kept in sync, so no GPU readback is required.
+    pub fn snapshot_connections(&self) -> Vec<GpuAdhesionConnection> {
+        self.connections_cache.clone()
+    }
+
+    /// Return a clone of the CPU-side per-cell adhesion index cache for snapshot
+    /// serialisation.
+    pub fn snapshot_cell_indices(&self) -> Vec<CellAdhesionIndices> {
+        self.cell_indices_cache.clone()
+    }
+
+    /// Return the number of adhesion slots that have been allocated (including
+    /// inactive/freed ones up to the high-water mark).
+    pub fn snapshot_allocated_count(&self) -> u32 {
+        self.slot_allocator.allocated_count()
+    }
+
+    /// Restore adhesion state from snapshot data.
+    ///
+    /// Replaces the CPU caches with the provided data and marks the buffers as
+    /// needing a GPU sync.  Call `sync_to_gpu` afterwards to push the data to
+    /// the GPU.
+    ///
+    /// # Panics
+    /// Panics if `connections` is longer than the buffer capacity or if
+    /// `cell_indices` is longer than the cell capacity.
+    pub fn restore_from_snapshot(
+        &mut self,
+        connections: Vec<GpuAdhesionConnection>,
+        cell_indices: Vec<CellAdhesionIndices>,
+        allocated_count: u32,
+    ) {
+        assert!(
+            connections.len() <= self.connections_cache.len(),
+            "snapshot adhesion connections ({}) exceed buffer capacity ({})",
+            connections.len(),
+            self.connections_cache.len(),
+        );
+        assert!(
+            cell_indices.len() <= self.cell_indices_cache.len(),
+            "snapshot cell adhesion indices ({}) exceed cell capacity ({})",
+            cell_indices.len(),
+            self.cell_indices_cache.len(),
+        );
+
+        // Reset allocator to match the snapshot's allocation state.
+        self.slot_allocator.reset();
+        // Advance the allocator's high-water mark to match the snapshot.
+        // Slots that are inactive in the connections cache are treated as freed.
+        for _ in 0..allocated_count {
+            // Advance allocated_count by allocating each slot in order.
+            let _ = self.slot_allocator.allocate_slot();
+        }
+        // Free any slots that are inactive in the snapshot (they were freed
+        // before the snapshot was taken).
+        for (slot, conn) in connections.iter().enumerate().take(allocated_count as usize) {
+            if conn.is_active == 0 {
+                self.slot_allocator.free_slot(slot as u32);
+            }
+        }
+
+        // Copy connections into the cache (zero-fill the rest).
+        let n = connections.len();
+        self.connections_cache[..n].copy_from_slice(&connections);
+        for entry in &mut self.connections_cache[n..] {
+            *entry = GpuAdhesionConnection::inactive();
+        }
+
+        // Copy cell indices into the cache (default-fill the rest).
+        let m = cell_indices.len();
+        self.cell_indices_cache[..m].copy_from_slice(&cell_indices);
+        for entry in &mut self.cell_indices_cache[m..] {
+            *entry = CellAdhesionIndices::default();
+        }
+
+        self.needs_sync = true;
+    }
+
     /// DEBUG: Synchronous readback of adhesion counts from GPU
     /// This is slow and should only be used for debugging!
     pub fn debug_sync_readback_adhesion_counts(
