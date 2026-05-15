@@ -335,6 +335,9 @@ pub struct GpuPhysicsPipelines {
     // Swim force pipeline (applies thrust for Flagellocyte cells)
     pub swim_force: wgpu::ComputePipeline,
 
+    // Buoyancy force pipeline (applies upward force for Buoyocyte cells)
+    pub buoyancy_force: wgpu::ComputePipeline,
+
     // Glueocyte environment adhesion pipeline
     pub glueocyte_env_adhesion: wgpu::ComputePipeline,
 
@@ -756,6 +759,15 @@ impl GpuPhysicsPipelines {
             "Swim Force",
         );
 
+        // Buoyancy force pipeline (applies upward force for Buoyocyte cells)
+        let buoyancy_force = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/swim_force.wgsl"),
+            "buoyancy_main",
+            &[&physics_layout, &swim_force_force_accum_layout, &swim_force_cell_data_layout],
+            "Buoyancy Force",
+        );
+
         // Glueocyte environment adhesion pipeline
         // Group 0: physics, Group 1: force_accum+env_anchor, Group 2: mode data, Group 3: cave params
         let glueocyte_env_adhesion = Self::create_compute_pipeline(
@@ -992,6 +1004,7 @@ impl GpuPhysicsPipelines {
             lifecycle_division_execute,
             adhesion_cleanup,
             swim_force,
+            buoyancy_force,
             glueocyte_env_adhesion,
             glueocyte_cell_adhesion_create,
             glueocyte_cell_adhesion_release,

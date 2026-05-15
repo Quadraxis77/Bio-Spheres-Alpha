@@ -32,7 +32,7 @@ struct PhysicsParams {
 // v1: [split_mass, nutrient_priority, swim_force, prioritize_when_low]
 // v2: [max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a]
 // v3: [flagellocyte_speed_b, flagellocyte_threshold_c, flagellocyte_use_signal, min_adhesions]
-// v4: [max_adhesions, mode_a_after_splits, mode_b_after_splits, padding]
+// v4: [max_adhesions, mode_a_after_splits, mode_b_after_splits, buoyancy_force]
 
 // Cell type behavior flags for parameterized shader logic
 struct CellTypeBehaviorFlags {
@@ -42,7 +42,8 @@ struct CellTypeBehaviorFlags {
     has_procedural_tail: u32,
     gains_mass_from_light: u32,
     is_storage_cell: u32,
-    _padding: array<u32, 10>,
+    applies_buoyancy: u32,
+    _padding: array<u32, 9>,
 }
 
 @group(0) @binding(0)
@@ -198,4 +199,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     atomicAdd(&force_accum_x[cell_idx], float_to_fixed(swim_force.x));
     atomicAdd(&force_accum_y[cell_idx], float_to_fixed(swim_force.y));
     atomicAdd(&force_accum_z[cell_idx], float_to_fixed(swim_force.z));
+}
+
+// Buoyancy pass — separate entry point so it runs for all cells regardless of swim force
+@compute @workgroup_size(256)
+fn buoyancy_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let cell_idx = global_id.x;
+    let cell_count = cell_count_buffer[0];
+    if (cell_idx >= cell_count) { return; }
+
+    let mode_idx = mode_indices[cell_idx];
+    if (mode_idx >= arrayLength(&mode_properties_v4)) { return; }
+
+    let cell_type = mode_cell_types[mode_idx];
+    let behavior = type_behaviors[cell_type];
+    if (behavior.applies_buoyancy == 0u) { return; }
+
+    // v4.w = buoyancy_force
+    let buoyancy_force = mode_properties_v4[mode_idx].w;
+    if (buoyancy_force <= 0.0) { return; }
+
+    // Apply upward force (world +Y)
+    const BUOYANCY_MULTIPLIER: f32 = 120.0;
+    let fy = buoyancy_force * BUOYANCY_MULTIPLIER;
+    atomicAdd(&force_accum_y[cell_idx], float_to_fixed(fy));
 }

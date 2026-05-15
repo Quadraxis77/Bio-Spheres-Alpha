@@ -223,6 +223,13 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
+        // Stage 5.51: Buoyancy force (256 threads) - applies upward force for Buoyocyte cells
+        compute_pass.set_pipeline(&pipelines.buoyancy_force);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.swim_force_force_accum[current_index], &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
         // Stage 5.55: Cilia force (256 threads) - contact-dependent surface propulsion for Ciliocyte cells
         // Pushes against neighbors and walls to generate thrust along forward axis
         if let Some(_cave_renderer) = cave_renderer.as_ref() {
@@ -470,6 +477,13 @@ pub fn execute_gpu_mechanics_step(
 
         // Stage 5.5: Swim force
         compute_pass.set_pipeline(&pipelines.swim_force);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.swim_force_force_accum[current_index], &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+
+        // Stage 5.51: Buoyancy force
+        compute_pass.set_pipeline(&pipelines.buoyancy_force);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, &cached_bind_groups.swim_force_force_accum[current_index], &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);

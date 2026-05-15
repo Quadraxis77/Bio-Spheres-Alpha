@@ -1027,8 +1027,8 @@ pub fn physics_step_with_genome(
     // Skip swim forces in preview mode - flagellocyte thrust is GPU-only
     // apply_swim_forces(state, genome);
 
-    // Skip buoyancy forces in preview mode - buoyocyte lift is GPU-only
-    // apply_buoyancy_forces(state, genome);
+    // Apply buoyancy forces for Buoyocyte cells
+    apply_buoyancy_forces(state, genome);
 
     apply_boundary_forces(state, config);
 

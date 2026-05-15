@@ -334,7 +334,7 @@ pub struct GpuTripleBufferSystem {
     /// v1: [split_mass, nutrient_priority, swim_force, prioritize_when_low]
     /// v2: [max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a]
     /// v3: [flagellocyte_speed_b, flagellocyte_threshold_c, flagellocyte_use_signal, min_adhesions]
-    /// v4: [max_adhesions, mode_a_after_splits, mode_b_after_splits, padding]
+    /// v4: [max_adhesions, mode_a_after_splits, mode_b_after_splits, buoyancy_force]
     /// Each sub-buffer: num_modes * 16 bytes
     pub mode_properties_v0: wgpu::Buffer,
     pub mode_properties_v1: wgpu::Buffer,
@@ -1242,7 +1242,7 @@ impl GpuTripleBufferSystem {
                 v1.push([mode.split_mass, mode.nutrient_priority, mode.swim_force, if mode.prioritize_when_low { 1.0 } else { 0.0 }]);
                 v2.push([gpu_max_splits, mode.split_ratio, mode.flagellocyte_signal_channel as f32, mode.flagellocyte_speed_a]);
                 v3.push([mode.flagellocyte_speed_b, mode.flagellocyte_threshold_c, if mode.flagellocyte_use_signal { 1.0 } else { 0.0 }, mode.min_adhesions as f32]);
-                v4.push([mode.max_adhesions as f32, gpu_mode_a_after, gpu_mode_b_after, 0.0]);
+                v4.push([mode.max_adhesions as f32, gpu_mode_a_after, gpu_mode_b_after, mode.buoyancy_force]);
             }
             global_mode_offset += genome.modes.len() as i32;
         }
