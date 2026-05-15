@@ -183,6 +183,11 @@ var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
 @group(2) @binding(17)
 var<storage, read_write> genome_orientations: array<vec4<f32>>;
 
+// Embryocyte reserve buffer (one atomic<u32> per cell, ×1000 fixed-point)
+// Initialized to 65535000 for Embryocytes (cell_type == 10), 0 for all others.
+@group(2) @binding(18)
+var<storage, read_write> embryocyte_reserves: array<atomic<u32>>;
+
 @compute @workgroup_size(1, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Only thread 0 should execute (single workgroup dispatch)
@@ -321,6 +326,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Initialize cell type (0 = Test, 1 = Flagellocyte, etc.)
     cell_types[slot] = insertion_params.cell_type;
     
+    // Initialize reserve: Embryocytes (cell_type == 10) start with a full reserve
+    // (65535 whole units, stored ×1000 fixed-point = 65535000). All others start at 0.
+    // Writing here ensures the correct slot always gets the right value, regardless
+    // of what current_cell_count the CPU thinks is current.
+    if (insertion_params.cell_type == 10u) {
+        atomicStore(&embryocyte_reserves[slot], 65535000u);
+    } else {
+        atomicStore(&embryocyte_reserves[slot], 0u);
+    }
+
     // Update live cell count - always increment by 1
     // Whether we used a recycled slot or a new slot, we're adding one live cell
     atomicAdd(&cell_count_buffer[1], 1u);

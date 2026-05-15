@@ -4327,6 +4327,18 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 18: Embryocyte reserve buffer (read-write atomic<u32>)
+                // Initialized to 65535000 for Embryocytes, 0 for all others.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 18,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }

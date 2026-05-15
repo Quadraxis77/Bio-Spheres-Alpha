@@ -2226,17 +2226,6 @@ impl GpuScene {
             self.total_cell_slots = self.total_cell_slots.max(self.current_cell_count);
             self.next_cell_id += 1;
 
-            // Embryocytes start with a full reserve (65535 whole units, stored ×1000 fixed-point)
-            if mode.cell_type == 10 {
-                let initial_reserve: u32 = 65_535_000;
-                let byte_offset = (cell_index as u64) * 4;
-                queue.write_buffer(
-                    &self.gpu_triple_buffers.embryocyte_reserve_buffer,
-                    byte_offset,
-                    bytemuck::bytes_of(&initial_reserve),
-                );
-            }
-
             Some(cell_index)
         } else {
             None
