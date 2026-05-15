@@ -161,6 +161,16 @@ pub struct ModeSettings {
     pub myocyte_pulse_rate: f32, // Pulse oscillation rate in cycles per second (0.1 to 10.0)
     pub myocyte_pulse_phase: i32, // Which pulse phase to contract on (0 = Pulse A, 1 = Pulse B)
 
+    // Embryocyte settings
+    // Release triggers (AND logic): all enabled triggers must be satisfied simultaneously
+    pub embryocyte_use_timer: bool,       // Enable timer trigger
+    pub embryocyte_release_timer: f32,    // Seconds since cell creation before timer is satisfied
+    pub embryocyte_use_threshold: bool,   // Enable reserve threshold trigger
+    pub embryocyte_threshold_value: u32,  // Reserve must be >= this value (0-65535)
+    pub embryocyte_use_signal: bool,      // Enable signal trigger
+    pub embryocyte_signal_channel: i32,   // Signal channel to monitor (0-15)
+    pub embryocyte_signal_value: f32,     // Minimum signal value required for trigger
+
     // Regulation signal emission: any cell mode can emit a signal on channels 8-15
     pub regulation_emit_channel: i32, // Channel to emit on (-1 = disabled, 8-15 = regulation channel)
     pub regulation_emit_value: f32, // Signal value to emit (0.0 to 2047.0)
@@ -275,6 +285,13 @@ impl Default for ModeSettings {
             myocyte_threshold: 1.0, // Default: threshold of 1.0
             myocyte_pulse_rate: 1.0, // Default: 1 cycle per second
             myocyte_pulse_phase: 0, // Default: pulse A
+            embryocyte_use_timer: false,       // Default: no timer trigger
+            embryocyte_release_timer: 10.0,    // Default: 10 seconds
+            embryocyte_use_threshold: false,   // Default: no threshold trigger
+            embryocyte_threshold_value: 32768, // Default: half full (32768)
+            embryocyte_use_signal: false,      // Default: no signal trigger
+            embryocyte_signal_channel: 0,      // Default: channel 0
+            embryocyte_signal_value: 1.0,      // Default: threshold of 1.0
             regulation_emit_channel: -1, // Disabled by default
             regulation_emit_value: 10.0, // Default: 10 signal value
             regulation_emit_hops: 3, // Default: 3 hops

@@ -91,6 +91,7 @@ pub mod buoyocyte;
 pub mod glueocyte;
 pub mod oculocyte;
 pub mod ciliocyte;
+pub mod embryocyte;
 
 use crate::genome::ModeSettings;
 
@@ -346,5 +347,6 @@ pub fn create_behavior(cell_type: crate::cell::CellType) -> Box<dyn CellBehavior
         crate::cell::CellType::Oculocyte => Box::new(oculocyte::OculocyteBehavior),
         crate::cell::CellType::Ciliocyte => Box::new(ciliocyte::CiliocyteBehavior),
         crate::cell::CellType::Myocyte => Box::new(myocyte::MyocyteBehavior),
+        crate::cell::CellType::Embryocyte => Box::new(embryocyte::EmbryocyteBehavior),
     }
 }

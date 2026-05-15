@@ -209,6 +209,12 @@ impl GpuScene {
             Vec::new()
         };
 
+        let embryocyte_reserves: Vec<u32> = if slots > 0 {
+            readback_typed(device, queue, &self.gpu_triple_buffers.embryocyte_reserve_buffer, slots)?
+        } else {
+            Vec::new()
+        };
+
         // ── Adhesion state (CPU caches — no readback needed) ──────────────────
         let adhesion_connections = self.adhesion_buffers.snapshot_connections();
         let cell_adhesion_indices = self.adhesion_buffers.snapshot_cell_indices();
@@ -273,6 +279,7 @@ impl GpuScene {
             mode_indices,
             cell_ids,
             death_flags,
+            embryocyte_reserves,
             adhesion_connections,
             cell_adhesion_indices,
             adhesion_allocated_count,
@@ -450,6 +457,11 @@ impl GpuScene {
                 canonical.genome_ids[i] = snapshot.genome_ids[i] as usize;
                 canonical.mode_indices[i] = snapshot.mode_indices[i] as usize;
                 canonical.cell_ids[i] = snapshot.cell_ids[i];
+
+                // Restore Embryocyte reserves (zero for non-Embryocyte slots)
+                if i < snapshot.embryocyte_reserves.len() {
+                    canonical.reserves[i] = snapshot.embryocyte_reserves[i];
+                }
             }
 
             canonical.next_cell_id = snapshot.next_cell_id;
@@ -457,6 +469,12 @@ impl GpuScene {
             // Push canonical state to all three GPU buffer sets.
             self.gpu_triple_buffers
                 .sync_from_canonical_state(queue, &canonical, &self.genomes);
+
+            // Sync embryocyte reserve buffer to GPU (sync_from_canonical_state doesn't cover it)
+            if !snapshot.embryocyte_reserves.is_empty() {
+                self.gpu_triple_buffers
+                    .sync_embryocyte_reserves(queue, &snapshot.embryocyte_reserves, slots);
+            }
         }
 
         // ── Restore adhesion state ────────────────────────────────────────────
@@ -479,6 +497,8 @@ impl GpuScene {
                 .sync_cilia_mode_properties(queue, &self.genomes);
             self.gpu_triple_buffers
                 .sync_myocyte_mode_properties(queue, &self.genomes);
+            self.gpu_triple_buffers
+                .sync_embryocyte_mode_properties(queue, &self.genomes);
         }
 
         // Mark instance builder dirty so rendering picks up the new state.

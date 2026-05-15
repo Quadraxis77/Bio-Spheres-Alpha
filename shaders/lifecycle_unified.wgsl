@@ -143,6 +143,22 @@ var<storage, read> signal_settings_v0_read: array<vec4<f32>>;
 @group(2) @binding(18)
 var<storage, read> signal_settings_v1_read: array<vec4<f32>>;
 
+// Binding 19: Embryocyte reserve buffer (read-write atomic<u32> per cell).
+// death_scan: burns reserve for free Embryocytes and uses it for death detection.
+// reserve == 0 → Embryocyte dies (reserve is its sole energy source).
+@group(2) @binding(19)
+var<storage, read_write> embryocyte_reserves: array<atomic<u32>>;
+
+// Binding 20: Mode properties v9 (Embryocyte trigger params per mode)
+// [use_timer as f32, release_timer, use_threshold as f32, threshold_value as f32]
+@group(2) @binding(20)
+var<storage, read> embryocyte_mode_v9: array<vec4<f32>>;
+
+// Binding 21: Mode properties v10 (Embryocyte signal trigger params per mode)
+// [use_signal as f32, signal_channel as f32, signal_value, 0.0]
+@group(2) @binding(21)
+var<storage, read> embryocyte_mode_v10: array<vec4<f32>>;
+
 // Adhesion bind group (group 3) - read-only for neighbor deferral check in division_scan
 @group(3) @binding(0)
 var<storage, read> adhesion_connections: array<AdhesionConnection>;
@@ -257,13 +273,30 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Read nutrients from nutrients_buffer (fixed-point i32)
     let nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
     let was_dead = death_flags[cell_idx] == 1u;
-    
+
     // Check for invalid mode index (corrupted cell from mutation)
     let mode_idx = mode_indices[cell_idx];
     let has_invalid_mode = mode_idx >= arrayLength(&mode_cell_types);
-    
-    // Cell is dead if: nutrients below threshold OR invalid mode index
-    let is_dead = nutrients < DEATH_NUTRIENT_THRESHOLD || has_invalid_mode;
+
+    // Determine if this cell is an Embryocyte (cell_type == 10).
+    var is_embryocyte = false;
+    if (!has_invalid_mode) {
+        is_embryocyte = mode_cell_types[mode_idx] == 10u;
+    }
+
+    // Embryocyte reserve management:
+    // - Reserve burn rate: 10 units/sec when free (no adhesions — checked in division_scan).
+    //   death_scan does not have adhesion data, so burn is applied in division_scan.
+    // - Death: Embryocytes die when reserve == 0 (reserve is their sole energy source).
+    // Non-Embryocyte cells: die when nutrients < threshold AND reserve == 0.
+    let reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
+    var is_dead: bool;
+    if (is_embryocyte) {
+        is_dead = reserve == 0u || has_invalid_mode;
+    } else {
+        // Normal cells: can survive on reserve even if nutrients < threshold
+        is_dead = (nutrients < DEATH_NUTRIENT_THRESHOLD && reserve == 0u) || has_invalid_mode;
+    }
     
     // Signal-conditional apoptosis check:
     // If the mode has apoptosis_signal_channel >= 0, check if the cell's signal
@@ -317,33 +350,28 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Newly dead cell - push slot to ring buffer for recycling
         death_flags[cell_idx] = 1u;
         push_free_slot(cell_idx);
-        
+
         // Decrement live cell count
         atomicSub(&cell_count_buffer[1], 1u);
-        
+
         // Clear division flag
         division_flags[cell_idx] = 0u;
-        
-        // Zero mass, velocity, and nutrients so the cell is fully inert.
-        // Mass < 0.5 is the dead-cell guard used by spatial grid build,
-        // collision detection, position update, and velocity update.
-        // Nutrients must be zeroed to prevent any shader from seeing stale
-        // nutrient data and accidentally treating this slot as alive.
+
+        // Zero mass, velocity, nutrients, and reserve so the cell is fully inert.
         let pos = positions_out[cell_idx].xyz;
         positions_out[cell_idx] = vec4<f32>(pos, 0.0);
         velocities_out[cell_idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         atomicStore(&nutrients_buffer[cell_idx], 0i);
+        atomicStore(&embryocyte_reserves[cell_idx], 0u);
     } else if (should_die) {
         // Already dead, ensure division flag is clear
         division_flags[cell_idx] = 0u;
-        
-        // Re-zero mass and nutrients each frame for cells that were already dead.
-        // This catches cells that died before this fix was added, and also
-        // guards against any shader accidentally writing mass or nutrients back
-        // (e.g. a stale copy from the previous triple-buffer set).
+
+        // Re-zero mass, nutrients, and reserve each frame for already-dead cells.
         let pos = positions_out[cell_idx].xyz;
         positions_out[cell_idx] = vec4<f32>(pos, 0.0);
         atomicStore(&nutrients_buffer[cell_idx], 0i);
+        atomicStore(&embryocyte_reserves[cell_idx], 0u);
     }
 }
 
@@ -363,7 +391,98 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         division_flags[cell_idx] = 0u;
         return;
     }
-    
+
+    // Get cell type early (needed for Embryocyte handling before division checks)
+    let mode_idx = mode_indices[cell_idx];
+    let cell_type = mode_cell_types[mode_idx];
+
+    // === EMBRYOCYTE RESERVE BURN + RELEASE TRIGGER ===
+    // Embryocytes never divide normally. When free (no active adhesions) they burn
+    // their reserve at 10 units/sec. When attached, AND-logic release triggers fire
+    // division_flags = 2u which signals division_execute to drop all adhesions.
+    if (cell_type == 10u) {
+        // Count active adhesions
+        let emb_adh_base = cell_idx * MAX_ADHESIONS_PER_CELL;
+        var emb_adh_count = 0u;
+        for (var ei = 0u; ei < MAX_ADHESIONS_PER_CELL; ei++) {
+            let adh_idx = cell_adhesion_indices[emb_adh_base + ei];
+            if (adh_idx >= 0 && adhesion_connections[u32(adh_idx)].is_active != 0u) {
+                emb_adh_count++;
+            }
+        }
+
+        if (emb_adh_count == 0u) {
+            // Free (no connections): burn reserve at 10 units/sec, and divide when the
+            // split timer elapses. split_interval is the "hatch timer" — the embryocyte
+            // divides once it has been free for long enough (age >= split_interval).
+            // split_interval > 59.0 is the sentinel for "never split".
+            // Reserve is stored ×1000 (fixed-point), so burn rate * 1000.
+            let burn = u32(10.0 * params.delta_time * 1000.0 + 0.5);
+            let cur_reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
+            atomicStore(&embryocyte_reserves[cell_idx], cur_reserve - min(burn, cur_reserve));
+
+            // Timer-based division: fires when cell age >= split_interval and never-split
+            // sentinel is not set. Uses the same split_interval field as normal cells.
+            let birth_time = birth_times[cell_idx];
+            let age = params.current_time - birth_time;
+            let split_interval = split_intervals[cell_idx];
+            let current_splits = split_counts[cell_idx];
+            let max_split = max_splits[cell_idx];
+            let splits_remaining = max_split >= 0xFFFFFFFFu || current_splits < max_split;
+
+            if (split_interval <= 59.0 && age >= split_interval && splits_remaining) {
+                let child_slot = allocate_slot();
+                if (child_slot != 0xFFFFFFFFu) {
+                    division_flags[cell_idx] = 1u;
+                    division_slot_assignments[cell_idx] = child_slot;
+                    atomicAdd(&ring_state[3], 1u);
+                } else {
+                    division_flags[cell_idx] = 0u;
+                }
+            } else {
+                division_flags[cell_idx] = 0u;
+            }
+        } else {
+            // Attached: check AND-logic release triggers (threshold + signal; timer is CPU-only)
+            // v9: [use_timer, release_timer, use_threshold, threshold_value]
+            // v10: [use_signal, signal_channel, signal_value, 0.0]
+            let v9 = embryocyte_mode_v9[mode_idx];
+            let v10 = embryocyte_mode_v10[mode_idx];
+
+            var any_trigger_enabled = false;
+            var all_triggers_met = true;
+
+            // Threshold trigger: use_threshold = v9.z, threshold_value = v9.w
+            if (v9.z > 0.5) {
+                any_trigger_enabled = true;
+                let cur_reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
+                // Reserve stored ×1000; threshold in whole units → compare cur_reserve/1000 < threshold
+                if (f32(cur_reserve) < v9.w * 1000.0) {
+                    all_triggers_met = false;
+                }
+            }
+
+            // Signal trigger: use_signal = v10.x, signal_channel = v10.y, signal_value = v10.z
+            if (v10.x > 0.5) {
+                any_trigger_enabled = true;
+                let sig_ch = clamp(u32(v10.y), 0u, 15u);
+                let raw_signal = signal_flags_read[cell_idx * 16u + sig_ch];
+                let signal_value = f32(raw_signal & 0x7FFu);
+                if (signal_value < v10.z) {
+                    all_triggers_met = false;
+                }
+            }
+
+            // Fire release only when at least one trigger is enabled and all are satisfied
+            if (any_trigger_enabled && all_triggers_met) {
+                division_flags[cell_idx] = 2u; // Drop all adhesions (release event)
+            } else {
+                division_flags[cell_idx] = 0u;
+            }
+        }
+        return; // Embryocytes never do normal division
+    }
+
     // === DIVISION DETECTION ===
     // Read nutrients from nutrients_buffer (fixed-point i32)
     let nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
@@ -372,26 +491,24 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let split_nutrient_threshold = split_nutrient_thresholds[cell_idx];
     let current_splits = split_counts[cell_idx];
     let max_split = max_splits[cell_idx];
-    
+
     // Check for "never split" condition (threshold > 100 means never split)
     if (split_nutrient_threshold > 100.0) {
         division_flags[cell_idx] = 0u;
         return;
     }
-    
-    // Get cell type for behavior flags
-    let mode_idx = mode_indices[cell_idx];
-    let cell_type = mode_cell_types[mode_idx];
+
+    // Get behavior flags (mode_idx and cell_type already read above)
     let behavior = type_behaviors[cell_type];
-    
+
     // Check division criteria
     let age = params.current_time - birth_time;
-    let nutrients_ready = nutrients >= split_nutrient_threshold;
+    let nutrients_ready = (nutrients + f32(atomicLoad(&embryocyte_reserves[cell_idx])) / 1000.0) >= split_nutrient_threshold;
     let time_ready = (behavior.ignores_split_interval != 0u) || (age >= split_interval);
     let splits_remaining = max_split >= 0xFFFFFFFFu || current_splits < max_split;
-    
+
     let wants_to_divide = nutrients_ready && time_ready && splits_remaining;
-    
+
     if (!wants_to_divide) {
         division_flags[cell_idx] = 0u;
         return;
@@ -526,7 +643,7 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let neighbor_cell_type = mode_cell_types[neighbor_mode_idx];
         let neighbor_behavior = type_behaviors[neighbor_cell_type];
         
-        let neighbor_nutrients_ready = neighbor_nutrients >= neighbor_split_nutrient_threshold;
+        let neighbor_nutrients_ready = (neighbor_nutrients + f32(atomicLoad(&embryocyte_reserves[neighbor_idx])) / 1000.0) >= neighbor_split_nutrient_threshold;
         let neighbor_time_ready = (neighbor_behavior.ignores_split_interval != 0u) || (neighbor_age >= neighbor_split_interval);
         let neighbor_splits_remaining = neighbor_max_splits >= 0xFFFFFFFFu || neighbor_current_splits < neighbor_max_splits;
         

@@ -59,7 +59,7 @@ pub struct InspectedCellData {
 
     // Organism identity (16 bytes)
     pub organism_id: u32, // min cell index in connected component; 0xFFFFFFFF = dead/isolated
-    pub _pad2: u32,
+    pub reserve: u32,     // embryocyte reserve (0-65535); also used by non-embryocytes as head-start buffer
     pub _pad3: u32,
     pub _pad4: u32,
 }
@@ -92,7 +92,7 @@ impl Default for InspectedCellData {
             adhesion_count: 0,
             is_dead: 0,
             organism_id: u32::MAX,
-            _pad2: 0,
+            reserve: 0,
             _pad3: 0,
             _pad4: 0,
         }
@@ -299,6 +299,10 @@ impl GpuCellDataExtraction {
                 wgpu::BindGroupEntry {
                     binding: 16,
                     resource: label_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 17,
+                    resource: buffers.embryocyte_reserve_buffer.as_entire_binding(),
                 },
             ],
         });

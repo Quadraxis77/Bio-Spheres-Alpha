@@ -34,6 +34,8 @@ pub struct InitialCell {
     pub split_interval: f32,
     pub split_nutrient_threshold: f32,
     pub stiffness: f32,
+    /// Starting reserve for Embryocyte cells (cell_type == 10); 0 for all others
+    pub initial_reserve: u32,
 }
 
 impl InitialState {
@@ -55,6 +57,11 @@ impl InitialState {
         // All cells start with full nutrients (100.0)
         let initial_nutrients = 100.0;
 
+        // Embryocytes start with a full reserve (65535 whole units, stored as ×1000 fixed-point);
+        // other cell types start at 0
+        let is_embryocyte = mode.map(|m| m.cell_type == 10).unwrap_or(false);
+        let initial_reserve: u32 = if is_embryocyte { 65_535_000 } else { 0 };
+
         Self {
             initial_cells: vec![InitialCell {
                 position: glam::Vec3::ZERO,
@@ -68,6 +75,7 @@ impl InitialState {
                 split_interval,
                 split_nutrient_threshold,
                 stiffness: membrane_stiffness, // Use mode-specific membrane stiffness
+                initial_reserve,
             }],
             max_cells: capacity,
             rng_seed: 12345,
@@ -79,7 +87,7 @@ impl InitialState {
         let mut state = CanonicalState::new(self.max_cells);
         
         for cell in &self.initial_cells {
-            let _ = state.add_cell(
+            if let Some(idx) = state.add_cell(
                 cell.position,
                 cell.velocity,
                 cell.rotation,
@@ -92,7 +100,12 @@ impl InitialState {
                 cell.split_interval,
                 cell.split_nutrient_threshold,
                 cell.stiffness,
-            );
+            ) {
+                // Set initial reserve for Embryocyte cells
+                if cell.initial_reserve > 0 {
+                    state.reserves[idx] = cell.initial_reserve;
+                }
+            }
         }
         
         state
@@ -301,6 +314,15 @@ impl PreviewState {
             mode.myocyte_threshold.to_bits().hash(&mut hasher);
             mode.myocyte_pulse_rate.to_bits().hash(&mut hasher);
             mode.myocyte_pulse_phase.hash(&mut hasher);
+
+            // Hash embryocyte release trigger settings
+            mode.embryocyte_use_timer.hash(&mut hasher);
+            mode.embryocyte_release_timer.to_bits().hash(&mut hasher);
+            mode.embryocyte_use_threshold.hash(&mut hasher);
+            mode.embryocyte_threshold_value.hash(&mut hasher);
+            mode.embryocyte_use_signal.hash(&mut hasher);
+            mode.embryocyte_signal_channel.hash(&mut hasher);
+            mode.embryocyte_signal_value.to_bits().hash(&mut hasher);
         }
         
         hasher.finish()

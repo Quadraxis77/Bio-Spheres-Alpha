@@ -213,6 +213,21 @@ pub struct SerializableModeSettings {
     pub myocyte_pulse_rate: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub myocyte_pulse_phase: Option<i32>,
+    // Embryocyte settings
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embryocyte_use_timer: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embryocyte_release_timer: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embryocyte_use_threshold: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embryocyte_threshold_value: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embryocyte_use_signal: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embryocyte_signal_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embryocyte_signal_value: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -414,6 +429,13 @@ fn mode_to_serializable(
         myocyte_threshold: diff_f32(mode.myocyte_threshold, default.myocyte_threshold),
         myocyte_pulse_rate: diff_f32(mode.myocyte_pulse_rate, default.myocyte_pulse_rate),
         myocyte_pulse_phase: diff_i32(mode.myocyte_pulse_phase, default.myocyte_pulse_phase),
+        embryocyte_use_timer: diff_bool(mode.embryocyte_use_timer, default.embryocyte_use_timer),
+        embryocyte_release_timer: diff_f32(mode.embryocyte_release_timer, default.embryocyte_release_timer),
+        embryocyte_use_threshold: diff_bool(mode.embryocyte_use_threshold, default.embryocyte_use_threshold),
+        embryocyte_threshold_value: if mode.embryocyte_threshold_value != default.embryocyte_threshold_value { Some(mode.embryocyte_threshold_value) } else { None },
+        embryocyte_use_signal: diff_bool(mode.embryocyte_use_signal, default.embryocyte_use_signal),
+        embryocyte_signal_channel: diff_i32(mode.embryocyte_signal_channel, default.embryocyte_signal_channel),
+        embryocyte_signal_value: diff_f32(mode.embryocyte_signal_value, default.embryocyte_signal_value),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(&mode.adhesion_settings, &default.adhesion_settings),
@@ -502,6 +524,13 @@ impl SerializableModeSettings {
             || self.myocyte_threshold.is_some()
             || self.myocyte_pulse_rate.is_some()
             || self.myocyte_pulse_phase.is_some()
+            || self.embryocyte_use_timer.is_some()
+            || self.embryocyte_release_timer.is_some()
+            || self.embryocyte_use_threshold.is_some()
+            || self.embryocyte_threshold_value.is_some()
+            || self.embryocyte_use_signal.is_some()
+            || self.embryocyte_signal_channel.is_some()
+            || self.embryocyte_signal_value.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -787,6 +816,27 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.myocyte_pulse_phase {
         mode.myocyte_pulse_phase = v;
+    }
+    if let Some(v) = ser.embryocyte_use_timer {
+        mode.embryocyte_use_timer = v;
+    }
+    if let Some(v) = ser.embryocyte_release_timer {
+        mode.embryocyte_release_timer = v;
+    }
+    if let Some(v) = ser.embryocyte_use_threshold {
+        mode.embryocyte_use_threshold = v;
+    }
+    if let Some(v) = ser.embryocyte_threshold_value {
+        mode.embryocyte_threshold_value = v;
+    }
+    if let Some(v) = ser.embryocyte_use_signal {
+        mode.embryocyte_use_signal = v;
+    }
+    if let Some(v) = ser.embryocyte_signal_channel {
+        mode.embryocyte_signal_channel = v;
+    }
+    if let Some(v) = ser.embryocyte_signal_value {
+        mode.embryocyte_signal_value = v;
     }
     if let Some(ref child_a) = ser.child_a {
         apply_child_settings(&mut mode.child_a, child_a);

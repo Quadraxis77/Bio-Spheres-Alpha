@@ -460,6 +460,9 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             // Nutrients & Division
             ui.label("Nutrients & Division:");
             ui.label(format!("  Nutrients: {:.1}", data.nutrients));
+            if data.reserve > 0 {
+                ui.label(format!("  Reserve: {}", data.reserve / 1000));
+            }
             let div_progress = if data.nutrient_threshold > 0.0 {
                 (data.nutrients / data.nutrient_threshold * 100.0).min(100.0)
             } else {
@@ -1965,6 +1968,13 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     myocyte_threshold: 1.0,
                     myocyte_pulse_rate: 1.0,
                     myocyte_pulse_phase: 0,
+                    embryocyte_use_timer: false,
+                    embryocyte_release_timer: 10.0,
+                    embryocyte_use_threshold: false,
+                    embryocyte_threshold_value: 32768,
+                    embryocyte_use_signal: false,
+                    embryocyte_signal_channel: 0,
+                    embryocyte_signal_value: 1.0,
                     buoyancy_force: 0.5, // Default buoyancy force for buoyocytes
                     oculocyte_sense_type: 0,
                     oculocyte_signal_channel: 0,
@@ -2703,6 +2713,83 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             ui.add(egui::Slider::new(&mut mode.myocyte_threshold, -100.0..=100.0).show_value(false));
                             ui.add(egui::DragValue::new(&mut mode.myocyte_threshold).speed(0.1).range(-100.0..=100.0));
                         });
+                    }
+                });
+            } else if mode.cell_type == 10 { // Embryocyte (cell_type == 10)
+                group_container(ui, "Embryocyte Release Triggers", egui::Color32::from_rgb(80, 170, 180), |ui| {
+                    ui.label("Carries a reserve (max 65535). Burns reserve when free.");
+                    ui.label("Release fires when ALL enabled triggers are satisfied:");
+                    ui.separator();
+
+                    // Timer trigger
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut mode.embryocyte_use_timer, "Timer");
+                    });
+                    if mode.embryocyte_use_timer {
+                        ui.label("Release after (seconds attached):");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.embryocyte_release_timer, 0.1..=300.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.embryocyte_release_timer).speed(0.1).range(0.1..=300.0));
+                        });
+                    }
+
+                    ui.separator();
+
+                    // Threshold trigger
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut mode.embryocyte_use_threshold, "Reserve Threshold");
+                    });
+                    if mode.embryocyte_use_threshold {
+                        ui.label("Release when reserve >=:");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            let mut threshold_f32 = mode.embryocyte_threshold_value as f32;
+                            ui.add(egui::Slider::new(&mut threshold_f32, 0.0_f32..=65535.0_f32).show_value(false));
+                            ui.add(egui::DragValue::new(&mut threshold_f32).speed(10.0).range(0.0_f32..=65535.0_f32));
+                            mode.embryocyte_threshold_value = threshold_f32 as u32;
+                        });
+                    }
+
+                    ui.separator();
+
+                    // Signal trigger
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut mode.embryocyte_use_signal, "Signal");
+                    });
+                    if mode.embryocyte_use_signal {
+                        let emb_ch_labels = ["Ch 0", "Ch 1", "Ch 2", "Ch 3", "Ch 4", "Ch 5", "Ch 6", "Ch 7",
+                                             "Ch 8", "Ch 9", "Ch 10", "Ch 11", "Ch 12", "Ch 13", "Ch 14", "Ch 15"];
+                        let emb_ch_idx = (mode.embryocyte_signal_channel as usize).min(15);
+                        ui.horizontal(|ui| {
+                            ui.label("Channel:");
+                            egui::ComboBox::from_id_salt("embryocyte_signal_channel")
+                                .selected_text(emb_ch_labels[emb_ch_idx])
+                                .show_ui(ui, |ui| {
+                                    for (i, label) in emb_ch_labels.iter().enumerate() {
+                                        ui.selectable_value(&mut mode.embryocyte_signal_channel, i as i32, *label);
+                                    }
+                                });
+                        });
+
+                        ui.label("Release when signal >=:");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.embryocyte_signal_value, 0.0..=2047.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.embryocyte_signal_value).speed(1.0).range(0.0..=2047.0));
+                        });
+                    }
+
+                    // Show info when no triggers are enabled
+                    if !mode.embryocyte_use_timer && !mode.embryocyte_use_threshold && !mode.embryocyte_use_signal {
+                        ui.separator();
+                        ui.colored_label(egui::Color32::YELLOW, "⚠ No triggers enabled — cell will never release.");
                     }
                 });
             }

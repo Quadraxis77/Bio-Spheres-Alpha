@@ -1222,6 +1222,9 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry { binding: 16, resource: adhesion_buffers.signal_flags.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 17, resource: buffers.signal_settings_v0.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 18, resource: buffers.signal_settings_v1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 19, resource: buffers.embryocyte_reserve_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 20, resource: buffers.mode_properties_v9.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 21, resource: buffers.mode_properties_v10.as_entire_binding() },
             ],
         })
     }
@@ -1323,10 +1326,11 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry { binding: 36, resource: buffers.signal_settings_v1.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 37, resource: buffers.signal_settings_v2.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 38, resource: buffers.signal_settings_v3.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 39, resource: buffers.embryocyte_reserve_buffer.as_entire_binding() },
             ],
         })
     }
-    
+
     /// Create mass accumulation bind group (nutrient gain rates and split nutrient thresholds per cell)
     pub fn create_mass_accum_bind_group(
         &self,
@@ -2256,6 +2260,12 @@ impl GpuPhysicsPipelines {
                     // Bindings 17-18: Signal settings v0-v1 (per-mode, for division gating + apoptosis)
                     wgpu::BindGroupLayoutEntry { binding: 17, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                     wgpu::BindGroupLayoutEntry { binding: 18, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Binding 19: Embryocyte reserve buffer (read-write: death_scan burns reserve, sets death when zero)
+                    wgpu::BindGroupLayoutEntry { binding: 19, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Binding 20: Mode properties v9 (Embryocyte trigger params: use_timer, release_timer, use_threshold, threshold_value)
+                    wgpu::BindGroupLayoutEntry { binding: 20, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Binding 21: Mode properties v10 (Embryocyte signal trigger params: use_signal, signal_channel, signal_value)
+                    wgpu::BindGroupLayoutEntry { binding: 21, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 ],
             })
         } else {
@@ -2466,6 +2476,8 @@ impl GpuPhysicsPipelines {
                     wgpu::BindGroupLayoutEntry { binding: 36, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                     wgpu::BindGroupLayoutEntry { binding: 37, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                     wgpu::BindGroupLayoutEntry { binding: 38, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                    // Binding 39: Embryocyte reserve buffer (read-write: halved on division, child_reserve = parent_reserve >> 1)
+                    wgpu::BindGroupLayoutEntry { binding: 39, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 ],
             })
         }
@@ -3765,10 +3777,14 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupLayoutEntry { binding: 9, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 // Binding 10: Split nutrient thresholds
                 wgpu::BindGroupLayoutEntry { binding: 10, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 11: Embryocyte reserve buffer (read-write: incoming nutrients redirected here for Embryocytes)
+                wgpu::BindGroupLayoutEntry { binding: 11, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 12: Mode properties v9 (Embryocyte trigger params: use_timer, release_timer, use_threshold, threshold_value)
+                wgpu::BindGroupLayoutEntry { binding: 12, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
             ],
         })
     }
-    
+
     /// Create mode properties bind group layout (Group 4 in nutrient transport shader)
     /// Create nutrient system bind group (Group 1 in nutrient transport shader)
     fn create_nutrient_system_bind_group(
@@ -3827,10 +3843,12 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry { binding: 8, resource: buffers.mode_cell_types.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 9, resource: buffers.nutrients_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 10, resource: buffers.split_nutrient_thresholds.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 11, resource: buffers.embryocyte_reserve_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 12, resource: buffers.mode_properties_v9.as_entire_binding() },
             ],
         })
     }
-    
+
     /// Create nutrient apply bind group layout (Group 1 in nutrient_apply shader)
     fn create_nutrient_apply_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -4517,6 +4535,17 @@ impl GpuPhysicsPipelines {
                 // Binding 16: Organism label buffer (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 16,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 17: Embryocyte reserve buffer (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 17,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },

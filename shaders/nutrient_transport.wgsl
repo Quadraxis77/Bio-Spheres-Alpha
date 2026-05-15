@@ -118,6 +118,16 @@ var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
 @group(3) @binding(10)
 var<storage, read> split_nutrient_thresholds: array<f32>;
 
+// Embryocyte reserve buffer (one atomic<u32> per cell, capped at 65535).
+// Incoming nutrients are redirected here for Embryocytes (cell_type == 10).
+@group(3) @binding(11)
+var<storage, read_write> embryocyte_reserves: array<atomic<u32>>;
+
+// Mode properties v9: per-mode Embryocyte trigger params (not used here, kept for layout).
+// [use_timer as f32, release_timer, use_threshold as f32, threshold_value as f32]
+@group(3) @binding(12)
+var<storage, read> mode_properties_v9: array<vec4<f32>>;
+
 struct AdhesionConnection {
     cell_a_index: u32,
     cell_b_index: u32,
@@ -214,9 +224,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Test cells (cell_type 0) have no metabolism - they auto-gain from nutrient_gain_rate
     // Phagocytes (cell_type 2) and Photocytes (cell_type 3) use specialized shaders for gain
     // but still need base metabolism to starve when not consuming/absorbing
+    // Embryocytes (cell_type 10) skip ALL normal metabolism — energy comes only from reserve
     // All other cells (including invalid mode cells) have base metabolism
+    let is_embryocyte = mode_valid && cell_type == 10u;
     let auto_gain_cell = mode_valid && cell_type == 0u;
-    if (!auto_gain_cell && mode_idx < arrayLength(&mode_properties_v0)) {
+    if (!auto_gain_cell && !is_embryocyte && mode_idx < arrayLength(&mode_properties_v0)) {
         let mode_v1 = mode_properties_v1[mode_idx];
 
         // Base metabolism: consume nutrients to stay alive (1.0 nutrients/sec)
@@ -258,10 +270,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             nutrient_loss *= metabolism_scale;
         }
 
+        // Reserve-first metabolism: burn reserve before touching regular nutrients.
+        // Reserve is stored ×1000 (fixed-point), so burn float_to_fixed(nutrient_loss)
+        // milli-units per tick — exact, no truncation at sub-unit drain rates.
+        let cur_reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
+        var remaining_loss = nutrient_loss;
+        if (cur_reserve > 0u) {
+            let loss_fixed = u32(float_to_fixed(nutrient_loss));
+            let reserve_burned = min(loss_fixed, cur_reserve);
+            atomicSub(&embryocyte_reserves[cell_idx], reserve_burned);
+            remaining_loss = max(nutrient_loss - f32(reserve_burned) / FIXED_POINT_SCALE, 0.0);
+        }
+
         // Apply nutrient consumption as an atomic delta (NOT atomicStore!)
         // atomicStore here would race with atomicAdd from neighbor transport threads,
         // overwriting any nutrients transferred to this cell during the same dispatch.
-        let safe_loss = min(nutrient_loss, max(current_nutrients, 0.0));
+        let safe_loss = min(remaining_loss, max(current_nutrients, 0.0));
         atomicAdd(&nutrients_buffer[cell_idx], -float_to_fixed(safe_loss));
     }
     
@@ -272,11 +296,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Total outflow is capped at TRANSPORT_RATE nutrients/sec across ALL connections.
     // Transfer is lerp-smoothed to prevent oscillation.
     //
+    // Embryocyte rules (cell_type == 10):
+    //   - Embryocytes NEVER send nutrients out → skip all connections if cell_a is Embryocyte.
+    //   - Incoming nutrients to an Embryocyte go to its reserve buffer, not nutrients_buffer.
+    //
     // Two-pass approach (matches preview):
     // Pass 1: compute desired flow per connection, sum total outflow for this cell
     // Pass 2: proportionally scale flows so total stays within TRANSPORT_RATE, then apply
     let adhesion_list = adhesion_indices[cell_idx];
     let mode_a_idx = mode_indices[cell_idx];
+
+    // Embryocytes never send — skip the entire transport loop for them.
+    if (is_embryocyte) {
+        return;
+    }
 
     // Snapshot nutrients for this cell once (matches preview's single-snapshot semantics)
     let nutrients_a_snap = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
@@ -370,29 +403,57 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let target_per_sec = desired * scale;
         let nutrient_transfer = target_per_sec * lerp_t * params.delta_time;
 
+        // Determine if cell_b is an Embryocyte — incoming goes to reserve, not nutrients.
+        let mode_b_idx = mode_indices[cell_b_idx];
+        var cell_b_is_embryocyte = false;
+        if (mode_b_idx < arrayLength(&mode_cell_types)) {
+            cell_b_is_embryocyte = mode_cell_types[mode_b_idx] == 10u;
+        }
+
         // Clamp by available nutrients and receiver capacity
         let min_nutrients_a = select(0.0, 10.0, prioritize_a);
         let min_nutrients_b = select(0.0, 10.0, prioritize_b);
         let max_nutrients_a = split_nutrient_thresholds[cell_idx] * 2.0;
-        let max_nutrients_b = split_nutrient_thresholds[cell_b_idx] * 2.0;
+
+        // For Embryocyte receivers: capacity = space left in reserve (×1000 fixed-point)
+        var max_recv_b: f32;
+        if (cell_b_is_embryocyte) {
+            let cur_reserve_b = atomicLoad(&embryocyte_reserves[cell_b_idx]);
+            max_recv_b = f32(65535000u - min(cur_reserve_b, 65535000u)) / FIXED_POINT_SCALE;
+        } else {
+            max_recv_b = split_nutrient_thresholds[cell_b_idx] * 2.0;
+        }
 
         var actual_transfer: f32;
         if (nutrient_transfer > 0.0) {
             let can_give = max(nutrients_a_snap - min_nutrients_a, 0.0);
-            let can_recv = max(max_nutrients_b - nutrients_b, 0.0);
+            let can_recv = max(max_recv_b - nutrients_b, 0.0);
             actual_transfer = min(nutrient_transfer, min(can_give, can_recv));
         } else {
-            let can_give = max(nutrients_b - min_nutrients_b, 0.0);
-            let can_recv = max(max_nutrients_a - nutrients_a_snap, 0.0);
-            actual_transfer = max(nutrient_transfer, -min(can_give, can_recv));
+            // Reverse flow (B→A): Embryocyte cell_b cannot send, so block
+            if (cell_b_is_embryocyte) {
+                actual_transfer = 0.0;
+            } else {
+                let can_give = max(nutrients_b - min_nutrients_b, 0.0);
+                let can_recv = max(max_nutrients_a - nutrients_a_snap, 0.0);
+                actual_transfer = max(nutrient_transfer, -min(can_give, can_recv));
+            }
         }
 
-        // Apply transfer using atomic operations (thread-safe)
-        let transfer_fixed = float_to_fixed(actual_transfer);
-
-        // Atomically subtract from cell A and add to cell B
-        atomicAdd(&nutrients_buffer[cell_idx], -transfer_fixed);
-        atomicAdd(&nutrients_buffer[cell_b_idx], transfer_fixed);
+        // Apply transfer using atomic operations (thread-safe).
+        // If cell_b is an Embryocyte, incoming nutrients go to its reserve buffer.
+        if (actual_transfer > 0.0 && cell_b_is_embryocyte) {
+            // A→B: deduct from A's nutrients, add to B's reserve (×1000 fixed-point)
+            let transfer_fixed = float_to_fixed(actual_transfer);
+            atomicAdd(&nutrients_buffer[cell_idx], -transfer_fixed);
+            let reserve_gain = u32(float_to_fixed(actual_transfer));
+            atomicAdd(&embryocyte_reserves[cell_b_idx], reserve_gain);
+        } else {
+            // Normal transfer: atomically subtract from cell A, add to cell B
+            let transfer_fixed = float_to_fixed(actual_transfer);
+            atomicAdd(&nutrients_buffer[cell_idx], -transfer_fixed);
+            atomicAdd(&nutrients_buffer[cell_b_idx], transfer_fixed);
+        }
     }
     
     // NOTE: Death detection is handled by a separate shader that checks nutrients < MIN_NUTRIENTS

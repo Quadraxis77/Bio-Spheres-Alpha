@@ -453,6 +453,34 @@ pub struct CanonicalState {
     /// Each cell only controls its own half of the adhesion bond.
     pub muscle_contractions: Vec<f32>,
 
+    /// Per-cell reserve (u32, stored ×1000 fixed-point; 0–65,535,000 = 0–65535 whole units).
+    ///
+    /// Stored in fixed-point (×1000) so sub-unit drain rates (e.g. 1/sec at 64 Hz = 0.015/tick)
+    /// accumulate correctly without truncation.
+    ///
+    /// For Embryocytes (cell_type == 10): the reserve is the ONLY nutrient source.
+    /// Incoming adhesion nutrients go here instead of the normal pool.
+    /// Once detached, reserve burns at 10 units/sec until the cell dies.
+    ///
+    /// For non-Embryocyte cells: reserve provides a head-start buffer.
+    /// Metabolism burns reserve first before touching normal nutrients.
+    /// Death requires both reserve AND normal nutrients to be exhausted.
+    ///
+    /// Reserve is inherited at birth: child_reserve = parent_reserve >> 1 (integer halving).
+    /// The initial Embryocyte placed in a scene starts with a full reserve of 65,535,000 (= 65535 whole units).
+    pub reserves: Vec<u32>,
+
+    /// Per-cell accumulation timer for Embryocyte release triggering (seconds).
+    ///
+    /// For Embryocytes (cell_type == 10) with at least one active adhesion:
+    /// incremented by `dt` each physics step. When it reaches
+    /// `mode.embryocyte_release_timer` (and `embryocyte_use_timer == true`),
+    /// the timer trigger is considered satisfied.
+    ///
+    /// Reset to 0.0 when the Embryocyte drops all adhesions (releases).
+    /// Always 0.0 for non-Embryocyte cells.
+    pub embryocyte_timers: Vec<f32>,
+
     /// Track actual signal flow paths for visualization
     /// Maps (source_cell, target_cell) -> true if signal flowed from source to target
     pub signal_flow_tracker: crate::simulation::signal_system::SignalFlowTracker,
@@ -572,6 +600,12 @@ impl CanonicalState {
             has_any_signal: false,
             muscle_contractions: vec![0.0; capacity],
             signal_flow_tracker: crate::simulation::signal_system::SignalFlowTracker::new(),
+
+            // Reserve — zero by default; set to 65535 for initial Embryocyte cells
+            reserves: vec![0u32; capacity],
+
+            // Embryocyte accumulation timer — 0.0 for all cells initially
+            embryocyte_timers: vec![0.0f32; capacity],
         }
     }
     
@@ -679,7 +713,11 @@ impl CanonicalState {
         for ch in 0..16 {
             self.signal_channels[index * 16 + ch] = None;
         }
-        
+
+        // Reserve starts at 0; caller must set it for Embryocytes
+        self.reserves[index] = 0;
+        self.embryocyte_timers[index] = 0.0;
+
         Some(index)
     }
     
@@ -794,7 +832,11 @@ impl CanonicalState {
         for ch in 0..16 {
             self.signal_channels[slot_index * 16 + ch] = None;
         }
-        
+
+        // Reserve starts at 0; caller must set it for Embryocytes
+        self.reserves[slot_index] = 0;
+        self.embryocyte_timers[slot_index] = 0.0;
+
         Some(slot_index)
     }
     
@@ -856,6 +898,8 @@ impl CanonicalState {
             self.sister_expiry[cell_index] = self.sister_expiry[last_index];
             self.env_anchor_pos[cell_index] = self.env_anchor_pos[last_index];
             self.env_anchor_active[cell_index] = self.env_anchor_active[last_index];
+            self.reserves[cell_index] = self.reserves[last_index];
+            self.embryocyte_timers[cell_index] = self.embryocyte_timers[last_index];
 
             // Swap signal channels (16 channels per cell)
             for ch in 0..16 {

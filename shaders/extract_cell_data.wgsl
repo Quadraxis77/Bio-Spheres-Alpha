@@ -78,7 +78,7 @@ struct InspectedCellData {
 
     // Organism identity (16 bytes)
     organism_id: u32,  // min cell index in connected component; 0xFFFFFFFF = dead/isolated
-    _pad2: u32,
+    reserve: u32,      // embryocyte reserve (0-65535); also used by non-embryocytes as head-start buffer
     _pad3: u32,
     _pad4: u32,
 }
@@ -164,6 +164,10 @@ var<storage, read> cell_adhesion_indices: array<i32>;
 @group(2) @binding(16)
 var<storage, read> label_buffer: array<u32>;
 
+// Embryocyte reserve buffer (one u32 per cell, 0-65535)
+@group(2) @binding(17)
+var<storage, read> embryocyte_reserves: array<u32>;
+
 // Output buffer for extracted cell data
 @group(3) @binding(0)
 var<storage, read_write> extracted_data: InspectedCellData;
@@ -204,6 +208,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         extracted_data.adhesion_count = 0u;
         extracted_data.is_dead = 0u;
         extracted_data.organism_id = 0xFFFFFFFFu;
+        extracted_data.reserve = 0u;
         return;
     }
     
@@ -256,6 +261,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Organism ID from label buffer
     extracted_data.organism_id = label_buffer[cell_index];
+    
+    // Reserve
+    extracted_data.reserve = embryocyte_reserves[cell_index];
     
     // Debug: log organism ID values
     if (extracted_data.organism_id == 0u) {

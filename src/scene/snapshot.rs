@@ -98,6 +98,9 @@ pub struct GpuSceneSnapshot {
     pub cell_ids: Vec<u32>,
     /// Death flags: `1` = dead/free slot, `0` = alive.
     pub death_flags: Vec<u32>,
+    /// Embryocyte reserve (u32, max 65535) per cell slot. Zero for non-Embryocyte cells.
+    #[serde(default)]
+    pub embryocyte_reserves: Vec<u32>,
 
     // ── Adhesion state (CPU caches — no readback needed) ─────────────────────
     /// All adhesion connection slots (including inactive ones).

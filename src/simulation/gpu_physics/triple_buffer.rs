@@ -350,10 +350,22 @@ pub struct GpuTripleBufferSystem {
     
     /// Mode properties v7 for myocyte parameters (16 bytes per mode)
     /// v7: [myocyte_contraction, myocyte_use_signal as f32, myocyte_signal_channel as f32, myocyte_threshold]
-    /// v8: [myocyte_contraction_above, myocyte_contraction_below, 0.0, 0.0]
+    /// v8: [myocyte_contraction_above, myocyte_contraction_below, myocyte_pulse_rate, myocyte_pulse_phase as f32]
     pub mode_properties_v7: wgpu::Buffer,
     pub mode_properties_v8: wgpu::Buffer,
-    
+
+    /// Mode properties v9–v10 for Embryocyte parameters (16 bytes per mode each)
+    /// v9:  [use_timer as f32, release_timer, use_threshold as f32, threshold_value as f32]
+    /// v10: [use_signal as f32, signal_channel as f32, signal_value, 0.0]
+    pub mode_properties_v9: wgpu::Buffer,
+    pub mode_properties_v10: wgpu::Buffer,
+
+    /// Per-cell Embryocyte reserve buffer (one u32 per cell).
+    /// Embryocytes: sole energy source; burns at 10 units/sec when free.
+    /// Non-Embryocytes: provides extended life; burns before normal nutrients.
+    /// Halved on division: child_reserve = parent_reserve >> 1.
+    pub embryocyte_reserve_buffer: wgpu::Buffer,
+
     /// Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
     /// Used by shaders to derive cell_type from mode_index (always up-to-date with genome settings)
     pub mode_cell_types: wgpu::Buffer,
@@ -612,7 +624,18 @@ impl GpuTripleBufferSystem {
         // Mode properties v7–v8 for myocyte parameters (16 bytes per mode each)
         let mode_properties_v7 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V7");
         let mode_properties_v8 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V8");
-        
+
+        // Mode properties v9–v10 for Embryocyte parameters (16 bytes per mode each)
+        let mode_properties_v9 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V9");
+        let mode_properties_v10 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V10");
+
+        // Per-cell Embryocyte reserve buffer (one u32 per cell, zero-initialized)
+        let embryocyte_reserve_buffer = Self::create_zero_initialized_storage_buffer(
+            device,
+            capacity as u64 * 4, // 4 bytes per u32
+            "Embryocyte Reserve Buffer",
+        );
+
         // Mode cell types: one u32 per mode - lookup table for deriving cell_type from mode_index
         let mode_cell_types = Self::create_storage_buffer(device, max_modes * 4, "Mode Cell Types");
         
@@ -722,6 +745,9 @@ impl GpuTripleBufferSystem {
             mode_properties_v6,
             mode_properties_v7,
             mode_properties_v8,
+            mode_properties_v9,
+            mode_properties_v10,
+            embryocyte_reserve_buffer,
             mode_cell_types,
             behavior_flags,
             env_anchor_buffer,
@@ -1344,6 +1370,73 @@ impl GpuTripleBufferSystem {
             queue.write_buffer(&self.mode_properties_v7, offset, bytemuck::cast_slice(&v7));
             queue.write_buffer(&self.mode_properties_v8, offset, bytemuck::cast_slice(&v8));
         }
+    }
+
+    /// Sync Embryocyte mode properties for the lifecycle shaders.
+    /// v9:  [use_timer as f32, release_timer, use_threshold as f32, threshold_value as f32]
+    /// v10: [use_signal as f32, signal_channel as f32, signal_value, 0.0]
+    pub fn sync_embryocyte_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let mut v9: Vec<[f32; 4]> = Vec::new();
+        let mut v10: Vec<[f32; 4]> = Vec::new();
+
+        for genome in genomes {
+            for mode in &genome.modes {
+                v9.push([
+                    if mode.embryocyte_use_timer { 1.0 } else { 0.0 },
+                    mode.embryocyte_release_timer,
+                    if mode.embryocyte_use_threshold { 1.0 } else { 0.0 },
+                    mode.embryocyte_threshold_value as f32,
+                ]);
+                v10.push([
+                    if mode.embryocyte_use_signal { 1.0 } else { 0.0 },
+                    mode.embryocyte_signal_channel as f32,
+                    mode.embryocyte_signal_value,
+                    0.0,
+                ]);
+            }
+        }
+
+        if !v9.is_empty() {
+            queue.write_buffer(&self.mode_properties_v9, 0, bytemuck::cast_slice(&v9));
+            queue.write_buffer(&self.mode_properties_v10, 0, bytemuck::cast_slice(&v10));
+        }
+    }
+
+    /// Incremental sync of Embryocyte mode properties for a single genome.
+    pub fn incremental_sync_embryocyte_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
+        let mut v9: Vec<[f32; 4]> = Vec::new();
+        let mut v10: Vec<[f32; 4]> = Vec::new();
+
+        for mode in &genome.modes {
+            v9.push([
+                if mode.embryocyte_use_timer { 1.0 } else { 0.0 },
+                mode.embryocyte_release_timer,
+                if mode.embryocyte_use_threshold { 1.0 } else { 0.0 },
+                mode.embryocyte_threshold_value as f32,
+            ]);
+            v10.push([
+                if mode.embryocyte_use_signal { 1.0 } else { 0.0 },
+                mode.embryocyte_signal_channel as f32,
+                mode.embryocyte_signal_value,
+                0.0,
+            ]);
+        }
+
+        if !v9.is_empty() {
+            let offset = (global_start_index * 16) as u64;
+            queue.write_buffer(&self.mode_properties_v9, offset, bytemuck::cast_slice(&v9));
+            queue.write_buffer(&self.mode_properties_v10, offset, bytemuck::cast_slice(&v10));
+        }
+    }
+
+    /// Upload Embryocyte reserve values from canonical state to GPU.
+    /// Called during full sync and after any cell addition that involves an Embryocyte.
+    pub fn sync_embryocyte_reserves(&self, queue: &wgpu::Queue, reserves: &[u32], cell_count: usize) {
+        if cell_count == 0 {
+            return;
+        }
+        let data = &reserves[..cell_count.min(reserves.len())];
+        queue.write_buffer(&self.embryocyte_reserve_buffer, 0, bytemuck::cast_slice(data));
     }
 
     /// Sync mode cell types lookup table (cell_type per mode)

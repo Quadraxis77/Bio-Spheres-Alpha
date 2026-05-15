@@ -473,14 +473,26 @@ pub fn consume_swim_nutrients(
 /// Note: Flagellocytes (cell_type == 1) don't generate their own nutrients -
 /// they must receive nutrients through adhesion connections from other cells.
 /// Mass and radius are derived from nutrients: mass = 1.0 + nutrients/100.0
+///
+/// Embryocytes (cell_type == 10) skip this function entirely — their energy
+/// comes exclusively from the reserve field (see `update_embryocyte_reserve_burn`
+/// and `transport_nutrients_through_adhesions`).
+///
+/// Non-Embryocyte cells that have a non-zero reserve burn from reserve first:
+/// their metabolic drain is satisfied from reserve before touching normal nutrients.
 pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f32) {
     const BASE_METABOLISM_RATE: f32 = 1.0; // nutrients/sec drain for non-auto-gain cells
     const AUTO_GAIN_RATE: f32 = 20.0; // nutrients/sec for Test, Phagocyte, Photocyte
     const OCULOCYTE_SENSE_CONSUMPTION_RATE: f32 = 0.08; // nutrients/sec per unit sense_range (default 25 range = 2.0/sec)
-    
+
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
         if let Some(mode) = genome.modes.get(mode_index) {
+            // Embryocytes skip normal metabolism entirely — reserve-only energy system
+            if mode.cell_type == 10 {
+                continue;
+            }
+
             let can_auto_gain = mode.cell_type == 0  // Test
                              || mode.cell_type == 2  // Phagocyte
                              || mode.cell_type == 3; // Photocyte
@@ -516,30 +528,163 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
                     }
                 }
             } else {
-                // Non-auto-gain cells lose nutrients to metabolism
-                // Base drain for all non-auto-gain cells
+                // Non-auto-gain cells lose nutrients to metabolism.
+                // If a reserve is present, burn it first to offset the drain before
+                // touching normal nutrients (reserve-first metabolism for descendants
+                // of Embryocytes).
                 let base_loss = BASE_METABOLISM_RATE * dt;
-                // Oculocytes have additional sense range consumption
                 let sense_loss = if is_oculocyte {
                     mode.oculocyte_ray_length * OCULOCYTE_SENSE_CONSUMPTION_RATE * dt
                 } else {
                     0.0
                 };
                 let total_loss = base_loss + sense_loss;
-                let new_nutrients = (current_nutrients - total_loss).max(0.0);
-                if new_nutrients != current_nutrients {
-                    state.nutrients[i] = new_nutrients;
-                    // Derive mass and radius from nutrients
-                    let new_mass = 1.0 + new_nutrients / 100.0;
-                    state.masses[i] = new_mass;
-                    let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
-                    if new_radius != state.radii[i] {
-                        state.radii[i] = new_radius;
-                        state.masses_changed = true;
+
+                // Attempt to cover drain from reserve before nutrients
+                let reserve = state.reserves[i];
+                if reserve > 0 {
+                    // Reserve covers the full drain 1:1. Reserve is stored ×1000 (fixed-point)
+                    // so burn total_loss * 1000 milli-units, then apply any remainder to nutrients.
+                    let reserve_burned = ((total_loss * 1000.0) as u32).min(reserve);
+                    state.reserves[i] = reserve.saturating_sub(reserve_burned);
+                    let covered = reserve_burned as f32 / 1000.0;
+                    let remaining_loss = (total_loss - covered).max(0.0);
+                    let new_nutrients = (current_nutrients - remaining_loss).max(0.0);
+                    if new_nutrients != current_nutrients {
+                        state.nutrients[i] = new_nutrients;
+                        let new_mass = 1.0 + new_nutrients / 100.0;
+                        state.masses[i] = new_mass;
+                        let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
+                        if new_radius != state.radii[i] {
+                            state.radii[i] = new_radius;
+                            state.masses_changed = true;
+                        }
+                    }
+                } else {
+                    // No reserve: standard drain
+                    let new_nutrients = (current_nutrients - total_loss).max(0.0);
+                    if new_nutrients != current_nutrients {
+                        state.nutrients[i] = new_nutrients;
+                        let new_mass = 1.0 + new_nutrients / 100.0;
+                        state.masses[i] = new_mass;
+                        let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
+                        if new_radius != state.radii[i] {
+                            state.radii[i] = new_radius;
+                            state.masses_changed = true;
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+/// Burn Embryocyte reserve for free (detached) Embryocytes at 10 units/sec,
+/// and tick the accumulation timer for attached Embryocytes.
+///
+/// - **Attached** (≥1 active adhesion): increment `embryocyte_timers[i]` by `dt`.
+/// - **Free** (no adhesions): burn `reserve` at 10 units/sec.
+///
+/// This runs after `transport_nutrients_through_adhesions` so reserve
+/// has already been topped up by nutrient transport this tick.
+pub fn update_embryocyte_reserve_burn(state: &mut CanonicalState, genome: &Genome, dt: f32) {
+    const RESERVE_BURN_RATE: f32 = 10.0; // units/sec when free
+
+    for i in 0..state.cell_count {
+        let mode_index = state.mode_indices[i];
+        let Some(mode) = genome.modes.get(mode_index) else { continue };
+        if mode.cell_type != 10 {
+            continue;
+        }
+
+        let adhesion_count = state.adhesion_manager.count_active_adhesions(i);
+        if adhesion_count > 0 {
+            // Attached: tick the accumulation timer
+            state.embryocyte_timers[i] += dt;
+        } else {
+            // Free: burn reserve (stored ×1000 fixed-point, so burn rate * 1000)
+            let burn = (RESERVE_BURN_RATE * dt * 1000.0) as u32;
+            state.reserves[i] = state.reserves[i].saturating_sub(burn);
+            // Reset timer (will restart when re-attached)
+            state.embryocyte_timers[i] = 0.0;
+        }
+    }
+}
+
+/// Check AND-logic release triggers for attached Embryocytes.
+///
+/// All *enabled* triggers must be satisfied simultaneously for release to occur.
+/// When triggered, all adhesions for the cell are dropped (it becomes free).
+///
+/// Triggers:
+/// - **Timer**: `embryocyte_timers[i] >= mode.embryocyte_release_timer`
+/// - **Threshold**: `reserves[i] >= mode.embryocyte_threshold_value`
+/// - **Signal**: signal on `embryocyte_signal_channel` >= `embryocyte_signal_value`
+///
+/// If no triggers are enabled, the cell never self-releases (manual-only).
+pub fn check_embryocyte_release_triggers(state: &mut CanonicalState, genome: &Genome) {
+    let mut cells_to_release: Vec<usize> = Vec::new();
+
+    for i in 0..state.cell_count {
+        let mode_index = state.mode_indices[i];
+        let Some(mode) = genome.modes.get(mode_index) else { continue };
+        if mode.cell_type != 10 {
+            continue;
+        }
+
+        // Must have at least one adhesion to "release" from
+        if state.adhesion_manager.count_active_adhesions(i) == 0 {
+            continue;
+        }
+
+        // If no triggers enabled, skip (never self-releases)
+        let any_enabled = mode.embryocyte_use_timer
+            || mode.embryocyte_use_threshold
+            || mode.embryocyte_use_signal;
+        if !any_enabled {
+            continue;
+        }
+
+        // AND logic: all enabled triggers must be satisfied
+        let mut all_satisfied = true;
+
+        if mode.embryocyte_use_timer {
+            if state.embryocyte_timers[i] < mode.embryocyte_release_timer {
+                all_satisfied = false;
+            }
+        }
+
+        if all_satisfied && mode.embryocyte_use_threshold {
+            if state.reserves[i] / 1000 < mode.embryocyte_threshold_value {
+                all_satisfied = false;
+            }
+        }
+
+        if all_satisfied && mode.embryocyte_use_signal {
+            let channel = (mode.embryocyte_signal_channel as usize).min(15);
+            let signal_val = state.signal_channels
+                .get(i * 16 + channel)
+                .copied()
+                .flatten()
+                .unwrap_or(0.0);
+            if signal_val < mode.embryocyte_signal_value {
+                all_satisfied = false;
+            }
+        }
+
+        if all_satisfied {
+            cells_to_release.push(i);
+        }
+    }
+
+    // Drop all adhesions for triggered cells
+    for i in cells_to_release {
+        state.adhesion_manager.remove_all_connections_for_cell(
+            &mut state.adhesion_connections,
+            i,
+        );
+        // Reset accumulation timer
+        state.embryocyte_timers[i] = 0.0;
     }
 }
 
@@ -649,18 +794,62 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         let max_a = state.split_nutrient_thresholds[cell_a] * 2.0;
         let max_b = state.split_nutrient_thresholds[cell_b] * 2.0;
 
+        // Embryocyte rules:
+        //   - An Embryocyte NEVER sends nutrients out (block outgoing).
+        //   - An Embryocyte ALWAYS redirects incoming nutrients to its reserve.
+        let is_embryo_a = mode_a.cell_type == 10;
+        let is_embryo_b = mode_b.cell_type == 10;
+
+        // transfer > 0 means A→B, transfer < 0 means B→A.
+        // Block transfers where the sender is an Embryocyte.
+        let transfer_blocked = (transfer > 0.0 && is_embryo_a)
+                            || (transfer < 0.0 && is_embryo_b);
+        if transfer_blocked {
+            if dt > 0.0 {
+                state.adhesion_connections.connection_flow_rates[cf.conn_idx] = 0.0;
+            }
+            continue;
+        }
+
         let actual = if transfer > 0.0 {
             let can_give = (state.nutrients[cell_a] - min_a).max(0.0);
-            let can_recv = (max_b - state.nutrients[cell_b]).max(0.0);
+            let can_recv = if is_embryo_b {
+                // Receiver is an Embryocyte: capacity = space left in reserve (×1000 fixed-point)
+                let reserve_space = 65_535_000u32.saturating_sub(state.reserves[cell_b]) as f32 / 1000.0;
+                reserve_space
+            } else {
+                (max_b - state.nutrients[cell_b]).max(0.0)
+            };
             transfer.min(can_give).min(can_recv)
         } else {
             let can_give = (state.nutrients[cell_b] - min_b).max(0.0);
-            let can_recv = (max_a - state.nutrients[cell_a]).max(0.0);
+            let can_recv = if is_embryo_a {
+                // Receiver (negative direction) is an Embryocyte (×1000 fixed-point)
+                let reserve_space = 65_535_000u32.saturating_sub(state.reserves[cell_a]) as f32 / 1000.0;
+                reserve_space
+            } else {
+                (max_a - state.nutrients[cell_a]).max(0.0)
+            };
             transfer.max(-(can_give.min(can_recv)))
         };
 
-        nutrient_deltas[cell_a] -= actual;
-        nutrient_deltas[cell_b] += actual;
+        // Route the transfer: if the receiver is an Embryocyte, add to reserve instead of nutrients.
+        if transfer > 0.0 && is_embryo_b {
+            // A→B, B is Embryocyte: add to B's reserve (×1000 fixed-point)
+            let gained = (actual.max(0.0) * 1000.0) as u32;
+            state.reserves[cell_b] = state.reserves[cell_b].saturating_add(gained).min(65_535_000);
+            nutrient_deltas[cell_a] -= actual;
+            // Don't touch nutrient_deltas[cell_b] — reserve was updated directly
+        } else if transfer < 0.0 && is_embryo_a {
+            // B→A, A is Embryocyte: add to A's reserve (×1000 fixed-point)
+            let gained = ((-actual).max(0.0) * 1000.0) as u32;
+            state.reserves[cell_a] = state.reserves[cell_a].saturating_add(gained).min(65_535_000);
+            nutrient_deltas[cell_b] -= -actual;
+            // Don't touch nutrient_deltas[cell_a]
+        } else {
+            nutrient_deltas[cell_a] -= actual;
+            nutrient_deltas[cell_b] += actual;
+        }
 
         // Store actual flow rate (nutrients/sec, positive = A→B) for display
         if dt > 0.0 {
@@ -890,9 +1079,16 @@ pub fn physics_step_with_genome(
 
     update_nutrient_growth(state, genome, dt);
 
-    // Transport nutrients between adhesion-connected cells
-    // This allows Flagellocytes to receive nutrients from connected cells
+    // Transport nutrients between adhesion-connected cells.
+    // Embryocytes: incoming redirected to reserve, outgoing blocked.
     transport_nutrients_through_adhesions(state, genome, dt);
+
+    // Tick Embryocyte timers (attached) and burn reserve (free).
+    // Runs after transport so reserve reflects this tick's incoming nutrients.
+    update_embryocyte_reserve_burn(state, genome, dt);
+
+    // Check AND-logic release triggers for attached Embryocytes.
+    check_embryocyte_release_triggers(state, genome);
 
     // Consume nutrients for Flagellocyte cells swimming
     // This must happen after nutrient growth so cells can potentially recover
@@ -903,12 +1099,23 @@ pub fn physics_step_with_genome(
         state.remove_cells(&dead_cells);
     }
 
-    // Remove any cells that starved (nutrients < 1.0), matching GPU death threshold.
-    // This catches non-auto-gain cells (Buoyocyte, Glueocyte, Lipocyte, Flagellocyte)
-    // that lost nutrients via passive drain and weren't rescued by nutrient transport.
+    // Remove any cells that starved, matching GPU death threshold.
+    // - Standard cells (non-Embryocyte): die when nutrients < 1.0 AND reserve == 0.
+    //   A non-zero reserve extends life (reserve burns first in update_nutrient_growth).
+    // - Embryocytes (cell_type == 10): die when reserve == 0 (nutrients are irrelevant).
     const DEATH_NUTRIENT_THRESHOLD: f32 = 1.0;
     let starved: Vec<usize> = (0..state.cell_count)
-        .filter(|&i| state.nutrients[i] < DEATH_NUTRIENT_THRESHOLD)
+        .filter(|&i| {
+            let mode_index = state.mode_indices[i];
+            let is_embryocyte = genome.modes.get(mode_index)
+                .map(|m| m.cell_type == 10)
+                .unwrap_or(false);
+            if is_embryocyte {
+                state.reserves[i] == 0
+            } else {
+                state.nutrients[i] < DEATH_NUTRIENT_THRESHOLD && state.reserves[i] == 0
+            }
+        })
         .collect();
     if !starved.is_empty() {
         state.remove_cells(&starved);

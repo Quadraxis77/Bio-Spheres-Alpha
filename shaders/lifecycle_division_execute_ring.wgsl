@@ -235,6 +235,10 @@ var<storage, read> signal_settings_v2_read: array<vec4<f32>>;
 @group(2) @binding(38)
 var<storage, read> signal_settings_v3_read: array<vec4<f32>>;
 
+// Per-cell Embryocyte reserve (u32, halved on division)
+@group(2) @binding(39)
+var<storage, read_write> embryocyte_reserves: array<atomic<u32>>;
+
 // Adhesion bind group (group 3)
 @group(3) @binding(0)
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
@@ -430,11 +434,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Check if this cell is dividing
+    // === EMBRYOCYTE RELEASE (division_flags == 2u) ===
+    // Drop all active adhesions. The cell remains alive; reserve burn begins next frame.
+    if (division_flags[cell_idx] == 2u) {
+        let adh_base = cell_idx * MAX_ADHESIONS_PER_CELL;
+        for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+            let adh_idx_signed = atomicLoad(&cell_adhesion_indices[adh_base + i]);
+            if (adh_idx_signed < 0) { continue; }
+            let adh_idx = u32(adh_idx_signed);
+            let conn = adhesion_connections[adh_idx];
+            if (conn.is_active != 0u) {
+                adhesion_connections[adh_idx].is_active = 0u;
+                // Clear this bond from the other cell's index list
+                let other_cell = select(conn.cell_a_index, conn.cell_b_index, conn.cell_a_index == cell_idx);
+                let other_base = other_cell * MAX_ADHESIONS_PER_CELL;
+                for (var j = 0u; j < MAX_ADHESIONS_PER_CELL; j++) {
+                    let cas = atomicCompareExchangeWeak(&cell_adhesion_indices[other_base + j], adh_idx_signed, -1);
+                    if (cas.exchanged || cas.old_value != adh_idx_signed) { break; }
+                }
+            }
+            atomicStore(&cell_adhesion_indices[adh_base + i], -1);
+        }
+        division_flags[cell_idx] = 0u;
+        return;
+    }
+
+    // Check if this cell is dividing normally
     if (division_flags[cell_idx] != 1u) {
         return;
     }
-    
+
     // Get the pre-assigned slot for child B
     let child_b_slot = division_slot_assignments[cell_idx];
     
@@ -450,7 +479,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Get parent's nutrients from nutrients_buffer
     let parent_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
-    
+
+    // Read parent's Embryocyte reserve; will be halved for each child
+    let parent_reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
+    let child_reserve = parent_reserve >> 1u;
+
     // Get parent's mode index for looking up child orientations and split direction
     let parent_mode_idx = mode_indices[cell_idx];
     
@@ -600,7 +633,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (child_b_mode_idx >= mode_count) {
         child_b_mode_idx = parent_mode_idx;
     }
-    
+
+    // Embryocyte children cannot be Embryocytes (prevents reserve-doubling chains).
+    // If the assigned child mode is cell_type 10, fall back to mode 0.
+    if (mode_cell_types[parent_mode_idx] == 10u) {
+        if (mode_cell_types[child_a_mode_idx] == 10u) {
+            child_a_mode_idx = 0u;
+        }
+        if (mode_cell_types[child_b_mode_idx] == 10u) {
+            child_b_mode_idx = 0u;
+        }
+    }
+
     // === Create Child A (overwrites parent slot) ===
     let parent_velocity = velocities_in[cell_idx];
     positions_out[cell_idx] = vec4<f32>(child_a_pos, child_a_mass);
@@ -643,9 +687,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     split_nutrient_thresholds[cell_idx] = (child_a_split_mass - 1.0) * 100.0;
     max_splits[cell_idx] = select(u32(child_a_props_2.x), 0xFFFFFFFFu, child_a_props_2.x < 0.0);
     
-    // Set child A nutrients
+    // Set child A nutrients and reserve (reserve halved from parent)
     atomicStore(&nutrients_buffer[cell_idx], float_to_fixed(child_a_nutrients));
-    
+    atomicStore(&embryocyte_reserves[cell_idx], child_reserve);
+
     // === Create Child B (in assigned slot) ===
     positions_out[child_b_slot] = vec4<f32>(child_b_pos, child_b_mass);
     velocities_out[child_b_slot] = vec4<f32>(parent_velocity.xyz, 0.0);
@@ -686,9 +731,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     max_cell_sizes[child_b_slot] = child_b_props_0.y;
     stiffnesses[child_b_slot] = child_b_props_0.z;
     
-    // Set child B nutrients
+    // Set child B nutrients and reserve (reserve halved from parent)
     atomicStore(&nutrients_buffer[child_b_slot], float_to_fixed(child_b_nutrients));
-    
+    atomicStore(&embryocyte_reserves[child_b_slot], child_reserve);
+
     // Clear death flag for the new slot
     death_flags[child_b_slot] = 0u;
     

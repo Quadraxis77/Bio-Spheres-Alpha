@@ -992,6 +992,13 @@ impl GpuScene {
                 myocyte_threshold: 1.0,
                 myocyte_pulse_rate: 1.0,
                 myocyte_pulse_phase: 0,
+                embryocyte_use_timer: false,
+                embryocyte_release_timer: 10.0,
+                embryocyte_use_threshold: false,
+                embryocyte_threshold_value: 32768,
+                embryocyte_use_signal: false,
+                embryocyte_signal_channel: 0,
+                embryocyte_signal_value: 1.0,
                 child_a: crate::genome::ChildSettings {
                     mode_number: child_a_local,
                     orientation: qa,
@@ -1845,7 +1852,10 @@ impl GpuScene {
         
         // Update myocyte mode properties for this genome's modes only
         self.gpu_triple_buffers.incremental_sync_myocyte_mode_properties(queue, &genome, global_start_index);
-        
+
+        // Update embryocyte mode properties for this genome's modes only
+        self.gpu_triple_buffers.incremental_sync_embryocyte_mode_properties(queue, &genome, global_start_index);
+
         // Update child mode indices for this genome's modes only
         self.gpu_triple_buffers.incremental_sync_child_mode_indices(device, genome_id, global_start_index, mode_count);
         
@@ -2048,7 +2058,10 @@ impl GpuScene {
         
         // Sync myocyte mode properties for muscle_contraction shader (v7, v8)
         self.gpu_triple_buffers.sync_myocyte_mode_properties(queue, &self.genomes);
-        
+
+        // Sync embryocyte mode properties for lifecycle shaders (v9, v10)
+        self.gpu_triple_buffers.sync_embryocyte_mode_properties(queue, &self.genomes);
+
         // Sync mode cell types lookup table (for deriving cell_type from mode_index)
         self.gpu_triple_buffers.sync_mode_cell_types(queue, &self.genomes);
 
@@ -2212,7 +2225,18 @@ impl GpuScene {
             self.current_cell_count += 1;
             self.total_cell_slots = self.total_cell_slots.max(self.current_cell_count);
             self.next_cell_id += 1;
-            
+
+            // Embryocytes start with a full reserve (65535 whole units, stored ×1000 fixed-point)
+            if mode.cell_type == 10 {
+                let initial_reserve: u32 = 65_535_000;
+                let byte_offset = (cell_index as u64) * 4;
+                queue.write_buffer(
+                    &self.gpu_triple_buffers.embryocyte_reserve_buffer,
+                    byte_offset,
+                    bytemuck::bytes_of(&initial_reserve),
+                );
+            }
+
             Some(cell_index)
         } else {
             None

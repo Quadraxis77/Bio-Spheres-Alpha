@@ -111,13 +111,31 @@ pub fn division_step(
                 true
             };
             
+            // Embryocytes (cell_type == 10) use a timer-based split condition instead of
+            // nutrients. They divide only when they have NO active connections AND their
+            // age has reached split_interval. This models the embryocyte "hatching" when
+            // it detaches from the organism.
+            let is_embryocyte = mode.map(|m| m.cell_type == 10).unwrap_or(false);
+            if is_embryocyte {
+                let active_connections = state.adhesion_manager.count_active_adhesions(i);
+                let split_interval_valid = state.split_intervals[i] <= 59.0;
+                // Only divide when free (no connections) and timer has elapsed
+                if can_split_by_count && active_connections == 0 && cell_age >= state.split_intervals[i] && split_interval_valid {
+                    state.divisions_to_process_buffer.push(i);
+                }
+                continue;
+            }
+
             // Check nutrient threshold - cells must have enough nutrients to split
             // Values > 100 mean "never split" (UI sentinel: split_mass > 2.0 -> threshold > 100)
             // Lipocytes (cell_type 4) can have threshold up to 200
+            // Reserve counts 1:1 toward the threshold — cells with reserve can split even
+            // if their regular nutrients alone are below the threshold.
             let is_lipocyte = mode.map(|m| m.cell_type == 4).unwrap_or(false);
             let max_threshold = if is_lipocyte { 200.0 } else { 100.0 };
-            let can_split_by_nutrients = state.split_nutrient_thresholds[i] <= max_threshold 
-                && state.nutrients[i] >= state.split_nutrient_thresholds[i];
+            let effective_nutrients = state.nutrients[i] + state.reserves[i] as f32 / 1000.0;
+            let can_split_by_nutrients = state.split_nutrient_thresholds[i] <= max_threshold
+                && effective_nutrients >= state.split_nutrient_thresholds[i];
             
             // Check time threshold - cells must be old enough to split
             let can_split_by_time = cell_age >= state.split_intervals[i];
@@ -158,6 +176,7 @@ pub fn division_step(
             #[allow(dead_code)]
             parent_nutrients: f32,
             parent_radius: f32,
+            parent_reserve: u32,
             child_a_pos: Vec3,
             child_b_pos: Vec3,
             child_a_orientation: Quat,
@@ -213,6 +232,7 @@ pub fn division_step(
                 let parent_genome_id = state.genome_ids[parent_idx];
                 let parent_stiffness = state.stiffnesses[parent_idx];
                 let parent_split_count = state.split_counts[parent_idx];
+                let parent_reserve = state.reserves[parent_idx];
                 
                 // Calculate split direction using parent's current rotation plus mode's split angle
                 // This compounds the rotation each generation without needing to track state
@@ -270,6 +290,18 @@ pub fn division_step(
                     }
                 }
                 
+                // Embryocyte rule: children of Embryocytes (cell_type == 10) cannot
+                // themselves be Embryocytes (would create reserve-doubling chains).
+                // Remap any Embryocyte child mode to mode 0 as a safety guard.
+                if mode.cell_type == 10 {
+                    if genome.modes.get(child_a_mode_idx).map(|m| m.cell_type == 10).unwrap_or(false) {
+                        child_a_mode_idx = 0;
+                    }
+                    if genome.modes.get(child_b_mode_idx).map(|m| m.cell_type == 10).unwrap_or(false) {
+                        child_b_mode_idx = 0;
+                    }
+                }
+
                 // Determine split counts: reset to 0 if mode changes, otherwise inherit parent's count + 1
                 let child_a_split_count = if child_a_mode_idx != mode_index {
                     0
@@ -281,7 +313,7 @@ pub fn division_step(
                 } else {
                     parent_split_count + 1
                 };
-                
+
                 // Get child properties
                 let child_a_mode = genome.modes.get(child_a_mode_idx);
                 let child_b_mode = genome.modes.get(child_b_mode_idx);
@@ -363,6 +395,7 @@ pub fn division_step(
                     parent_genome_orientation,
                     parent_nutrients,
                     parent_radius,
+                    parent_reserve,
                     child_a_pos,
                     child_b_pos,
                     child_a_orientation,
@@ -388,6 +421,9 @@ pub fn division_step(
             // Children are born at current_time
             let child_birth_time = current_time;
 
+            // Reserve halving: each child gets half the parent's reserve (integer shift).
+            let child_reserve = data.parent_reserve >> 1;
+
             if data.child_a_slot < state.capacity {
                 // Write child A
                 let child_a_id = state.next_cell_id;
@@ -396,13 +432,13 @@ pub fn division_step(
                 state.positions[data.child_a_slot] = data.child_a_pos;
                 state.prev_positions[data.child_a_slot] = data.child_a_pos;
                 state.velocities[data.child_a_slot] = data.parent_velocity;
-                
+
                 // Derive mass and radius from nutrients
                 state.nutrients[data.child_a_slot] = data.child_a_nutrients;
                 let child_a_mass = 1.0 + data.child_a_nutrients / 100.0;
                 state.masses[data.child_a_slot] = child_a_mass;
                 state.radii[data.child_a_slot] = child_a_mass.clamp(0.5, 2.0);
-                
+
                 state.genome_ids[data.child_a_slot] = data.parent_genome_id;
                 state.mode_indices[data.child_a_slot] = data.child_a_mode_idx;
 
@@ -420,6 +456,9 @@ pub fn division_step(
                 state.split_intervals[data.child_a_slot] = data.child_a_split_interval;
                 state.split_nutrient_thresholds[data.child_a_slot] = data.child_a_split_nutrient_threshold;
                 state.split_counts[data.child_a_slot] = data.child_a_split_count;
+                // Inherit halved reserve; reset Embryocyte accumulation timer
+                state.reserves[data.child_a_slot] = child_reserve;
+                state.embryocyte_timers[data.child_a_slot] = 0.0;
             }
 
             if data.child_b_slot < state.capacity {
@@ -430,13 +469,13 @@ pub fn division_step(
                 state.positions[data.child_b_slot] = data.child_b_pos;
                 state.prev_positions[data.child_b_slot] = data.child_b_pos;
                 state.velocities[data.child_b_slot] = data.parent_velocity;
-                
+
                 // Derive mass and radius from nutrients
                 state.nutrients[data.child_b_slot] = data.child_b_nutrients;
                 let child_b_mass = 1.0 + data.child_b_nutrients / 100.0;
                 state.masses[data.child_b_slot] = child_b_mass;
                 state.radii[data.child_b_slot] = child_b_mass.clamp(0.5, 2.0);
-                
+
                 state.genome_ids[data.child_b_slot] = data.parent_genome_id;
                 state.mode_indices[data.child_b_slot] = data.child_b_mode_idx;
 
@@ -454,8 +493,11 @@ pub fn division_step(
                 state.split_intervals[data.child_b_slot] = data.child_b_split_interval;
                 state.split_nutrient_thresholds[data.child_b_slot] = data.child_b_split_nutrient_threshold;
                 state.split_counts[data.child_b_slot] = data.child_b_split_count;
+                // Inherit halved reserve; reset Embryocyte accumulation timer
+                state.reserves[data.child_b_slot] = child_reserve;
+                state.embryocyte_timers[data.child_b_slot] = 0.0;
             }
-            
+
             // Record the division event
             pass_division_events.push(DivisionEvent {
                 parent_idx: data.parent_idx,
@@ -655,10 +697,13 @@ pub fn division_step_multi(
             // Check nutrient threshold - cells must have enough nutrients to split
             // Values > 100 mean "never split" (UI sentinel: split_mass > 2.0 -> threshold > 100)
             // Lipocytes (cell_type 4) can have threshold up to 200
+            // Reserve counts 1:1 toward the threshold — cells with reserve can split even
+            // if their regular nutrients alone are below the threshold.
             let is_lipocyte = mode.map(|m| m.cell_type == 4).unwrap_or(false);
             let max_threshold = if is_lipocyte { 200.0 } else { 100.0 };
-            let can_split_by_nutrients = state.split_nutrient_thresholds[i] <= max_threshold 
-                && state.nutrients[i] >= state.split_nutrient_thresholds[i];
+            let effective_nutrients = state.nutrients[i] + state.reserves[i] as f32 / 1000.0;
+            let can_split_by_nutrients = state.split_nutrient_thresholds[i] <= max_threshold
+                && effective_nutrients >= state.split_nutrient_thresholds[i];
             
             // Check time threshold - cells must be old enough to split
             let can_split_by_time = cell_age >= state.split_intervals[i];
@@ -693,6 +738,7 @@ pub fn division_step_multi(
             parent_genome_orientation: Quat,
             #[allow(dead_code)]
             parent_nutrients: f32,
+            parent_reserve: u32,
             child_a_pos: Vec3,
             child_b_pos: Vec3,
             child_a_orientation: Quat,
@@ -749,6 +795,7 @@ pub fn division_step_multi(
             let parent_nutrients = state.nutrients[parent_idx];
             let parent_stiffness = state.stiffnesses[parent_idx];
             let parent_split_count = state.split_counts[parent_idx];
+            let parent_reserve = state.reserves[parent_idx];
             
             let pitch = mode.parent_split_direction.x.to_radians();
             let yaw = mode.parent_split_direction.y.to_radians();
@@ -795,12 +842,23 @@ pub fn division_step_multi(
                 }
             }
             
+            // Embryocyte rule: children of Embryocytes (cell_type == 10) cannot
+            // themselves be Embryocytes (would create reserve-doubling chains).
+            if mode.cell_type == 10 {
+                if genome.modes.get(child_a_mode_idx).map(|m| m.cell_type == 10).unwrap_or(false) {
+                    child_a_mode_idx = 0;
+                }
+                if genome.modes.get(child_b_mode_idx).map(|m| m.cell_type == 10).unwrap_or(false) {
+                    child_b_mode_idx = 0;
+                }
+            }
+
             let child_a_split_count = if child_a_mode_idx != mode_index { 0 } else { parent_split_count + 1 };
             let child_b_split_count = if child_b_mode_idx != mode_index { 0 } else { parent_split_count + 1 };
-            
+
             let child_a_mode = genome.modes.get(child_a_mode_idx);
             let child_b_mode = genome.modes.get(child_b_mode_idx);
-            
+
             // Split parent's nutrients according to split_ratio
             let split_ratio = mode.split_ratio.clamp(0.0, 1.0);
             let child_a_nutrients = parent_nutrients * split_ratio;
@@ -857,6 +915,7 @@ pub fn division_step_multi(
                 parent_split_count,
                 parent_genome_orientation,
                 parent_nutrients,
+                parent_reserve,
                 child_a_pos,
                 child_b_pos,
                 child_a_orientation,
@@ -883,6 +942,9 @@ pub fn division_step_multi(
             let child_birth_time = current_time;
             let genome = &genomes[data.parent_genome_id];
 
+            // Reserve halving: each child gets half the parent's reserve (integer shift).
+            let child_reserve = data.parent_reserve >> 1;
+
             if data.child_a_slot < state.capacity {
                 let child_a_id = state.next_cell_id;
                 state.cell_ids[data.child_a_slot] = child_a_id;
@@ -890,13 +952,13 @@ pub fn division_step_multi(
                 state.positions[data.child_a_slot] = data.child_a_pos;
                 state.prev_positions[data.child_a_slot] = data.child_a_pos;
                 state.velocities[data.child_a_slot] = data.parent_velocity;
-                
+
                 // Derive mass and radius from nutrients
                 state.nutrients[data.child_a_slot] = data.child_a_nutrients;
                 let child_a_mass = 1.0 + data.child_a_nutrients / 100.0;
                 state.masses[data.child_a_slot] = child_a_mass;
                 state.radii[data.child_a_slot] = child_a_mass.clamp(0.5, 2.0);
-                
+
                 state.genome_ids[data.child_a_slot] = data.parent_genome_id;
                 state.mode_indices[data.child_a_slot] = data.child_a_mode_idx;
                 state.rotations[data.child_a_slot] = data.child_a_orientation;
@@ -911,6 +973,9 @@ pub fn division_step_multi(
                 state.split_intervals[data.child_a_slot] = data.child_a_split_interval;
                 state.split_nutrient_thresholds[data.child_a_slot] = data.child_a_split_nutrient_threshold;
                 state.split_counts[data.child_a_slot] = data.child_a_split_count;
+                // Inherit halved reserve; reset Embryocyte accumulation timer
+                state.reserves[data.child_a_slot] = child_reserve;
+                state.embryocyte_timers[data.child_a_slot] = 0.0;
             }
 
             if data.child_b_slot < state.capacity {
@@ -920,13 +985,13 @@ pub fn division_step_multi(
                 state.positions[data.child_b_slot] = data.child_b_pos;
                 state.prev_positions[data.child_b_slot] = data.child_b_pos;
                 state.velocities[data.child_b_slot] = data.parent_velocity;
-                
+
                 // Derive mass and radius from nutrients
                 state.nutrients[data.child_b_slot] = data.child_b_nutrients;
                 let child_b_mass = 1.0 + data.child_b_nutrients / 100.0;
                 state.masses[data.child_b_slot] = child_b_mass;
                 state.radii[data.child_b_slot] = child_b_mass.clamp(0.5, 2.0);
-                
+
                 state.genome_ids[data.child_b_slot] = data.parent_genome_id;
                 state.mode_indices[data.child_b_slot] = data.child_b_mode_idx;
                 state.rotations[data.child_b_slot] = data.child_b_orientation;
@@ -941,8 +1006,11 @@ pub fn division_step_multi(
                 state.split_intervals[data.child_b_slot] = data.child_b_split_interval;
                 state.split_nutrient_thresholds[data.child_b_slot] = data.child_b_split_nutrient_threshold;
                 state.split_counts[data.child_b_slot] = data.child_b_split_count;
+                // Inherit halved reserve; reset Embryocyte accumulation timer
+                state.reserves[data.child_b_slot] = child_reserve;
+                state.embryocyte_timers[data.child_b_slot] = 0.0;
             }
-            
+
             pass_division_events.push(DivisionEvent {
                 parent_idx: data.parent_idx,
                 child_a_idx: data.child_a_slot,
