@@ -466,12 +466,42 @@ fn internals_test(p: vec3<f32>, r: f32) -> vec3<f32> {
     return vec3<f32>(0.0, 0.0, 0.0);
 }
 
+// Type 10: Embryocyte — Egg-like appearance.
+// A warm amber yolk sphere visible through a translucent albumen interior.
+// type_data_0: x=yolk_radius (0.3-0.7), y=yolk_offset_y (-0.3-0.0), z=yolk_brightness (0.5-1.5), w=unused
+fn internals_embryocyte(p: vec3<f32>, r: f32, type_data_0: vec4<f32>) -> vec3<f32> {
+    let yolk_radius    = clamp(type_data_0.x, 0.3, 0.7);
+    let yolk_offset_y  = clamp(type_data_0.y, -0.35, 0.0);
+    let yolk_bright    = clamp(type_data_0.z, 0.5, 1.5);
+
+    // Yolk sphere: warm amber, offset slightly downward in cell-local space
+    let yolk_center = vec3<f32>(0.0, yolk_offset_y, 0.0);
+    let yolk_dist = length(p - yolk_center);
+
+    // Soft yolk edge with a bright highlight toward the top
+    let yolk_mask = smoothstep(yolk_radius + 0.04, yolk_radius - 0.06, yolk_dist);
+
+    // Subtle internal gradient: brighter at top of yolk (light from above)
+    let yolk_gradient = 0.7 + 0.3 * clamp((p.y - yolk_offset_y) / yolk_radius + 0.5, 0.0, 1.0);
+
+    // Albumen haze: faint milky glow between yolk and membrane
+    let albumen = smoothstep(0.9, 0.5, r) * 0.12;
+
+    let pattern = yolk_mask * yolk_bright * yolk_gradient + albumen;
+    // Yolk shifts color warm (positive = lighter/warmer via base_color tint)
+    let color_shift = yolk_mask * 0.35 * yolk_bright;
+
+    return vec3<f32>(pattern, color_shift, 0.0);
+}
+
+// Type 7: Oculocyte — handled inline in fs_main (needs surface direction, not interior pos).
+
 // Type 1: Flagellocyte — Same as test cell (tail is rendered separately).
 fn internals_flagellocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
     return vec3<f32>(0.0, 0.0, 0.0);
 }
 
-// Type 2: Phagocyte — Simple cell with a visible nucleus.
+// Type 2: Phagocyte — nucleus sphere visible through cytoplasm.
 fn internals_phagocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
     let nucleus_r = length(p);
     let nucleus = smoothstep(0.3, 0.2, nucleus_r);
@@ -657,11 +687,36 @@ fn internals_buoyocyte(p: vec3<f32>, r: f32, time: f32, cell_index: u32) -> vec3
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
+// Type 9: Myocyte — Peripheral flattened nuclei (syncytial cell with multiple nuclei).
+// Nuclei are elongated ellipsoids near the membrane, compressed along the fiber axis (local Z).
+// type_data_0: x=line_freq, y=bulge_strength, z=warp_amt, w=sarc_freq_packed
+fn internals_myocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
+    // Two nuclei offset toward the membrane in XY, flattened along Z (fiber axis)
+    let n1c = vec3<f32>( 0.52,  0.32,  0.05);
+    let n2c = vec3<f32>(-0.50, -0.30,  0.10);
+
+    // Flattened ellipsoid SDF: scale Z up to squash it, keeping XY round
+    let p1  = p - n1c;
+    let p2  = p - n2c;
+    let e1  = length(vec3<f32>(p1.x * 0.90, p1.y * 1.05, p1.z * 2.30)) - 0.115;
+    let e2  = length(vec3<f32>(p2.x * 1.00, p2.y * 0.88, p2.z * 2.50)) - 0.100;
+
+    let m1 = smoothstep( 0.025, -0.008, e1);
+    let m2 = smoothstep( 0.025, -0.008, e2);
+    let nucleus = max(m1, m2);
+
+    // Nuclei are significantly darker and slightly violet-tinted (heterochromatin)
+    let color_shift = nucleus * -0.58;
+    let pattern     = nucleus * 0.80;
+
+    return vec3<f32>(pattern, color_shift, 0.0);
+}
+
 // ============================================================================
 // Pattern Dispatcher
 // ============================================================================
 
-fn get_internals(cell_type: u32, p: vec3<f32>, r: f32, cell_index: u32) -> vec3<f32> {
+fn get_internals(cell_type: u32, p: vec3<f32>, r: f32, cell_index: u32, type_data_0: vec4<f32>) -> vec3<f32> {
     switch (cell_type) {
         case 0u: { return internals_test(p, r); }
         case 1u: { return internals_flagellocyte(p, r); }
@@ -670,7 +725,10 @@ fn get_internals(cell_type: u32, p: vec3<f32>, r: f32, cell_index: u32) -> vec3<
         case 4u: { return internals_lipocyte(p, r); }
         case 5u: { return internals_buoyocyte(p, r, camera.time, cell_index); }
         case 6u: { return vec3<f32>(0.0); } // handled inline in fs_main using surface dir
+        case 7u: { return vec3<f32>(0.0); } // Oculocyte: handled inline in fs_main using surface dir
         case 8u: { return vec3<f32>(0.0); } // Ciliocyte: handled inline in fs_main
+        case 9u: { return internals_myocyte(p, r); } // Peripheral nuclei; surface pattern handled inline
+        case 10u: { return internals_embryocyte(p, r, type_data_0); }
         default: { return internals_test(p, r); }
     }
 }
@@ -731,11 +789,29 @@ fn get_membrane_params(cell_type: u32) -> MembraneParams {
             m.rim_power = 2.5;
             m.color_darken = 0.2;
         }
+        case 7u: { // Oculocyte — glossy cornea, high specular
+            m.thickness = 0.04;
+            m.opacity = 0.35;
+            m.rim_power = 1.8;
+            m.color_darken = 0.1;
+        }
         case 8u: { // Ciliocyte — standard membrane, rings are normal perturbation only
             m.thickness = 0.06;
             m.opacity = 0.5;
             m.rim_power = 2.5;
             m.color_darken = 0.25;
+        }
+        case 9u: { // Myocyte — semi-translucent membrane reveals fiber+sarcomere texture beneath
+            m.thickness = 0.055;
+            m.opacity = 0.42;
+            m.rim_power = 2.5;
+            m.color_darken = 0.22;
+        }
+        case 10u: { // Embryocyte — thick chalky eggshell membrane, matte and opaque
+            m.thickness = 0.10;
+            m.opacity = 0.65;
+            m.rim_power = 3.5;
+            m.color_darken = 0.35;
         }
         default: {
             m.thickness = 0.06;
@@ -827,7 +903,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     if (lod >= 1u) {
         // Get cell index from instance data (assuming it's packed in w component)
         let cell_index = u32(in.instance_index);
-        let internals = get_internals(cell_type, interior_pos, r, cell_index);
+        let internals = get_internals(cell_type, interior_pos, r, cell_index, in.type_data_0);
         let pattern_value = internals.x;
         let color_shift = internals.y;
 
@@ -862,7 +938,111 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     }
 
     // ====================================================================
-    // Ciliocyte (type 8): Rolling ring normal perturbation (LOD >= 1)
+    // Oculocyte (type 7): Forward-facing eye (LOD >= 1)
+    // The eye is centered on the cell's forward axis (local +Z).
+    // type_data_0: x=pupil_size, y=iris_freq, z=iris_texture, w=pupil_dark
+    // ====================================================================
+    if (cell_type == 7u && lod >= 1u) {
+        // Surface direction in cell-local space (rotation-aware, on the front shell)
+        let surf_local = normalize(quat_rotate_inverse(in.rotation,
+            in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
+
+        let pupil_size   = clamp(in.type_data_0.x, 0.1, 0.45);
+        let iris_freq    = clamp(in.type_data_0.y, 2.0, 16.0);
+        let iris_texture = clamp(in.type_data_0.z, 0.0, 0.6);
+        let pupil_dark   = clamp(in.type_data_0.w, 0.5, 1.0);
+
+        // Dot product with forward axis: 1.0 = dead center, 0.0 = equator, -1.0 = back
+        let fwd_dot = surf_local.z; // local +Z is the gaze direction
+
+        // Angular distance from the forward pole (0 = center, 1 = equator)
+        let ang_dist = sqrt(max(0.0, 1.0 - fwd_dot * fwd_dot));
+
+        // Iris outer radius in angular space
+        let iris_outer = pupil_size + 0.38;
+
+        // Pupil: dark disc at the forward pole
+        let pupil_mask = smoothstep(pupil_size + 0.015, pupil_size - 0.02, ang_dist);
+
+        // Iris: annular band around the pupil
+        let iris_mask = smoothstep(iris_outer + 0.02, iris_outer - 0.02, ang_dist)
+                      * (1.0 - pupil_mask);
+
+        // Sclera: bright area outside the iris on the front hemisphere
+        let sclera_mask = smoothstep(iris_outer + 0.06, iris_outer + 0.01, ang_dist)
+                        * smoothstep(0.0, 0.12, fwd_dot)
+                        * (1.0 - iris_mask) * (1.0 - pupil_mask);
+
+        // Iris radial striations: spokes from the pupil center
+        let angle = atan2(surf_local.y, surf_local.x);
+        let stria_a = sin(angle * iris_freq) * 0.5 + 0.5;
+        let stria_b = sin(angle * iris_freq * 1.618 + 0.9) * 0.5 + 0.5;
+        let iris_detail = mix(stria_a, stria_b, iris_texture) * iris_mask;
+
+        // Cornea specular: bright highlight near the forward pole
+        let cornea_spec = pow(max(0.0, fwd_dot), 12.0) * 0.5 * (1.0 - pupil_mask);
+
+        // Compose over interior
+        // Sclera: bright white
+        let sclera_color = vec3<f32>(0.95, 0.95, 0.92) * (0.8 + 0.2 * fwd_dot);
+        // Iris: base_color tinted with striation detail
+        let iris_color = base_color * (0.6 + iris_detail * 0.6);
+        // Pupil: very dark
+        let pupil_color = base_color * (1.0 - pupil_dark);
+
+        var eye_color = interior_result;
+        eye_color = mix(eye_color, sclera_color, sclera_mask * 0.85);
+        eye_color = mix(eye_color, iris_color,   iris_mask   * 0.9);
+        eye_color = mix(eye_color, pupil_color,  pupil_mask  * 0.95);
+        eye_color = eye_color + vec3<f32>(cornea_spec);
+
+        interior_result = eye_color;
+    }
+
+    // ====================================================================
+    // Myocyte (type 9): Sarcomere striations + longitudinal myofibril bundles (LOD >= 1)
+    //
+    // Two overlapping patterns produce the classic striated-muscle appearance:
+    //   1. Longitudinal myofibrils — azimuthal (around Y) cosine bands; each fiber
+    //      looks like a convex cylinder from the normal perturbation below.
+    //      Fibers converge at the ±Y poles (forward / rear of the cell).
+    //   2. Sarcomere cross-striations — periodic transverse bands along local Y:
+    //        Z-disc (very dark) → I-band (light, actin) → A-band (dark, myosin+actin)
+    //        → H-zone (medium, myosin only) → M-line (dark seam) → H-zone → A-band
+    //        → I-band → Z-disc (next sarcomere)
+    //
+    // type_data_0: x=line_freq (fiber count), y=bulge_strength, z=warp_amt,
+    // ====================================================================
+    // Myocyte (type 9): Longitudinal fiber bundles converging at forward/rear poles
+    // Lines run like meridians on a globe — converging at local +Z (forward)
+    // and local -Z (rear). type_data_0: x=line_freq, y=bulge_str, z=warp, w=unused
+    // ====================================================================
+    if (cell_type == 9u && lod >= 1u) {
+        let surf_local = normalize(quat_rotate_inverse(in.rotation,
+            in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
+
+        let line_freq = clamp(in.type_data_0.x, 4.0, 20.0);
+        let warp_amt  = clamp(in.type_data_0.z, 0.0, 0.30);
+
+        // Angle around local Z — lines of constant angle are meridians
+        // converging at the forward (+Z) and rear (-Z) poles
+        let angle = atan2(surf_local.y, surf_local.x);
+        let wn1 = value_noise_3d(surf_local * 4.5 + vec3<f32>(2.3, 8.1, 0.0));
+        let wn2 = value_noise_3d(surf_local * 9.0 + vec3<f32>(5.1, 1.7, 3.3)) * 0.5;
+        let warp_n = (wn1 + wn2 - 0.75) * 2.0;
+        let angle_warped = angle + warp_n * warp_amt;
+
+        // Squared cosine: wide bright crowns, narrow dark grooves
+        let fiber_cos    = cos(angle_warped * line_freq);
+        let fiber_t      = fiber_cos * 0.5 + 0.5;
+        let fiber_bright = fiber_t * fiber_t;
+
+        // Groove = 0.6, crown = 1.0
+        interior_result = interior_result * (0.60 + fiber_bright * 0.40);
+    }
+
+    // ====================================================================
+    // Ciliocyte (type 8): Rolling ring color ripple (LOD >= 1)
     // type_data_0: x=effective_speed, y=ring_frequency, z=ring_depth, w=ring_speed
     // Rings scroll along local Z axis proportional to effective_speed.
     // Static when effective_speed is 0.
@@ -882,12 +1062,22 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         // When effective_speed is 0, time term vanishes → static rings
         let phase = cilia_local_dir.z * ring_freq - camera.time * ring_speed * effective_speed;
 
-        // Sinusoidal ring wave (2*PI for full wave per ring unit)
+        // Sinusoidal ring wave in [-1, 1]
         let ring_wave = sin(phase * 6.283185);
 
-        // Darken troughs for depth perception
-        let trough_darken = 1.0 - max(0.0, -ring_wave) * ring_depth * 0.5;
-        interior_result = interior_result * trough_darken;
+        // t in [0, 1]: 0 = trough, 1 = peak
+        let t = ring_wave * 0.5 + 0.5;
+
+        // Trough color: darker, slightly warm/purple (compressed cilia)
+        let trough_color = base_color * (1.0 - ring_depth * 0.6)
+                         * vec3<f32>(0.85, 0.80, 1.0);
+
+        // Peak color: brighter, slightly cool/cyan (extended cilia catching light)
+        let peak_color   = base_color * (1.0 + ring_depth * 0.45)
+                         * vec3<f32>(1.0, 1.05, 1.15);
+
+        // Smooth blend between trough and peak
+        interior_result = mix(trough_color, peak_color, smoothstep(0.0, 1.0, t));
     }
 
     // ====================================================================
@@ -988,6 +1178,36 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         perturbed_normal = normalize(perturbed_normal + forward_world * perturb_strength);
     }
 
+    // Myocyte (type 9): Normal perturbation for both fiber bundles and sarcomere ridges
+    if (cell_type == 9u && lod >= 1u) {
+        let myo_surf   = normalize(quat_rotate_inverse(in.rotation,
+            in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
+        let line_freq  = clamp(in.type_data_0.x, 4.0, 20.0);
+        let bulge_str  = clamp(in.type_data_0.y, 0.1, 0.90);
+        let warp_amt   = clamp(in.type_data_0.z, 0.0, 0.30);
+
+        // ── Fiber bundle normals (azimuthal bumps around local forward Z) ──
+        // Matches the color pass: atan2(y, x) orbits around local +Z so fibers
+        // converge at the cell's own forward and rear poles.
+        let angle = atan2(myo_surf.y, myo_surf.x);
+        let wn1 = value_noise_3d(myo_surf * 4.5 + vec3<f32>(2.3, 8.1, 0.0));
+        let wn2 = value_noise_3d(myo_surf * 9.0 + vec3<f32>(5.1, 1.7, 3.3)) * 0.5;
+        let warp_n = (wn1 + wn2 - 0.75) * 2.0;
+        let angle_warped = angle + warp_n * warp_amt;
+
+        let fiber_slope = -sin(angle_warped * line_freq) * line_freq;
+        // Tangent sweeps around local Z, transformed to world space.
+        // Safe: when myo_surf is near the Z poles, xy_len → 0; clamp to avoid NaN.
+        let xy_len = length(myo_surf.xy);
+        let tangent_local = select(
+            normalize(vec3<f32>(-myo_surf.y, myo_surf.x, 0.0)),
+            vec3<f32>(1.0, 0.0, 0.0),  // fallback at poles
+            xy_len < 0.001
+        );
+        let tangent_world = quat_rotate(in.rotation, tangent_local);
+        perturbed_normal = normalize(perturbed_normal + tangent_world * fiber_slope * bulge_str * 0.10);
+    }
+
     // Composite membrane over interior
     var composited = mix(interior_result, membrane_color, membrane_alpha);
 
@@ -1042,17 +1262,12 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         final_color = mix(vec3<f32>(1.0, 1.0, 0.0), final_color, yellow_outline);
     }
 
-    // ====================================================================
-    // Sphere depth (front surface)
-    // ====================================================================
+
     let sphere_offset = z_front * in.radius;
     let sphere_world_pos = in.center + in.to_camera * sphere_offset;
     let sphere_clip = camera.view_proj * vec4<f32>(sphere_world_pos, 1.0);
     out.depth = sphere_clip.z / sphere_clip.w;
 
-    // ====================================================================
-    // Debug LOD colors (skipped for highlighted cells since they share the same flag slot)
-    // ====================================================================
     var output_color: vec3<f32>;
     if (debug_colors > 0.5 && highlight_flag < 0.5) {
         switch (lod) {

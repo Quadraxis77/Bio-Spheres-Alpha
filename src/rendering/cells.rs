@@ -707,10 +707,17 @@ impl CellRenderer {
             data.data[6] = if selected_mode_index == Some(mode_index) { 1.0 } else { 0.0 }; // yellow outline highlight
             data.data[7] = cell_type_index as f32;
             
-            // Pack Goldberg ridge params into type_data[0..3] for non-tail cells
+            // Pack type_data[0..3]: cilia cells get ring params, all others get Goldberg ridge params
             // (Flagellocyte tail params are already packed by its behavior module)
             let cell_type = CellType::all().get(cell_type_index).copied().unwrap_or(CellType::Test);
-            if cell_type != CellType::Flagellocyte {
+            if cell_type == CellType::Ciliocyte {
+                // Match build_instances.wgsl: [effective_speed, ring_frequency, ring_depth, ring_speed]
+                let cilia_speed = mode_settings.cilia_speed;
+                data.data[0] = cilia_speed;
+                data.data[1] = visuals.cilia_ring_frequency;
+                data.data[2] = visuals.cilia_ring_depth;
+                data.data[3] = visuals.cilia_ring_speed;
+            } else if cell_type != CellType::Flagellocyte {
                 data.data[0] = visuals.goldberg_scale;
                 data.data[1] = visuals.goldberg_ridge_width;
                 data.data[2] = visuals.goldberg_meander;
