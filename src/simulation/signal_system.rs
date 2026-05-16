@@ -12,7 +12,7 @@
 use glam::Vec3;
 use crate::genome::Genome;
 use crate::simulation::canonical_state::CanonicalState;
-use std::collections::VecDeque;
+
 
 /// Number of signal channels (0-15)
 pub const SIGNAL_CHANNELS: usize = 16;
@@ -167,10 +167,14 @@ fn sense_barrier_ray(
     t > 0.0 && t <= ray_length
 }
 
-/// Propagate signal emissions through adhesion connections using BFS.
-/// Each emission starts at the source cell and floods outward for `hops` steps.
-/// Signals are additive — multiple sources on the same channel sum their values.
-/// Signal senders (oculocytes) are immune to receiving signals that would alter their output.
+/// Propagate signal emissions through adhesion connections using hop-level wave propagation.
+///
+/// Processes one hop-level at a time so that attenuation is applied uniformly at every
+/// hop (SIGNAL_ATTENUATION_PER_HOP^N at distance N). Cells reachable via multiple
+/// equal-length paths accumulate signal additively from all of those paths — "electricity
+/// through wires" behaviour. Cells already reached by a shorter path are not revisited
+/// at greater attenuation. Relay cells (oculocytes, regulation emitters) carry the wave
+/// forward without accumulating signal themselves.
 pub fn propagate_signals(
     state: &mut CanonicalState,
     genome: &Genome,
@@ -180,65 +184,90 @@ pub fn propagate_signals(
         return;
     }
 
-    // BFS queue: (cell_index, remaining_hops, signal_strength)
-    let mut queue: VecDeque<(usize, usize, f32)> = VecDeque::new();
-    // Track visited cells per emission to avoid re-visiting in the same BFS
-    let mut visited: Vec<bool> = vec![false; state.cell_count];
+    let cell_count = state.cell_count;
+
+    // Per-emission scratch buffers, reused across emissions to avoid allocation.
+    // min_hop_distance[i]: shortest hop distance from the current emitter to cell i
+    //   (-1 = not yet reached by this emission's wave).
+    // signal_contribution[i]: total signal accumulated from all equal-shortest-length paths.
+    let mut min_hop_distance = vec![-1i32; cell_count];
+    let mut signal_contribution = vec![0.0f32; cell_count];
+    let mut current_frontier: Vec<usize> = Vec::new();
+    let mut next_frontier: Vec<usize> = Vec::new();
 
     for emission in emissions {
-        if emission.source_cell >= state.cell_count {
+        if emission.source_cell >= cell_count {
             continue;
         }
 
-        // Write signal to source cell first (full strength)
+        // Source cell receives its own emission at full (unattenuated) strength.
         add_signal(state, emission.source_cell, emission.channel, emission.value);
 
-        // BFS from source.
-        // Cells are written when enqueued, not when dequeued, so the signal strength
-        // and visited marking are both set at the correct hop distance.
-        // remaining_hops = how many more hops can spread FROM this cell.
-        // hops=1 means: spread to direct neighbours (write them at full strength), then stop.
-        for v in visited.iter_mut().take(state.cell_count) {
-            *v = false;
+        if emission.hops == 0 {
+            continue;
         }
-        visited[emission.source_cell] = true;
-        queue.clear();
 
-        // Seed with direct neighbours of source at full strength.
-        // Signal senders are marked visited (to block loops) but not written to and not
-        // enqueued for further spreading — they are a hard stop in the BFS.
-        if emission.hops > 0 {
-            let neighbors = get_adhesion_neighbors(state, emission.source_cell);
-            for neighbor in neighbors {
-                if neighbor < state.cell_count && !visited[neighbor] {
-                    visited[neighbor] = true;
-                    if is_signal_sender(state, genome, neighbor, emissions) {
-                        continue;
+        // Reset per-emission scratch state.
+        for v in min_hop_distance[..cell_count].iter_mut() { *v = -1; }
+        for v in signal_contribution[..cell_count].iter_mut() { *v = 0.0; }
+        min_hop_distance[emission.source_cell] = 0;
+
+        current_frontier.clear();
+        current_frontier.push(emission.source_cell);
+
+        // Process one hop-level at a time.
+        // Hop 1 is full strength (same as the source). Attenuation begins at hop 2:
+        //   hop 1 → emission.value
+        //   hop 2 → emission.value * SIGNAL_ATTENUATION_PER_HOP
+        //   hop N → emission.value * SIGNAL_ATTENUATION_PER_HOP^(N-1)
+        let mut signal_at_hop = emission.value;
+        for hop in 0..emission.hops {
+            let hop_number = (hop + 1) as i32;
+
+            next_frontier.clear();
+            for &cell_idx in &current_frontier {
+                let neighbors = get_adhesion_neighbors(state, cell_idx);
+                for neighbor in neighbors {
+                    if neighbor >= cell_count { continue; }
+                    if min_hop_distance[neighbor] == -1 {
+                        // First path to reach this cell — record distance and seed signal.
+                        min_hop_distance[neighbor] = hop_number;
+                        signal_contribution[neighbor] = signal_at_hop;
+                        next_frontier.push(neighbor);
+                        // Record the adhesion edge the signal actually travelled along.
+                        state.signal_flow_tracker.add_flow(cell_idx, neighbor);
+                    } else if min_hop_distance[neighbor] == hop_number {
+                        // Another equal-length path — take the max, not the sum.
+                        // Summing would let branching topology amplify signals indefinitely
+                        // (a binary tree has 2^(N-1) paths of length N, each contributing
+                        // v * 0.5^(N-1), summing to v regardless of distance).
+                        // Max gives voltage-like behaviour: signal strength depends only on
+                        // hop distance, not on how many wires run in parallel.
+                        if signal_at_hop > signal_contribution[neighbor] {
+                            signal_contribution[neighbor] = signal_at_hop;
+                        }
+                        // Record this parallel path's edge too.
+                        state.signal_flow_tracker.add_flow(cell_idx, neighbor);
                     }
-                    add_signal(state, neighbor, emission.channel, emission.value);
-                    state.signal_flow_tracker.add_flow(emission.source_cell, neighbor);
-                    if emission.hops > 1 {
-                        queue.push_back((neighbor, emission.hops - 1, emission.value));
-                    }
+                    // min_hop_distance < hop_number: shorter path already won —
+                    // signal does not flow backward, so don't record this edge.
                 }
             }
+            std::mem::swap(&mut current_frontier, &mut next_frontier);
+            // Attenuate for the *next* hop. This keeps hop 1 at full strength
+            // and reduces by SIGNAL_ATTENUATION_PER_HOP for each subsequent hop.
+            signal_at_hop *= SIGNAL_ATTENUATION_PER_HOP;
         }
 
-        while let Some((cell_idx, remaining_hops, signal_strength)) = queue.pop_front() {
-            let next_strength = signal_strength * SIGNAL_ATTENUATION_PER_HOP;
-            let neighbors = get_adhesion_neighbors(state, cell_idx);
-            for neighbor in neighbors {
-                if neighbor < state.cell_count && !visited[neighbor] {
-                    visited[neighbor] = true;
-                    if is_signal_sender(state, genome, neighbor, emissions) {
-                        continue;
-                    }
-                    add_signal(state, neighbor, emission.channel, next_strength);
-                    state.signal_flow_tracker.add_flow(emission.source_cell, neighbor);
-                    if remaining_hops > 1 {
-                        queue.push_back((neighbor, remaining_hops - 1, next_strength));
-                    }
-                }
+        // Write accumulated contributions to signal channels.
+        // Skip the source (already written above) and relay cells (oculocytes /
+        // regulation emitters carry the wave but do not receive it).
+        for cell_idx in 0..cell_count {
+            if cell_idx == emission.source_cell { continue; }
+            if min_hop_distance[cell_idx] < 0 { continue; }
+            if is_signal_sender(state, genome, cell_idx, emissions) { continue; }
+            if signal_contribution[cell_idx] != 0.0 {
+                add_signal(state, cell_idx, emission.channel, signal_contribution[cell_idx]);
             }
         }
     }
@@ -246,19 +275,22 @@ pub fn propagate_signals(
     state.has_any_signal = true;
 }
 
-/// Check if a cell is a signal sender (oculocyte or test signal source).
-/// Signal senders are immune to receiving signals that would alter their own output.
-fn is_signal_sender(state: &CanonicalState, genome: &Genome, cell_idx: usize, test_emissions: &[SignalEmission]) -> bool {
-    // Check if this cell is an oculocyte
+/// Check if a cell is a transparent relay that carries the signal wave but does
+/// not itself receive a signal value written to its channels.
+///
+/// Only oculocytes qualify: their output is determined by ray-casting and must
+/// not be altered by inbound signals from other cells. Every other cell type —
+/// including regulation emitters — should both emit *and* receive signals normally.
+/// Regulation emitters participating as receivers is exactly how inter-cell signal
+/// gating (division, apoptosis, mode-switching) works in practice.
+fn is_signal_sender(state: &CanonicalState, genome: &Genome, cell_idx: usize, _emissions: &[SignalEmission]) -> bool {
     let mode_idx = state.mode_indices[cell_idx];
     if let Some(mode) = genome.modes.get(mode_idx) {
         if mode.cell_type == OCULOCYTE_TYPE {
             return true;
         }
     }
-    
-    // Check if this cell is a test signal source
-    test_emissions.iter().any(|emission| emission.source_cell == cell_idx)
+    false
 }
 
 /// Add a signal value to a cell's channel (additive).

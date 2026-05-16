@@ -1128,11 +1128,13 @@ pub fn physics_step_with_genome(
     let boundary_radius = config.sphere_radius;
     crate::simulation::signal_system::run_signal_system(state, genome, boundary_radius);
 
-    // Apply persistent test signals (if any) after normal signal system
+    // Apply persistent test signals (if any) after normal signal system.
+    // Do NOT clear signals first — regulation signals (channels 8-15) must remain intact.
+    // run_signal_system already called clear_all_signals at the start of this step, so
+    // there is no cross-step accumulation. Test signals simply add on top of the
+    // normally-computed oculocyte and regulation signals.
     if let Some(test_signals) = test_signals {
         if !test_signals.is_empty() {
-            // Clear signals before applying test signals to avoid accumulation
-            crate::simulation::signal_system::clear_all_signals(state);
             crate::simulation::signal_system::propagate_test_signals(state, genome, test_signals.to_vec());
         }
     }

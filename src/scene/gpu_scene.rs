@@ -4,7 +4,7 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, DepthOfFieldRenderer, GpuAdhesionLineRenderer, GpuSurfaceNets, InstanceBuilder, NutrientParticleRenderer, OrganismSkinRenderer, SteamParticleRenderer, SunRenderer, TailRenderer, VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
+use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, DeathParticleRenderer, DepthOfFieldRenderer, GpuAdhesionLineRenderer, GpuSurfaceNets, InstanceBuilder, NutrientParticleRenderer, OrganismSkinRenderer, SteamParticleRenderer, SunRenderer, TailRenderer, VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
@@ -248,6 +248,14 @@ pub struct GpuScene {
     nutrient_extract_bind_group: Option<wgpu::BindGroup>,
     /// Cached nutrient particle render bind group
     nutrient_render_bind_group: Option<wgpu::BindGroup>,
+    /// Death particle system renderer — emits burst particles when cells die
+    pub death_particle_renderer: Option<DeathParticleRenderer>,
+    /// Whether to show death particles
+    pub show_death_particles: bool,
+    /// Cached death particle render bind group
+    death_render_bind_group: Option<wgpu::BindGroup>,
+    /// Cached camera bind group for death particle renderer
+    env_camera_bind_group_death: Option<wgpu::BindGroup>,
     /// Phagocyte nutrient consumption system
     phagocyte_consumption: Option<PhagocyteConsumptionSystem>,
     /// Cached phagocyte consumption nutrient bind group
@@ -576,6 +584,10 @@ impl GpuScene {
             nutrient_spawn_probability: 0.05,  // 5% spawn probability
             nutrient_extract_bind_group: None,
             nutrient_render_bind_group: None,
+            death_particle_renderer: None,
+            show_death_particles: true,
+            death_render_bind_group: None,
+            env_camera_bind_group_death: None,
             phagocyte_consumption: None,
             phagocyte_nutrient_bind_group: None,
             phagocyte_physics_bind_groups: None,
@@ -835,6 +847,15 @@ impl GpuScene {
             mode_count,
         )?;
 
+        // Regulation params: [channel(u32), value_bits(u32), hops(u32), padding(u32)]
+        // channel == 0xFFFFFFFF means disabled (-1); otherwise 8-15.
+        let regulation_params = self.read_back_buffer_range::<[u32; 4]>(
+            device, queue,
+            &self.gpu_triple_buffers.regulation_params,
+            base_offset as u64,
+            mode_count,
+        )?;
+
         // mode_visuals: read colors (1 vec4 per mode) and emissive (1 vec4 per mode) separately
         let colors_raw = self.read_back_buffer_range::<[f32; 4]>(
             device, queue,
@@ -956,9 +977,12 @@ impl GpuScene {
                 oculocyte_signal_hops: oculocyte_params[i][2] as i32,
                 oculocyte_ray_length: f32::from_bits(oculocyte_params[i][1]),
                 membrane_stiffness: props[2],
-                regulation_emit_channel: -1,
-                regulation_emit_value: 10.0,
-                regulation_emit_hops: 3,
+                regulation_emit_channel: {
+                    let ch = regulation_params[i][0];
+                    if ch == 0xFFFFFFFFu32 { -1i32 } else { ch.clamp(8, 15) as i32 }
+                },
+                regulation_emit_value: f32::from_bits(regulation_params[i][1]),
+                regulation_emit_hops: regulation_params[i][2].clamp(1, 20) as i32,
                 division_signal_channel: -1,
                 division_signal_threshold: 1.0,
                 division_signal_invert: false,
@@ -3025,6 +3049,20 @@ impl GpuScene {
                 }));
             }
         }
+        
+        // Create death particle camera bind group if needed
+        if self.env_camera_bind_group_death.is_none() {
+            if let Some(ref renderer) = self.death_particle_renderer {
+                self.env_camera_bind_group_death = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Env Death Camera Bind Group"),
+                    layout: renderer.camera_bind_group_layout(),
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffer.as_entire_binding(),
+                    }],
+                }));
+            }
+        }
     }
     
     /// Ensure cached adhesion data bind groups exist (one per triple buffer index).
@@ -3751,6 +3789,9 @@ impl GpuScene {
         // Initialize nutrient particle renderer
         self.initialize_nutrient_particle_renderer(device, queue, surface_format);
 
+        // Initialize death particle renderer (independent of fluid — works in all modes)
+        self.initialize_death_particle_renderer(device, surface_format);
+
         // Initialize phagocyte consumption system
         self.initialize_phagocyte_consumption(device);
 
@@ -4085,7 +4126,104 @@ impl GpuScene {
         self.ensure_nutrient_particle_renderer(device, queue, surface_format, depth_format);
     }
 
-    /// Create or update steam extract bind group when fluid simulator is available
+    /// Initialize the death particle renderer.
+    ///
+    /// This can be called at any time — it only needs the device and surface format.
+    /// The compute bind group is rebuilt every frame (not cached) because the
+    /// position buffer index rotates with the triple-buffer system.
+    pub fn initialize_death_particle_renderer(
+        &mut self,
+        device: &wgpu::Device,
+        surface_format: wgpu::TextureFormat,
+    ) {
+        if self.death_particle_renderer.is_some() {
+            return;
+        }
+
+        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Death Particle Camera Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let renderer = DeathParticleRenderer::new(
+            device,
+            surface_format,
+            wgpu::TextureFormat::Depth32Float,
+            &camera_layout,
+            self.gpu_triple_buffers.capacity,
+        );
+
+        self.death_render_bind_group = Some(renderer.create_render_bind_group(device));
+        self.death_particle_renderer = Some(renderer);
+        self.show_death_particles = true;
+
+        log::info!("Death particle renderer initialized (GPU-based)");
+    }
+
+    /// Snapshot death_flags → prev_death_flags BEFORE physics runs this frame.
+    /// This must be called at the start of the frame so spawn_new can detect
+    /// the alive→dead transition after physics completes.
+    pub fn snapshot_death_flags_for_particles(&self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(ref renderer) = self.death_particle_renderer {
+            renderer.snapshot_death_flags(
+                encoder,
+                &self.gpu_triple_buffers.death_flags,
+                self.gpu_triple_buffers.capacity,
+            );
+        }
+    }
+
+    /// Run the death particle spawn + age compute passes AFTER physics runs.
+    /// Rebuilds the compute bind group each frame using the current triple-buffer
+    /// position slot (current_index, not output_index).
+    pub fn update_death_particles(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        dt: f32,
+    ) {
+        if self.death_particle_renderer.is_none() {
+            return;
+        }
+
+        // Use current_index() — the last completed physics frame's positions.
+        // output_index() is the buffer being written this frame (positions may be
+        // partially zeroed by death_scan already).
+        let current_idx = self.gpu_triple_buffers.current_index();
+        let position_buffer = &self.gpu_triple_buffers.position_and_mass[current_idx];
+
+        // Build a fresh bind group each frame (triple-buffer index rotates)
+        let compute_bind_group = {
+            let renderer = self.death_particle_renderer.as_ref().unwrap();
+            renderer.create_compute_bind_group(
+                device,
+                &self.gpu_triple_buffers.death_flags,
+                position_buffer,
+            )
+        };
+
+        let capacity = self.gpu_triple_buffers.capacity;
+        if let Some(ref mut renderer) = self.death_particle_renderer {
+            renderer.update(encoder, queue, &compute_bind_group, capacity, dt);
+        }
+    }
+
+    /// Poll the death particle counter staging buffer after queue submission.
+    pub fn poll_death_particle_count(&mut self, device: &wgpu::Device) {
+        if let Some(ref mut renderer) = self.death_particle_renderer {
+            renderer.poll_particle_count(device);
+        }
+    }
     fn ensure_steam_extract_bind_group(&mut self, device: &wgpu::Device) {
         if self.steam_extract_bind_group.is_some() {
             return;
@@ -4930,6 +5068,12 @@ impl Scene for GpuScene {
             false
         };
 
+        // Snapshot death_flags BEFORE physics runs — needed by spawn_new to detect
+        // the alive→dead transition this frame.
+        if self.show_death_particles && !self.paused {
+            self.snapshot_death_flags_for_particles(&mut encoder);
+        }
+
         // Execute GPU physics pipeline if not paused and has cells
         // Use fixed timestep accumulator for consistent physics behavior
         if !self.paused {
@@ -4960,6 +5104,14 @@ impl Scene for GpuScene {
 
         // Execute non-drag pending position updates (e.g. from other tools)
         let position_updated = position_updated || self.execute_pending_position_updates(device, &mut encoder, queue);
+
+        // Update death particles AFTER physics — spawn_new reads death_flags written
+        // by lifecycle_unified.wgsl (death_scan) and positions from the current
+        // triple-buffer slot (last completed frame, not the one being written).
+        if self.show_death_particles && !self.paused {
+            let dt = 1.0 / 60.0;
+            self.update_death_particles(&mut encoder, device, queue, dt);
+        }
 
         // Execute any pending cell removals (remove tool) AFTER physics
         // This marks cells for death by setting their mass to 0
@@ -5368,6 +5520,21 @@ impl Scene for GpuScene {
             }
         }
 
+        // Render death particles if enabled (uses cached camera bind group)
+        if self.show_death_particles {
+            if let (Some(ref death_particle_renderer), Some(ref render_bind_group), Some(ref camera_bind_group)) =
+                (&self.death_particle_renderer, &self.death_render_bind_group, &self.env_camera_bind_group_death) {
+
+                death_particle_renderer.render(
+                    &mut encoder,
+                    scene_target,
+                    &self.renderer.depth_view,
+                    camera_bind_group,
+                    render_bind_group,
+                );
+            }
+        }
+
 
         // Render adhesion lines if enabled (uses cached bind groups per triple buffer index)
         if self.show_adhesion_lines {
@@ -5514,6 +5681,11 @@ impl Scene for GpuScene {
         // Poll for nutrient particle count (GPU readback)
         if self.show_nutrient_particles {
             self.poll_nutrient_particle_count(device);
+        }
+
+        // Poll for death particle count (GPU readback)
+        if self.show_death_particles {
+            self.poll_death_particle_count(device);
         }
 
         // Mark that we now have Hi-Z data for next frame
