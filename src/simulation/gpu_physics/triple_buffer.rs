@@ -344,7 +344,7 @@ pub struct GpuTripleBufferSystem {
     
     /// Mode properties v5–v6 for cilia parameters (16 bytes per mode each)
     /// v5: [cilia_speed, cilia_push_bonded as f32, cilia_use_signal as f32, cilia_signal_channel as f32]
-    /// v6: [cilia_speed_below, cilia_speed_above, cilia_threshold, 0.0]
+    /// v6: [cilia_speed_below, cilia_speed_above, cilia_threshold, cilia_attract_force]
     pub mode_properties_v5: wgpu::Buffer,
     pub mode_properties_v6: wgpu::Buffer,
     
@@ -359,6 +359,10 @@ pub struct GpuTripleBufferSystem {
     /// v10: [use_signal as f32, signal_channel as f32, signal_value, 0.0]
     pub mode_properties_v9: wgpu::Buffer,
     pub mode_properties_v10: wgpu::Buffer,
+
+    /// Mode properties v11 for Devorocyte parameters (16 bytes per mode each)
+    /// v11: [consume_range, consume_rate, 0.0, 0.0]
+    pub mode_properties_v11: wgpu::Buffer,
 
     /// Per-cell Embryocyte reserve buffer (one u32 per cell).
     /// Embryocytes: sole energy source; burns at 10 units/sec when free.
@@ -629,6 +633,9 @@ impl GpuTripleBufferSystem {
         let mode_properties_v9 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V9");
         let mode_properties_v10 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V10");
 
+        // Mode properties v11 for Devorocyte parameters (16 bytes per mode each)
+        let mode_properties_v11 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V11");
+
         // Per-cell Embryocyte reserve buffer (one u32 per cell, zero-initialized)
         let embryocyte_reserve_buffer = Self::create_zero_initialized_storage_buffer(
             device,
@@ -747,6 +754,7 @@ impl GpuTripleBufferSystem {
             mode_properties_v8,
             mode_properties_v9,
             mode_properties_v10,
+            mode_properties_v11,
             embryocyte_reserve_buffer,
             mode_cell_types,
             behavior_flags,
@@ -1259,7 +1267,7 @@ impl GpuTripleBufferSystem {
     /// Sync cilia mode properties for the cilia_force shader.
     /// Data is written into 2 separate vec4 sub-buffers (v5, v6), each 16 bytes/mode.
     /// v5: [cilia_speed, cilia_push_bonded as f32, cilia_use_signal as f32, cilia_signal_channel as f32]
-    /// v6: [cilia_speed_below, cilia_speed_above, cilia_threshold, 0.0]
+    /// v6: [cilia_speed_below, cilia_speed_above, cilia_threshold, cilia_attract_force]
     pub fn sync_cilia_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
         let mut v5: Vec<[f32; 4]> = Vec::new();
         let mut v6: Vec<[f32; 4]> = Vec::new();
@@ -1276,7 +1284,7 @@ impl GpuTripleBufferSystem {
                     mode.cilia_speed_below,
                     mode.cilia_speed_above,
                     mode.cilia_threshold,
-                    0.0,
+                    mode.cilia_attract_force,
                 ]);
             }
         }
@@ -1303,7 +1311,7 @@ impl GpuTripleBufferSystem {
                 mode.cilia_speed_below,
                 mode.cilia_speed_above,
                 mode.cilia_threshold,
-                0.0,
+                mode.cilia_attract_force,
             ]);
         }
 
@@ -1426,6 +1434,31 @@ impl GpuTripleBufferSystem {
             let offset = (global_start_index * 16) as u64;
             queue.write_buffer(&self.mode_properties_v9, offset, bytemuck::cast_slice(&v9));
             queue.write_buffer(&self.mode_properties_v10, offset, bytemuck::cast_slice(&v10));
+        }
+    }
+
+    /// Sync Devorocyte mode properties for the devorocyte_consume shader.
+    /// v11: [consume_range, consume_rate, 0.0, 0.0]
+    pub fn sync_devorocyte_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let mut v11: Vec<[f32; 4]> = Vec::new();
+        for genome in genomes {
+            for mode in &genome.modes {
+                v11.push([mode.devorocyte_consume_range, mode.devorocyte_consume_rate, 0.0, 0.0]);
+            }
+        }
+        if !v11.is_empty() {
+            queue.write_buffer(&self.mode_properties_v11, 0, bytemuck::cast_slice(&v11));
+        }
+    }
+
+    /// Incremental sync of Devorocyte mode properties for a single genome.
+    pub fn incremental_sync_devorocyte_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
+        let v11: Vec<[f32; 4]> = genome.modes.iter()
+            .map(|mode| [mode.devorocyte_consume_range, mode.devorocyte_consume_rate, 0.0, 0.0])
+            .collect();
+        if !v11.is_empty() {
+            let offset = (global_start_index * 16) as u64;
+            queue.write_buffer(&self.mode_properties_v11, offset, bytemuck::cast_slice(&v11));
         }
     }
 

@@ -336,16 +336,22 @@ impl AdhesionConnectionManager {
     }
     
     /// Count active adhesions for a cell.
-    /// Requires a reference to connections to verify each entry is actually active,
-    /// preventing stale (deactivated) references from inflating the count.
-    pub fn count_active_adhesions(&self, cell_index: usize) -> usize {
+    /// Validates each slot against `connections.is_active` to avoid counting
+    /// force-broken bonds whose slots haven't been cleared yet.
+    pub fn count_active_adhesions(&self, cell_index: usize, connections: &AdhesionConnections) -> usize {
         if cell_index >= self.cell_adhesion_indices.len() {
             return 0;
         }
-        
+
         self.cell_adhesion_indices[cell_index]
             .iter()
-            .filter(|&&idx| idx >= 0)
+            .filter(|&&idx| {
+                if idx < 0 {
+                    return false;
+                }
+                let i = idx as usize;
+                i < connections.active_count && connections.is_active[i] == 1
+            })
             .count()
     }
     

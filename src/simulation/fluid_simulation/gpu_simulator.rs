@@ -882,8 +882,10 @@ impl GpuFluidSimulator {
             return;
         }
 
-        // Update time for wave animations
-        let current_time = self.time.get() + dt;
+        // Update time for wave animations.
+        // Wrap at 65536s to prevent f32 precision loss in long runs — once the
+        // raw time exceeds ~8M seconds, adding dt has no effect on a f32.
+        let current_time = (self.time.get() + dt) % 65536.0;
         self.time.set(current_time);
         
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
@@ -1079,6 +1081,15 @@ impl GpuFluidSimulator {
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
 
+        // Wrap time to prevent f32 precision loss in long runs.
+        // f32 loses sub-second precision above ~8M seconds; wrapping at
+        // epoch_spacing * 8192 (~16 hours at default 7s spacing) keeps the
+        // epoch counter cycling correctly while staying well within f32 range.
+        // The wrap is a multiple of epoch_spacing so latest_epoch = u32(t / spacing)
+        // resets cleanly to 0 without skipping or repeating an epoch boundary.
+        let wrap_period = epoch_spacing * 8192.0;
+        let wrapped_time = self.time.get() % wrap_period;
+
         let params = NutrientPopulateParams {
             grid_resolution: GRID_RESOLUTION,
             cell_size,
@@ -1087,7 +1098,7 @@ impl GpuFluidSimulator {
             grid_origin_z: grid_origin.z,
             world_radius: self.world_radius,
             nutrient_density,
-            time: self.time.get(),
+            time: wrapped_time,
             delta_time,
             epoch_duration,
             epoch_spacing,

@@ -147,6 +147,7 @@ pub struct ModeSettings {
     pub cilia_speed_below: f32, // Cilia speed when signal < threshold
     pub cilia_speed_above: f32, // Cilia speed when signal >= threshold
     pub cilia_threshold: f32, // Signal threshold for speed switching
+    pub cilia_attract_force: f32, // Gentle attraction force pulling nearby non-organism cells toward the ciliocyte (0.0 = off, 1.0 = max); helps convey cells along a ciliocyte chain
 
     // Membrane settings
     pub membrane_stiffness: f32, // Cell membrane stiffness for collision response (0.0 = no repulsion, higher = more rigid)
@@ -202,6 +203,10 @@ pub struct ModeSettings {
     pub mode_switch_signal_threshold: f32, // Threshold for mode switch
     pub mode_switch_target: i32, // Target mode index (-1 = disabled)
     pub mode_switch_invert: bool, // If true, switch when signal BELOW threshold
+
+    // Devorocyte settings
+    pub devorocyte_consume_range: f32, // Extra contact range beyond cell radii (0.0 to 2.0)
+    pub devorocyte_consume_rate: f32,  // Nutrients stolen per second from each victim (1.0 to 100.0)
 
     // Child settings
     pub child_a: ChildSettings,
@@ -270,6 +275,7 @@ impl Default for ModeSettings {
             cilia_speed_below: 0.5, // Default: same as cilia_speed
             cilia_speed_above: 0.0, // Default: stop when signal received
             cilia_threshold: 1.0, // Default: threshold of 1.0
+            cilia_attract_force: 0.0, // Default: no attraction (off)
             buoyancy_force: 0.5, // Default buoyancy force for buoyocytes
             oculocyte_sense_type: 0, // Default: sense cells
             oculocyte_signal_channel: 0, // Default: channel 0
@@ -313,6 +319,8 @@ impl Default for ModeSettings {
             mode_switch_signal_threshold: 1.0,
             mode_switch_target: -1,
             mode_switch_invert: false,
+            devorocyte_consume_range: 0.5,
+            devorocyte_consume_rate: 30.0,
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),
             adhesion_settings: AdhesionSettings::default(),

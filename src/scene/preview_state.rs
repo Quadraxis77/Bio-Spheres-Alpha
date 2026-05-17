@@ -304,7 +304,8 @@ impl PreviewState {
             mode.cilia_speed_below.to_bits().hash(&mut hasher);
             mode.cilia_speed_above.to_bits().hash(&mut hasher);
             mode.cilia_threshold.to_bits().hash(&mut hasher);
-            
+            mode.cilia_attract_force.to_bits().hash(&mut hasher);
+
             // Hash myocyte settings
             mode.myocyte_contraction.to_bits().hash(&mut hasher);
             mode.myocyte_use_signal.hash(&mut hasher);
@@ -323,6 +324,10 @@ impl PreviewState {
             mode.embryocyte_use_signal.hash(&mut hasher);
             mode.embryocyte_signal_channel.hash(&mut hasher);
             mode.embryocyte_signal_value.to_bits().hash(&mut hasher);
+
+            // Hash devorocyte settings
+            mode.devorocyte_consume_range.to_bits().hash(&mut hasher);
+            mode.devorocyte_consume_rate.to_bits().hash(&mut hasher);
         }
         
         hasher.finish()

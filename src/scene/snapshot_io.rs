@@ -499,6 +499,8 @@ impl GpuScene {
                 .sync_myocyte_mode_properties(queue, &self.genomes);
             self.gpu_triple_buffers
                 .sync_embryocyte_mode_properties(queue, &self.genomes);
+            self.gpu_triple_buffers
+                .sync_devorocyte_mode_properties(queue, &self.genomes);
         }
 
         // Mark instance builder dirty so rendering picks up the new state.

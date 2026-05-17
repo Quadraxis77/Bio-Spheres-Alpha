@@ -86,7 +86,7 @@ pub fn division_step(
             // Check min/max adhesions against active connection count
             let can_split_by_adhesions = if let Some(m) = mode {
                 let active = if m.min_adhesions > 0 || m.max_adhesions > 0 {
-                    state.adhesion_manager.count_active_adhesions(i)
+                    state.adhesion_manager.count_active_adhesions(i, &state.adhesion_connections)
                 } else {
                     0
                 };
@@ -117,7 +117,7 @@ pub fn division_step(
             // it detaches from the organism.
             let is_embryocyte = mode.map(|m| m.cell_type == 10).unwrap_or(false);
             if is_embryocyte {
-                let active_connections = state.adhesion_manager.count_active_adhesions(i);
+                let active_connections = state.adhesion_manager.count_active_adhesions(i, &state.adhesion_connections);
                 let split_interval_valid = state.split_intervals[i] <= 59.0;
                 // Only divide when free (no connections) and timer has elapsed
                 if can_split_by_count && active_connections == 0 && cell_age >= state.split_intervals[i] && split_interval_valid {

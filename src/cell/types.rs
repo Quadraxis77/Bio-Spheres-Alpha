@@ -364,11 +364,12 @@ pub enum CellType {
     Ciliocyte = 8,
     Myocyte = 9,
     Embryocyte = 10,
+    Devorocyte = 11,
 }
 
 impl CellType {
     /// Number of registered cell types. Update when adding new types.
-    pub const COUNT: usize = 11;
+    pub const COUNT: usize = 12;
 
     /// Maximum number of cell types supported by GPU buffers.
     pub const MAX_TYPES: usize = 30;
@@ -387,6 +388,7 @@ impl CellType {
             CellType::Ciliocyte,
             CellType::Myocyte,
             CellType::Embryocyte,
+            CellType::Devorocyte,
         ]
     }
 
@@ -409,12 +411,13 @@ impl CellType {
             CellType::Ciliocyte => "Ciliocyte",
             CellType::Myocyte => "Myocyte",
             CellType::Embryocyte => "Embryocyte",
+            CellType::Devorocyte => "Devorocyte",
         }
     }
 
     /// Get all cell type names as a slice.
     pub const fn names() -> &'static [&'static str] {
-        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte", "Buoyocyte", "Glueocyte", "Oculocyte", "Ciliocyte", "Myocyte", "Embryocyte"]
+        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte", "Buoyocyte", "Glueocyte", "Oculocyte", "Ciliocyte", "Myocyte", "Embryocyte", "Devorocyte"]
     }
 
     /// Convert from integer index to cell type.
@@ -431,6 +434,7 @@ impl CellType {
             8 => Some(CellType::Ciliocyte),
             9 => Some(CellType::Myocyte),
             10 => Some(CellType::Embryocyte),
+            11 => Some(CellType::Devorocyte),
             _ => None,
         }
     }
@@ -583,6 +587,18 @@ impl CellType {
                 applies_muscle_contraction: 0,
                 _padding: [0; 7],
             },
+            CellType::Devorocyte => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 0,
+                applies_swim_force: 0,
+                uses_texture_atlas: 0,
+                has_procedural_tail: 0,
+                gains_mass_from_light: 0,
+                is_storage_cell: 0,
+                applies_buoyancy: 0,
+                applies_cilia_force: 0,
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
+            },
         }
     }
 
@@ -630,6 +646,13 @@ impl CellType {
                 // Enable timer trigger by default (release after 10 seconds)
                 mode.embryocyte_use_timer = true;
                 mode.embryocyte_release_timer = 10.0;
+            }
+            CellType::Devorocyte => {
+                mode.nutrient_priority = 1.0;
+                mode.max_cell_size = 2.0;
+                mode.split_mass = 3.1;
+                mode.devorocyte_consume_range = 0.5;
+                mode.devorocyte_consume_rate = 30.0;
             }
             _ => {}
         }

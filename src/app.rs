@@ -224,6 +224,12 @@ impl App {
                         if let Some(mode_idx) = hit_mode {
                             preview_scene.selected_mode_index = Some(mode_idx);
                             self.editor_state.selected_mode_index = mode_idx;
+                            // Sync quaternion ball orientations from the selected mode's genome
+                            // data — same sync that happens when clicking a mode button directly.
+                            if let Some(mode) = self.working_genome.modes.get(mode_idx) {
+                                self.editor_state.child_a_orientation = mode.child_a.orientation;
+                                self.editor_state.child_b_orientation = mode.child_b.orientation;
+                            }
                             log::info!("Preview cell click: selected mode {}", mode_idx);
                         }
                     }

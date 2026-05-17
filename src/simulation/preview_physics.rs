@@ -495,7 +495,8 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
 
             let can_auto_gain = mode.cell_type == 0  // Test
                              || mode.cell_type == 2  // Phagocyte
-                             || mode.cell_type == 3; // Photocyte
+                             || mode.cell_type == 3  // Photocyte
+                             || mode.cell_type == 11; // Devorocyte (simulates predation as auto-gain in preview)
             let is_oculocyte = mode.cell_type == 7;
 
             let current_nutrients = state.nutrients[i];
@@ -597,7 +598,7 @@ pub fn update_embryocyte_reserve_burn(state: &mut CanonicalState, genome: &Genom
             continue;
         }
 
-        let adhesion_count = state.adhesion_manager.count_active_adhesions(i);
+        let adhesion_count = state.adhesion_manager.count_active_adhesions(i, &state.adhesion_connections);
         if adhesion_count > 0 {
             // Attached: tick the accumulation timer
             state.embryocyte_timers[i] += dt;
@@ -633,7 +634,7 @@ pub fn check_embryocyte_release_triggers(state: &mut CanonicalState, genome: &Ge
         }
 
         // Must have at least one adhesion to "release" from
-        if state.adhesion_manager.count_active_adhesions(i) == 0 {
+        if state.adhesion_manager.count_active_adhesions(i, &state.adhesion_connections) == 0 {
             continue;
         }
 
@@ -921,8 +922,8 @@ pub fn form_glueocyte_contact_bonds(state: &mut CanonicalState, genome: &Genome,
             continue;
         }
 
-        let adhesions_a = state.adhesion_manager.count_active_adhesions(idx_a);
-        let adhesions_b = state.adhesion_manager.count_active_adhesions(idx_b);
+        let adhesions_a = state.adhesion_manager.count_active_adhesions(idx_a, &state.adhesion_connections);
+        let adhesions_b = state.adhesion_manager.count_active_adhesions(idx_b, &state.adhesion_connections);
 
         let max_a = genome.modes.get(mode_a).map(|m| m.max_adhesions as usize).unwrap_or(10);
         let max_b = genome.modes.get(mode_b).map(|m| m.max_adhesions as usize).unwrap_or(10);

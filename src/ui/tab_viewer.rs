@@ -1960,6 +1960,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     cilia_speed_below: 0.5,
                     cilia_speed_above: 0.0,
                     cilia_threshold: 1.0,
+                    cilia_attract_force: 0.0,
                     myocyte_contraction: 0.5,
                     myocyte_use_signal: false,
                     myocyte_signal_channel: 0,
@@ -2003,6 +2004,8 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     mode_switch_signal_threshold: 1.0,
                     mode_switch_target: -1,
                     mode_switch_invert: false,
+                    devorocyte_consume_range: 0.5,
+                    devorocyte_consume_rate: 30.0,
                     child_a: crate::genome::ChildSettings {
                         mode_number: selected_index as i32,
                         ..Default::default()
@@ -2624,6 +2627,16 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     ui.add_space(4.0);
                     ui.checkbox(&mut mode.cilia_push_bonded, "Push Organism Cells");
+
+                    ui.add_space(4.0);
+                    ui.label("Attract Force:");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.cilia_attract_force, 0.0..=1.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.cilia_attract_force).speed(0.01).range(0.0..=1.0));
+                    });
                 });
             } else if mode.cell_type == 9 { // Myocyte (cell_type == 9)
                 group_container(ui, "Myocyte Functions", egui::Color32::from_rgb(200, 140, 140), |ui| {
@@ -2791,6 +2804,30 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.separator();
                         ui.colored_label(egui::Color32::YELLOW, "⚠ No triggers enabled — cell will never release.");
                     }
+                });
+            } else if mode.cell_type == 11 { // Devorocyte (cell_type == 11)
+                group_container(ui, "Devorocyte Functions", egui::Color32::from_rgb(200, 60, 60), |ui| {
+                    ui.label("Steals nutrients from and kills foreign cells on contact.");
+                    ui.label("Ignores cells of the same organism or genome.");
+                    ui.separator();
+
+                    ui.label("Contact Range:");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.devorocyte_consume_range, 0.0..=3.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.devorocyte_consume_range).speed(0.01).range(0.0..=3.0).suffix(" u"));
+                    });
+
+                    ui.label("Consume Rate:");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.devorocyte_consume_rate, 0.0..=200.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.devorocyte_consume_rate).speed(1.0).range(0.0..=200.0).suffix("/s"));
+                    });
                 });
             }
 

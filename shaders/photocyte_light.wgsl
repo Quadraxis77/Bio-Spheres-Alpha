@@ -173,20 +173,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Convert mass_per_second to nutrients per second (multiply by 100)
     let nutrient_rate = photocyte_params.mass_per_second_full_light * 100.0;
     
-    var new_nutrients = current_nutrients;
-    
     if (in_light) {
-        // In light: gain nutrients at the full rate from the brightness setting
-        let nutrient_gain = nutrient_rate * params.delta_time;
-        new_nutrients = min(current_nutrients + nutrient_gain, max_nutrients);
+        // In light: gain nutrients at the full rate from the brightness setting.
+        // Use atomicAdd of the delta — atomicStore would overwrite concurrent writes
+        // from nutrient_transport running in the same frame.
+        let nutrient_gain = min(nutrient_rate * params.delta_time, max(max_nutrients - current_nutrients, 0.0));
+        if (nutrient_gain > 0.0) {
+            atomicAdd(&nutrients_buffer[cell_idx], float_to_fixed(nutrient_gain));
+        }
     } else {
-        // In shadow: lose nutrients (half the gain rate)
-        let nutrient_loss = nutrient_rate * 0.5 * params.delta_time;
-        new_nutrients = max(current_nutrients - nutrient_loss, 1.0);
-    }
-    
-    // Only write if nutrients actually changed
-    if (new_nutrients != current_nutrients) {
-        atomicStore(&nutrients_buffer[cell_idx], float_to_fixed(new_nutrients));
+        // In shadow: lose nutrients (half the gain rate).
+        // Subtract via atomicAdd of a negative delta; clamp so we don't go below 1.0.
+        let nutrient_loss = min(nutrient_rate * 0.5 * params.delta_time, max(current_nutrients - 1.0, 0.0));
+        if (nutrient_loss > 0.0) {
+            atomicAdd(&nutrients_buffer[cell_idx], -float_to_fixed(nutrient_loss));
+        }
     }
 }

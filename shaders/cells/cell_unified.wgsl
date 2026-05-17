@@ -224,11 +224,21 @@ fn vs_main(
         lod_level = 3u;
     }
 
-    let world_size = instance.radius * 1.1;
-    let world_pos = instance.position + right * quad_pos.x * world_size + up * quad_pos.y * world_size;
+    // Devorocyte (type 11): expand billboard to accommodate spikes extending beyond the sphere.
+    // Spikes reach 0.75 radii beyond the surface, so we need radius * (1.1 + 0.75) = 1.85.
+    let cell_type_vs = u32(round(instance.type_data_1.w));
+    let billboard_scale = select(1.1, 1.85, cell_type_vs == 11u);
+    let world_size_scaled = instance.radius * billboard_scale;
+    let world_pos = instance.position + right * quad_pos.x * world_size_scaled + up * quad_pos.y * world_size_scaled;
 
     out.clip_position = camera.view_proj * vec4<f32>(world_pos, 1.0);
-    out.uv = quad_pos * 0.5 + 0.5;
+    // Scale UV so that local_pos = uv*2-1 correctly maps to sphere-radius units.
+    // For the expanded Devorocyte billboard (1.55x), quad_pos=±1 corresponds to ±1.409 sphere radii.
+    // We encode this by scaling uv: local_pos = (uv*2-1) will then range to ±billboard_scale/1.1.
+    // Standard cells: billboard_scale=1.1, ratio=1.0, uv=quad_pos*0.5+0.5 → local_pos=quad_pos ∈ [-1,1].
+    // Devorocyte:     billboard_scale=1.85, ratio≈1.682, uv scaled → local_pos ∈ [-1.682, 1.682].
+    let uv_scale = billboard_scale / 1.1;
+    out.uv = quad_pos * uv_scale * 0.5 + 0.5;
     out.color = instance.color;
     out.center = instance.position;
     out.radius = instance.radius;
@@ -847,11 +857,14 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let cell_type = u32(round(in.cell_type_and_debug.x));
     let debug_colors = in.cell_type_and_debug.y;
 
-    // Billboard-space position [-1, 1]
+    // Billboard-space position [-1, 1] for sphere, potentially larger for Devorocyte spikes
     let local_pos = in.uv * 2.0 - 1.0;
     let r2 = dot(local_pos, local_pos);
 
-    if (r2 > 1.0) {
+    // For non-Devorocyte cells, discard outside the sphere as usual.
+    // For Devorocyte (type 11), the billboard is expanded — pixels outside r2>1 may be spikes.
+    let is_devorocyte = (cell_type == 11u);
+    if (r2 > 1.0 && !is_devorocyte) {
         discard;
     }
 
@@ -1260,6 +1273,137 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         let aa2 = fwidth(z_front);
         let yellow_outline = smoothstep(yellow_width - aa2, yellow_width + aa2, z_front);
         final_color = mix(vec3<f32>(1.0, 1.0, 0.0), final_color, yellow_outline);
+    }
+
+    // ====================================================================
+    // Devorocyte (type 11): Cone spike rendering — runs for ALL pixels, not just r2>1.
+    //
+    // Spikes pointing toward the camera project inside the sphere billboard (r2<=1).
+    // We must test spikes for every Devorocyte pixel and let the spike win when it
+    // hits closer to the camera than the sphere front surface.
+    //
+    // Ray-cone: tip (apex) at spike_dir*(1+spike_height), axis = -spike_dir (inward).
+    // ====================================================================
+    if (cell_type == 11u) {
+        let pixel_world   = in.center
+                          + in.cam_right * local_pos.x * in.radius
+                          + in.cam_up    * local_pos.y * in.radius;
+        let ray_dir_world = normalize(pixel_world - camera.camera_pos);
+
+        let cam_local_unscaled = quat_rotate_inverse(in.rotation, camera.camera_pos - in.center);
+        let ray_o = cam_local_unscaled / in.radius;
+        let ray_d = normalize(quat_rotate_inverse(in.rotation, ray_dir_world));
+
+        // t at which the ray hits the sphere front surface in cell-local space.
+        // Solve |ray_o + t*ray_d|² = 1. Take the larger positive root (front face).
+        let sph_b    = dot(ray_o, ray_d);
+        let sph_c    = dot(ray_o, ray_o) - 1.0;
+        let sph_disc = sph_b * sph_b - sph_c;
+        var t_sphere_front = 1e9;
+        if (sph_disc >= 0.0) {
+            let t_sf = -sph_b + sqrt(sph_disc);
+            if (t_sf > 0.001) { t_sphere_front = t_sf; }
+        }
+
+        let spike_dirs = array<vec3<f32>, 20>(
+            normalize(vec3<f32>( 0.000,  1.000,  0.000)),
+            normalize(vec3<f32>( 0.894,  0.800, -0.000)),
+            normalize(vec3<f32>(-0.588,  0.600,  0.809)),
+            normalize(vec3<f32>(-0.588,  0.400, -0.809)),
+            normalize(vec3<f32>( 0.951,  0.200,  0.309)),
+            normalize(vec3<f32>( 0.000,  0.000, -1.000)),
+            normalize(vec3<f32>(-0.951,  0.200,  0.309)),
+            normalize(vec3<f32>( 0.588, -0.200,  0.809)),
+            normalize(vec3<f32>( 0.588, -0.200, -0.809)),
+            normalize(vec3<f32>(-0.951, -0.200, -0.309)),
+            normalize(vec3<f32>( 0.000, -0.200,  1.000)),
+            normalize(vec3<f32>( 0.951, -0.400, -0.309)),
+            normalize(vec3<f32>(-0.588, -0.400,  0.809)),
+            normalize(vec3<f32>(-0.000, -0.600, -1.000)),
+            normalize(vec3<f32>( 0.588, -0.600,  0.809)),
+            normalize(vec3<f32>( 0.951, -0.600, -0.309)),
+            normalize(vec3<f32>(-0.951, -0.600,  0.309)),
+            normalize(vec3<f32>( 0.000, -0.800,  0.000)),
+            normalize(vec3<f32>( 0.588, -0.800, -0.809)),
+            normalize(vec3<f32>(-0.588, -1.000,  0.000))
+        );
+
+        let spike_height   = 0.75;
+        let spike_embed    = 0.12;
+        let spike_total    = spike_height + spike_embed;
+        let cone_half_cos  = 0.985;
+        let cone_half_cos2 = cone_half_cos * cone_half_cos;
+
+        var best_t    = 1e9;
+        var best_norm = vec3<f32>(0.0, 1.0, 0.0);
+        var hit_spike = false;
+
+        for (var si = 0u; si < 20u; si++) {
+            let spike_dir = spike_dirs[si];
+            let apex      = spike_dir * (1.0 + spike_height);
+            let cone_axis = -spike_dir;
+
+            let oc = ray_o - apex;
+            let dv = dot(ray_d, cone_axis);
+            let ov = dot(oc, cone_axis);
+
+            let a    = dv * dv - cone_half_cos2;
+            let b    = 2.0 * (dv * ov - cone_half_cos2 * dot(oc, ray_d));
+            let c    = ov * ov - cone_half_cos2 * dot(oc, oc);
+            let disc = b * b - 4.0 * a * c;
+            if (disc < 0.0 || abs(a) < 1e-6) { continue; }
+
+            let sq = sqrt(disc);
+            let t0 = (-b - sq) / (2.0 * a);
+            let t1 = (-b + sq) / (2.0 * a);
+
+            var cone_t = -1.0;
+            var cone_n = vec3<f32>(0.0);
+
+            if (t0 > 0.001 && t0 < best_t) {
+                let hp    = ray_o + ray_d * t0;
+                let along = dot(hp - apex, cone_axis);
+                if (along >= 0.0 && along <= spike_total) {
+                    let n = normalize((hp - apex) - cone_axis * (along / cone_half_cos2));
+                    if (dot(n, -ray_d) >= 0.0) { cone_t = t0; cone_n = n; }
+                }
+            }
+            if (cone_t < 0.0 && t1 > 0.001 && t1 < best_t) {
+                let hp    = ray_o + ray_d * t1;
+                let along = dot(hp - apex, cone_axis);
+                if (along >= 0.0 && along <= spike_total) {
+                    let n = normalize((hp - apex) - cone_axis * (along / cone_half_cos2));
+                    if (dot(n, -ray_d) >= 0.0) { cone_t = t1; cone_n = n; }
+                }
+            }
+
+            if (cone_t > 0.0) { best_t = cone_t; best_norm = cone_n; hit_spike = true; }
+        }
+
+        // Spike wins if it hit AND is closer to the camera than the sphere front surface.
+        if (hit_spike && best_t < t_sphere_front) {
+            let spike_world_normal = normalize(quat_rotate(in.rotation, best_norm));
+            let hit_local = ray_o + ray_d * best_t;
+            let hit_world = in.center + quat_rotate(in.rotation, hit_local) * in.radius;
+
+            let spike_ndotl = max(dot(spike_world_normal, -light_dir), 0.0);
+            let spike_half  = normalize(-light_dir + view_dir);
+            let spike_spec  = pow(max(dot(spike_world_normal, spike_half), 0.0), 40.0) * 0.8;
+
+            let tip_fade    = clamp((length(hit_local) - 1.0) / spike_height, 0.0, 1.0);
+            let spike_color = base_color * (0.8 - tip_fade * 0.4)
+                            * (0.2 + 0.8 * spike_ndotl)
+                            + vec3<f32>(spike_spec);
+
+            let spike_clip = camera.view_proj * vec4<f32>(hit_world, 1.0);
+            out.depth = spike_clip.z / spike_clip.w;
+            out.color = vec4<f32>(spike_color, in.color.a);
+            return out;
+        }
+
+        // No spike closer than the sphere — discard if we're in the expanded region.
+        if (r2 > 1.0) { discard; }
+        // Otherwise fall through to normal sphere shading.
     }
 
 

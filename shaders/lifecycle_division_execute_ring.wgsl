@@ -455,6 +455,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
             atomicStore(&cell_adhesion_indices[adh_base + i], -1);
         }
+        // Reset birth_time so the timer trigger starts fresh on the next attachment.
+        // Without this, age = current_time - original_birth_time would already exceed
+        // release_timer on every subsequent attachment, causing instant re-release.
+        birth_times[cell_idx] = params.current_time;
         division_flags[cell_idx] = 0u;
         return;
     }

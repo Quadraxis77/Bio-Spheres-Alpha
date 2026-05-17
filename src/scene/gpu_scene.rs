@@ -8,7 +8,7 @@ use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, DeathParti
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
-use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, execute_signal_system, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem, MossSystem};
+use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, execute_signal_system, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem, DevorocyteConsumptionSystem, MossSystem};
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
@@ -262,6 +262,15 @@ pub struct GpuScene {
     phagocyte_nutrient_bind_group: Option<wgpu::BindGroup>,
     /// Cached phagocyte consumption physics bind groups (one per triple buffer index)
     phagocyte_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
+
+    /// Devorocyte consumption system
+    devorocyte_consumption: Option<DevorocyteConsumptionSystem>,
+    /// Cached devorocyte cell data bind group (shared across frames)
+    devorocyte_cell_data_bind_group: Option<wgpu::BindGroup>,
+    /// Cached devorocyte spatial bind group (shared across frames)
+    devorocyte_spatial_bind_group: Option<wgpu::BindGroup>,
+    /// Cached devorocyte physics bind groups (one per triple buffer index)
+    devorocyte_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// Moss system for cave wall vegetation (growth, erosion, consumption)
     pub moss_system: Option<MossSystem>,
     /// Whether to show moss on cave walls
@@ -591,6 +600,10 @@ impl GpuScene {
             phagocyte_consumption: None,
             phagocyte_nutrient_bind_group: None,
             phagocyte_physics_bind_groups: None,
+            devorocyte_consumption: None,
+            devorocyte_cell_data_bind_group: None,
+            devorocyte_spatial_bind_group: None,
+            devorocyte_physics_bind_groups: None,
             moss_system: None,
             show_moss: true,
             moss_growth_bind_group: None,
@@ -1008,6 +1021,7 @@ impl GpuScene {
                 cilia_speed_below: 0.5,
                 cilia_speed_above: 0.0,
                 cilia_threshold: 1.0,
+                cilia_attract_force: 0.0,
                 myocyte_contraction: 0.5,
                 myocyte_use_signal: false,
                 myocyte_signal_channel: 0,
@@ -1023,6 +1037,8 @@ impl GpuScene {
                 embryocyte_use_signal: false,
                 embryocyte_signal_channel: 0,
                 embryocyte_signal_value: 1.0,
+                devorocyte_consume_range: 0.5,
+                devorocyte_consume_rate: 30.0,
                 child_a: crate::genome::ChildSettings {
                     mode_number: child_a_local,
                     orientation: qa,
@@ -1246,6 +1262,12 @@ impl GpuScene {
         }
         // Run phagocyte nutrient consumption BEFORE physics so nutrients are available for transport
         self.run_phagocyte_consumption(device, encoder, queue);
+        // Run devorocyte consumption — steals nutrients from and kills foreign cells
+        // Must run AFTER the spatial grid is built (which happens inside execute_gpu_physics_step)
+        // but BEFORE nutrient_transport so stolen nutrients are visible this frame.
+        // We run it here (before the main physics step) using the grid from the previous frame,
+        // which is a one-frame lag but avoids a second grid build pass.
+        self.run_devorocyte_consumption(device, encoder);
         // Run moss consumption (phagocytes eating moss) alongside nutrient consumption
         self.run_moss_consumption(device, encoder, queue);
         // Run photocyte light consumption each physics step (reads pre-computed light field)
@@ -1822,6 +1844,7 @@ impl GpuScene {
                 || ma.cilia_speed_below != mb.cilia_speed_below
                 || ma.cilia_speed_above != mb.cilia_speed_above
                 || ma.cilia_threshold != mb.cilia_threshold
+                || ma.cilia_attract_force != mb.cilia_attract_force
             {
                 return false;
             }
@@ -1879,6 +1902,8 @@ impl GpuScene {
 
         // Update embryocyte mode properties for this genome's modes only
         self.gpu_triple_buffers.incremental_sync_embryocyte_mode_properties(queue, &genome, global_start_index);
+        // Update devorocyte mode properties for this genome's modes only
+        self.gpu_triple_buffers.incremental_sync_devorocyte_mode_properties(queue, &genome, global_start_index);
 
         // Update child mode indices for this genome's modes only
         self.gpu_triple_buffers.incremental_sync_child_mode_indices(device, genome_id, global_start_index, mode_count);
@@ -2085,6 +2110,8 @@ impl GpuScene {
 
         // Sync embryocyte mode properties for lifecycle shaders (v9, v10)
         self.gpu_triple_buffers.sync_embryocyte_mode_properties(queue, &self.genomes);
+        // Sync devorocyte mode properties (v11)
+        self.gpu_triple_buffers.sync_devorocyte_mode_properties(queue, &self.genomes);
 
         // Sync mode cell types lookup table (for deriving cell_type from mode_index)
         self.gpu_triple_buffers.sync_mode_cell_types(queue, &self.genomes);
@@ -3795,6 +3822,9 @@ impl GpuScene {
         // Initialize phagocyte consumption system
         self.initialize_phagocyte_consumption(device);
 
+        // Initialize devorocyte consumption system
+        self.initialize_devorocyte_consumption(device);
+
         // Initialize moss system for cave wall vegetation
         self.initialize_moss_system(device);
 
@@ -3822,6 +3852,95 @@ impl GpuScene {
 
             self.phagocyte_consumption = Some(consumption_system);
             log::info!("Phagocyte consumption system initialized");
+        }
+    }
+
+    /// Initialize the devorocyte consumption system
+    fn initialize_devorocyte_consumption(&mut self, device: &wgpu::Device) {
+        if self.devorocyte_consumption.is_some() {
+            return;
+        }
+        self.devorocyte_consumption = Some(DevorocyteConsumptionSystem::new(device));
+        log::info!("Devorocyte consumption system initialized");
+    }
+
+    /// Run devorocyte consumption compute shader — steals nutrients from and kills foreign cells.
+    fn run_devorocyte_consumption(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+        let system = match &self.devorocyte_consumption {
+            Some(s) => s,
+            None => return,
+        };
+
+        // Cache physics bind groups (one per triple buffer index)
+        if self.devorocyte_physics_bind_groups.is_none() {
+            let bufs = &self.gpu_triple_buffers;
+            self.devorocyte_physics_bind_groups = Some([
+                system.create_physics_bind_group(
+                    device,
+                    &bufs.physics_params,
+                    &bufs.position_and_mass[0],
+                    &bufs.velocity[0],
+                    &bufs.position_and_mass[0], // positions_out (same buffer — read-only in shader)
+                    &bufs.velocity[0],           // velocities_out (same buffer — read-only in shader)
+                    &bufs.cell_count_buffer,
+                ),
+                system.create_physics_bind_group(
+                    device,
+                    &bufs.physics_params,
+                    &bufs.position_and_mass[1],
+                    &bufs.velocity[1],
+                    &bufs.position_and_mass[1],
+                    &bufs.velocity[1],
+                    &bufs.cell_count_buffer,
+                ),
+                system.create_physics_bind_group(
+                    device,
+                    &bufs.physics_params,
+                    &bufs.position_and_mass[2],
+                    &bufs.velocity[2],
+                    &bufs.position_and_mass[2],
+                    &bufs.velocity[2],
+                    &bufs.cell_count_buffer,
+                ),
+            ]);
+        }
+
+        // Cache cell data bind group (buffers don't change after init)
+        if self.devorocyte_cell_data_bind_group.is_none() {
+            let bufs = &self.gpu_triple_buffers;
+            if let Some(org_system) = self.organism_label_system.as_ref() {
+                self.devorocyte_cell_data_bind_group = Some(system.create_cell_data_bind_group(
+                    device,
+                    &bufs.cell_types,
+                    &bufs.nutrients_buffer,
+                    &bufs.split_nutrient_thresholds,
+                    &bufs.death_flags,
+                    &org_system.label_buffer,
+                    &bufs.genome_ids,
+                    &bufs.mode_indices,
+                    &bufs.mode_properties_v11,
+                ));
+            }
+        }
+
+        // Cache spatial bind group
+        if self.devorocyte_spatial_bind_group.is_none() {
+            let bufs = &self.gpu_triple_buffers;
+            self.devorocyte_spatial_bind_group = Some(system.create_spatial_bind_group(
+                device,
+                &bufs.spatial_grid_counts,
+                &bufs.spatial_grid_cells,
+                &bufs.cell_grid_indices,
+            ));
+        }
+
+        let output_idx = self.gpu_triple_buffers.output_buffer_index();
+        if let (Some(ref physics_bgs), Some(ref cell_bg), Some(ref spatial_bg)) = (
+            &self.devorocyte_physics_bind_groups,
+            &self.devorocyte_cell_data_bind_group,
+            &self.devorocyte_spatial_bind_group,
+        ) {
+            system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, self.gpu_triple_buffers.capacity);
         }
     }
 
@@ -5085,7 +5204,12 @@ impl Scene for GpuScene {
             while self.time_accumulator >= fixed_dt && steps < max_steps {
                 self.run_physics(device, &mut encoder, queue, fixed_dt, world_diameter);
 
-                self.current_time += fixed_dt;
+                // Wrap current_time to prevent f32 precision loss in long runs.
+                // f32 loses sub-second precision above ~8M seconds. Wrapping at 65536s
+                // keeps full precision. birth_times are also written from current_time
+                // so cell_age = current_time - birth_time remains correct after the wrap
+                // as long as no cell lives longer than 65536 sim-seconds (they don't).
+                self.current_time = (self.current_time + fixed_dt) % 65536.0;
                 self.time_accumulator -= fixed_dt;
                 steps += 1;
             }

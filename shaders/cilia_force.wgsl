@@ -6,9 +6,10 @@
 //
 // Force model:
 // - Wall/boundary contact: self-propulsion along forward axis (forward × speed × mass × CILIA_WALL_MULTIPLIER)
-// - Neighbor contact: Newton's third law equal-and-opposite force pairs
-//   - Push neighbor in -forward direction (force_mag = speed × mass × CILIA_PUSH_MULTIPLIER)
-//   - Reaction on self in +forward direction (same magnitude)
+// - Neighbor attraction: gentle radial pull on non-organism cells within attract_range (v6.w)
+// - Neighbor contact: one-sided conveyor force — pushes cargo cells in +forward direction
+//   (force_mag = speed × mass × CILIA_PUSH_MULTIPLIER; no reaction on self — wall thrust
+//   already handles locomotion, and a reaction force would stall the conveyor against cargo)
 //
 // Must run after swim_force and before glueocyte_env_adhesion.
 // Workgroup size: 256 threads for optimal GPU occupancy
@@ -202,11 +203,13 @@ var<uniform> cave_params: CaveParams;
 
 const CILIA_WALL_MULTIPLIER: f32 = 800.0;
 const CILIA_PUSH_MULTIPLIER: f32 = 200.0;
+const CILIA_ATTRACT_MULTIPLIER: f32 = 80.0; // Attraction force scale — intentionally small relative to push
 const CONTACT_THRESHOLD: f32 = 3.0;
 const CONTACT_THRESHOLD_NEIGHBOR: f32 = 0.5;
 const MAX_CELLS_PER_GRID: u32 = 16u;
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const CILIA_MAX_CRAWL_SPEED: f32 = 8.0; // Terminal crawl speed — high traction, low top speed
+const CILIA_ATTRACT_MAX_RANGE: f32 = 10.0; // Maximum attraction radius at force=1.0 (world units)
 
 // ---- Utility Functions ----
 
@@ -391,7 +394,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Read cilia params from mode_properties_v5, v6
     // v5: [cilia_speed, cilia_push_bonded, cilia_use_signal, cilia_signal_channel]
-    // v6: [cilia_speed_below, cilia_speed_above, cilia_threshold, padding]
+    // v6: [cilia_speed_below, cilia_speed_above, cilia_threshold, cilia_attract_force]
     let v5 = mode_properties_v5[mode_idx];
     let v6 = mode_properties_v6[mode_idx];
 
@@ -508,40 +511,105 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let contact_dist = radius + other_radius + CONTACT_THRESHOLD_NEIGHBOR;
 
             if (dist < contact_dist) {
-                // Neighbor is in contact — check organism filter
+                // Neighbor is in contact — skip if same organism (ciliocytes never
+                // push cells belonging to their own organism regardless of settings)
                 let other_org = organism_labels[other_idx];
-
-                // Skip push if same organism and push_bonded is false
-                var skip_push = false;
-                if (!push_bonded && my_org != 0xFFFFFFFFu && other_org != 0xFFFFFFFFu && my_org == other_org) {
-                    skip_push = true;
+                if (my_org != 0xFFFFFFFFu && other_org != 0xFFFFFFFFu && my_org == other_org) {
+                    continue;
                 }
 
-                if (!skip_push) {
-                    // Newton's third law: equal and opposite forces
-                    // Force magnitude based on ciliocyte's mass and speed
-                    let force_mag = abs(effective_speed) * mass * CILIA_PUSH_MULTIPLIER;
+                // Conveyor force: push the cargo cell along the cilia beat direction (+forward).
+                // The ciliocyte's own locomotion is already driven entirely by wall-contact
+                // thrust above, so we apply this as a one-sided force on the cargo cell only.
+                // Applying an equal-opposite reaction on self would fight the wall thrust and
+                // stall the conveyor every time it touches cargo.
+                let force_mag = abs(effective_speed) * mass * CILIA_PUSH_MULTIPLIER;
 
-                    // Determine push direction based on sign of effective_speed
-                    var push_dir: vec3<f32>;
-                    if (effective_speed >= 0.0) {
-                        push_dir = -forward; // Push neighbor backward
-                    } else {
-                        push_dir = forward; // Negative speed reverses push direction
-                    }
-
-                    // Push neighbor in push direction
-                    let push_on_neighbor = push_dir * force_mag;
-                    atomicAdd(&force_accum_x[other_idx], float_to_fixed(push_on_neighbor.x));
-                    atomicAdd(&force_accum_y[other_idx], float_to_fixed(push_on_neighbor.y));
-                    atomicAdd(&force_accum_z[other_idx], float_to_fixed(push_on_neighbor.z));
-
-                    // Equal and opposite reaction on self (opposite of push direction)
-                    let reaction_on_self = -push_dir * force_mag;
-                    atomicAdd(&force_accum_x[cell_idx], float_to_fixed(reaction_on_self.x));
-                    atomicAdd(&force_accum_y[cell_idx], float_to_fixed(reaction_on_self.y));
-                    atomicAdd(&force_accum_z[cell_idx], float_to_fixed(reaction_on_self.z));
+                // Convey direction follows the sign of effective_speed
+                var convey_dir: vec3<f32>;
+                if (effective_speed >= 0.0) {
+                    convey_dir = forward; // Carry neighbor forward along cilia direction
+                } else {
+                    convey_dir = -forward; // Negative speed reverses convey direction
                 }
+
+                // Apply convey force to cargo cell only
+                let convey_on_neighbor = convey_dir * force_mag;
+                atomicAdd(&force_accum_x[other_idx], float_to_fixed(convey_on_neighbor.x));
+                atomicAdd(&force_accum_y[other_idx], float_to_fixed(convey_on_neighbor.y));
+                atomicAdd(&force_accum_z[other_idx], float_to_fixed(convey_on_neighbor.z));
+            }
+        }
+    }
+
+    // === NEIGHBOR ATTRACTION ===
+    // Pull nearby non-organism cells gently toward this ciliocyte.
+    // This is a one-sided force (applied only to the attracted cell, not self) so it
+    // doesn't interfere with wall-crawling.  The intent is a "conveyor channel" effect:
+    // cells drifting near a chain of ciliocytes are drawn in and kept close enough
+    // to be handed along by successive pushes, rather than escaping sideways.
+    //
+    // Range scales with attract_force (2–10 units) so low values give a tight,
+    // short-range pull while high values cast a wider net.
+    // Force falls off linearly from full strength at contact_dist to zero at attract_range.
+    let attract_force = v6.w; // cilia_attract_force (0.0 = off, 1.0 = max)
+    if (attract_force > 0.001) {
+        // Range: 2 units at force=0, up to CILIA_ATTRACT_MAX_RANGE at force=1
+        let attract_range = 2.0 + attract_force * CILIA_ATTRACT_MAX_RANGE;
+
+        for (var n = 0u; n < 27u; n++) {
+            let cell_count_in_grid = neighbor_counts[n];
+            if (cell_count_in_grid == 0u) {
+                continue;
+            }
+
+            let grid_base_offset = neighbor_indices[n] * MAX_CELLS_PER_GRID;
+
+            for (var i = 0u; i < cell_count_in_grid; i++) {
+                let other_idx = spatial_grid_cells[grid_base_offset + i];
+
+                if (other_idx == cell_idx) {
+                    continue;
+                }
+
+                // Never attract same-organism cells
+                let other_org = organism_labels[other_idx];
+                if (my_org != 0xFFFFFFFFu && other_org != 0xFFFFFFFFu && my_org == other_org) {
+                    continue;
+                }
+
+                let other_pos = positions_in[other_idx].xyz;
+                let other_mass = positions_in[other_idx].w;
+
+                if (other_mass < 0.5) {
+                    continue;
+                }
+
+                let other_radius = calculate_radius_from_mass(other_mass);
+                let delta = pos - other_pos; // points from other → self
+                let dist = length(delta);
+                let contact_dist = radius + other_radius + CONTACT_THRESHOLD_NEIGHBOR;
+
+                // Only attract cells that are outside contact range but within attract_range.
+                // Cells already in contact are handled by the push section above.
+                if (dist <= contact_dist || dist > attract_range) {
+                    continue;
+                }
+
+                // Linear falloff: full force at contact edge, zero at attract_range
+                let t = 1.0 - (dist - contact_dist) / (attract_range - contact_dist);
+
+                // Direction toward this ciliocyte (delta points away from it, so negate)
+                let attract_dir = -normalize(delta);
+
+                // Scale by attract_force, other cell mass and the falloff
+                // Using other_mass keeps the acceleration (force/mass) constant regardless of cell size
+                let attract_mag = attract_force * other_mass * CILIA_ATTRACT_MULTIPLIER * t;
+                let attract_vec = attract_dir * attract_mag;
+
+                atomicAdd(&force_accum_x[other_idx], float_to_fixed(attract_vec.x));
+                atomicAdd(&force_accum_y[other_idx], float_to_fixed(attract_vec.y));
+                atomicAdd(&force_accum_z[other_idx], float_to_fixed(attract_vec.z));
             }
         }
     }

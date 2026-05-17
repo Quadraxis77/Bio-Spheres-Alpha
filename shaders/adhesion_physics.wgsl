@@ -308,6 +308,10 @@ fn compute_adhesion_forces_for_cell(
         let damping_torque_a = -norm_axis_a * dot(ang_vel_a, norm_axis_a) * settings.orientation_spring_damping;
         torque_a += spring_torque_a + damping_torque_a;
     }
+    // Damp spin around the bond axis itself. The orientation spring's rotation axis is
+    // always perpendicular to adhesion_dir, so it cannot see or damp bond-axis spin.
+    // This term catches that blind spot and prevents runaway spinning around the bond.
+    torque_a -= adhesion_dir * dot(ang_vel_a, adhesion_dir) * settings.orientation_spring_damping * 0.5;
     
     // Orientation spring for cell B
     let axis_b = cross(anchor_b, -adhesion_dir);
@@ -320,6 +324,8 @@ fn compute_adhesion_forces_for_cell(
         let damping_torque_b = -norm_axis_b * dot(ang_vel_b, norm_axis_b) * settings.orientation_spring_damping;
         torque_b += spring_torque_b + damping_torque_b;
     }
+    // Same bond-axis damping for cell B.
+    torque_b -= adhesion_dir * dot(ang_vel_b, adhesion_dir) * settings.orientation_spring_damping * 0.5;
     
     // Twist constraints - uses physics rotations for current anchor detection,
     // twist references from bond creation for target orientation

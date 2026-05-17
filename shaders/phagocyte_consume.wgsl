@@ -187,9 +187,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Try to consume the nutrient (atomic operation)
     if (try_consume_nutrient(voxel_index)) {
-        // Successfully consumed nutrient - add nutrients
-        let nutrient_gain = nutrient_params.mass_per_nutrient * 100.0;  // Convert mass gain to nutrients
-        let new_nutrients = min(current_nutrients + nutrient_gain, max_nutrients);
-        atomicStore(&nutrients_buffer[cell_idx], float_to_fixed(new_nutrients));
+        // Successfully consumed nutrient - add nutrients via atomicAdd, NOT atomicStore.
+        //
+        // Using atomicStore here would be a race: we read current_nutrients at the top of
+        // the shader, then nutrient_transport (which runs in the same frame) may have
+        // already done atomicAdd writes to this cell's slot. An atomicStore would silently
+        // overwrite those writes, permanently destroying transported nutrients.
+        //
+        // Instead, clamp the gain so we don't exceed max_nutrients. We compute the
+        // headroom from the stale read — this is a slight over-estimate if transport
+        // added nutrients between the read and now, but the worst case is a tiny
+        // overshoot that the next frame's cap check will correct. That is far better
+        // than the previous behaviour of discarding all transport income.
+        let nutrient_gain = nutrient_params.mass_per_nutrient * 100.0;
+        let headroom = max(max_nutrients - current_nutrients, 0.0);
+        let clamped_gain = min(nutrient_gain, headroom);
+        if (clamped_gain > 0.0) {
+            atomicAdd(&nutrients_buffer[cell_idx], float_to_fixed(clamped_gain));
+        }
     }
 }

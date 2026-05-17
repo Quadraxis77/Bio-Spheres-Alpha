@@ -292,6 +292,9 @@ fn compute_adhesion_force_pair(
         torque_a += axis_a_norm * angle_a * settings.orientation_spring_stiffness;
         torque_a += -axis_a_norm * ang_vel_a.dot(axis_a_norm) * settings.orientation_spring_damping;
     }
+    // Damp spin around the bond axis itself — the orientation spring's axis is always
+    // perpendicular to adhesion_dir so it cannot see bond-axis spin. This plugs that gap.
+    torque_a -= adhesion_dir * ang_vel_a.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
 
     // Orientation spring for cell B: aligns B's anchor toward -adhesion_dir (toward A)
     let axis_b = phys_anchor_b.cross(-adhesion_dir);
@@ -303,6 +306,8 @@ fn compute_adhesion_force_pair(
         torque_b += axis_b_norm * angle_b * settings.orientation_spring_stiffness;
         torque_b += -axis_b_norm * ang_vel_b.dot(axis_b_norm) * settings.orientation_spring_damping;
     }
+    // Same bond-axis damping for cell B.
+    torque_b -= adhesion_dir * ang_vel_b.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
 
     // Relative twist constraint: constrains A's rotation relative to B about the bond axis.
     // This allows the whole structure to spin freely while preventing cells from
@@ -477,7 +482,10 @@ pub fn compute_adhesion_substep(
         let mut new_ang_vel = angular_velocities[idx];
         if moment_of_inertia > 0.0001 {
             let angular_acceleration = clamped_torque / moment_of_inertia;
-            let angular_damping_factor = angular_damping.powf(dt);
+            // Match integrate_angular_velocities: powf(dt * 100.0) so damping is
+            // consistent regardless of substep dt. Without the * 100.0 the substep
+            // damps ~100x less than the main pass.
+            let angular_damping_factor = angular_damping.powf(dt * 100.0);
             new_ang_vel = (angular_velocities[idx] + angular_acceleration * dt) * angular_damping_factor;
         }
 
@@ -588,6 +596,9 @@ fn compute_substep_force_pair(
         torque_a += axis_a_norm * angle_a * settings.orientation_spring_stiffness;
         torque_a += -axis_a_norm * ang_vel_a.dot(axis_a_norm) * settings.orientation_spring_damping;
     }
+    // Damp spin around the bond axis itself — the orientation spring's axis is always
+    // perpendicular to adhesion_dir so it cannot see bond-axis spin. This plugs that gap.
+    torque_a -= adhesion_dir * ang_vel_a.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
 
     // Orientation spring for cell B: aligns B's anchor toward -adhesion_dir (toward A)
     let axis_b = phys_anchor_b.cross(-adhesion_dir);
@@ -599,6 +610,8 @@ fn compute_substep_force_pair(
         torque_b += axis_b_norm * angle_b * settings.orientation_spring_stiffness;
         torque_b += -axis_b_norm * ang_vel_b.dot(axis_b_norm) * settings.orientation_spring_damping;
     }
+    // Same bond-axis damping for cell B.
+    torque_b -= adhesion_dir * ang_vel_b.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
 
     // Relative twist constraint: constrains A's rotation relative to B about the bond axis.
     if settings.enable_twist_constraint

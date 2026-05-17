@@ -168,8 +168,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // Add nutrients proportional to moss consumed
+    // Add nutrients proportional to moss consumed.
+    // Use atomicAdd of the delta rather than atomicStore of a new absolute value.
+    // atomicStore would overwrite any concurrent atomicAdd writes from nutrient_transport
+    // or other nutrient sources running in the same frame, permanently destroying them.
     let nutrient_gain = old_moss * moss_params.nutrient_per_moss;
-    let new_nutrients = min(current_nutrients + nutrient_gain, max_nutrients);
-    atomicStore(&nutrients_buffer[cell_idx], float_to_fixed(new_nutrients));
+    let headroom = max(max_nutrients - current_nutrients, 0.0);
+    let clamped_gain = min(nutrient_gain, headroom);
+    if (clamped_gain > 0.0) {
+        atomicAdd(&nutrients_buffer[cell_idx], float_to_fixed(clamped_gain));
+    }
 }

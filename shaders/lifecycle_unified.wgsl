@@ -443,7 +443,8 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 division_flags[cell_idx] = 0u;
             }
         } else {
-            // Attached: check AND-logic release triggers (threshold + signal; timer is CPU-only)
+            // Attached: check AND-logic release triggers (timer + threshold + signal).
+            // All three run on GPU — birth_times and params.current_time are already bound here.
             // v9: [use_timer, release_timer, use_threshold, threshold_value]
             // v10: [use_signal, signal_channel, signal_value, 0.0]
             let v9 = embryocyte_mode_v9[mode_idx];
@@ -451,6 +452,16 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
             var any_trigger_enabled = false;
             var all_triggers_met = true;
+
+            // Timer trigger: use_timer = v9.x, release_timer = v9.y (seconds since birth)
+            if (v9.x > 0.5) {
+                any_trigger_enabled = true;
+                let birth_time = birth_times[cell_idx];
+                let age = params.current_time - birth_time;
+                if (age < v9.y) {
+                    all_triggers_met = false;
+                }
+            }
 
             // Threshold trigger: use_threshold = v9.z, threshold_value = v9.w
             if (v9.z > 0.5) {

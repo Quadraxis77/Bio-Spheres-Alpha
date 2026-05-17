@@ -198,6 +198,8 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cilia_threshold: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cilia_attract_force: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub myocyte_contraction: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub myocyte_use_signal: Option<bool>,
@@ -228,6 +230,10 @@ pub struct SerializableModeSettings {
     pub embryocyte_signal_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embryocyte_signal_value: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub devorocyte_consume_range: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub devorocyte_consume_rate: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -421,6 +427,7 @@ fn mode_to_serializable(
         cilia_speed_below: diff_f32(mode.cilia_speed_below, default.cilia_speed_below),
         cilia_speed_above: diff_f32(mode.cilia_speed_above, default.cilia_speed_above),
         cilia_threshold: diff_f32(mode.cilia_threshold, default.cilia_threshold),
+        cilia_attract_force: diff_f32(mode.cilia_attract_force, default.cilia_attract_force),
         myocyte_contraction: diff_f32(mode.myocyte_contraction, default.myocyte_contraction),
         myocyte_use_signal: diff_bool(mode.myocyte_use_signal, default.myocyte_use_signal),
         myocyte_signal_channel: diff_i32(mode.myocyte_signal_channel, default.myocyte_signal_channel),
@@ -436,6 +443,8 @@ fn mode_to_serializable(
         embryocyte_use_signal: diff_bool(mode.embryocyte_use_signal, default.embryocyte_use_signal),
         embryocyte_signal_channel: diff_i32(mode.embryocyte_signal_channel, default.embryocyte_signal_channel),
         embryocyte_signal_value: diff_f32(mode.embryocyte_signal_value, default.embryocyte_signal_value),
+        devorocyte_consume_range: diff_f32(mode.devorocyte_consume_range, default.devorocyte_consume_range),
+        devorocyte_consume_rate: diff_f32(mode.devorocyte_consume_rate, default.devorocyte_consume_rate),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(&mode.adhesion_settings, &default.adhesion_settings),
@@ -516,6 +525,7 @@ impl SerializableModeSettings {
             || self.cilia_speed_below.is_some()
             || self.cilia_speed_above.is_some()
             || self.cilia_threshold.is_some()
+            || self.cilia_attract_force.is_some()
             || self.myocyte_contraction.is_some()
             || self.myocyte_use_signal.is_some()
             || self.myocyte_signal_channel.is_some()
@@ -531,6 +541,8 @@ impl SerializableModeSettings {
             || self.embryocyte_use_signal.is_some()
             || self.embryocyte_signal_channel.is_some()
             || self.embryocyte_signal_value.is_some()
+            || self.devorocyte_consume_range.is_some()
+            || self.devorocyte_consume_rate.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -793,6 +805,9 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.cilia_threshold {
         mode.cilia_threshold = v;
     }
+    if let Some(v) = ser.cilia_attract_force {
+        mode.cilia_attract_force = v;
+    }
     if let Some(v) = ser.myocyte_contraction {
         mode.myocyte_contraction = v;
     }
@@ -837,6 +852,12 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.embryocyte_signal_value {
         mode.embryocyte_signal_value = v;
+    }
+    if let Some(v) = ser.devorocyte_consume_range {
+        mode.devorocyte_consume_range = v;
+    }
+    if let Some(v) = ser.devorocyte_consume_rate {
+        mode.devorocyte_consume_rate = v;
     }
     if let Some(ref child_a) = ser.child_a {
         apply_child_settings(&mut mode.child_a, child_a);
