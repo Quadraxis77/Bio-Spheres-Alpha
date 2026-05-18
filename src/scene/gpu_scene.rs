@@ -1039,6 +1039,7 @@ impl GpuScene {
                 embryocyte_signal_value: 1.0,
                 devorocyte_consume_range: 0.5,
                 devorocyte_consume_rate: 30.0,
+                vascular_outlet: false,
                 child_a: crate::genome::ChildSettings {
                     mode_number: child_a_local,
                     orientation: qa,
@@ -1904,6 +1905,8 @@ impl GpuScene {
         self.gpu_triple_buffers.incremental_sync_embryocyte_mode_properties(queue, &genome, global_start_index);
         // Update devorocyte mode properties for this genome's modes only
         self.gpu_triple_buffers.incremental_sync_devorocyte_mode_properties(queue, &genome, global_start_index);
+        // Update vasculocyte mode properties for this genome's modes only
+        self.gpu_triple_buffers.incremental_sync_vasculocyte_mode_properties(queue, &genome, global_start_index);
 
         // Update child mode indices for this genome's modes only
         self.gpu_triple_buffers.incremental_sync_child_mode_indices(device, genome_id, global_start_index, mode_count);
@@ -2112,6 +2115,8 @@ impl GpuScene {
         self.gpu_triple_buffers.sync_embryocyte_mode_properties(queue, &self.genomes);
         // Sync devorocyte mode properties (v11)
         self.gpu_triple_buffers.sync_devorocyte_mode_properties(queue, &self.genomes);
+        // Sync vasculocyte mode properties (v12)
+        self.gpu_triple_buffers.sync_vasculocyte_mode_properties(queue, &self.genomes);
 
         // Sync mode cell types lookup table (for deriving cell_type from mode_index)
         self.gpu_triple_buffers.sync_mode_cell_types(queue, &self.genomes);

@@ -2006,6 +2006,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     mode_switch_invert: false,
                     devorocyte_consume_range: 0.5,
                     devorocyte_consume_rate: 30.0,
+                    vascular_outlet: false,
                     child_a: crate::genome::ChildSettings {
                         mode_number: selected_index as i32,
                         ..Default::default()
@@ -2803,6 +2804,29 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     if !mode.embryocyte_use_timer && !mode.embryocyte_use_threshold && !mode.embryocyte_use_signal {
                         ui.separator();
                         ui.colored_label(egui::Color32::YELLOW, "⚠ No triggers enabled — cell will never release.");
+                    }
+                });
+            } else if mode.cell_type == 12 { // Vasculocyte (cell_type == 12)
+                group_container(ui, "Vasculocyte Functions", egui::Color32::from_rgb(60, 160, 200), |ui| {
+                    ui.label("Forms high-throughput nutrient conduits through the organism.");
+                    ui.label("Vascular-to-vascular transport is 5× faster than normal.");
+                    ui.label("Physical compression (e.g. from Myocytes) boosts transport rate.");
+                    ui.separator();
+
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut mode.vascular_outlet, "Outlet");
+                        ui.label("Release nutrients to non-vascular neighbors.");
+                    });
+                    if mode.vascular_outlet {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(120, 220, 255),
+                            "  ▸ Outlet open — nutrients flow to adjacent cells.",
+                        );
+                    } else {
+                        ui.colored_label(
+                            egui::Color32::GRAY,
+                            "  ▸ Sealed — acts as a pure transport pipe.",
+                        );
                     }
                 });
             } else if mode.cell_type == 11 { // Devorocyte (cell_type == 11)

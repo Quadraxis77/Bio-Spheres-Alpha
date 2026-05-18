@@ -235,6 +235,8 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub devorocyte_consume_rate: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub vascular_outlet: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_b: Option<SerializableChildSettings>,
@@ -445,6 +447,7 @@ fn mode_to_serializable(
         embryocyte_signal_value: diff_f32(mode.embryocyte_signal_value, default.embryocyte_signal_value),
         devorocyte_consume_range: diff_f32(mode.devorocyte_consume_range, default.devorocyte_consume_range),
         devorocyte_consume_rate: diff_f32(mode.devorocyte_consume_rate, default.devorocyte_consume_rate),
+        vascular_outlet: diff_bool(mode.vascular_outlet, default.vascular_outlet),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(&mode.adhesion_settings, &default.adhesion_settings),
@@ -543,6 +546,7 @@ impl SerializableModeSettings {
             || self.embryocyte_signal_value.is_some()
             || self.devorocyte_consume_range.is_some()
             || self.devorocyte_consume_rate.is_some()
+            || self.vascular_outlet.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -858,6 +862,9 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.devorocyte_consume_rate {
         mode.devorocyte_consume_rate = v;
+    }
+    if let Some(v) = ser.vascular_outlet {
+        mode.vascular_outlet = v;
     }
     if let Some(ref child_a) = ser.child_a {
         apply_child_settings(&mut mode.child_a, child_a);

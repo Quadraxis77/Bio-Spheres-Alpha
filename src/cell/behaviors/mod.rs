@@ -82,6 +82,7 @@
 //! processing. The trait bound enforces this at compile time.
 
 pub mod devorocyte;
+pub mod vasculocyte;
 pub mod flagellocyte;
 pub mod test_cell;
 pub mod myocyte;
@@ -350,5 +351,6 @@ pub fn create_behavior(cell_type: crate::cell::CellType) -> Box<dyn CellBehavior
         crate::cell::CellType::Myocyte => Box::new(myocyte::MyocyteBehavior),
         crate::cell::CellType::Embryocyte => Box::new(embryocyte::EmbryocyteBehavior),
         crate::cell::CellType::Devorocyte => Box::new(devorocyte::DevorocyteBehavior),
+        crate::cell::CellType::Vasculocyte => Box::new(vasculocyte::VasculocyteBehavior),
     }
 }

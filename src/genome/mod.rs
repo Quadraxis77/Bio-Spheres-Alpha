@@ -208,6 +208,9 @@ pub struct ModeSettings {
     pub devorocyte_consume_range: f32, // Extra contact range beyond cell radii (0.0 to 2.0)
     pub devorocyte_consume_rate: f32,  // Nutrients stolen per second from each victim (1.0 to 100.0)
 
+    // Vasculocyte settings
+    pub vascular_outlet: bool, // When true, releases nutrients to non-vascular neighbors; when false, sealed (pipe only)
+
     // Child settings
     pub child_a: ChildSettings,
     pub child_b: ChildSettings,
@@ -321,6 +324,7 @@ impl Default for ModeSettings {
             mode_switch_invert: false,
             devorocyte_consume_range: 0.5,
             devorocyte_consume_rate: 30.0,
+            vascular_outlet: false,
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),
             adhesion_settings: AdhesionSettings::default(),

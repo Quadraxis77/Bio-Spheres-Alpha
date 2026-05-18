@@ -364,6 +364,10 @@ pub struct GpuTripleBufferSystem {
     /// v11: [consume_range, consume_rate, 0.0, 0.0]
     pub mode_properties_v11: wgpu::Buffer,
 
+    /// Mode properties v12 for Vasculocyte parameters (16 bytes per mode each)
+    /// v12: [vascular_outlet as f32, 0.0, 0.0, 0.0]
+    pub mode_properties_v12: wgpu::Buffer,
+
     /// Per-cell Embryocyte reserve buffer (one u32 per cell).
     /// Embryocytes: sole energy source; burns at 10 units/sec when free.
     /// Non-Embryocytes: provides extended life; burns before normal nutrients.
@@ -636,6 +640,9 @@ impl GpuTripleBufferSystem {
         // Mode properties v11 for Devorocyte parameters (16 bytes per mode each)
         let mode_properties_v11 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V11");
 
+        // Mode properties v12 for Vasculocyte parameters (16 bytes per mode each)
+        let mode_properties_v12 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V12");
+
         // Per-cell Embryocyte reserve buffer (one u32 per cell, zero-initialized)
         let embryocyte_reserve_buffer = Self::create_zero_initialized_storage_buffer(
             device,
@@ -755,6 +762,7 @@ impl GpuTripleBufferSystem {
             mode_properties_v9,
             mode_properties_v10,
             mode_properties_v11,
+            mode_properties_v12,
             embryocyte_reserve_buffer,
             mode_cell_types,
             behavior_flags,
@@ -1459,6 +1467,31 @@ impl GpuTripleBufferSystem {
         if !v11.is_empty() {
             let offset = (global_start_index * 16) as u64;
             queue.write_buffer(&self.mode_properties_v11, offset, bytemuck::cast_slice(&v11));
+        }
+    }
+
+    /// Sync Vasculocyte mode properties for the nutrient transport shader.
+    /// v12: [vascular_outlet as f32, 0.0, 0.0, 0.0]
+    pub fn sync_vasculocyte_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let mut v12: Vec<[f32; 4]> = Vec::new();
+        for genome in genomes {
+            for mode in &genome.modes {
+                v12.push([if mode.vascular_outlet { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]);
+            }
+        }
+        if !v12.is_empty() {
+            queue.write_buffer(&self.mode_properties_v12, 0, bytemuck::cast_slice(&v12));
+        }
+    }
+
+    /// Incremental sync of Vasculocyte mode properties for a single genome.
+    pub fn incremental_sync_vasculocyte_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
+        let v12: Vec<[f32; 4]> = genome.modes.iter()
+            .map(|mode| [if mode.vascular_outlet { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0])
+            .collect();
+        if !v12.is_empty() {
+            let offset = (global_start_index * 16) as u64;
+            queue.write_buffer(&self.mode_properties_v12, offset, bytemuck::cast_slice(&v12));
         }
     }
 

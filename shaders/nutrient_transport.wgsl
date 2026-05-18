@@ -12,6 +12,23 @@
 // - Flow is driven by "pressure" differences: pressure = mass / priority
 // - Cells with low nutrients get temporary priority boost (10x) when below 10.0 nutrients
 // - Transport rate: 30.0 nutrients/sec
+//
+// Vasculocyte transport rules (cell_type == 12):
+// - Vascular-to-vascular connections use VASCULAR_TRANSPORT_RATE (5x normal) for
+//   high-throughput conduit behaviour across large body structures.
+// - When a vasculocyte is sealed (vascular_outlet == 0), outflow to non-vascular
+//   neighbors is reduced to VASCULAR_SEAL_FACTOR * normal rate (~5%), effectively
+//   keeping nutrients inside the network.
+// - When a vasculocyte is an outlet (vascular_outlet == 1), outflow to non-vascular
+//   neighbors uses the normal rate, delivering nutrients to surrounding cells.
+// - Physical compression between any two cells boosts their shared connection's
+//   transport rate by up to PUMP_AMPLIFICATION * compression_ratio. This amplifies
+//   flow through cells that are being squeezed (e.g. Lipocytes compressed by Myocytes).
+// - Myocytes (cell_type 9) act as directional nutrient heart valves. Their velocity
+//   direction defines the pump axis. Connections in the forward direction get a
+//   positive pressure bias (pushing nutrients downstream); backward connections get a
+//   negative bias (valve effect, resisting backflow). Pump strength scales with speed,
+//   so myocytes must stay in motion (via swim force or body dynamics) to sustain pumping.
 
 struct PhysicsParams {
     delta_time: f32,
@@ -128,6 +145,11 @@ var<storage, read_write> embryocyte_reserves: array<atomic<u32>>;
 @group(3) @binding(12)
 var<storage, read> mode_properties_v9: array<vec4<f32>>;
 
+// Mode properties v12: per-mode Vasculocyte params.
+// [vascular_outlet as f32 (0=sealed, 1=outlet), 0, 0, 0]
+@group(3) @binding(13)
+var<storage, read> mode_properties_v12: array<vec4<f32>>;
+
 struct AdhesionConnection {
     cell_a_index: u32,
     cell_b_index: u32,
@@ -155,11 +177,40 @@ const BASE_METABOLISM_RATE: f32 = 1.0;  // Base metabolic cost in nutrients/sec 
 const SWIM_CONSUMPTION_RATE: f32 = 2.0;  // 2 nutrients/sec at swim_force=1, 6/sec at swim_force=3
 const DEFER_FRAMES: i32 = 6;  // ~0.1 seconds at 64 FPS = 6 frames
 
+// Vasculocyte transport constants
+const VASCULOCYTE_CELL_TYPE: u32 = 12u;
+const VASCULAR_TRANSPORT_RATE: f32 = 150.0; // 5x normal: vascular-to-vascular highway rate
+const VASCULAR_SEAL_FACTOR: f32 = 0.05;     // Only 5% of normal rate leaks through a sealed vasculocyte
+const PUMP_AMPLIFICATION: f32 = 8.0;        // Compression multiplier for myocyte-driven pumping
+
+// Myocyte directional pump constants
+// Myocytes act as nutrient heart valves: their velocity direction defines the pump axis.
+// Connections aligned with the forward axis receive a positive pressure bias (pushing nutrients
+// forward); connections on the backward side receive a negative bias (valve effect, resisting
+// backflow). Pump strength scales linearly with speed, clamped to 1.0.
+const MYOCYTE_CELL_TYPE: u32 = 9u;
+const MYOCYTE_PUMP_FORCE: f32 = 20.0;      // Max pressure bias (nutrients) added per unit alignment
+const MYOCYTE_PUMP_SPEED_SCALE: f32 = 3.0; // Speed units that map to full pump strength (1.0)
+
 // Fixed-point conversion for atomic operations (matching other shaders)
 const FIXED_POINT_SCALE: f32 = 1000.0;
 
 fn float_to_fixed(value: f32) -> i32 {
     return i32(value * FIXED_POINT_SCALE);
+}
+
+// Radius from mass, matching collision_detection.wgsl
+fn cell_radius(mass: f32) -> f32 {
+    return clamp(mass, 0.5, 2.0);
+}
+
+// Compression ratio for an adhesion connection [0, 1].
+// Returns 0 when cells are at or beyond their natural separation,
+// positive when they are squeezed closer together (e.g. by a myocyte).
+fn adhesion_compression(pos_a: vec3<f32>, mass_a: f32, pos_b: vec3<f32>, mass_b: f32) -> f32 {
+    let natural_dist = cell_radius(mass_a) + cell_radius(mass_b);
+    let actual_dist  = length(pos_b - pos_a);
+    return max(0.0, (natural_dist - actual_dist) / natural_dist);
 }
 
 fn fixed_to_float(value: i32) -> f32 {
@@ -314,9 +365,74 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Snapshot nutrients for this cell once (matches preview's single-snapshot semantics)
     let nutrients_a_snap = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
 
+    // Determine if cell_a is a vasculocyte and whether it is an outlet.
+    let cell_a_is_vascular = mode_valid && cell_type == VASCULOCYTE_CELL_TYPE;
+    var cell_a_is_outlet = false;
+    if (cell_a_is_vascular && mode_a_idx < arrayLength(&mode_properties_v12)) {
+        cell_a_is_outlet = mode_properties_v12[mode_a_idx].x > 0.5;
+    }
+
+    // --- Myocyte directional pump setup ---
+    // The myocyte's current velocity defines its pump axis and strength. A fast-moving
+    // myocyte pumps hard; a stationary myocyte applies no directional bias. This means
+    // players can use swim force or physical contact to keep myocytes in motion and
+    // sustain pumping. The velocity direction rotates with the organism naturally.
+    let cell_a_is_myocyte = mode_valid && cell_type == MYOCYTE_CELL_TYPE;
+    var myocyte_pump_axis: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+    var myocyte_pump_strength: f32 = 0.0;
+    if (cell_a_is_myocyte) {
+        let vel = velocities_in[cell_idx].xyz;
+        let speed = length(vel);
+        if (speed > 0.01) {
+            myocyte_pump_axis    = vel / speed; // normalized pump direction
+            myocyte_pump_strength = clamp(speed * MYOCYTE_PUMP_SPEED_SCALE, 0.0, 1.0);
+        }
+    }
+
+    // Cache position and mass of cell_a for compression calculations.
+    let pos_a  = positions_in[cell_idx].xyz;
+    let mass_a = positions_in[cell_idx].w;
+
+    // Pre-scan: find the maximum compression cell_a is experiencing from ANY neighbor.
+    // This is what makes the myocyte+lipocyte pump work correctly: a myocyte squeezing
+    // a lipocyte raises the lipocyte's max_compression_a, which then boosts the
+    // lipocyte's outflow rate to ALL of its other connections (e.g. vasculocytes).
+    // Without this, the compression boost would only apply to the myocyte↔lipocyte
+    // connection itself, not to the lipocyte's downstream connections.
+    var max_compression_a: f32 = 0.0;
+    for (var i = 0; i < 20; i++) {
+        let adh_idx = adhesion_list[i];
+        if (adh_idx < 0 || adh_idx >= i32(arrayLength(&adhesion_connections))) {
+            continue;
+        }
+        let adh = adhesion_connections[adh_idx];
+        if (adh.is_active == 0u) {
+            continue;
+        }
+        // Check both directions: cell_a may appear as either endpoint.
+        var neighbor_idx: u32;
+        if (adh.cell_a_index == cell_idx) {
+            neighbor_idx = adh.cell_b_index;
+        } else if (adh.cell_b_index == cell_idx) {
+            neighbor_idx = adh.cell_a_index;
+        } else {
+            continue;
+        }
+        if (neighbor_idx >= cell_count || death_flags[neighbor_idx] == 1u) {
+            continue;
+        }
+        let pos_n  = positions_in[neighbor_idx].xyz;
+        let mass_n = positions_in[neighbor_idx].w;
+        let comp   = adhesion_compression(pos_a, mass_a, pos_n, mass_n);
+        max_compression_a = max(max_compression_a, comp);
+    }
+    // Global outflow multiplier for this cell — applied to all connections uniformly.
+    let cell_pump_mult = 1.0 + max_compression_a * PUMP_AMPLIFICATION;
+
     // Pass 1: compute desired flows and accumulate total outflow for this cell
     var total_out: f32 = 0.0;
     var desired_arr: array<f32, 20>;
+    var rate_arr: array<f32, 20>;   // effective max rate per connection
     var cellb_arr: array<u32, 20>;
     var nutrb_arr: array<f32, 20>;
     var prioa_arr: array<u32, 20>;
@@ -349,6 +465,37 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
 
+        // Determine if cell_b is a vasculocyte.
+        var cell_b_type = 0xFFFFFFFFu;
+        if (mode_b_idx < arrayLength(&mode_cell_types)) {
+            cell_b_type = mode_cell_types[mode_b_idx];
+        }
+        let cell_b_is_vascular = cell_b_type == VASCULOCYTE_CELL_TYPE;
+
+        // --- Effective transport rate for this connection ---
+        // 1. Vascular-to-vascular: 5x highway rate.
+        // 2. Vascular sealed (cell_a) to non-vascular: nearly blocked.
+        // 3. Vascular outlet (cell_a) to non-vascular: normal rate.
+        // 4. Non-vascular to vascular (cell_b): normal rate (vasculocytes absorb freely).
+        // 5. Non-vascular to non-vascular: normal rate.
+        var effective_rate: f32 = TRANSPORT_RATE;
+        if (cell_a_is_vascular) {
+            if (cell_b_is_vascular) {
+                effective_rate = VASCULAR_TRANSPORT_RATE;
+            } else if (!cell_a_is_outlet) {
+                effective_rate = TRANSPORT_RATE * VASCULAR_SEAL_FACTOR;
+            }
+            // outlet to non-vascular: keep TRANSPORT_RATE
+        }
+        // Non-vascular sending to vasculocyte: no restriction (TRANSPORT_RATE unchanged).
+
+        // --- Compression-driven pump boost ---
+        // Apply the cell-level pump multiplier derived from the pre-scan.
+        // If any neighbor (e.g. a myocyte) is compressing cell_a, all of cell_a's
+        // outgoing connections benefit — so a lipocyte squeezed by a myocyte pushes
+        // nutrients faster into every adjacent vasculocyte, not just back into the myocyte.
+        effective_rate *= cell_pump_mult;
+
         let nutrients_b = fixed_to_float(atomicLoad(&nutrients_buffer[cell_b_idx]));
         let mode_a_v1 = mode_properties_v1[mode_a_idx];
         let mode_b_v1 = mode_properties_v1[mode_b_idx];
@@ -361,10 +508,27 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let priority_b = select(mode_b_v1.y, mode_b_v1.y * PRIORITY_BOOST,
                                prioritize_b && nutrients_b < DANGER_NUTRIENTS);
 
-        let pressure_diff = nutrients_a_snap / priority_a - nutrients_b / priority_b;
-        let desired = clamp(pressure_diff, -TRANSPORT_RATE, TRANSPORT_RATE);
+        // --- Myocyte directional pump bias ---
+        // Project the vector to cell_b onto the pump axis. Positive = forward (push);
+        // negative = backward (valve, resists outflow). The bias is added to the raw
+        // pressure difference before clamping, so it can overcome or reinforce the
+        // natural pressure gradient — nutrients flow forward even against backpressure.
+        var pump_pressure_bias: f32 = 0.0;
+        if (cell_a_is_myocyte && myocyte_pump_strength > 0.0) {
+            let pos_b    = positions_in[cell_b_idx].xyz;
+            let dir_to_b = pos_b - pos_a;
+            let dist     = length(dir_to_b);
+            if (dist > 0.001) {
+                let axis_dot = dot(dir_to_b / dist, myocyte_pump_axis);
+                pump_pressure_bias = MYOCYTE_PUMP_FORCE * myocyte_pump_strength * axis_dot;
+            }
+        }
+
+        let pressure_diff = nutrients_a_snap / priority_a - nutrients_b / priority_b + pump_pressure_bias;
+        let desired = clamp(pressure_diff, -effective_rate, effective_rate);
 
         desired_arr[i] = desired;
+        rate_arr[i]    = effective_rate;
         cellb_arr[i] = cell_b_idx;
         nutrb_arr[i] = nutrients_b;
         prioa_arr[i] = select(0u, 1u, prioritize_a);
@@ -390,13 +554,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let prioritize_a = prioa_arr[i] == 1u;
         let prioritize_b = priob_arr[i] == 1u;
 
-        // Scale outflow so the sending cell never exceeds TRANSPORT_RATE total.
-        // Proportionally reduces each connection's flow based on total desired outflow.
-        // For negative flows (cell_b sends), we cannot compute cell_b's total_out
-        // on GPU in a single pass, so we don't scale (matches preview when total_out <= TRANSPORT_RATE).
+        // Scale outflow so the sending cell's total outflow stays within budget.
+        // Use the per-connection effective_rate as the cap (already accounts for
+        // vascular highway rate and compression boost).
+        let conn_rate = rate_arr[i];
         var scale: f32 = 1.0;
-        if (desired > 0.0 && total_out > TRANSPORT_RATE) {
-            scale = TRANSPORT_RATE / total_out;
+        if (desired > 0.0 && total_out > conn_rate) {
+            scale = conn_rate / total_out;
         }
 
         // Target transfer this step (nutrients), lerped toward desired

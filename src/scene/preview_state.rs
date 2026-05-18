@@ -328,6 +328,9 @@ impl PreviewState {
             // Hash devorocyte settings
             mode.devorocyte_consume_range.to_bits().hash(&mut hasher);
             mode.devorocyte_consume_rate.to_bits().hash(&mut hasher);
+
+            // Hash vasculocyte settings
+            mode.vascular_outlet.hash(&mut hasher);
         }
         
         hasher.finish()

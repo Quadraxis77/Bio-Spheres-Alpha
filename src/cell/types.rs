@@ -365,11 +365,12 @@ pub enum CellType {
     Myocyte = 9,
     Embryocyte = 10,
     Devorocyte = 11,
+    Vasculocyte = 12,
 }
 
 impl CellType {
     /// Number of registered cell types. Update when adding new types.
-    pub const COUNT: usize = 12;
+    pub const COUNT: usize = 13;
 
     /// Maximum number of cell types supported by GPU buffers.
     pub const MAX_TYPES: usize = 30;
@@ -389,6 +390,7 @@ impl CellType {
             CellType::Myocyte,
             CellType::Embryocyte,
             CellType::Devorocyte,
+            CellType::Vasculocyte,
         ]
     }
 
@@ -412,12 +414,13 @@ impl CellType {
             CellType::Myocyte => "Myocyte",
             CellType::Embryocyte => "Embryocyte",
             CellType::Devorocyte => "Devorocyte",
+            CellType::Vasculocyte => "Vasculocyte",
         }
     }
 
     /// Get all cell type names as a slice.
     pub const fn names() -> &'static [&'static str] {
-        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte", "Buoyocyte", "Glueocyte", "Oculocyte", "Ciliocyte", "Myocyte", "Embryocyte", "Devorocyte"]
+        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte", "Buoyocyte", "Glueocyte", "Oculocyte", "Ciliocyte", "Myocyte", "Embryocyte", "Devorocyte", "Vasculocyte"]
     }
 
     /// Convert from integer index to cell type.
@@ -435,6 +438,7 @@ impl CellType {
             9 => Some(CellType::Myocyte),
             10 => Some(CellType::Embryocyte),
             11 => Some(CellType::Devorocyte),
+            12 => Some(CellType::Vasculocyte),
             _ => None,
         }
     }
@@ -599,6 +603,18 @@ impl CellType {
                 applies_muscle_contraction: 0,
                 _padding: [0; 7],
             },
+            CellType::Vasculocyte => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 0,
+                applies_swim_force: 0,
+                uses_texture_atlas: 0,
+                has_procedural_tail: 0,
+                gains_mass_from_light: 0,
+                is_storage_cell: 0,
+                applies_buoyancy: 0,
+                applies_cilia_force: 0,
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
+            },
         }
     }
 
@@ -653,6 +669,14 @@ impl CellType {
                 mode.split_mass = 3.1;
                 mode.devorocyte_consume_range = 0.5;
                 mode.devorocyte_consume_rate = 30.0;
+            }
+            CellType::Vasculocyte => {
+                // Low storage (stays lean to act as a pipe, not a tank)
+                mode.nutrient_priority = 0.5;
+                mode.max_cell_size = 1.5;
+                mode.split_mass = 2.5;
+                // Sealed by default — outlets must be explicitly enabled
+                mode.vascular_outlet = false;
             }
             _ => {}
         }
