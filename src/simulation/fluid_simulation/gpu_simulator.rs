@@ -838,6 +838,12 @@ impl GpuFluidSimulator {
     /// Set continuous spawning enabled/disabled
     pub fn set_continuous_spawn(&self, enabled: bool) {
         self.continuous_spawn_enabled.set(enabled);
+        // Reset the epoch clock when water fill starts so the user always gets
+        // a fresh nutrient epoch rather than landing mid-epoch (which could mean
+        // nutrients despawn within seconds of the water being added).
+        if enabled {
+            self.time.set(0.0);
+        }
     }
 
     /// Get continuous spawning enabled state
@@ -1081,14 +1087,13 @@ impl GpuFluidSimulator {
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
 
-        // Wrap time to prevent f32 precision loss in long runs.
-        // f32 loses sub-second precision above ~8M seconds; wrapping at
-        // epoch_spacing * 8192 (~16 hours at default 7s spacing) keeps the
-        // epoch counter cycling correctly while staying well within f32 range.
-        // The wrap is a multiple of epoch_spacing so latest_epoch = u32(t / spacing)
-        // resets cleanly to 0 without skipping or repeating an epoch boundary.
-        let wrap_period = epoch_spacing * 8192.0;
-        let wrapped_time = self.time.get() % wrap_period;
+        // Use the fluid sim's own time directly. The fluid sim already wraps at 65536s
+        // (well within f32 precision), and that wrap is a fixed constant so the epoch
+        // counter resets cleanly at the same point every time. A separate wrap period
+        // based on epoch_spacing caused misaligned discontinuities: when the fluid sim
+        // time crossed a multiple of (epoch_spacing * 8192) the nutrient time would
+        // jump, clearing all nutrients for one frame.
+        let wrapped_time = self.time.get();
 
         let params = NutrientPopulateParams {
             grid_resolution: GRID_RESOLUTION,

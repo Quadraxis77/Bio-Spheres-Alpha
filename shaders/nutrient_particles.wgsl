@@ -45,11 +45,17 @@ fn get_triangle_vertex(index: u32, particle_pos: vec3<f32>, particle_size: f32, 
     );
     
     // Calculate view-aligned triangle (billboard)
-    let to_camera = normalize(camera.camera_pos - particle_pos);
-    
-    // Use a stable up vector that works for all camera angles
+    let to_camera_raw = camera.camera_pos - particle_pos;
+    let dist_sq = dot(to_camera_raw, to_camera_raw);
+    // Guard against NaN when camera is at or very near the particle position
+    let to_camera = select(vec3<f32>(0.0, 0.0, 1.0), to_camera_raw * inverseSqrt(dist_sq), dist_sq > 1e-6);
+
+    // Use a stable up vector; fall back to world_right when to_camera is nearly parallel to world_up
     let world_up = vec3<f32>(0.0, 1.0, 0.0);
-    let right = normalize(cross(to_camera, world_up));
+    let world_right = vec3<f32>(1.0, 0.0, 0.0);
+    let up_dot = abs(dot(to_camera, world_up));
+    let reference_up = select(world_up, world_right, up_dot > 0.99);
+    let right = normalize(cross(to_camera, reference_up));
     let up = cross(right, to_camera);
     
     // Scale by particle size and create camera-facing triangle

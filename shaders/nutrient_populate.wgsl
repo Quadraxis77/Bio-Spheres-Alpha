@@ -46,24 +46,53 @@ fn smoothstep(t: f32) -> f32 {
     return t * t * (3.0 - 2.0 * t);
 }
 
+// Integer hash for a 3-D lattice point + epoch seed.
+//
+// WHY THIS REPLACES THE ORIGINAL SIN-BASED HASH:
+// The original code used  s = vec3<f32>(f32(seed))  and passed it into
+//   fract(sin(dot(pos + s, k)) * 43758.5453)
+// Because the epoch seed grows as  1337 + epoch * 7919,  by epoch ~17
+// (~119 simulated seconds, roughly 2 minutes) the sin() argument exceeds
+// ~3 × 10¹².  At that magnitude f32 has no sub-ULP precision left for
+// trigonometric range reduction, so sin() returns the same garbage value
+// (often 0.0) for every voxel.  The fbm collapses to 0, noise ≤ threshold
+// becomes universally true, and nutrients never spawn again — permanently.
+//
+// Integer hashing (Murmur3 finalizer mix) is immune to input magnitude:
+// it operates purely in u32 modular arithmetic, guarantees uniform output
+// in [0, 1) for any coordinate+seed combination, and is consistent across
+// all GPU vendors.
+fn hash_noise(xi: i32, yi: i32, zi: i32, seed: u32) -> f32 {
+    // Bias coordinates into non-negative u32 range (noise samples are in [-15, 15])
+    var h = (u32(xi + 4096) * 2654435761u)
+          ^ (u32(yi + 4096) * 1013904223u)
+          ^ (u32(zi + 4096) * 2246822519u)
+          ^ seed;
+    // Murmur3 finalizer
+    h ^= h >> 16u;
+    h *= 0x85ebca6bu;
+    h ^= h >> 13u;
+    h *= 0xc2b2ae35u;
+    h ^= h >> 16u;
+    return f32(h >> 8u) * (1.0 / 16777216.0);
+}
+
 fn value_noise_3d(pos: vec3<f32>, seed: u32) -> f32 {
-    let ix = floor(pos.x);
-    let iy = floor(pos.y);
-    let iz = floor(pos.z);
+    let ix = i32(floor(pos.x));
+    let iy = i32(floor(pos.y));
+    let iz = i32(floor(pos.z));
     let fx = fract(pos.x);
     let fy = fract(pos.y);
     let fz = fract(pos.z);
 
-    let s = vec3<f32>(f32(seed));
-    let k = vec3<f32>(127.1, 311.7, 74.7);
-    let h000 = fract(sin(dot(vec3<f32>(ix,       iy,       iz      ) + s, k)) * 43758.5453);
-    let h001 = fract(sin(dot(vec3<f32>(ix,       iy,       iz + 1.0) + s, k)) * 43758.5453);
-    let h010 = fract(sin(dot(vec3<f32>(ix,       iy + 1.0, iz      ) + s, k)) * 43758.5453);
-    let h011 = fract(sin(dot(vec3<f32>(ix,       iy + 1.0, iz + 1.0) + s, k)) * 43758.5453);
-    let h100 = fract(sin(dot(vec3<f32>(ix + 1.0, iy,       iz      ) + s, k)) * 43758.5453);
-    let h101 = fract(sin(dot(vec3<f32>(ix + 1.0, iy,       iz + 1.0) + s, k)) * 43758.5453);
-    let h110 = fract(sin(dot(vec3<f32>(ix + 1.0, iy + 1.0, iz      ) + s, k)) * 43758.5453);
-    let h111 = fract(sin(dot(vec3<f32>(ix + 1.0, iy + 1.0, iz + 1.0) + s, k)) * 43758.5453);
+    let h000 = hash_noise(ix,   iy,   iz,   seed);
+    let h100 = hash_noise(ix+1, iy,   iz,   seed);
+    let h010 = hash_noise(ix,   iy+1, iz,   seed);
+    let h110 = hash_noise(ix+1, iy+1, iz,   seed);
+    let h001 = hash_noise(ix,   iy,   iz+1, seed);
+    let h101 = hash_noise(ix+1, iy,   iz+1, seed);
+    let h011 = hash_noise(ix,   iy+1, iz+1, seed);
+    let h111 = hash_noise(ix+1, iy+1, iz+1, seed);
 
     let sx = smoothstep(fx);
     let sy = smoothstep(fy);
