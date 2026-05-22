@@ -368,6 +368,54 @@ impl Default for Genome {
 }
 
 impl Genome {
+    /// Returns the path to the genomes folder, creating it if it doesn't exist.
+    /// This is the canonical location for saving and loading `.genome` files.
+    pub fn genomes_dir() -> std::path::PathBuf {
+        let dir = std::path::PathBuf::from("genomes");
+        if !dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                log::warn!("Could not create genomes directory: {}", e);
+            }
+        }
+        dir
+    }
+
+    /// Load a random genome from the genomes folder.
+    /// Returns `None` if the folder is empty or no `.genome` files exist.
+    pub fn load_random_from_genomes_dir() -> Option<Self> {
+        let dir = Self::genomes_dir();
+        let entries: Vec<_> = std::fs::read_dir(&dir)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path().extension().and_then(|x| x.to_str()) == Some("genome")
+            })
+            .collect();
+
+        if entries.is_empty() {
+            return None;
+        }
+
+        // Pick a pseudo-random entry using system time as seed
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0) as usize;
+        let idx = seed % entries.len();
+        let path = entries[idx].path();
+
+        match Self::load_from_file(&path) {
+            Ok(genome) => {
+                log::info!("Main menu loaded genome from {:?}", path);
+                Some(genome)
+            }
+            Err(e) => {
+                log::warn!("Failed to load genome {:?}: {}", path, e);
+                None
+            }
+        }
+    }
+
     /// Create a new genome with random colors for each mode.
     /// Use this for user-facing "new genome" creation.
     /// Do NOT use this as a serialization baseline — `Default::default()` must stay deterministic.
@@ -388,7 +436,9 @@ impl Genome {
             let g = ((rng >> 33) & 0xFF) as f32 / 255.0;
             rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             let b = ((rng >> 33) & 0xFF) as f32 / 255.0;
-            mode.color = Vec3::new(r, g, b);
+            // Remap 0–1 to 0.35–1.0 so colors are never too dark to see
+            let brighten = |v: f32| v * 0.65 + 0.35;
+            mode.color = Vec3::new(brighten(r), brighten(g), brighten(b));
         }
 
         genome

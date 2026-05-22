@@ -230,7 +230,7 @@ impl Default for CellTypeVisuals {
 pub struct CellTypeVisualsStore {
     /// Visual settings indexed by cell type
     pub visuals: Vec<CellTypeVisuals>,
-    /// Cell outline width for cel-shaded black outline effect (0.0 = off)
+    // Cell outline width for cel-shaded black outline effect (0.0 = off, 0.15 = thick)
     #[serde(default)]
     pub cell_outline_width: f32,
 }

@@ -43,8 +43,9 @@
 //! - Culling statistics (frustum and occlusion)
 //! - Cell counts and simulation metrics
 
-use crate::scene::SceneManager;
+use crate::scene::{MainMenuScene, SceneManager};
 use crate::ui::{DockManager, PerformanceMetrics, UiSystem};
+use egui::TextureId;
 use egui_wgpu::ScreenDescriptor;
 use std::sync::Arc;
 use winit::{
@@ -53,6 +54,26 @@ use winit::{
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
 };
+
+/// High-level application phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppPhase {
+    /// Showing the main menu (before any simulation is started).
+    MainMenu,
+    /// Inside the simulation (Preview or GPU mode).
+    InGame,
+}
+
+/// Button action returned by the main-menu egui pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenuAction {
+    None,
+    Play,
+    GenomeEditor,
+    Settings,
+    Credits,
+    Exit,
+}
 
 /// Action deferred until after the current frame is presented to the screen.
 ///
@@ -93,6 +114,10 @@ pub struct App {
     deferred_action: Option<DeferredAction>,
     device: wgpu::Device,
     surface: wgpu::Surface<'static>,
+    /// Current high-level application phase (main menu vs in-game).
+    app_phase: AppPhase,
+    /// Main menu scene (two live genome previews + egui overlay).
+    main_menu_scene: Option<MainMenuScene>,
 }
 
 impl App {
@@ -104,8 +129,13 @@ impl App {
         config: wgpu::SurfaceConfiguration,
         scene_manager: SceneManager,
         dock_manager: DockManager,
-        ui: UiSystem,
+        mut ui: UiSystem,
     ) -> Self {
+        // Build the main menu scene before moving `ui` into the struct so we
+        // can access `ui.renderer` mutably without fighting the borrow checker.
+        let main_menu_scene =
+            MainMenuScene::new(&device, &queue, &config, &mut ui.renderer);
+
         Self {
             window,
             queue,
@@ -126,6 +156,8 @@ impl App {
             deferred_action: None,
             device,
             surface,
+            app_phase: AppPhase::MainMenu,
+            main_menu_scene: Some(main_menu_scene),
         }
     }
     
@@ -168,6 +200,9 @@ impl App {
                     self.config.height = physical_size.height;
                     self.surface.configure(&self.device, &self.config);
                     self.scene_manager.resize(&self.device, physical_size.width, physical_size.height);
+                    if let Some(menu) = &mut self.main_menu_scene {
+                        menu.resize(&self.device, &mut self.ui.renderer, physical_size.width, physical_size.height);
+                    }
                 }
             }
             WindowEvent::MouseInput { button, state, .. } => {
@@ -500,6 +535,23 @@ impl App {
                         return true;
                     }
                 }
+
+                // Escape returns to the main menu from any in-game scene
+                if let PhysicalKey::Code(KeyCode::Escape) = event.physical_key {
+                    if event.state == ElementState::Pressed && self.app_phase == AppPhase::InGame {
+                        log::info!("Escape pressed — returning to main menu");
+                        // Rebuild the menu scene so the previews are fresh
+                        self.main_menu_scene = Some(MainMenuScene::new(
+                            &self.device,
+                            &self.queue,
+                            &self.config,
+                            &mut self.ui.renderer,
+                        ));
+                        self.app_phase = AppPhase::MainMenu;
+                        self.window.request_redraw();
+                        return true;
+                    }
+                }
                 
                 // Only pass to camera if egui doesn't want the input
                 if !self.ui.wants_keyboard_input() {
@@ -527,25 +579,388 @@ impl App {
         true
     }
     
+    // ─── Main menu ────────────────────────────────────────────────────────────
+
+    /// Full render pass for a single main-menu frame.
+    fn render_main_menu_frame(&mut self, dt: f32) {
+        // Update genome simulations and orbit cameras.
+        if let Some(menu) = &mut self.main_menu_scene {
+            menu.update(dt);
+        }
+
+        // Render preview scenes into their off-screen textures.
+        let cell_type_visuals = &self.editor_state.cell_type_visuals;
+        if let Some(menu) = &mut self.main_menu_scene {
+            menu.render(&self.device, &self.queue, Some(cell_type_visuals), &mut self.ui.renderer);
+        }
+
+        // Acquire swapchain texture.
+        let output = loop {
+            match self.surface.get_current_texture() {
+                Ok(o) => break o,
+                Err(wgpu::SurfaceError::Outdated) => {
+                    self.surface.configure(&self.device, &self.config);
+                }
+                Err(e) => {
+                    log::error!("Main menu surface error: {:?}", e);
+                    return;
+                }
+            }
+        };
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Clear the swapchain to black before egui paints.
+        {
+            let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("menu_clear"),
+            });
+            enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("menu_clear_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.02, g: 0.02, b: 0.03, a: 1.0 }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            self.queue.submit(std::iter::once(enc.finish()));
+        }
+
+        // egui frame.
+        self.ui.begin_frame(&self.window);
+
+        let (left_id, right_id, left_name, right_name, panel_w, panel_h) =
+            if let Some(menu) = &self.main_menu_scene {
+                (
+                    menu.left_tex_id,
+                    menu.right_tex_id,
+                    menu.left_genome_name.clone(),
+                    menu.right_genome_name.clone(),
+                    menu.panel_width as f32,
+                    menu.panel_height as f32,
+                )
+            } else {
+                return;
+            };
+
+        let action = Self::render_main_menu_ui(
+            &self.ui.ctx.clone(),
+            left_id,
+            right_id,
+            &left_name,
+            &right_name,
+            panel_w,
+            panel_h,
+        );
+
+        let egui_output = self.ui.ctx.end_pass();
+
+        // Submit egui rendering.
+        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("menu_egui"),
+        });
+        let screen_desc = ScreenDescriptor {
+            size_in_pixels: [self.config.width, self.config.height],
+            pixels_per_point: self.window.scale_factor() as f32,
+        };
+        self.ui.render(&self.device, &self.queue, &mut enc, &view, screen_desc, egui_output);
+        self.queue.submit(std::iter::once(enc.finish()));
+        output.present();
+
+        // Handle button actions.
+        match action {
+            MenuAction::Play => {
+                self.app_phase = AppPhase::InGame;
+                let target = crate::ui::types::SimulationMode::Gpu;
+                self.ui.state.current_mode = target;
+                let cave_init = self.scene_manager.switch_mode(
+                    target,
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    self.ui.state.world_diameter,
+                    self.ui.state.world_settings.cell_capacity,
+                    &self.editor_state,
+                );
+                if cave_init { self.editor_state.cave_params_dirty = true; }
+                self.dock_manager.switch_mode(target);
+            }
+            MenuAction::GenomeEditor => {
+                self.app_phase = AppPhase::InGame;
+                let target = crate::ui::types::SimulationMode::Preview;
+                self.ui.state.current_mode = target;
+                self.scene_manager.switch_mode(
+                    target,
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    self.ui.state.world_diameter,
+                    self.ui.state.world_settings.cell_capacity,
+                    &self.editor_state,
+                );
+                self.dock_manager.switch_mode(target);
+            }
+            MenuAction::Exit => {
+                // Save persistent state before exiting.
+                self.dock_manager.save_all();
+                self.ui.save_ui_state();
+                self.editor_state.save_cell_type_visuals();
+                std::process::exit(0);
+            }
+            _ => {}
+        }
+
+        // FPS counter.
+        self.frame_count += 1;
+        if self.fps_timer.elapsed().as_secs_f32() >= 1.0 {
+            self.frame_count = 0;
+            self.fps_timer = std::time::Instant::now();
+        }
+
+        self.window.request_redraw();
+    }
+
+    /// Draw the main-menu egui overlay and return the button action (if any).
+    fn render_main_menu_ui(ctx: &egui::Context, left_id: TextureId, right_id: TextureId, left_name: &str, right_name: &str, _panel_w: f32, _panel_h: f32) -> MenuAction {
+        use egui::{Align2, Color32, FontId, FontFamily, Pos2, Rect, Stroke, Vec2};
+
+        // Background colours
+        let bg          = Color32::from_rgb(5, 5, 8);
+        let fade_dark   = Color32::from_rgba_premultiplied(5, 5, 8, 255);
+        let fade_clear  = Color32::from_rgba_premultiplied(5, 5, 8, 0);
+
+        // Button palette
+        let teal_fill   = Color32::from_rgba_premultiplied(29, 158, 117, 30);
+        let teal_fill_h = Color32::from_rgba_premultiplied(29, 158, 117, 58);
+        let teal_border = Color32::from_rgb(42, 122, 90);
+        let teal_text   = Color32::from_rgb(160, 240, 205);
+
+        let blue_fill   = Color32::from_rgba_premultiplied(55, 138, 221, 20);
+        let blue_fill_h = Color32::from_rgba_premultiplied(55, 138, 221, 48);
+        let blue_border = Color32::from_rgb(42, 64, 96);
+        let blue_text   = Color32::from_rgb(160, 205, 240);
+
+        let muted_fill   = Color32::TRANSPARENT;
+        let muted_fill_h = Color32::from_rgba_premultiplied(255, 255, 255, 10);
+        let muted_border = Color32::from_rgb(42, 42, 53);
+        let muted_text   = Color32::from_rgb(136, 135, 144);
+
+        let mut action = MenuAction::None;
+
+        #[allow(deprecated)]
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(bg))
+            .show(ctx, |ui| {
+                let rect = ui.max_rect();
+                let h = rect.height();
+
+                // ── genome panel images ───────────────────────────────────────
+                // Use 1/3 of the egui rect width so the display rect matches the
+                // texture's aspect ratio regardless of DPI scaling.
+                let display_panel_w = rect.width() / 3.0;
+                let left_rect  = Rect::from_min_size(rect.min, Vec2::new(display_panel_w, h));
+                let right_rect = Rect::from_min_size(
+                    Pos2::new(rect.max.x - display_panel_w, rect.min.y),
+                    Vec2::new(display_panel_w, h),
+                );
+                let full_uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
+                ui.painter().image(left_id,  left_rect,  full_uv, Color32::WHITE);
+                ui.painter().image(right_id, right_rect, full_uv, Color32::WHITE);
+
+                // ── edge fades (gradient meshes) ──────────────────────────────
+                let fade_w = 80.0_f32;
+
+                // Right edge of left panel fades → black
+                let lr = Rect::from_min_size(
+                    Pos2::new(rect.min.x + display_panel_w - fade_w, rect.min.y),
+                    Vec2::new(fade_w, h),
+                );
+                ui.painter().add(egui::Shape::from(Self::gradient_mesh(lr, fade_clear, fade_dark)));
+
+                // Left edge of right panel fades black →
+                let rr = Rect::from_min_size(
+                    Pos2::new(rect.max.x - display_panel_w, rect.min.y),
+                    Vec2::new(fade_w, h),
+                );
+                ui.painter().add(egui::Shape::from(Self::gradient_mesh(rr, fade_dark, fade_clear)));
+
+                // ── genome name labels at panel bottoms ───────────────────────
+                let label_y = rect.max.y - 20.0;
+                let label_font = FontId::new(11.0, FontFamily::Proportional);
+                let label_color = Color32::from_rgb(47, 110, 84);
+                ui.painter().text(
+                    Pos2::new(rect.min.x + display_panel_w * 0.5, label_y),
+                    Align2::CENTER_CENTER,
+                    left_name.to_uppercase(),
+                    label_font.clone(),
+                    label_color,
+                );
+                ui.painter().text(
+                    Pos2::new(rect.max.x - display_panel_w * 0.5, label_y),
+                    Align2::CENTER_CENTER,
+                    right_name.to_uppercase(),
+                    label_font,
+                    label_color,
+                );
+
+                // ── centre column ─────────────────────────────────────────────
+                let cx = rect.center().x;
+                let btn_w = 240.0_f32;
+                let btn_h = 44.0_f32;
+                let gap   = 12.0_f32;
+
+                // Heights: title block + 2 primary + divider + 2 secondary + divider + 1 exit
+                let block_h = 56.0 + 30.0                // title + subtitle
+                            + btn_h + gap + btn_h + gap  // Play, Genome editor
+                            + 28.0                        // divider gap
+                            + btn_h + gap + btn_h + gap  // Settings, Credits
+                            + 28.0                        // divider gap
+                            + btn_h;
+
+                #[allow(unused_assignments)]
+                let mut y = rect.center().y - block_h * 0.5;
+
+                // Dark background behind the centre column so it always reads
+                // clearly over the panel images at any window width.
+                let col_pad_x = 60.0_f32;
+                let col_rect = Rect::from_center_size(
+                    Pos2::new(cx, rect.center().y),
+                    Vec2::new(btn_w + col_pad_x * 2.0, h),
+                );
+                ui.painter().rect_filled(col_rect, 0.0, bg);
+
+                // Title
+                ui.painter().text(
+                    Pos2::new(cx, y + 20.0),
+                    Align2::CENTER_CENTER,
+                    "BIO-SPHERES",
+                    FontId::new(36.0, FontFamily::Proportional),
+                    Color32::from_rgb(232, 244, 240),
+                );
+                y += 48.0;
+                ui.painter().text(
+                    Pos2::new(cx, y),
+                    Align2::CENTER_CENTER,
+                    "Evolution simulator",
+                    FontId::new(14.0, FontFamily::Proportional),
+                    Color32::from_rgb(100, 190, 155),
+                );
+                y += 38.0;
+
+                // ── helper: draw one button ───────────────────────────────────
+                macro_rules! btn {
+                    ($label:expr, $fill:expr, $fill_h:expr, $border:expr, $text_col:expr) => {{
+                        let r = Rect::from_center_size(
+                            Pos2::new(cx, y + btn_h * 0.5),
+                            Vec2::new(btn_w, btn_h),
+                        );
+                        // Use a plain fill first; we'll repaint with hover fill if hovered.
+                        let response = ui.put(
+                            r,
+                            egui::Button::new(
+                                egui::RichText::new($label)
+                                    .color($text_col)
+                                    .size(15.0),
+                            )
+                            .fill($fill)
+                            .stroke(Stroke::new(1.0, $border))
+                            .corner_radius(32.0_f32),
+                        );
+                        // Repaint with hover fill on top when the pointer is over the button.
+                        if response.hovered() {
+                            ui.painter().rect_filled(r, 32.0, $fill_h);
+                            ui.painter().rect_stroke(r, 32.0, Stroke::new(1.0, $border), egui::StrokeKind::Outside);
+                        }
+                        y += btn_h + gap;
+                        response
+                    }};
+                }
+
+                if btn!("Play", teal_fill, teal_fill_h, teal_border, teal_text).clicked() {
+                    action = MenuAction::Play;
+                }
+                if btn!("Genome editor", blue_fill, blue_fill_h, blue_border, blue_text).clicked() {
+                    action = MenuAction::GenomeEditor;
+                }
+
+                // Divider
+                y += 4.0;
+                ui.painter().line_segment(
+                    [Pos2::new(cx - 50.0, y), Pos2::new(cx + 50.0, y)],
+                    Stroke::new(1.0, Color32::from_rgb(26, 26, 40)),
+                );
+                y += 14.0;
+
+                if btn!("Settings", muted_fill, muted_fill_h, muted_border, muted_text).clicked() {
+                    action = MenuAction::Settings;
+                }
+                if btn!("Credits", muted_fill, muted_fill_h, muted_border, muted_text).clicked() {
+                    action = MenuAction::Credits;
+                }
+
+                // Divider
+                y += 4.0;
+                ui.painter().line_segment(
+                    [Pos2::new(cx - 50.0, y), Pos2::new(cx + 50.0, y)],
+                    Stroke::new(1.0, Color32::from_rgb(26, 26, 40)),
+                );
+                y += 14.0;
+
+                if btn!("Exit", muted_fill, muted_fill_h, muted_border, muted_text).clicked() {
+                    action = MenuAction::Exit;
+                }
+                let _ = y; // y is advanced by the last btn! macro but not read after
+            });
+
+        action
+    }
+
+    /// Horizontal gradient quad mesh (for edge fades).
+    fn gradient_mesh(rect: egui::Rect, left_color: egui::Color32, right_color: egui::Color32) -> egui::Mesh {
+        use egui::epaint::Vertex;
+        use egui::Pos2;
+
+        let uv = Pos2::new(0.0, 0.0); // UV unused; texture_id = default (white)
+        let mut mesh = egui::Mesh::default();
+        mesh.vertices.push(Vertex { pos: rect.left_top(),     uv, color: left_color  });
+        mesh.vertices.push(Vertex { pos: rect.right_top(),    uv, color: right_color });
+        mesh.vertices.push(Vertex { pos: rect.right_bottom(), uv, color: right_color });
+        mesh.vertices.push(Vertex { pos: rect.left_bottom(),  uv, color: left_color  });
+        mesh.indices = vec![0, 1, 2, 0, 2, 3];
+        mesh
+    }
+
     fn render(&mut self) {
         // Don't render if surface has zero dimensions
         if self.config.width == 0 || self.config.height == 0 {
             return;
         }
-        
+
         let now = std::time::Instant::now();
-        
+
         // Skip render if we haven't reached the next frame time (60fps limiter)
         // IMPORTANT: This must be BEFORE acquiring surface texture to avoid cleanup issues
         if now < self.next_frame_time {
             return;
         }
-        
-        let dt = now.duration_since(self.last_render_time).as_secs_f32();
+
+        let dt = now.duration_since(self.last_render_time).as_secs_f32().min(0.1);
         self.last_render_time = now;
-        
+
         // Schedule next frame for 60fps (16.67ms)
         self.next_frame_time = now + std::time::Duration::from_micros(16_667);
+
+        // ── Main menu fast path ───────────────────────────────────────────────
+        if self.app_phase == AppPhase::MainMenu {
+            self.render_main_menu_frame(dt);
+            return;
+        }
         
         // Update performance metrics (includes automatic spike detection)
         self.performance.update(dt);

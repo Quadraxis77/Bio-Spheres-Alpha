@@ -2165,6 +2165,7 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
                 if ui.button("Save Genome").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Genome", &["genome"])
+                        .set_directory(crate::genome::Genome::genomes_dir())
                         .set_file_name(&format!("{}.genome", context.genome.name))
                         .save_file()
                     {
@@ -2177,6 +2178,7 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
                 if ui.button("Load Genome").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Genome", &["genome"])
+                        .set_directory(crate::genome::Genome::genomes_dir())
                         .pick_file()
                     {
                         match crate::genome::Genome::load_from_file(&path) {
@@ -3962,8 +3964,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 let available = ui.available_width();
                 let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                 ui.style_mut().spacing.slider_width = slider_width;
-                ui.add(egui::Slider::new(&mut context.editor_state.cell_outline_width, 0.0..=0.5).show_value(false));
-                ui.add(egui::DragValue::new(&mut context.editor_state.cell_outline_width).speed(0.01).range(0.0..=0.5));
+                ui.add(egui::Slider::new(&mut context.editor_state.cell_outline_width, 0.0..=0.2).show_value(false));
+                ui.add(egui::DragValue::new(&mut context.editor_state.cell_outline_width).speed(0.005).range(0.0..=0.2));
             });
 
             ui.add_space(8.0);

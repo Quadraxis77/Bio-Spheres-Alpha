@@ -5,7 +5,7 @@
     persistence: 0.1,
     threshold: 1.0,
     smoothness: 0.0,
-    seed: 1106,
+    seed: 7785,
     resolution: 128,
     show_moss: true,
     moss_growth_rate: 0.5,
@@ -25,5 +25,5 @@
     moss_height_sharpness_high: 0.62,
     moss_bump_strength: 2.0,
     moss_color_dark: (0.06, 0.12, 0.04),
-    moss_color_bright: (0.2, 0.38, 0.1),
+    moss_color_bright: (0.03501433, 0.10368132, 0.04555294),
 )

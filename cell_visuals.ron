@@ -287,5 +287,5 @@
             cilia_ring_speed: 4.0,
         ),
     ],
-    cell_outline_width: 0.5,
+    cell_outline_width: 0.2,
 )

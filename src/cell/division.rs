@@ -5,7 +5,6 @@ use crate::simulation::canonical_state::{CanonicalState, DivisionEvent};
 use crate::simulation::adhesion_inheritance::inherit_adhesions_on_division;
 use crate::genome::Genome;
 
-#[allow(dead_code)]
 /// Deterministic pseudo-random rotation for cell division
 /// Generates small rotation perturbations for visual variety
 /// Uses u32 arithmetic to match the GPU shader implementation exactly
@@ -247,11 +246,21 @@ pub fn division_step(
                     * Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0)
                     * Vec3::Z;
                 
+                // Apply a tiny positional jitter to the child spawn offset so that
+                // cells don't sit on a perfectly symmetric axis. This breaks the
+                // degenerate case where every collision normal is identical, which
+                // causes cells to stack in a line instead of sliding past each other.
+                // The jitter is applied only to the offset direction, not to the
+                // genome/physics orientations, so adhesion anchors are unaffected.
+                let parent_cell_id = state.cell_ids[parent_idx];
+                let jitter_rot = pseudo_random_rotation(parent_cell_id, rng_seed);
+                let jittered_split_direction = (jitter_rot * split_direction).normalize();
+
                 // 75% overlap means centers are 25% of combined diameter apart
                 // Match reference convention: Child A at +offset, Child B at -offset
                 let offset_distance = parent_radius * 0.25;
-                let child_a_pos = parent_position + split_direction * offset_distance;
-                let child_b_pos = parent_position - split_direction * offset_distance;
+                let child_a_pos = parent_position + jittered_split_direction * offset_distance;
+                let child_b_pos = parent_position - jittered_split_direction * offset_distance;
                 
                 // Get child mode indices
                 // Check if children will reach max_splits after this division
@@ -326,7 +335,6 @@ pub fn division_step(
                 
                 // Get split intervals (potentially randomized from range)
                 // Use parent cell_id + tick for deterministic randomness
-                let parent_cell_id = state.cell_ids[parent_idx];
                 let tick = (current_time * 60.0) as u64; // Approximate tick from time
                 
                 let child_a_split_interval = if let Some(m) = child_a_mode {

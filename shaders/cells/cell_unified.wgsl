@@ -1259,20 +1259,27 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     var final_color = composited + specular + fresnel_contribution + sss_color
                     + composited * in.visual_params.w; // emissive
 
-    // Cel-shaded black outline: hard black band at the silhouette edge
+    // Cel-shaded black outline: hard black band at the silhouette edge.
+    // Computed in r-space (radial distance from billboard centre) rather than
+    // z_front-space so that fwidth() is well-behaved even for small/distant cells.
+    // outline_width is the fraction of the sphere radius that becomes black (0=none, 1=full).
     if (lighting.outline_width > 0.0) {
-        let aa = fwidth(z_front);
-        let outline = smoothstep(lighting.outline_width - aa, lighting.outline_width + aa, z_front);
-        final_color = mix(vec3<f32>(0.0, 0.0, 0.0), final_color, outline);
+        // r is the normalised radial distance [0, 1] on the billboard.
+        // The outline occupies r in [1 - outline_width, 1].
+        let outline_inner = 1.0 - lighting.outline_width;
+        let aa = fwidth(r) * 1.5; // fwidth(r) ≈ constant ≈ 1/screen_radius — well-behaved
+        let outline = smoothstep(outline_inner - aa, outline_inner + aa, r);
+        final_color = mix(final_color, vec3<f32>(0.0, 0.0, 0.0), outline);
     }
 
     // Yellow outline for selected-mode cells (type_data_1.z == 1.0)
     let highlight_flag = in.type_data_1.z;
     if (highlight_flag > 0.5) {
         let yellow_width = max(lighting.outline_width, 0.08);
-        let aa2 = fwidth(z_front);
-        let yellow_outline = smoothstep(yellow_width - aa2, yellow_width + aa2, z_front);
-        final_color = mix(vec3<f32>(1.0, 1.0, 0.0), final_color, yellow_outline);
+        let yellow_inner = 1.0 - yellow_width;
+        let aa2 = fwidth(r) * 1.5;
+        let yellow_outline = smoothstep(yellow_inner - aa2, yellow_inner + aa2, r);
+        final_color = mix(final_color, vec3<f32>(1.0, 1.0, 0.0), yellow_outline);
     }
 
     // ====================================================================

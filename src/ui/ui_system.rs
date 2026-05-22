@@ -106,6 +106,10 @@ impl UiSystem {
                     return false;
                 }
             }
+        } else {
+            // No viewport rect yet (e.g. first frame after menu transition).
+            // Don't block camera input — the whole window is the viewport.
+            return false;
         }
         
         // Otherwise, check if egui wants the pointer
