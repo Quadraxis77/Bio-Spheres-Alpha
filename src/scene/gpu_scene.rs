@@ -1915,7 +1915,7 @@ impl GpuScene {
         self.gpu_triple_buffers.incremental_sync_genome_mode_data(device, genome_id, global_start_index, mode_count);
         
         // Update mode cell types for this genome's modes only
-        self.gpu_triple_buffers.incremental_sync_mode_cell_types(device, genome_id, global_start_index, mode_count);
+        self.gpu_triple_buffers.incremental_sync_mode_cell_types(queue, &genome, global_start_index);
         
         // Update parent_make_adhesion flags for this genome's modes only
         self.incremental_sync_parent_make_adhesion_flags(queue, genome_id, global_start_index, mode_count);

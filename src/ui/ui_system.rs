@@ -274,6 +274,20 @@ impl UiSystem {
                         open_panel(dock_manager.current_tree_mut(), &help_panel);
                     }
                 }
+
+                // Tutorial button — starts or resumes the guided walkthrough
+                let tutorial_label = if ui_state_copy.tutorial.active {
+                    "🎓 Tutorial ●"
+                } else {
+                    "🎓 Tutorial"
+                };
+                if ui.button(tutorial_label).clicked() {
+                    if ui_state_copy.tutorial.active {
+                        ui_state_copy.tutorial.close();
+                    } else {
+                        ui_state_copy.tutorial.start();
+                    }
+                }
             });
         });
         
@@ -490,6 +504,24 @@ impl UiSystem {
             }
         }
         
+        // ── Tutorial overlay ──────────────────────────────────────────────────
+        // Auto-launch the tutorial the very first time the player opens the
+        // Genome Editor, before they've ever seen it.
+        if !ui_state_copy.tutorial.ever_shown
+            && ui_state_copy.current_mode == crate::ui::types::SimulationMode::Preview
+        {
+            ui_state_copy.tutorial.start();
+        }
+
+        // Render the tutorial dialogue + schematic pointer line.
+        crate::ui::tutorial::render_tutorial(
+            &self.ctx,
+            &mut ui_state_copy.tutorial,
+            &editor_state.panel_rects,
+            genome,
+            editor_state.selected_mode_index,
+        );
+
         // Apply any changes back to the original state
         let state_changed = self.state != ui_state_copy;
         self.state = ui_state_copy;

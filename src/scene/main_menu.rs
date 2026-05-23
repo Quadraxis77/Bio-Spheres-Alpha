@@ -8,6 +8,10 @@ use crate::genome::Genome;
 use crate::scene::traits::Scene as _;
 use egui::TextureId;
 use glam::{Quat, Vec3};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Monotonically increasing counter so each menu creation picks the next genome pair.
+static MENU_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // ── orbit constants ───────────────────────────────────────────────────────────
 
@@ -71,8 +75,12 @@ impl MainMenuScene {
             desired_maximum_frame_latency: surface_config.desired_maximum_frame_latency,
         };
 
-        // Left preview — load a random saved genome, fall back to random colors
-        let left_genome = Genome::load_random_from_genomes_dir()
+        // Use a global counter so each menu creation advances to the next genome pair,
+        // guaranteeing every genome is eventually shown regardless of timing.
+        let counter = MENU_COUNTER.fetch_add(2, Ordering::Relaxed);
+
+        // Left preview — load a saved genome, fall back to random colors
+        let left_genome = Genome::load_from_genomes_dir_at(counter)
             .unwrap_or_else(Genome::new_with_random_colors);
         let left_name = left_genome.name.clone();
         let mut left_preview = crate::scene::PreviewScene::new(device, queue, &panel_config);
@@ -90,8 +98,8 @@ impl MainMenuScene {
             ..Default::default()
         });
 
-        // Right preview — load a different random saved genome, fall back to random colors
-        let right_genome = Genome::load_random_from_genomes_dir()
+        // Right preview — load a different saved genome (counter+1 ensures a different pick)
+        let right_genome = Genome::load_from_genomes_dir_at(counter + 1)
             .unwrap_or_else(Genome::new_with_random_colors);
         let right_name = right_genome.name.clone();
         let mut right_preview = crate::scene::PreviewScene::new(device, queue, &panel_config);
@@ -179,13 +187,17 @@ impl MainMenuScene {
             self.right_color_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Render each preview into its off-screen texture.
+        // lod_scale_factor must match the editor default (500.0) so that cells at the
+        // menu's orbit distance (~40 units) compute a screen_radius above lod_threshold_low
+        // and render at LOD >= 1 (textured). With scale 1.0 every cell falls to LOD 0
+        // (plain sphere) because screen_radius = radius/distance * 1.0 ≈ 0.025 < 10.0.
         self.left_preview.render(
             device,
             queue,
             &left_view,
             cell_type_visuals,
             400.0,
-            1.0,
+            500.0,
             10.0,
             25.0,
             50.0,
@@ -198,7 +210,7 @@ impl MainMenuScene {
             &right_view,
             cell_type_visuals,
             400.0,
-            1.0,
+            500.0,
             10.0,
             25.0,
             50.0,

@@ -1724,9 +1724,14 @@ impl GpuTripleBufferSystem {
     }
     
     /// Incremental sync of mode cell types for a single genome
-    pub fn incremental_sync_mode_cell_types(&self, _device: &wgpu::Device, genome_id: usize, global_start_index: usize, mode_count: usize) {
-        log::info!("Incremental sync of mode cell types for genome {} at index {} ({} modes)", 
-            genome_id, global_start_index, mode_count);
+    pub fn incremental_sync_mode_cell_types(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
+        let cell_types: Vec<u32> = genome.modes.iter()
+            .map(|mode| mode.cell_type as u32)
+            .collect();
+        if !cell_types.is_empty() {
+            let offset = (global_start_index * 4) as u64; // u32 = 4 bytes per mode
+            queue.write_buffer(&self.mode_cell_types, offset, bytemuck::cast_slice(&cell_types));
+        }
     }
 
     /// Sync a single cell to all GPU buffer sets (for cell insertion during simulation)

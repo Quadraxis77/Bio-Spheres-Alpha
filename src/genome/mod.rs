@@ -241,7 +241,7 @@ impl Default for ModeSettings {
             color: Vec3::new(1.0, 1.0, 1.0),
             opacity: 1.0, // Default: fully opaque
             emissive: 0.0, // Default: no glow
-            cell_type: 2,
+            cell_type: 0,
             parent_make_adhesion: false,
             split_mass: 1.5,
             split_interval: 1.0,
@@ -380,31 +380,39 @@ impl Genome {
         dir
     }
 
-    /// Load a random genome from the genomes folder.
-    /// Returns `None` if the folder is empty or no `.genome` files exist.
-    pub fn load_random_from_genomes_dir() -> Option<Self> {
+    /// Collect all `.genome` files from the genomes folder, sorted for determinism.
+    /// Returns an empty vec if the folder doesn't exist or has no genome files.
+    pub fn list_genomes_dir() -> Vec<std::path::PathBuf> {
         let dir = Self::genomes_dir();
-        let entries: Vec<_> = std::fs::read_dir(&dir)
-            .ok()?
+        let mut paths: Vec<_> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path().extension().and_then(|x| x.to_str()) == Some("genome")
-            })
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("genome"))
             .collect();
+        paths.sort(); // deterministic order so index selection is stable
+        paths
+    }
 
-        if entries.is_empty() {
+    /// Load a genome from the genomes folder by index (wraps around).
+    /// `seed` is mixed with the index so two calls with different seeds pick different files.
+    /// Returns `None` if the folder has no `.genome` files.
+    pub fn load_from_genomes_dir_at(seed: u64) -> Option<Self> {
+        let paths = Self::list_genomes_dir();
+        if paths.is_empty() {
             return None;
         }
-
-        // Pick a pseudo-random entry using system time as seed
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0) as usize;
-        let idx = seed % entries.len();
-        let path = entries[idx].path();
-
-        match Self::load_from_file(&path) {
+        // Use a hash mix that avoids the modulo-bias of a single LCG step.
+        // splitmix64: well-distributed across all output bits.
+        let mut x = seed.wrapping_add(0x9e3779b97f4a7c15);
+        x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+        x ^= x >> 31;
+        let idx = (x as usize) % paths.len();
+        let path = &paths[idx];
+        log::info!("Main menu selecting genome index {}/{}: {:?}", idx, paths.len(), path);
+        match Self::load_from_file(path) {
             Ok(genome) => {
                 log::info!("Main menu loaded genome from {:?}", path);
                 Some(genome)
@@ -436,9 +444,7 @@ impl Genome {
             let g = ((rng >> 33) & 0xFF) as f32 / 255.0;
             rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             let b = ((rng >> 33) & 0xFF) as f32 / 255.0;
-            // Remap 0–1 to 0.35–1.0 so colors are never too dark to see
-            let brighten = |v: f32| v * 0.65 + 0.35;
-            mode.color = Vec3::new(brighten(r), brighten(g), brighten(b));
+            mode.color = Vec3::new(r, g, b);
         }
 
         genome

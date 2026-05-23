@@ -222,6 +222,9 @@ fn render_viewport(ui: &mut Ui, viewport_rect: &mut Option<egui::Rect>) {
 
 /// Render the SceneManager panel.
 fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
+    // Record panel rect for the tutorial pointer.
+    context.editor_state.panel_rects.insert("SceneManager".to_string(), ui.max_rect());
+
     // Single button that switches between scenes
     let (button_text, button_color) = if context.is_preview_mode() {
         ("Live Simulation", egui::Color32::from_rgb(200, 100, 100)) // Red for live simulation
@@ -418,24 +421,11 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             ui.separator();
             
             // Cell type name
-            let type_name = match data.cell_type {
-                0 => "Test",
-                1 => "Flagellocyte",
-                2 => "Photocyte",
-                3 => "Glueocyte",
-                4 => "Lipocyte",
-                5 => "Phagocyte",
-                6 => "Devorocyte",
-                7 => "Stereocyte",
-                8 => "Buoyocyte",
-                9 => "Virocyte",
-                10 => "Keratinocyte",
-                11 => "Ciliocyte",
-                12 => "Secrocyte",
-                13 => "Stemocyte",
-                14 => "Sensocyte",
-                _ => "Unknown",
-            };
+            let cell_type_names = crate::cell::types::CellType::names();
+            let type_name = cell_type_names
+                .get(data.cell_type as usize)
+                .copied()
+                .unwrap_or("Unknown");
             
             // Status line
             if data.is_dead != 0 {
@@ -1858,6 +1848,9 @@ fn render_lighting_settings(ui: &mut Ui) {
 
 /// Render the Modes panel with full functionality.
 fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
+    // Record panel rect for the tutorial pointer.
+    context.editor_state.panel_rects.insert("Modes".to_string(), ui.max_rect());
+
     // The genome should always have 40 modes by default
     if context.genome.modes.is_empty() {
         log::warn!("Genome has no modes, this should not happen with default genome");
@@ -1923,7 +1916,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     color: glam::Vec3::new(r, g, b),
                     opacity: 1.0,
                     emissive: 0.0,
-                    cell_type: 2, // Default to Phagocyte
+                    cell_type: 0, // Default to Test
                     parent_make_adhesion: false, // Default to no adhesion
                     split_mass: 1.5,
                     split_interval: 1.0,
@@ -2155,6 +2148,9 @@ fn group_container(ui: &mut Ui, title: &str, color: egui::Color32, content: impl
 
 /// Render the NameTypeEditor panel.
 fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
+    // Record panel rect for the tutorial pointer.
+    context.editor_state.panel_rects.insert("NameTypeEditor".to_string(), ui.max_rect());
+
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -2190,8 +2186,9 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
                         }
                     }
                 }
-                if ui.button("Genome Graph").clicked() {
-                    context.editor_state.toggle_mode_graph_panel = true;
+                if ui.button("New Genome").clicked() {
+                    *context.genome = crate::genome::Genome::new_with_random_colors();
+                    context.editor_state.selected_mode_index = 0;
                 }
             });
 
@@ -2216,12 +2213,13 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
             // Type dropdown and checkbox on the same line
             ui.horizontal(|ui| {
                 ui.label("Type:");
-                let cell_types = crate::cell::types::CellType::names();
+                let cell_types = crate::cell::types::CellType::all();
                 egui::ComboBox::from_id_salt("cell_type")
-                    .selected_text(cell_types[mode.cell_type as usize])
+                    .selected_text(cell_types[mode.cell_type as usize].name())
                     .show_ui(ui, |ui| {
-                        for (i, type_name) in cell_types.iter().enumerate() {
-                            ui.selectable_value(&mut mode.cell_type, i as i32, *type_name);
+                        for ct in cell_types.iter() {
+                            ui.selectable_value(&mut mode.cell_type, ct.to_index() as i32, ct.name())
+                                .on_hover_text(ct.tooltip());
                         }
                     });
 
@@ -2232,6 +2230,9 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the AdhesionSettings panel (placeholder).
 fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
+    // Record panel rect for the tutorial pointer.
+    context.editor_state.panel_rects.insert("AdhesionSettings".to_string(), ui.max_rect());
+
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -2351,6 +2352,9 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the ParentSettings panel (placeholder).
 fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
+    // Record panel rect for the tutorial pointer.
+    context.editor_state.panel_rects.insert("ParentSettings".to_string(), ui.max_rect());
+
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -3497,6 +3501,7 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the QuaternionBall panel with two quaternion balls for Child A and Child B.
 fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
+    context.editor_state.panel_rects.insert("QuaternionBall".to_string(), ui.max_rect());
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -3865,6 +3870,9 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
 /// A yellow bar fills behind the slider track to show how far the
 /// simulation has actually reached (resim_display_time).
 fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
+    // Record panel rect for the tutorial pointer.
+    context.editor_state.panel_rects.insert("TimeSlider".to_string(), ui.max_rect());
+
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {

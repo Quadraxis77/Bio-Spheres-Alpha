@@ -446,6 +446,15 @@ pub struct GenomeEditorState {
     pub toggle_mode_graph_panel: bool,
     /// Stored location of mode graph panel when hidden (surface, node, tab indices)
     pub mode_graph_panel_location: Option<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, egui_dock::TabIndex)>,
+
+    /// Screen-space rects for each named panel, updated every frame by the
+    /// panel render functions. Used by the tutorial overlay to position the
+    /// schematic pointer line.
+    ///
+    /// Keys match [`TutorialTarget::panel_key()`] values:
+    /// `"Modes"`, `"NameTypeEditor"`, `"ParentSettings"`,
+    /// `"AdhesionSettings"`, `"TimeSlider"`, `"SceneManager"`.
+    pub panel_rects: std::collections::HashMap<String, egui::Rect>,
 }
 
 impl GenomeEditorState {
@@ -669,6 +678,7 @@ impl GenomeEditorState {
             mode_graph_state: crate::genome::node_graph::ModeGraphState::new(),
             toggle_mode_graph_panel: false,
             mode_graph_panel_location: None,
+            panel_rects: std::collections::HashMap::new(),
         };
         state
     }

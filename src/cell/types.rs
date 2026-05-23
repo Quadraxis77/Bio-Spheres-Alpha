@@ -448,6 +448,70 @@ impl CellType {
         *self as u32
     }
 
+    /// A short description of what this cell type does, shown as a tooltip
+    /// in the genome editor's Type dropdown.
+    pub const fn tooltip(&self) -> &'static str {
+        match self {
+            CellType::Test =>
+                "Gains nutrients automatically at a fixed rate. Useful for quick \
+                 prototyping — no food source needed.",
+
+            CellType::Flagellocyte =>
+                "Propels the organism using a whip-like flagellum tail. Swim force \
+                 can be fixed or switched between two speeds via an oculocyte signal.",
+
+            CellType::Phagocyte =>
+                "Absorbs free-floating nutrient particles from the environment on \
+                 contact. The primary food-gathering cell in nutrient-rich worlds.",
+
+            CellType::Photocyte =>
+                "Converts light into nutrients — self-sustaining near a light source. \
+                 Nutrient gain scales with the local light field intensity.",
+
+            CellType::Lipocyte =>
+                "Stores surplus nutrients as fat reserves, acting as a buffer during \
+                 food shortages. Excess mass is donated to hungry neighbours.",
+
+            CellType::Buoyocyte =>
+                "Generates an upward buoyancy force, counteracting gravity and keeping \
+                 the organism neutrally buoyant or floating near the surface.",
+
+            CellType::Glueocyte =>
+                "Bonds to other cells or cave walls on contact. Useful for anchoring \
+                 an organism to a surface or building sticky capture traps.",
+
+            CellType::Oculocyte =>
+                "Casts a detection ray to sense cells, food particles, light, or \
+                 barriers. Broadcasts a numeric signal through the adhesion network \
+                 when a target is detected.",
+
+            CellType::Ciliocyte =>
+                "Beats microscopic cilia to push nearby cells and fluid in the \
+                 forward direction. Good for conveying particles along a chain or \
+                 creating internal circulation.",
+
+            CellType::Myocyte =>
+                "A muscle cell that rhythmically contracts its adhesion bonds. \
+                 Contractions can be timer-driven or signal-gated, producing \
+                 peristaltic pumping or coordinated movement.",
+
+            CellType::Embryocyte =>
+                "Incubates a fully-formed sub-organism and releases it when triggered \
+                 by a timer, a nutrient threshold, or an incoming signal. Enables \
+                 complex reproductive strategies.",
+
+            CellType::Devorocyte =>
+                "Aggressively steals nutrients from neighbouring foreign cells within \
+                 contact range. A predatory cell type — effective against slow or \
+                 undefended organisms.",
+
+            CellType::Vasculocyte =>
+                "Efficiently transports nutrients through the organism body along \
+                 adhesion pathways. Acts as a sealed pipe by default; set Outlet to \
+                 release nutrients to non-vascular neighbours.",
+        }
+    }
+
     /// Get the path to the appearance shader for this cell type.
     /// All cell types now use the unified shader.
     pub fn shader_path(&self) -> &'static str {

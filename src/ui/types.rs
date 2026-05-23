@@ -6,6 +6,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+use crate::ui::tutorial::TutorialState;
+
 /// Available simulation modes/scenes.
 ///
 /// - Preview: Single-threaded CPU simulation + GPU rendering (genome editor)
@@ -523,6 +525,10 @@ pub struct GlobalUiState {
     #[serde(default)]
     pub fluid_settings: FluidSettings,
 
+    /// Tutorial system state (step index, active flag, ever-shown flag).
+    #[serde(default)]
+    pub tutorial: TutorialState,
+
     /// Whether the low FPS warning dialog is shown
     #[serde(skip)]
     pub show_low_fps_dialog: bool,
@@ -588,6 +594,7 @@ impl Default for GlobalUiState {
             lod_debug_colors: false,
             world_settings: WorldSettings::default(),
             fluid_settings: FluidSettings::default(),
+            tutorial: TutorialState::default(),
             show_low_fps_dialog: false,
             suppress_low_fps_dialog: false,
             show_reset_dialog: false,

@@ -1,5 +1,5 @@
 (
-    current_mode: Gpu,
+    current_mode: Preview,
     ui_scale: 1.0,
     windows_locked: false,
     lock_tab_bar: false,
@@ -19,9 +19,9 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "Viewport",
-                "RightPanel",
                 "SceneManager",
+                "RightPanel",
+                "Viewport",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -42,16 +42,16 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "Viewport",
-                "NameTypeEditor",
-                "RightPanel",
-                "CircleSliders",
-                "SceneManager",
-                "TimeSlider",
-                "QuaternionBall",
                 "Modes",
                 "BottomPanel",
                 "LeftPanel",
+                "CircleSliders",
+                "NameTypeEditor",
+                "TimeSlider",
+                "RightPanel",
+                "QuaternionBall",
+                "SceneManager",
+                "Viewport",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -68,7 +68,7 @@
     frustum_enabled: false,
     gpu_readbacks_enabled: true,
     show_adhesion_lines: true,
-    world_diameter: 600.0,
+    world_diameter: 400.0,
     lod_scale_factor: 500.0,
     lod_threshold_low: 10.0,
     lod_threshold_medium: 25.0,
@@ -83,12 +83,12 @@
         water_viscosity: 0.01,
         radiation_level: 0.0001,
         subtle_mutations: false,
-        world_radius: 300.0,
+        world_radius: 200.0,
         solo_metabolism_enabled: false,
         solo_metabolism_multiplier: 10.0,
     ),
     fluid_settings: (
-        surface_pressure: 0.31,
+        surface_pressure: 0.0,
         organism_skin: (
             enabled: false,
             grid_resolution: 128,
@@ -103,5 +103,10 @@
             sss_strength: 0.25,
             rim_strength: 0.0,
         ),
+    ),
+    tutorial: (
+        active: true,
+        current_step: 1,
+        ever_shown: true,
     ),
 )
