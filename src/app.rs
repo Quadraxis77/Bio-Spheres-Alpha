@@ -2001,7 +2001,7 @@ impl ApplicationHandler for AppState {
 
         // Log adapter info to help diagnose GPU-specific issues
         let adapter_info = adapter.get_info();
-        log::info!(
+        log::warn!(
             "GPU adapter: {} ({:?}) driver: {}",
             adapter_info.name, adapter_info.backend, adapter_info.driver
         );
@@ -2042,12 +2042,19 @@ impl ApplicationHandler for AppState {
         
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .find(|f| f.is_srgb())
-            .copied()
-            .unwrap_or(surface_caps.formats[0]);
+        // Prefer Bgra8UnormSrgb (AMD/Vulkan native) then any sRGB, then driver default.
+        // Do NOT search for sRGB generically — on AMD, formats[0] may be Bgra8UnormSrgb
+        // while the search finds Rgba8UnormSrgb first, causing a pipeline/pass mismatch
+        // because all pipelines compile with the chosen format but the swapchain images
+        // come back as the driver's native format.
+        let surface_format = if surface_caps.formats.contains(&wgpu::TextureFormat::Bgra8UnormSrgb) {
+            wgpu::TextureFormat::Bgra8UnormSrgb
+        } else if surface_caps.formats.contains(&wgpu::TextureFormat::Rgba8UnormSrgb) {
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        } else {
+            surface_caps.formats[0]
+        };
+        log::warn!("Surface format selected: {:?} (available: {:?})", surface_format, surface_caps.formats);
         
         // Ensure we have non-zero dimensions before configuring
         let width = size.width.max(1);
@@ -2126,17 +2133,93 @@ impl ApplicationHandler for AppState {
 }
 
 pub fn run() {
-    env_logger::init();
-    
+    // ── Logging setup ────────────────────────────────────────────────────────
+    // Write logs to bio_spheres.log next to the executable so testers can
+    // easily find and copy the file after a crash.
+    let log_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("bio_spheres.log")))
+        .unwrap_or_else(|| std::path::PathBuf::from("bio_spheres.log"));
+
+    // Open (or create) the log file, truncating it each run so it stays small.
+    let log_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&log_path)
+        .expect("Failed to open log file");
+
+    // Build env_logger to write to the file.
+    // Level: WARN by default; set RUST_LOG=info or RUST_LOG=debug to get more.
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Warn)
+        .parse_default_env() // still respect RUST_LOG if set
+        .target(env_logger::Target::Pipe(Box::new(log_file)))
+        .format_timestamp_secs()
+        .init();
+
+    // ── Panic hook ───────────────────────────────────────────────────────────
+    // Capture panics into the log file and show a message box so the tester
+    // knows the crash happened and where to find the log.
+    let log_path_for_hook = log_path.clone();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = format!(
+            "PANIC: {}\n\nLog file: {}\n\nPlease send the log file to the developer.",
+            info,
+            log_path_for_hook.display(),
+        );
+        log::error!("{}", msg);
+
+        // Flush by dropping — env_logger flushes on drop but we can't drop it here,
+        // so write directly to the file as a fallback.
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&log_path_for_hook)
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "\n{}", msg);
+        }
+
+        // Show a Windows message box so the tester sees the crash immediately.
+        #[cfg(target_os = "windows")]
+        {
+            use std::ffi::OsStr;
+            use std::os::windows::ffi::OsStrExt;
+            let title: Vec<u16> = OsStr::new("Bio-Spheres Crashed")
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let body_str = format!(
+                "Bio-Spheres has crashed.\n\nPlease send this file to the developer:\n{}\n\nError: {}",
+                log_path_for_hook.display(),
+                info,
+            );
+            let body: Vec<u16> = OsStr::new(&body_str)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            unsafe {
+                winapi::um::winuser::MessageBoxW(
+                    std::ptr::null_mut(),
+                    body.as_ptr(),
+                    title.as_ptr(),
+                    winapi::um::winuser::MB_OK | winapi::um::winuser::MB_ICONERROR,
+                );
+            }
+        }
+    }));
+
+    log::warn!("Bio-Spheres starting — log: {}", log_path.display());
+
     // Write embedded default .ron settings next to the executable when the
     // files don't already exist.  This ensures a freshly-extracted build
     // starts with the settings that were current at compile time, while
     // still allowing the user to override them by editing the files.
     extract_default_settings();
-    
+
     let event_loop = EventLoop::new().unwrap();
     let mut state = AppState { app: None };
-    
+
     event_loop.run_app(&mut state).unwrap();
 }
 
