@@ -18,7 +18,7 @@
     show_sun: true,
     sun_color: (1.0, 1.0, 0.67),
     sun_angular_radius: 0.05,
-    sun_intensity: 5.0,
+    sun_intensity: 7.0,
     shadow_enabled: true,
     shadow_strength: 1.0,
     shadow_quality: 0.0,

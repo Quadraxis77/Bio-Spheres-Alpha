@@ -2207,8 +2207,9 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
                 if ui.button("🎲 Procedural")
                     .on_hover_text(
                         "Procedurally generate a creature with a random body plan.
-                         All creatures are guaranteed to reproduce by shedding a
-                         single detached egg cell that grows into the full organism."
+                         All creatures are guaranteed to reproduce by shedding
+                         multiple detached egg cells (3–6 per cycle) that each
+                         grow into the full organism."
                     )
                     .clicked()
                 {
