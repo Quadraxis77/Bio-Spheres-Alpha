@@ -449,6 +449,273 @@ impl Genome {
 
         genome
     }
+
+    /// Generate a procedural creature genome with a structured body plan.
+    ///
+    /// Uses a **segmented body plan**: a spine of stem cells grows along a fixed axis,
+    /// each segment spawning a ring of body cells perpendicular to the spine. Functional
+    /// specialist cells differentiate at defined positions.
+    ///
+    /// Five archetypes:
+    ///   0 = Worm       — linear spine, phagocyte body, flagella tail
+    ///   1 = Jellyfish  — flared bell, buoyocyte ring, flagella fringe
+    ///   2 = Predator   — compact cluster, devorocyte tips, myocyte pulse
+    ///   3 = Phototroph — vertical column, photocyte panels, buoyocyte crown
+    ///   4 = Crawler    — flat disc, glueocyte anchors, cilia locomotion
+    ///
+    /// Mode layout (all archetypes):
+    ///   M0 = Egg/Stem       — self-renewing; sheds free egg after N splits
+    ///   M1 = Spine Segment  — grows along body axis; spawns M2 rings; caps into M3
+    ///   M2 = Ring Cell      — grows perpendicular; terminates into M4 body specialists
+    ///   M3 = Spine Cap      — terminal spine; spawns M5 tip specialists
+    ///   M4 = Body Cell      — main functional type (terminal, no further division)
+    ///   M5 = Tip Cell       — spine-end specialist (terminal)
+    ///   M6 = Extra Cell     — optional third specialist for complex archetypes
+    pub fn generate_procedural(seed: u64) -> Self {
+        // ── Minimal seeded RNG ───────────────────────────────────────────────
+        struct Rng(u64);
+        impl Rng {
+            fn new(s: u64) -> Self { Self(s ^ 0xcafebabe_deadbeef) }
+            fn step(&mut self) -> u64 {
+                self.0 = self.0
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let x = self.0 ^ (self.0 >> 30);
+                let x = x.wrapping_mul(0xbf58476d1ce4e5b9);
+                let x = x ^ (x >> 27);
+                let x = x.wrapping_mul(0x94d049bb133111eb);
+                x ^ (x >> 31)
+            }
+            fn u32(&mut self, max: u32) -> u32 {
+                if max == 0 { return 0; }
+                (self.step() >> 33) as u32 % max
+            }
+            fn f32(&mut self, lo: f32, hi: f32) -> f32 {
+                let t = ((self.step() >> 33) as f32) / (0xFFFF_FFFFu64 as f32);
+                lo + t * (hi - lo)
+            }
+            fn pick<'a, T>(&mut self, s: &'a [T]) -> &'a T {
+                &s[self.u32(s.len() as u32) as usize]
+            }
+            fn i32_range(&mut self, lo: i32, hi: i32) -> i32 {
+                lo + self.u32((hi - lo) as u32) as i32
+            }
+        }
+
+        let mut rng = Rng::new(seed);
+        let mut genome = Self::new_with_random_colors();
+        genome.initial_mode = 0;
+
+        // ── Archetype ────────────────────────────────────────────────────────
+        let archetype = rng.u32(5);
+        let label = (rng.step() & 0xFFFF) as u16;
+        let names = ["Worm", "Jellyfish", "Predator", "Phototroph", "Crawler"];
+        genome.name = format!("{} {:04X}", names[archetype as usize], label);
+
+        // spine_pitch: tilt of spine from straight (degrees)
+        // ring_pitch:  angle of ring cells from perpendicular (degrees, 90=perpendicular)
+        // spine_segments: M0 max_splits (how many spine segments before egg)
+        // ring_splits:    M1 max_splits (how many ring cells per segment)
+        // body_type: cell type for M2/M4 (ring/body filler)
+        // tip_type:  cell type for M5 (spine-end specialist)
+        // extra_type: cell type for M6 (0 = none)
+        let (spine_pitch, ring_pitch, spine_segments, ring_splits,
+             body_type, tip_type, extra_type): (f32, f32, i32, i32, i32, i32, i32) =
+        match archetype {
+            0 => ( // Worm: straight spine, phagocyte body, flagella tail
+                0.0, 90.0,
+                rng.i32_range(4, 8), rng.i32_range(1, 3),
+                *rng.pick(&[2i32, 2, 4]), 1, 0,
+            ),
+            1 => ( // Jellyfish: flared bell, buoyocyte ring, flagella fringe
+                rng.f32(15.0, 30.0), 75.0,
+                rng.i32_range(2, 5), rng.i32_range(2, 4),
+                5, 1, *rng.pick(&[0i32, 3, 8]),
+            ),
+            2 => ( // Predator: compact cluster, devorocyte tips, myocyte body
+                rng.f32(20.0, 45.0), rng.f32(60.0, 80.0),
+                rng.i32_range(3, 6), rng.i32_range(1, 3),
+                *rng.pick(&[2i32, 9, 4]), 11, *rng.pick(&[0i32, 9, 6]),
+            ),
+            3 => ( // Phototroph: vertical column, photocyte panels, buoyocyte crown
+                rng.f32(0.0, 10.0), rng.f32(80.0, 90.0),
+                rng.i32_range(3, 6), rng.i32_range(2, 4),
+                3, 5, *rng.pick(&[0i32, 4, 3]),
+            ),
+            _ => ( // Crawler: flat disc, glueocyte anchors, cilia locomotion
+                rng.f32(60.0, 80.0), rng.f32(10.0, 30.0),
+                rng.i32_range(2, 4), rng.i32_range(2, 4),
+                *rng.pick(&[2i32, 4, 8]), 6, *rng.pick(&[0i32, 8, 1]),
+            ),
+        };
+
+        let has_extra = extra_type > 0;
+
+        // Shared timing — spine fast, body medium, specialists slow
+        let spine_split_mass     = rng.f32(1.2, 1.5);
+        let spine_split_interval = rng.f32(0.3, 0.7);
+        let ring_split_mass      = rng.f32(1.4, 1.8);
+        let ring_split_interval  = rng.f32(0.5, 1.0);
+        let spec_split_mass      = rng.f32(1.5, 2.0);
+        let spec_split_interval  = rng.f32(0.8, 1.5);
+
+        // Apply type-specific parameters to a mode
+        fn apply_type(m: &mut ModeSettings, cell_type: i32, rng: &mut Rng) {
+            m.cell_type = cell_type;
+            match cell_type {
+                1  => { m.swim_force = rng.f32(0.4, 0.9); }
+                5  => { m.buoyancy_force = rng.f32(0.3, 0.7); }
+                6  => { m.glueocyte_env_adhesion = true; m.glueocyte_cell_adhesion = false; }
+                8  => { m.cilia_speed = rng.f32(0.4, 1.0); m.cilia_push_bonded = false; }
+                9  => { m.myocyte_contraction = rng.f32(0.3, 0.7);
+                        m.myocyte_pulse_rate = rng.f32(0.5, 2.0); }
+                11 => { m.devorocyte_consume_range = rng.f32(0.3, 0.8);
+                        m.devorocyte_consume_rate = rng.f32(20.0, 50.0); }
+                _  => {}
+            }
+        }
+
+        // ── M0: Egg / Stem ───────────────────────────────────────────────────
+        // Self-renewing spine cell. Spawns M1 segments (child A) while renewing
+        // (child B → M0). After spine_segments splits, sheds a free detached egg.
+        {
+            let m = &mut genome.modes[0];
+            m.name = "Egg/Stem".to_string();
+            m.cell_type            = *rng.pick(&[2i32, 2, 3]);
+            m.split_mass           = spine_split_mass;
+            m.split_interval       = spine_split_interval;
+            m.parent_make_adhesion = true;
+            m.max_cell_size        = rng.f32(1.3, 1.7);
+            m.enable_parent_angle_snapping = false;
+            m.max_splits           = spine_segments;
+            m.parent_split_direction = Vec2::new(spine_pitch, 0.0);
+            m.child_a.mode_number   = 1;
+            m.child_a.keep_adhesion = true;
+            m.child_b.mode_number   = 0;
+            m.child_b.keep_adhesion = true;
+            // After spine_segments: shed free egg (child A detaches), stem continues
+            m.mode_a_after_splits               = 0;
+            m.child_a_after_split_keep_adhesion = false;
+            m.mode_b_after_splits               = 0;
+            m.child_b_after_split_keep_adhesion = true;
+        }
+
+        // ── M1: Spine Segment ────────────────────────────────────────────────
+        // Grows along the spine axis. Spawns ring cells (child A → M2) while
+        // continuing the spine (child B → M1). After ring_splits, both children
+        // become spine caps (M3) to terminate the spine cleanly.
+        {
+            let m = &mut genome.modes[1];
+            m.name = "Spine Segment".to_string();
+            m.cell_type            = *rng.pick(&[2i32, 2, 3]);
+            m.split_mass           = spine_split_mass;
+            m.split_interval       = spine_split_interval;
+            m.parent_make_adhesion = true;
+            m.max_cell_size        = rng.f32(1.2, 1.6);
+            m.enable_parent_angle_snapping = false;
+            m.max_splits           = ring_splits;
+            m.parent_split_direction = Vec2::new(spine_pitch, 0.0);
+            m.child_a.mode_number   = 2;
+            m.child_a.keep_adhesion = true;
+            m.child_b.mode_number   = 1;
+            m.child_b.keep_adhesion = true;
+            m.mode_a_after_splits               = 3;
+            m.child_a_after_split_keep_adhesion = true;
+            m.mode_b_after_splits               = 3;
+            m.child_b_after_split_keep_adhesion = true;
+        }
+
+        // ── M2: Ring Cell ────────────────────────────────────────────────────
+        // Grows perpendicular to the spine, filling out body cross-section.
+        // Self-clones 1–2 times, then both children become body specialists (M4).
+        {
+            let m = &mut genome.modes[2];
+            m.name = "Ring Cell".to_string();
+            m.split_mass           = ring_split_mass;
+            m.split_interval       = ring_split_interval;
+            m.parent_make_adhesion = true;
+            m.max_cell_size        = rng.f32(1.5, 2.0);
+            m.enable_parent_angle_snapping = false;
+            m.parent_split_direction = Vec2::new(ring_pitch, 0.0);
+            let ring_self_splits = rng.i32_range(1, 3);
+            m.max_splits = ring_self_splits;
+            m.child_a.mode_number   = 2;
+            m.child_a.keep_adhesion = true;
+            m.child_b.mode_number   = 2;
+            m.child_b.keep_adhesion = true;
+            m.mode_a_after_splits               = 4;
+            m.child_a_after_split_keep_adhesion = true;
+            m.mode_b_after_splits               = 4;
+            m.child_b_after_split_keep_adhesion = true;
+            apply_type(m, body_type, &mut rng);
+        }
+
+        // ── M3: Spine Cap ────────────────────────────────────────────────────
+        // Terminal spine cell. Spawns tip specialists (M5) then stops.
+        {
+            let m = &mut genome.modes[3];
+            m.name = "Spine Cap".to_string();
+            m.cell_type            = *rng.pick(&[2i32, 3]);
+            m.split_mass           = spec_split_mass;
+            m.split_interval       = spec_split_interval;
+            m.parent_make_adhesion = true;
+            m.max_cell_size        = rng.f32(1.3, 1.8);
+            m.enable_parent_angle_snapping = false;
+            m.parent_split_direction = Vec2::new(spine_pitch, 0.0);
+            let cap_splits = rng.i32_range(1, 3);
+            m.max_splits = cap_splits;
+            m.child_a.mode_number   = 5;
+            m.child_a.keep_adhesion = true;
+            m.child_b.mode_number   = 3;
+            m.child_b.keep_adhesion = true;
+            m.mode_a_after_splits               = 5;
+            m.child_a_after_split_keep_adhesion = true;
+            // After cap_splits: child B also becomes a tip specialist
+            m.mode_b_after_splits               = if has_extra { 6 } else { 5 };
+            m.child_b_after_split_keep_adhesion = true;
+        }
+
+        // ── M4: Body Specialist (terminal) ───────────────────────────────────
+        {
+            let m = &mut genome.modes[4];
+            m.name = "Body Cell".to_string();
+            m.split_mass           = spec_split_mass;
+            m.split_interval       = spec_split_interval;
+            m.parent_make_adhesion = false;
+            m.max_cell_size        = rng.f32(1.6, 2.0);
+            m.enable_parent_angle_snapping = false;
+            m.max_splits           = 0;
+            apply_type(m, body_type, &mut rng);
+        }
+
+        // ── M5: Tip Specialist (terminal) ────────────────────────────────────
+        {
+            let m = &mut genome.modes[5];
+            m.name = "Tip Cell".to_string();
+            m.split_mass           = spec_split_mass;
+            m.split_interval       = spec_split_interval;
+            m.parent_make_adhesion = false;
+            m.max_cell_size        = rng.f32(1.4, 1.9);
+            m.enable_parent_angle_snapping = false;
+            m.max_splits           = 0;
+            apply_type(m, tip_type, &mut rng);
+        }
+
+        // ── M6: Extra Specialist (optional, terminal) ─────────────────────────
+        if has_extra {
+            let m = &mut genome.modes[6];
+            m.name = "Extra Cell".to_string();
+            m.split_mass           = spec_split_mass;
+            m.split_interval       = spec_split_interval;
+            m.parent_make_adhesion = false;
+            m.max_cell_size        = rng.f32(1.4, 1.9);
+            m.enable_parent_angle_snapping = false;
+            m.max_splits           = 0;
+            apply_type(m, extra_type, &mut rng);
+        }
+
+        genome
+    }
 }
 
 // Helper function to convert HSV hue to RGB

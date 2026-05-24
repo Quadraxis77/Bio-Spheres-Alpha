@@ -878,7 +878,8 @@ pub fn modes_buttons(
 }
 
 /// Modes list items widget with full functionality
-/// Returns (selection_changed, initial_changed, rename_completed, color_change)
+/// Returns (selection_changed, initial_changed, rename_completed, color_change, row_rects)
+/// row_rects contains the screen rect for each rendered mode row (index-matched to modes).
 /// Validates: Requirements 3.3, 3.5, 3.6, 3.12
 pub fn modes_list_items(
     ui: &mut egui::Ui,
@@ -890,11 +891,12 @@ pub fn modes_list_items(
     color_picker_state: &mut Option<(usize, egui::ecolor::Hsva)>,
     renaming_mode: &mut Option<usize>,
     rename_buffer: &mut String,
-) -> (bool, bool, Option<(usize, String)>, Option<(usize, (u8, u8, u8))>) { // Changed return type
+) -> (bool, bool, Option<(usize, String)>, Option<(usize, (u8, u8, u8))>, Vec<egui::Rect>) {
     let mut selection_changed = false;
     let mut initial_changed = false;
     let mut rename_completed = None;
     let mut color_change = None;
+    let mut row_rects: Vec<egui::Rect> = Vec::new();
     
     // Handle color picker if open - take ownership to avoid borrowing issues
     let picker_state = color_picker_state.take();
@@ -954,7 +956,7 @@ pub fn modes_list_items(
     
     // Render mode list
     for (index, (name, rgb_color)) in modes.iter().enumerate() {
-        ui.horizontal(|ui| {
+        let row_resp = ui.horizontal(|ui| {
             // Convert RGB tuple to Color32 for UI
             let color = egui::Color32::from_rgb(rgb_color.0, rgb_color.1, rgb_color.2);
             
@@ -1095,9 +1097,10 @@ pub fn modes_list_items(
                 }
             }
         });
+        row_rects.push(row_resp.response.rect);
     }
-    
-    (selection_changed, initial_changed, rename_completed, color_change)
+
+    (selection_changed, initial_changed, rename_completed, color_change, row_rects)
 }
 
 /// Draw dashed border selection indicator with 6.0 pixel segments

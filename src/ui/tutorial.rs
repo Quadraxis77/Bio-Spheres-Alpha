@@ -104,8 +104,13 @@ impl StepGate {
 // Step data
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Which panel a tutorial step wants to point at.
+/// Which panel or element a tutorial step wants to point at.
+///
+/// Panel-level variants highlight the whole panel; element-level variants
+/// (`ModeRow`, `CellTypeDropdown`, etc.) highlight and point at the specific
+/// widget captured in `panel_rects` each frame.
 pub enum TutorialTarget {
+    // Panel-level
     ModesPanel,
     NameTypePanel,
     ParentSettingsPanel,
@@ -114,20 +119,41 @@ pub enum TutorialTarget {
     TimeSliderPanel,
     SceneManagerPanel,
     None,
+    // Element-level — point at a specific captured widget rect
+    /// The Nth mode row button in the Modes list (0-indexed).
+    ModeRow(usize),
+    /// The cell-type ComboBox in the Name & Type panel.
+    CellTypeDropdown,
+    /// The "Make Adhesion" checkbox in the Name & Type panel.
+    MakeAdhesionCheckbox,
+    /// The Max Splits slider row in the Parent Settings panel.
+    MaxSplitsSlider,
+    /// The "Child A After Splits" ComboBox row in the Parent Settings panel.
+    AfterSplitsChildA,
+    /// The "Child B After Splits" ComboBox row in the Parent Settings panel.
+    AfterSplitsChildB,
 }
 
 impl TutorialTarget {
-    /// The key used in `panel_rects` to look up this panel's screen rect.
-    pub fn panel_key(&self) -> Option<&'static str> {
+    /// The key used in `panel_rects` to look up this target's screen rect.
+    /// Returns `None` for `TutorialTarget::None`.
+    pub fn panel_key(&self) -> Option<String> {
         match self {
-            TutorialTarget::ModesPanel          => Some("Modes"),
-            TutorialTarget::NameTypePanel       => Some("NameTypeEditor"),
-            TutorialTarget::ParentSettingsPanel => Some("ParentSettings"),
-            TutorialTarget::AdhesionSettingsPanel => Some("AdhesionSettings"),
-            TutorialTarget::ChildRotationPanel  => Some("QuaternionBall"),
-            TutorialTarget::TimeSliderPanel     => Some("TimeSlider"),
-            TutorialTarget::SceneManagerPanel   => Some("SceneManager"),
-            TutorialTarget::None                => None,
+            TutorialTarget::ModesPanel            => Some("Modes".to_string()),
+            TutorialTarget::NameTypePanel         => Some("NameTypeEditor".to_string()),
+            TutorialTarget::ParentSettingsPanel   => Some("ParentSettings".to_string()),
+            TutorialTarget::AdhesionSettingsPanel => Some("AdhesionSettings".to_string()),
+            TutorialTarget::ChildRotationPanel    => Some("QuaternionBall".to_string()),
+            TutorialTarget::TimeSliderPanel       => Some("TimeSlider".to_string()),
+            TutorialTarget::SceneManagerPanel     => Some("SceneManager".to_string()),
+            TutorialTarget::None                  => None,
+            // Element-level keys — matched by `render_modes` and `render_parent_settings`
+            TutorialTarget::ModeRow(idx)          => Some(format!("mode_row_{}", idx)),
+            TutorialTarget::CellTypeDropdown      => Some("cell_type_dropdown".to_string()),
+            TutorialTarget::MakeAdhesionCheckbox  => Some("make_adhesion_checkbox".to_string()),
+            TutorialTarget::MaxSplitsSlider       => Some("max_splits_slider".to_string()),
+            TutorialTarget::AfterSplitsChildA     => Some("after_splits_child_a".to_string()),
+            TutorialTarget::AfterSplitsChildB     => Some("after_splits_child_b".to_string()),
         }
     }
 }
@@ -141,6 +167,9 @@ pub struct TutorialStepData {
     pub gate_hint: &'static str,
     pub gate: StepGate,
     pub target: TutorialTarget,
+    /// Normalised [x, y] position within the target panel where the arrow tip lands.
+    /// [0.0, 0.0] = top-left, [1.0, 1.0] = bottom-right, [0.5, 0.5] = centre.
+    pub target_pos: [f32; 2],
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -175,10 +204,14 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 • M3 — a swimming cell that moves the creature around\n\n\
                 Follow the steps one at a time. Each step explains what you're \
                 doing and why. You can't move on until you've done the action — \
-                so take your time and read everything!",
+                so take your time and read everything!\n\n\
+                Tip: you can drag the Time Slider at the bottom of the screen \
+                at any point to preview what your creature looks like so far. \
+                Use it freely as you go — it's a great way to check your work.",
         gate_hint: "",
-        gate:   StepGate::None,
-        target: TutorialTarget::None,
+        gate:       StepGate::None,
+        target:     TutorialTarget::None,
+        target_pos: [0.5, 0.5],
     },
 
     // ── 1 ── Select M1 ───────────────────────────────────────────────────────
@@ -190,9 +223,10 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 M1 is already selected by default, so all the other panels on \
                 screen are already showing M1's settings. Go ahead and confirm \
                 it's highlighted, then click Next to continue.",
-        gate_hint: "Click M1 in the Modes panel to continue.",
-        gate:   StepGate::ModeSelected(0),
-        target: TutorialTarget::ModesPanel,
+        gate_hint:  "Click M1 in the Modes panel to continue.",
+        gate:       StepGate::ModeSelected(0),
+        target:     TutorialTarget::ModeRow(0),
+        target_pos: [0.5, 0.5],
     },
 
     // ── 2 ── Modes panel controls ────────────────────────────────────────────
@@ -214,9 +248,10 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                   start that mode over.\n\n\
                 You don't need to use any of these right now — just keep them \
                 in mind as you build.",
-        gate_hint: "",
-        gate:   StepGate::None,
-        target: TutorialTarget::ModesPanel,
+        gate_hint:  "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::ModesPanel,
+        target_pos: [0.5, 0.04], // buttons + radio dot area at the very top
     },
 
     // ── 3 ── M1 cell type ────────────────────────────────────────────────────
@@ -230,12 +265,13 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 anything fancy — it just divides over and over to build up the \
                 body. Once it's done its job it will turn into the useful cells \
                 that do the real work. We'll set that up in a moment.",
-        gate_hint: "Set M1's Type to Embryocyte to continue.",
-        gate:   StepGate::CellTypeSet { mode_idx: 0, expected: 10 },
-        target: TutorialTarget::NameTypePanel,
+        gate_hint:  "Set M1's Type to Embryocyte to continue.",
+        gate:       StepGate::CellTypeSet { mode_idx: 0, expected: 10 },
+        target:     TutorialTarget::CellTypeDropdown,
+        target_pos: [0.5, 0.5],
     },
 
-    // ── 3 ── M1 adhesion ─────────────────────────────────────────────────────
+    // ── 4 ── M1 adhesion ─────────────────────────────────────────────────────
     TutorialStepData {
         title: "Step 4 — Stick the Cells Together",
         body:  "By default, when a cell divides its two children just float away \
@@ -244,13 +280,16 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 Tick the Make Adhesion checkbox in the Name & Type panel.\n\n\
                 This tells the cell to glue itself to the cell it was born from. \
                 With adhesion on, every division adds another cell to the growing \
-                cluster instead of releasing it into the world.",
-        gate_hint: "Tick Make Adhesion on M1 to continue.",
-        gate:   StepGate::AdhesionEnabled(0),
-        target: TutorialTarget::NameTypePanel,
+                cluster instead of releasing it into the world.\n\n\
+                Try it out: drag the Time Slider after ticking this to see the \
+                difference — cells should now clump together instead of drifting.",
+        gate_hint:  "Tick Make Adhesion on M1 to continue.",
+        gate:       StepGate::AdhesionEnabled(0),
+        target:     TutorialTarget::MakeAdhesionCheckbox,
+        target_pos: [0.5, 0.5],
     },
 
-    // ── 4 ── Two rotation panels explained ────────────────────────────���─────
+    // ── 5 ── Two rotation panels explained ───────────────────────────────────
     TutorialStepData {
         title: "Step 5 — Two Rotation Panels, Two Different Things",
         body:  "You'll notice there are two separate rotation panels in the \
@@ -269,12 +308,13 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 In short: Circle Sliders = how the parent is aimed when it \
                 splits. Child Rotation = where each child ends up pointing and \
                 what type it becomes.",
-        gate_hint: "",
-        gate:   StepGate::None,
-        target: TutorialTarget::ChildRotationPanel,
+        gate_hint:  "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::ChildRotationPanel,
+        target_pos: [0.5, 0.5],
     },
 
-    // ── 5 ── M1 max splits ───────────────────────────────────────────────────
+    // ── 6 ── M1 max splits ───────────────────────────────────────────────────
     TutorialStepData {
         title: "Step 6 — Limit How Many Times M1 Divides",
         body:  "Without a limit, stem cells divide forever and the creature just \
@@ -283,13 +323,17 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 Open the Parent Settings panel and drag the Max Splits slider to 3.\n\n\
                 This means each Embryocyte is only allowed to divide 3 times. \
                 After the third split it reaches its limit and something special \
-                happens — you'll set that up in the next step.",
-        gate_hint: "Set Max Splits to 3 in the Parent Settings panel to continue.",
-        gate:   StepGate::MaxSplitsSet { mode_idx: 0, expected: 3 },
-        target: TutorialTarget::ParentSettingsPanel,
+                happens — you'll set that up in the next step.\n\n\
+                Reminder: you can drag the Time Slider at any point to preview \
+                the current state of your creature. At this stage it will be a \
+                small growing cluster of Embryocytes.",
+        gate_hint:  "Set Max Splits to 3 in the Parent Settings panel to continue.",
+        gate:       StepGate::MaxSplitsSet { mode_idx: 0, expected: 3 },
+        target:     TutorialTarget::MaxSplitsSlider,
+        target_pos: [0.5, 0.5],
     },
 
-    // ── 5 ── M1 after-splits routing ─────────────────────────────────────────
+    // ── 7 ── M1 after-splits routing ─────────────────────────────────────────
     TutorialStepData {
         title: "Step 7 — Tell M1 What to Become",
         body:  "Now that Max Splits is set, two new dropdowns have appeared at \
@@ -300,24 +344,26 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 cluster — then on the final split, produce one energy cell (M2) \
                 and one swimming cell (M3). The embryo has done its job and hands \
                 off to the mature cells.",
-        gate_hint: "Set After-Splits Child A → M2 and Child B → M3 to continue.",
-        gate:   StepGate::AfterSplitsRouting { mode_idx: 0, a_target: 1, b_target: 2 },
-        target: TutorialTarget::ParentSettingsPanel,
+        gate_hint:  "Set After-Splits Child A → M2 and Child B → M3 to continue.",
+        gate:       StepGate::AfterSplitsRouting { mode_idx: 0, a_target: 1, b_target: 2 },
+        target:     TutorialTarget::AfterSplitsChildA,
+        target_pos: [0.5, 0.5],
     },
 
-    // ── 6 ── Select M2 ───────────────────────────────────────────────────────
+    // ── 8 ── Select M2 ───────────────────────────────────────────────────────
     TutorialStepData {
         title: "Step 8 — Open Mode 2",
         body:  "Great work — M1 is fully set up! Now let's define the mature \
                 cells that M1 will turn into.\n\n\
                 Click M2 in the Modes panel. The editing panels will switch over \
                 to M2's settings, which are all blank defaults right now.",
-        gate_hint: "Click M2 in the Modes panel to continue.",
-        gate:   StepGate::ModeSelected(1),
-        target: TutorialTarget::ModesPanel,
+        gate_hint:  "Click M2 in the Modes panel to continue.",
+        gate:       StepGate::ModeSelected(1),
+        target:     TutorialTarget::ModeRow(1),
+        target_pos: [0.5, 0.5],
     },
 
-    // ── 7 ── M2 cell type ────────────────────────────────────────────────────
+    // ── 9 ── M2 cell type ────────────────────────────────────────────────────
     TutorialStepData {
         title: "Step 9 — Make M2 an Energy Cell",
         body:  "Open the Type dropdown in the Name & Type panel and choose \
@@ -327,12 +373,13 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 it just sits there quietly doing photosynthesis, keeping the \
                 creature alive even when there's no food nearby.\n\n\
                 This will be one of the main workers in your mature creature.",
-        gate_hint: "Set M2's Type to Photocyte to continue.",
-        gate:   StepGate::CellTypeSet { mode_idx: 1, expected: 3 },
-        target: TutorialTarget::NameTypePanel,
+        gate_hint:  "Set M2's Type to Photocyte to continue.",
+        gate:       StepGate::CellTypeSet { mode_idx: 1, expected: 3 },
+        target:     TutorialTarget::CellTypeDropdown,
+        target_pos: [0.5, 0.5],
     },
 
-    // ── 8 ── M2 adhesion ─────────────────────────────────────────────────────
+    // ── 10 ── M2 adhesion ────────────────────────────────────────────────────
     TutorialStepData {
         title: "Step 10 — Keep the Energy Cell in the Body",
         body:  "Just like with M1, we need to turn on adhesion for M2.\n\n\
@@ -341,12 +388,13 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 Photocyte, that Photocyte needs to stay attached to the rest of \
                 the body. If it floats away, its energy goes with it and the \
                 other cells stop benefiting from it.",
-        gate_hint: "Tick Make Adhesion on M2 to continue.",
-        gate:   StepGate::AdhesionEnabled(1),
-        target: TutorialTarget::NameTypePanel,
+        gate_hint:  "Tick Make Adhesion on M2 to continue.",
+        gate:       StepGate::AdhesionEnabled(1),
+        target:     TutorialTarget::MakeAdhesionCheckbox,
+        target_pos: [0.5, 0.5],
     },
 
-    // ── 9 ── M2 max splits = 0 ───────────────────────────────────────────────
+    // ── 11 ── M2 max splits = 0 ──────────────────────────────────────────────
     TutorialStepData {
         title: "Step 11 — Make M2 a Dead-End Cell",
         body:  "The Photocyte's only job is to harvest light — it should never \
@@ -356,23 +404,25 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 just sit quietly in the body for the rest of the simulation, \
                 doing its job. This is how you create a stable, mature cell type \
                 — give it useful behaviour and stop it from growing.",
-        gate_hint: "Set Max Splits to 0 on M2 in the Parent Settings panel to continue.",
-        gate:   StepGate::MaxSplitsSet { mode_idx: 1, expected: 0 },
-        target: TutorialTarget::ParentSettingsPanel,
+        gate_hint:  "Set Max Splits to 0 on M2 in the Parent Settings panel to continue.",
+        gate:       StepGate::MaxSplitsSet { mode_idx: 1, expected: 0 },
+        target:     TutorialTarget::MaxSplitsSlider,
+        target_pos: [0.5, 0.5],
     },
 
-    // ── 10 ── Select M3 ──────────────────────────────────────────────────────
+    // ── 12 ── Select M3 ──────────────────────────────────────────────────────
     TutorialStepData {
         title: "Step 12 — Open Mode 3",
         body:  "One more cell type to go — the swimmer that will actually move \
                 your creature through the world.\n\n\
                 Click M3 in the Modes panel.",
-        gate_hint: "Click M3 in the Modes panel to continue.",
-        gate:   StepGate::ModeSelected(2),
-        target: TutorialTarget::ModesPanel,
+        gate_hint:  "Click M3 in the Modes panel to continue.",
+        gate:       StepGate::ModeSelected(2),
+        target:     TutorialTarget::ModeRow(2),
+        target_pos: [0.5, 0.5],
     },
 
-    // ── 11 ── M3 cell type ───────────────────────────────────────────────────
+    // ── 13 ── M3 cell type ───────────────────────────────────────────────────
     TutorialStepData {
         title: "Step 13 — Give M3 a Flagella",
         body:  "Open the Type dropdown and choose Flagellocyte.\n\n\
@@ -383,12 +433,13 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 Because every Embryocyte produces one Flagellocyte when it \
                 finishes, your creature will end up with a good spread of \
                 swimmers across the body.",
-        gate_hint: "Set M3's Type to Flagellocyte to continue.",
-        gate:   StepGate::CellTypeSet { mode_idx: 2, expected: 1 },
-        target: TutorialTarget::NameTypePanel,
+        gate_hint:  "Set M3's Type to Flagellocyte to continue.",
+        gate:       StepGate::CellTypeSet { mode_idx: 2, expected: 1 },
+        target:     TutorialTarget::CellTypeDropdown,
+        target_pos: [0.5, 0.5],
     },
 
-    // ── 12 ── M3 adhesion ────────────────────────────────────────────────────
+    // ── 14 ── M3 adhesion ────────────────────────────────────────────────────
     TutorialStepData {
         title: "Step 14 — Attach the Swimmer to the Body",
         body:  "Turn on Make Adhesion for M3.\n\n\
@@ -396,12 +447,13 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 on its own — it has no idea there's a creature it's supposed to \
                 be part of. With adhesion on, its push is applied directly to the \
                 cluster and the whole organism moves.",
-        gate_hint: "Tick Make Adhesion on M3 to continue.",
-        gate:   StepGate::AdhesionEnabled(2),
-        target: TutorialTarget::NameTypePanel,
+        gate_hint:  "Tick Make Adhesion on M3 to continue.",
+        gate:       StepGate::AdhesionEnabled(2),
+        target:     TutorialTarget::MakeAdhesionCheckbox,
+        target_pos: [0.5, 0.5],
     },
 
-    // ── 13 ── M3 max splits = 0 ──────────────────────────────────────────────
+    // ── 15 ── M3 max splits = 0 ──────────────────────────────────────────────
     TutorialStepData {
         title: "Step 15 — Make M3 a Dead-End Cell Too",
         body:  "Set Max Splits to 0 for M3 in the Parent Settings panel.\n\n\
@@ -413,12 +465,13 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 → On its last split, M1 hands off to M2 and M3\n\
                 → M2 and M3 never divide — they just work\n\
                 The creature will grow, mature, and then hold its shape forever.",
-        gate_hint: "Set Max Splits to 0 on M3 in the Parent Settings panel to continue.",
-        gate:   StepGate::MaxSplitsSet { mode_idx: 2, expected: 0 },
-        target: TutorialTarget::ParentSettingsPanel,
+        gate_hint:  "Set Max Splits to 0 on M3 in the Parent Settings panel to continue.",
+        gate:       StepGate::MaxSplitsSet { mode_idx: 2, expected: 0 },
+        target:     TutorialTarget::MaxSplitsSlider,
+        target_pos: [0.5, 0.5],
     },
 
-    // ── 14 ── Preview ────────────────────────────────────────────────────────
+    // ── 16 ── Preview ────────────────────────────────────────────────────────
     TutorialStepData {
         title: "Step 16 — Watch It Come to Life",
         body:  "Drag the Time Slider at the bottom of the screen to fast-forward \
@@ -430,12 +483,13 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 cell types — and the creature settles into its final shape.\n\n\
                 The Flagellocytes will begin beating their tails and pushing the \
                 whole cluster through the fluid.",
-        gate_hint: "",
-        gate:   StepGate::None,
-        target: TutorialTarget::TimeSliderPanel,
+        gate_hint:  "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::TimeSliderPanel,
+        target_pos: [0.5, 0.5],
     },
 
-    // ── 15 ── Complete ───────────────────────────────────────────────────────
+    // ── 17 ── Complete ───────────────────────────────────────────────────────
     TutorialStepData {
         title: "You Did It!",
         body:  "You've just built a living creature with a real lifecycle — \
@@ -449,9 +503,10 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                   or more rigid\n\
                 • When you're happy, click Live Simulation to release your \
                   creature into the full GPU world and watch it survive on its own",
-        gate_hint: "",
-        gate:   StepGate::None,
-        target: TutorialTarget::None,
+        gate_hint:  "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::None,
+        target_pos: [0.5, 0.5],
     },
 ];
 
@@ -541,14 +596,24 @@ pub fn render_tutorial(
 
     let step_index  = state.current_step;
     let total       = TutorialState::total_steps();
-    let step        = state.current();
-    let gate_ok     = step.gate.is_satisfied(genome, selected_mode);
-    let has_hint    = !step.gate_hint.is_empty();
-    let target_key  = step.target.panel_key();
+    // Extract all values we need from the step before any mutable borrows of state.
+    // `target_key` is Option<String> because element-level keys are dynamic (e.g. "mode_row_0").
+    let (gate_ok, has_hint, target_key, target_pos, step_title, step_body, step_gate_hint) = {
+        let step = state.current();
+        (
+            step.gate.is_satisfied(genome, selected_mode),
+            !step.gate_hint.is_empty(),
+            step.target.panel_key(),   // Option<String>
+            step.target_pos,
+            step.title,
+            step.body,
+            step.gate_hint,
+        )
+    };
 
     // ── Panel highlight ──────────────────────────────────────────────────────
-    if let Some(key) = target_key {
-        if let Some(&panel_rect) = panel_rects.get(key) {
+    if let Some(ref key) = target_key {
+        if let Some(&panel_rect) = panel_rects.get(key.as_str()) {
             let bg = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Background,
                 egui::Id::new("tut_panel_bg"),
@@ -585,19 +650,27 @@ pub fn render_tutorial(
             color: egui::Color32::from_black_alpha(130),
         });
 
-    egui::Window::new("▶  Tutorial")
+    // Place the dialogue at the top-left of the viewport, falling back to the
+    // screen origin if the viewport rect hasn't been captured yet.
+    let viewport_origin = panel_rects
+        .get("Viewport")
+        .map(|r| r.min + egui::vec2(10.0, 10.0))
+        .unwrap_or(egui::pos2(10.0, 10.0));
+
+    let win_response = egui::Window::new("▶  Tutorial")
         .id(egui::Id::new("tutorial_dialog"))
         .collapsible(false)
         .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .fixed_size([400.0, 0.0])
+        .default_pos(viewport_origin)
+        .fixed_size([380.0, 0.0])
         .frame(frame)
         .show(ctx, |ui| {
-            dialogue_rect = Some(ui.max_rect().expand(16.0));
+            // dialogue_rect is captured from the outer response below
+            let _ = ui.max_rect(); // keep borrow happy
 
             // Title
             ui.label(
-                egui::RichText::new(step.title)
+                egui::RichText::new(step_title)
                     .strong()
                     .size(15.0)
                     .color(TEAL),
@@ -607,7 +680,7 @@ pub fn render_tutorial(
             ui.add_space(5.0);
 
             // Body
-            ui.label(egui::RichText::new(step.body).size(13.0));
+            ui.label(egui::RichText::new(step_body).size(13.0));
             ui.add_space(10.0);
 
             // Gate status row (only shown for gated steps)
@@ -625,7 +698,7 @@ pub fn render_tutorial(
                 } else {
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new(format!("⟳  {}", step.gate_hint))
+                            egui::RichText::new(format!("⟳  {}", step_gate_hint))
                                 .size(12.0)
                                 .color(GATE_LOCKED),
                         );
@@ -685,19 +758,29 @@ pub fn render_tutorial(
             });
         });
 
+    // Capture the true outer window rect (includes title bar + frame).
+    if let Some(ref r) = win_response {
+        dialogue_rect = Some(r.response.rect);
+    }
+
     // ── Apply navigation ─────────────────────────────────────────────────────
     if close_clicked { state.close(); return; }
     if next_clicked  { state.next(); }
     else if prev_clicked { state.prev(); }
 
     // ── Schematic pointer line ───────────────────────────────────────────────
-    if let (Some(d_rect), Some(key)) = (dialogue_rect, target_key) {
-        if let Some(&p_rect) = panel_rects.get(key) {
+    if let (Some(d_rect), Some(ref key)) = (dialogue_rect, target_key) {
+        if let Some(&p_rect) = panel_rects.get(key.as_str()) {
+            let tp = target_pos;
+            let tip = egui::pos2(
+                p_rect.left() + p_rect.width()  * tp[0],
+                p_rect.top()  + p_rect.height() * tp[1],
+            );
             let painter = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground,
                 egui::Id::new("tut_pointer"),
             ));
-            draw_schematic_pointer(&painter, d_rect, p_rect, ctx, gate_ok);
+            draw_schematic_pointer(&painter, d_rect, tip, ctx, gate_ok);
         }
     }
 
@@ -708,21 +791,22 @@ pub fn render_tutorial(
 // Schematic pointer drawing
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Draw a high-tech schematic pointer from `d_rect` (dialogue) to `p_rect` (panel).
+/// Draw a high-tech schematic pointer from the nearest edge-midpoint of
+/// `d_rect` (dialogue) to the exact `tip` position within the target panel.
 ///
 /// Colour shifts: amber when the gate is locked, teal when open/satisfied.
 fn draw_schematic_pointer(
     painter:  &egui::Painter,
     d_rect:   egui::Rect,
-    p_rect:   egui::Rect,
+    tip:      egui::Pos2,
     ctx:      &egui::Context,
     gate_ok:  bool,
 ) {
     let line_color = if gate_ok { TEAL } else { GATE_LOCKED };
     let dim_color  = if gate_ok { TEAL_DIM } else { egui::Color32::from_rgb(100, 70, 0) };
 
-    let start = closest_edge_point(d_rect, p_rect.center());
-    let end   = closest_edge_point(p_rect, d_rect.center());
+    let start = nearest_edge_midpoint(d_rect, tip);
+    let end   = tip;
 
     if (end - start).length() < 10.0 { return; }
 
@@ -794,28 +878,22 @@ fn draw_schematic_pointer(
     painter.circle_stroke(scan_pos, 4.5, egui::Stroke::new(1.0, scan_ring));
 }
 
-/// Return the edge point of `rect` that a ray from `rect`'s centre toward
-/// `toward` would exit through.
-fn closest_edge_point(rect: egui::Rect, toward: egui::Pos2) -> egui::Pos2 {
+/// Return the midpoint of whichever edge of `rect` faces `toward`.
+///
+/// Compared to a ray-exit approach, this always produces a clean anchor at
+/// the centre of one of the four sides — the arrow never slides around
+/// diagonally as the two rects move relative to each other.
+fn nearest_edge_midpoint(rect: egui::Rect, toward: egui::Pos2) -> egui::Pos2 {
     let c  = rect.center();
     let dx = toward.x - c.x;
     let dy = toward.y - c.y;
-    let hw = rect.width()  * 0.5;
-    let hh = rect.height() * 0.5;
 
-    if hw < 1.0 || hh < 1.0 || (dx == 0.0 && dy == 0.0) {
-        return c;
-    }
-
-    let tx = if dx != 0.0 { hw / dx.abs() } else { f32::INFINITY };
-    let ty = if dy != 0.0 { hh / dy.abs() } else { f32::INFINITY };
-
-    if tx <= ty {
-        let exit_x = if dx >= 0.0 { rect.right() } else { rect.left() };
-        egui::Pos2::new(exit_x, (c.y + dy * tx).clamp(rect.top(), rect.bottom()))
+    if dx.abs() >= dy.abs() {
+        // Left or right edge
+        egui::pos2(if dx >= 0.0 { rect.right() } else { rect.left() }, c.y)
     } else {
-        let exit_y = if dy >= 0.0 { rect.bottom() } else { rect.top() };
-        egui::Pos2::new((c.x + dx * ty).clamp(rect.left(), rect.right()), exit_y)
+        // Top or bottom edge
+        egui::pos2(c.x, if dy >= 0.0 { rect.bottom() } else { rect.top() })
     }
 }
 

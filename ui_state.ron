@@ -19,8 +19,8 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "SceneManager",
                 "RightPanel",
+                "SceneManager",
                 "Viewport",
             ],
             lock_settings: (
@@ -42,16 +42,16 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "Modes",
-                "BottomPanel",
                 "LeftPanel",
                 "CircleSliders",
+                "BottomPanel",
                 "NameTypeEditor",
                 "TimeSlider",
+                "Viewport",
+                "SceneManager",
+                "Modes",
                 "RightPanel",
                 "QuaternionBall",
-                "SceneManager",
-                "Viewport",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -105,7 +105,7 @@
         ),
     ),
     tutorial: (
-        active: true,
+        active: false,
         current_step: 1,
         ever_shown: true,
     ),

@@ -50,7 +50,12 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
         match tab {
-            Panel::Viewport => render_viewport(ui, self.viewport_rect),
+            Panel::Viewport => {
+                render_viewport(ui, self.viewport_rect);
+                if let Some(r) = *self.viewport_rect {
+                    self.context.editor_state.panel_rects.insert("Viewport".to_string(), r);
+                }
+            }
             Panel::LeftPanel => render_placeholder_panel(ui, "Left Panel"),
             Panel::RightPanel => render_placeholder_panel(ui, "Right Panel"),
             Panel::BottomPanel => render_placeholder_panel(ui, "Bottom Panel"),
@@ -2044,7 +2049,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
     let available_width = ui.available_width();
     let copy_into_mode = context.editor_state.copy_into_dialog_open;
     
-    let (selection_changed, initial_changed, rename_completed, color_change) = modes_list_items(
+    let (selection_changed, initial_changed, rename_completed, color_change, row_rects) = modes_list_items(
         ui,
         &modes_data,
         &mut selected_index,
@@ -2055,6 +2060,11 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         &mut context.editor_state.renaming_mode,
         &mut context.editor_state.rename_buffer,
     );
+
+    // Store each mode row's rect so the tutorial arrow can point at specific rows.
+    for (i, rect) in row_rects.iter().enumerate() {
+        context.editor_state.panel_rects.insert(format!("mode_row_{}", i), *rect);
+    }
     
     // Handle mode selection change
     if selection_changed {
@@ -2156,7 +2166,7 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
 
-            // Three buttons at the top
+            // Genome file buttons — row 1
             ui.horizontal(|ui| {
                 if ui.button("Save Genome").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
@@ -2192,6 +2202,25 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
                 }
             });
 
+            // Genome file buttons — row 2
+            ui.horizontal(|ui| {
+                if ui.button("🎲 Procedural")
+                    .on_hover_text(
+                        "Procedurally generate a creature with a random body plan.
+                         All creatures are guaranteed to reproduce by shedding a
+                         single detached egg cell that grows into the full organism."
+                    )
+                    .clicked()
+                {
+                    let seed = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos() as u64)
+                        .unwrap_or(0xdeadbeef_cafebabe);
+                    *context.genome = crate::genome::Genome::generate_procedural(seed);
+                    context.editor_state.selected_mode_index = 0;
+                }
+            });
+
             ui.add_space(4.0);
 
             // Genome Name label and field on same line
@@ -2214,7 +2243,7 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
             ui.horizontal(|ui| {
                 ui.label("Type:");
                 let cell_types = crate::cell::types::CellType::all();
-                egui::ComboBox::from_id_salt("cell_type")
+                let combo_resp = egui::ComboBox::from_id_salt("cell_type")
                     .selected_text(cell_types[mode.cell_type as usize].name())
                     .show_ui(ui, |ui| {
                         for ct in cell_types.iter() {
@@ -2222,8 +2251,14 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
                                 .on_hover_text(ct.tooltip());
                         }
                     });
+                context.editor_state.panel_rects.insert(
+                    "cell_type_dropdown".to_string(), combo_resp.response.rect,
+                );
 
-                ui.checkbox(&mut mode.parent_make_adhesion, "Make Adhesion");
+                let chk = ui.checkbox(&mut mode.parent_make_adhesion, "Make Adhesion");
+                context.editor_state.panel_rects.insert(
+                    "make_adhesion_checkbox".to_string(), chk.rect,
+                );
             });
         });
 }
@@ -3257,17 +3292,17 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
 
                 ui.label("Max Splits:");
-                ui.horizontal(|ui| {
+                let max_splits_row = ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                     ui.style_mut().spacing.slider_width = slider_width;
                     ui.add(egui::Slider::new(&mut mode.max_splits, -1..=20).show_value(false));
-                    
+
                     // Custom DragValue that shows infinity symbol for -1
                     let mut drag_value = egui::DragValue::new(&mut mode.max_splits)
                         .speed(0.1)
                         .range(-1.0..=20.0);
-                    
+
                     // Custom formatter to show ∞ for -1
                     drag_value = drag_value.custom_formatter(|n, _| {
                         if n == -1.0 {
@@ -3276,7 +3311,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             format!("{}", n as i32)
                         }
                     });
-                    
+
                     // Custom parser to handle ∞ input
                     drag_value = drag_value.custom_parser(|s| {
                         if s == "∞" || s == "inf" || s == "infinity" {
@@ -3285,9 +3320,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             s.parse::<f64>().ok()
                         }
                     });
-                    
+
                     ui.add(drag_value);
                 });
+                context.editor_state.panel_rects.insert(
+                    "max_splits_slider".to_string(), max_splits_row.response.rect,
+                );
                 
                 // Mode after max splits reached - only show if max_splits is not infinite
                 if mode.max_splits >= 0 {
@@ -3303,7 +3341,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     
                     ui.add_space(4.0);
                     ui.label("Child A After Splits:");
-                    ui.horizontal(|ui| {
+                    let after_splits_a_row = ui.horizontal(|ui| {
                         let selected_text = if current_mode_a < 0 {
                             "Default".to_string()
                         } else if (current_mode_a as usize) < mode_count {
@@ -3311,7 +3349,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         } else {
                             "Invalid".to_string()
                         };
-                        
+
                         egui::ComboBox::from_id_salt("mode_a_after_splits")
                             .selected_text(selected_text)
                             .width(ui.available_width() - 10.0)
@@ -3338,9 +3376,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                 }
                             });
                     });
-                    
+                    context.editor_state.panel_rects.insert(
+                        "after_splits_child_a".to_string(), after_splits_a_row.response.rect,
+                    );
+
                     ui.label("Child B After Splits:");
-                    ui.horizontal(|ui| {
+                    let after_splits_b_row = ui.horizontal(|ui| {
                         let selected_text = if current_mode_b < 0 {
                             "Default".to_string()
                         } else if (current_mode_b as usize) < mode_count {
@@ -3348,7 +3389,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         } else {
                             "Invalid".to_string()
                         };
-                        
+
                         egui::ComboBox::from_id_salt("mode_b_after_splits")
                             .selected_text(selected_text)
                             .width(ui.available_width() - 10.0)
@@ -3375,6 +3416,9 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                 }
                             });
                     });
+                    context.editor_state.panel_rects.insert(
+                        "after_splits_child_b".to_string(), after_splits_b_row.response.rect,
+                    );
                     
                     // Apply selections after combo boxes are done
                     if let Some(new_val) = new_mode_a {
@@ -3512,12 +3556,11 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
         let selected_idx = context.editor_state.selected_mode_index;
         let has_valid_mode = selected_idx < context.genome.modes.len();
 
-        // Calculate responsive ball size - use more of the available width
+        // Calculate responsive ball size - each ball gets half the panel width
         let available_width = ui.available_width();
-        // Reserve minimal space for padding and two balls side by side
-        let max_radius = ((available_width - 20.0) / 2.0 - 8.0) / 2.0; // Reduced margins
-        let ball_radius = max_radius.clamp(20.0, 80.0); // Allow larger radius
-        let ball_container_width = ball_radius * 2.0 + 8.0; // Minimal container padding
+        let column_width = (available_width / 2.0).floor();
+        let ball_radius = ((column_width - 16.0) / 2.0).clamp(20.0, 80.0);
+        let ball_container_width = column_width;
 
         // Use persistent orientations from editor state
         let mut child_a_orientation = context.editor_state.child_a_orientation;
@@ -3525,7 +3568,7 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
 
         // Display balls horizontally with controls directly below each ball
         ui.horizontal_top(|ui| {
-            ui.add_space(4.0); // Reduced left margin
+            ui.spacing_mut().item_spacing.x = 0.0;
 
             // Ball 1 (Child A) with controls below
             ui.allocate_ui_with_layout(
@@ -3693,7 +3736,7 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                 }
             );
 
-            ui.add_space(4.0); // Minimal spacing between balls
+            ui.add_space(0.0); // no gap between columns
 
             // Ball 2 (Child B) with controls below
             ui.allocate_ui_with_layout(

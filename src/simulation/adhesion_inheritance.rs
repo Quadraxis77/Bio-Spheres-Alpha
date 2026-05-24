@@ -32,10 +32,21 @@ pub fn inherit_adhesions_on_division(
         None => return,
     };
 
-    // Match GPU: always use normal keep flags (GPU buffer is static per-mode,
-    // never switches to after_split variants based on will_reach_max_splits).
-    let child_a_keep = parent_mode.child_a.keep_adhesion;
-    let child_b_keep = parent_mode.child_b.keep_adhesion;
+    // Use after_split keep flags when this division triggers the max_splits transition,
+    // otherwise use the normal keep flags. This is what detaches the egg: mode 0 has
+    // child_a_after_split_keep_adhesion = false so the egg spawns free.
+    let will_reach_max_splits = parent_mode.max_splits >= 0
+        && (parent_split_count + 1) >= parent_mode.max_splits;
+    let child_a_keep = if will_reach_max_splits {
+        parent_mode.child_a_after_split_keep_adhesion
+    } else {
+        parent_mode.child_a.keep_adhesion
+    };
+    let child_b_keep = if will_reach_max_splits {
+        parent_mode.child_b_after_split_keep_adhesion
+    } else {
+        parent_mode.child_b.keep_adhesion
+    };
 
     // CRITICAL: Collect parent's adhesion connections BEFORE clearing indices
     // (child A reuses parent index, so clearing would lose the references)
@@ -83,9 +94,7 @@ pub fn inherit_adhesions_on_division(
     let child_a_pos_parent_frame = split_dir_normalized * child_offset;
     let child_b_pos_parent_frame = -split_dir_normalized * child_offset;
 
-    // Match GPU: use will_reach_max_splits for orientation selection
-    let will_reach_max_splits = parent_mode.max_splits >= 0
-        && (parent_split_count + 1) >= parent_mode.max_splits;
+    // Match GPU: use will_reach_max_splits for orientation selection (already computed above)
     let child_a_orientation_final = if will_reach_max_splits {
         parent_mode.child_a_after_split_orientation
     } else {

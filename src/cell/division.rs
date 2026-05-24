@@ -312,12 +312,18 @@ pub fn division_step(
                 }
 
                 // Determine split counts: reset to 0 if mode changes, otherwise inherit parent's count + 1
-                let child_a_split_count = if child_a_mode_idx != mode_index {
+                // Determine split counts: reset to 0 if mode changes, otherwise inherit parent's count + 1.
+                // Also reset to 0 when the after-splits routing fires — the explicit mode_a/b_after_splits
+                // fields represent a deliberate lifecycle transition (e.g. stem cell shedding an egg and
+                // then continuing to grow). Without the reset, the child that stays in the same mode via
+                // mode_b_after_splits would accumulate a split_count >= max_splits and immediately fail
+                // can_split_by_count on the very next tick, halting the stem forever.
+                let child_a_split_count = if child_a_mode_idx != mode_index || will_reach_max_splits {
                     0
                 } else {
                     parent_split_count + 1
                 };
-                let child_b_split_count = if child_b_mode_idx != mode_index {
+                let child_b_split_count = if child_b_mode_idx != mode_index || will_reach_max_splits {
                     0
                 } else {
                     parent_split_count + 1
@@ -532,9 +538,13 @@ pub fn division_step(
             let parent_mode = genome.modes.get(data.parent_mode_idx);
 
             if let Some(mode) = parent_mode {
-                // parent_make_adhesion always creates a sibling bond, regardless of keep_adhesion
-                // (matches GPU line 588: only checks make_adhesion flag)
-                if mode.parent_make_adhesion {
+                // When will_reach_max_splits fires and child_a_after_split_keep_adhesion is false,
+                // child A is the detached egg — do NOT create a sibling bond to it.
+                let will_reach_max_splits = mode.max_splits >= 0
+                    && (data.parent_split_count + 1) >= mode.max_splits;
+                let egg_detach = will_reach_max_splits && !mode.child_a_after_split_keep_adhesion;
+
+                if mode.parent_make_adhesion && !egg_detach {
                         // Calculate anchor directions based on compounded genome orientations (matches Python reference)
                         // Python: angle1_relative = (spawn_direction + math.pi) - daughter1.arrow_direction
                         // Python: angle2_relative = spawn_direction - daughter2.arrow_direction

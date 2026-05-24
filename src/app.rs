@@ -1998,7 +1998,27 @@ impl ApplicationHandler for AppState {
             force_fallback_adapter: false,
         }))
         .unwrap();
-        
+
+        // Log adapter info to help diagnose GPU-specific issues
+        let adapter_info = adapter.get_info();
+        log::info!(
+            "GPU adapter: {} ({:?}) driver: {}",
+            adapter_info.name, adapter_info.backend, adapter_info.driver
+        );
+
+        // Query what the adapter actually supports and clamp our requests to those limits.
+        // Hardcoding 512 MB will panic on AMD drivers that report lower limits.
+        let adapter_limits = adapter.limits();
+        let storage_binding_limit = adapter_limits.max_storage_buffer_binding_size
+            .min(512 * 1024 * 1024);
+        let buffer_size_limit = adapter_limits.max_buffer_size
+            .min(512 * 1024 * 1024);
+        log::info!(
+            "Adapter limits — max_storage_buffer_binding_size: {} MB, max_buffer_size: {} MB",
+            adapter_limits.max_storage_buffer_binding_size / (1024 * 1024),
+            adapter_limits.max_buffer_size / (1024 * 1024),
+        );
+
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("Bio-Spheres Device"),
@@ -2007,10 +2027,10 @@ impl ApplicationHandler for AppState {
                     // Cell state write bind group uses 35 storage buffers (0-34) after splitting
                     // genome_mode_data and mode_properties into 5 sub-buffers each
                     max_storage_buffers_per_shader_stage: 40,
-                    // adhesion_connections at 200k cells = 200k*10*104 = ~208 MB, exceeds the
-                    // default 128 MB limit. Request 512 MB to cover max capacity with headroom.
-                    max_storage_buffer_binding_size: 512 * 1024 * 1024,
-                    max_buffer_size: 512 * 1024 * 1024,
+                    // Clamp to what the adapter actually supports — requesting more than the
+                    // adapter limit causes request_device to fail (panic on .unwrap()).
+                    max_storage_buffer_binding_size: storage_binding_limit,
+                    max_buffer_size: buffer_size_limit,
                     ..wgpu::Limits::default()
                 },
                 memory_hints: Default::default(),
@@ -2018,7 +2038,7 @@ impl ApplicationHandler for AppState {
                 experimental_features: Default::default(),
             },
         ))
-        .unwrap();
+        .expect("Failed to create wgpu device — check log for adapter limits");
         
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
@@ -2048,7 +2068,12 @@ impl ApplicationHandler for AppState {
             format: surface_format,
             width,
             height,
-            present_mode: wgpu::PresentMode::Immediate,
+            // Immediate (no vsync) is not guaranteed on all drivers — fall back to Fifo.
+            present_mode: if surface_caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
+                wgpu::PresentMode::Immediate
+            } else {
+                wgpu::PresentMode::Fifo
+            },
             alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
