@@ -38,7 +38,7 @@ sysinfo = "0.32"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["wincon", "consoleapi", "winuser"] }
+winapi = { version = "0.3", features = ["wincon", "consoleapi", "winuser", "libloaderapi", "basetsd"] }
 
 [build-dependencies]
 winres = "0.1"

@@ -1,5 +1,5 @@
 (
-    current_mode: Preview,
+    current_mode: Gpu,
     ui_scale: 1.0,
     windows_locked: false,
     lock_tab_bar: false,
@@ -19,15 +19,15 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "QuaternionBall",
-                "TimeSlider",
                 "NameTypeEditor",
-                "LeftPanel",
-                "Viewport",
+                "TimeSlider",
                 "RightPanel",
-                "CircleSliders",
-                "SceneManager",
+                "LeftPanel",
                 "Modes",
+                "Viewport",
+                "CircleSliders",
+                "QuaternionBall",
+                "SceneManager",
                 "BottomPanel",
             ],
             lock_settings: (
@@ -49,9 +49,9 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "Viewport",
-                "SceneManager",
                 "RightPanel",
+                "SceneManager",
+                "Viewport",
             ],
             lock_settings: (
                 lock_tab_bar: false,

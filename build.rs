@@ -1,5 +1,7 @@
 fn main() {
     // Embed default layout files
+    println!("cargo:rerun-if-changed=assets/icon.ico");
+    println!("cargo:rerun-if-changed=assets/icon.png");
     println!("cargo:rerun-if-changed=default_dock_state_preview.ron");
     println!("cargo:rerun-if-changed=default_dock_state_gpu.ron");
     // Embed default UI state file

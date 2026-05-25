@@ -2110,12 +2110,92 @@ impl ApplicationHandler for AppState {
             return;
         }
         
+        // Build window icon from embedded PNG so it is set at creation time.
+        // Passing it via with_window_icon() is required for Wayland compositors
+        // and ensures the taskbar / launcher shows the correct icon immediately.
+        let window_icon = {
+            let icon_bytes = include_bytes!("../assets/icon.png");
+            image::load_from_memory(icon_bytes).ok().and_then(|img| {
+                let img = img.into_rgba8();
+                let (w, h) = img.dimensions();
+                winit::window::Icon::from_rgba(img.into_raw(), w, h).ok()
+            })
+        };
+
         let window_attributes = Window::default_attributes()
             .with_title("Bio-Spheres Preview")
-            .with_inner_size(winit::dpi::PhysicalSize::new(1920, 1080));
-        
+            .with_inner_size(winit::dpi::PhysicalSize::new(1920, 1080))
+            .with_window_icon(window_icon);
+
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
         window.set_maximized(true);
+
+        // On Windows the taskbar icon comes from the window CLASS icon, not the
+        // window instance icon. winit registers its class without an icon, so we
+        // patch it after creation using SetClassLongPtrW (GCLP_HICON / GCLP_HICONSM)
+        // and also send WM_SETICON for the instance. Both are needed for full coverage
+        // across taskbar, alt-tab, and title bar.
+        #[cfg(target_os = "windows")]
+        {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(handle) = window.window_handle() {
+                if let RawWindowHandle::Win32(win32) = handle.as_raw() {
+                    unsafe {
+                        let hwnd = win32.hwnd.get() as winapi::shared::windef::HWND;
+                        let hinstance = winapi::um::libloaderapi::GetModuleHandleW(std::ptr::null());
+
+                        // Load large icon (32x32) from the .exe resource embedded by winres.
+                        // MAKEINTRESOURCEW(1) = 1usize cast to LPCWSTR.
+                        let resource_id = 1usize as winapi::shared::ntdef::LPCWSTR;
+                        let hicon_big = winapi::um::winuser::LoadImageW(
+                            hinstance,
+                            resource_id,
+                            winapi::um::winuser::IMAGE_ICON,
+                            32, 32,
+                            winapi::um::winuser::LR_DEFAULTCOLOR,
+                        ) as winapi::shared::windef::HICON;
+
+                        // Load small icon (16x16) for the title bar / taskbar small slot.
+                        let hicon_small = winapi::um::winuser::LoadImageW(
+                            hinstance,
+                            resource_id,
+                            winapi::um::winuser::IMAGE_ICON,
+                            16, 16,
+                            winapi::um::winuser::LR_DEFAULTCOLOR,
+                        ) as winapi::shared::windef::HICON;
+
+                        if !hicon_big.is_null() {
+                            // Patch the window CLASS so the taskbar picks it up.
+                            winapi::um::winuser::SetClassLongPtrW(
+                                hwnd,
+                                winapi::um::winuser::GCLP_HICON,
+                                hicon_big as winapi::shared::basetsd::LONG_PTR,
+                            );
+                            // Also set on the window instance.
+                            winapi::um::winuser::SendMessageW(
+                                hwnd,
+                                winapi::um::winuser::WM_SETICON,
+                                winapi::um::winuser::ICON_BIG as usize,
+                                hicon_big as winapi::shared::minwindef::LPARAM,
+                            );
+                        }
+                        if !hicon_small.is_null() {
+                            winapi::um::winuser::SetClassLongPtrW(
+                                hwnd,
+                                winapi::um::winuser::GCLP_HICONSM,
+                                hicon_small as winapi::shared::basetsd::LONG_PTR,
+                            );
+                            winapi::um::winuser::SendMessageW(
+                                hwnd,
+                                winapi::um::winuser::WM_SETICON,
+                                winapi::um::winuser::ICON_SMALL as usize,
+                                hicon_small as winapi::shared::minwindef::LPARAM,
+                            );
+                        }
+                    }
+                }
+            }
+        }
         
         // Initialize wgpu
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
