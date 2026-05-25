@@ -2053,6 +2053,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         ui,
         &modes_data,
         &mut selected_index,
+        &mut context.editor_state.selected_mode_indices,
         &mut initial_mode,
         available_width,
         copy_into_mode,
@@ -2088,6 +2089,12 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         } else {
             // Normal mode selection
             context.editor_state.selected_mode_index = selected_index;
+            // Plain click (no modifier) resets multi-selection to just this mode.
+            // Ctrl/Shift clicks are handled inside modes_list_items and don't set
+            // selection_changed, so this branch only fires for plain clicks.
+            if !context.editor_state.selected_mode_indices.contains(&selected_index) {
+                context.editor_state.selected_mode_indices = vec![selected_index];
+            }
             
             // Initialize editor state orientations from the selected mode's genome data
             // This ensures the quaternion balls show the correct orientation when switching modes
@@ -2133,7 +2140,15 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
     // Show current mode info (for debugging/feedback) - more compact
     if selected_index < context.genome.modes.len() {
         ui.add_space(4.0); // Reduced spacing
-        ui.small(format!("Selected: {}", context.genome.modes[selected_index].name));
+        let multi_count = context.editor_state.selected_mode_indices.len();
+        if multi_count > 1 {
+            ui.colored_label(
+                egui::Color32::from_rgb(255, 200, 80),
+                format!("✦ {} modes selected — edits apply to all", multi_count),
+            );
+        } else {
+            ui.small(format!("Selected: {}", context.genome.modes[selected_index].name));
+        }
         ui.small(format!("Initial: {}", context.genome.modes[initial_mode].name));
         ui.small(format!("Total: {}", context.genome.modes.len()));
     }
@@ -2160,6 +2175,11 @@ fn group_container(ui: &mut Ui, title: &str, color: egui::Color32, content: impl
 fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
     // Record panel rect for the tutorial pointer.
     context.editor_state.panel_rects.insert("NameTypeEditor".to_string(), ui.max_rect());
+
+    // Multi-select: snapshot before rendering so we can diff afterwards
+    let selected_idx = context.editor_state.selected_mode_index;
+    let pre_cell_type = context.genome.modes.get(selected_idx).map(|m| m.cell_type);
+    let pre_make_adhesion = context.genome.modes.get(selected_idx).map(|m| m.parent_make_adhesion);
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -2262,6 +2282,30 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
                 );
             });
         });
+
+    // Multi-select: propagate cell_type and parent_make_adhesion if they changed
+    if let (Some(old_cell_type), Some(old_make_adhesion)) = (pre_cell_type, pre_make_adhesion) {
+        let selected_idx = context.editor_state.selected_mode_index;
+        if selected_idx < context.genome.modes.len() {
+            let new_cell_type     = context.genome.modes[selected_idx].cell_type;
+            let new_make_adhesion = context.genome.modes[selected_idx].parent_make_adhesion;
+
+            let cell_type_changed     = new_cell_type     != old_cell_type;
+            let make_adhesion_changed = new_make_adhesion != old_make_adhesion;
+
+            if cell_type_changed || make_adhesion_changed {
+                let secondary_indices: Vec<usize> = context.editor_state.selected_mode_indices
+                    .iter()
+                    .copied()
+                    .filter(|&i| i != selected_idx && i < context.genome.modes.len())
+                    .collect();
+                for other_idx in secondary_indices {
+                    if cell_type_changed     { context.genome.modes[other_idx].cell_type          = new_cell_type; }
+                    if make_adhesion_changed { context.genome.modes[other_idx].parent_make_adhesion = new_make_adhesion; }
+                }
+            }
+        }
+    }
 }
 
 /// Render the AdhesionSettings panel (placeholder).
@@ -2282,6 +2326,14 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("No mode selected");
                 return;
             }
+
+            // Multi-select: snapshot the adhesion settings before rendering
+            // Ensure selected_mode_indices is consistent (handles Default-constructed state)
+            if context.editor_state.selected_mode_indices.is_empty() {
+                context.editor_state.selected_mode_indices = vec![selected_idx];
+            }
+            let snapshot = context.genome.modes[selected_idx].adhesion_settings.clone();
+
             let mode = &mut context.genome.modes[selected_idx];
 
             // Breaking Properties Group (Red)
@@ -2383,6 +2435,30 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut mode.adhesion_settings.twist_constraint_damping).speed(0.01).range(0.0..=10.0));
                 });
             });
+
+            // Multi-select: propagate only the fields that changed to all other selected modes
+            let updated = context.genome.modes[selected_idx].adhesion_settings.clone();
+            let secondary_indices: Vec<usize> = context.editor_state.selected_mode_indices
+                .iter()
+                .copied()
+                .filter(|&i| i != selected_idx && i < context.genome.modes.len())
+                .collect();
+            if !secondary_indices.is_empty() {
+                for other_idx in secondary_indices {
+                    let other = &mut context.genome.modes[other_idx].adhesion_settings;
+                    if updated.can_break != snapshot.can_break { other.can_break = updated.can_break; }
+                    if (updated.break_force - snapshot.break_force).abs() > f32::EPSILON { other.break_force = updated.break_force; }
+                    if (updated.rest_length - snapshot.rest_length).abs() > f32::EPSILON { other.rest_length = updated.rest_length; }
+                    if (updated.linear_spring_stiffness - snapshot.linear_spring_stiffness).abs() > f32::EPSILON { other.linear_spring_stiffness = updated.linear_spring_stiffness; }
+                    if (updated.linear_spring_damping - snapshot.linear_spring_damping).abs() > f32::EPSILON { other.linear_spring_damping = updated.linear_spring_damping; }
+                    if (updated.orientation_spring_stiffness - snapshot.orientation_spring_stiffness).abs() > f32::EPSILON { other.orientation_spring_stiffness = updated.orientation_spring_stiffness; }
+                    if (updated.orientation_spring_damping - snapshot.orientation_spring_damping).abs() > f32::EPSILON { other.orientation_spring_damping = updated.orientation_spring_damping; }
+                    if (updated.max_angular_deviation - snapshot.max_angular_deviation).abs() > f32::EPSILON { other.max_angular_deviation = updated.max_angular_deviation; }
+                    if updated.enable_twist_constraint != snapshot.enable_twist_constraint { other.enable_twist_constraint = updated.enable_twist_constraint; }
+                    if (updated.twist_constraint_stiffness - snapshot.twist_constraint_stiffness).abs() > f32::EPSILON { other.twist_constraint_stiffness = updated.twist_constraint_stiffness; }
+                    if (updated.twist_constraint_damping - snapshot.twist_constraint_damping).abs() > f32::EPSILON { other.twist_constraint_damping = updated.twist_constraint_damping; }
+                }
+            }
         });
 }
 
@@ -2390,6 +2466,18 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
 fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
     // Record panel rect for the tutorial pointer.
     context.editor_state.panel_rects.insert("ParentSettings".to_string(), ui.max_rect());
+
+    // Multi-select: snapshot the primary mode before rendering so we can diff afterwards
+    let selected_idx = context.editor_state.selected_mode_index;
+    // Ensure selected_mode_indices is consistent (handles Default-constructed state)
+    if context.editor_state.selected_mode_indices.is_empty() {
+        context.editor_state.selected_mode_indices = vec![selected_idx];
+    }
+    let pre_snapshot: Option<crate::genome::ModeSettings> = if selected_idx < context.genome.modes.len() {
+        Some(context.genome.modes[selected_idx].clone())
+    } else {
+        None
+    };
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -3489,6 +3577,161 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
             });
 
         });
+
+    // Multi-select: propagate only the fields that changed to all other selected modes.
+    // We compare the primary mode's current state against the pre-render snapshot and
+    // apply each changed field individually to every other selected mode.
+    if let Some(snapshot) = pre_snapshot {
+        let selected_idx = context.editor_state.selected_mode_index;
+        if selected_idx < context.genome.modes.len() {
+            let updated = context.genome.modes[selected_idx].clone();
+            let secondary_indices: Vec<usize> = context.editor_state.selected_mode_indices
+                .iter()
+                .copied()
+                .filter(|&i| i != selected_idx && i < context.genome.modes.len())
+                .collect();
+            if !secondary_indices.is_empty() {
+                sync_mode_changes_to_others(&snapshot, &updated, &secondary_indices, &mut context.genome.modes);
+            }
+        }
+    }
+}
+
+/// Propagate only the fields that changed between `snapshot` and `updated` to all `other_indices`.
+/// Fields that were not touched by the user (identical in snapshot vs updated) are left alone.
+fn sync_mode_changes_to_others(
+    snapshot: &crate::genome::ModeSettings,
+    updated: &crate::genome::ModeSettings,
+    other_indices: &[usize],
+    modes: &mut Vec<crate::genome::ModeSettings>,
+) {
+    for &idx in other_indices {
+        let other = &mut modes[idx];
+
+        // Cell type
+        if updated.cell_type != snapshot.cell_type { other.cell_type = updated.cell_type; }
+
+        // Visual
+        if (updated.opacity - snapshot.opacity).abs() > f32::EPSILON { other.opacity = updated.opacity; }
+        if (updated.emissive - snapshot.emissive).abs() > f32::EPSILON { other.emissive = updated.emissive; }
+
+        // Parent / division
+        if updated.parent_make_adhesion != snapshot.parent_make_adhesion { other.parent_make_adhesion = updated.parent_make_adhesion; }
+        if (updated.split_mass - snapshot.split_mass).abs() > f32::EPSILON { other.split_mass = updated.split_mass; }
+        if (updated.split_interval - snapshot.split_interval).abs() > f32::EPSILON { other.split_interval = updated.split_interval; }
+        if (updated.nutrient_gain_rate - snapshot.nutrient_gain_rate).abs() > f32::EPSILON { other.nutrient_gain_rate = updated.nutrient_gain_rate; }
+        if (updated.max_cell_size - snapshot.max_cell_size).abs() > f32::EPSILON { other.max_cell_size = updated.max_cell_size; }
+        if (updated.split_ratio - snapshot.split_ratio).abs() > f32::EPSILON { other.split_ratio = updated.split_ratio; }
+        if (updated.nutrient_priority - snapshot.nutrient_priority).abs() > f32::EPSILON { other.nutrient_priority = updated.nutrient_priority; }
+        if updated.prioritize_when_low != snapshot.prioritize_when_low { other.prioritize_when_low = updated.prioritize_when_low; }
+        if (updated.parent_split_direction.x - snapshot.parent_split_direction.x).abs() > f32::EPSILON
+            || (updated.parent_split_direction.y - snapshot.parent_split_direction.y).abs() > f32::EPSILON
+        {
+            other.parent_split_direction = updated.parent_split_direction;
+        }
+        if updated.max_adhesions != snapshot.max_adhesions { other.max_adhesions = updated.max_adhesions; }
+        if updated.min_adhesions != snapshot.min_adhesions { other.min_adhesions = updated.min_adhesions; }
+        if updated.enable_parent_angle_snapping != snapshot.enable_parent_angle_snapping { other.enable_parent_angle_snapping = updated.enable_parent_angle_snapping; }
+        if updated.max_splits != snapshot.max_splits { other.max_splits = updated.max_splits; }
+        if updated.mode_a_after_splits != snapshot.mode_a_after_splits { other.mode_a_after_splits = updated.mode_a_after_splits; }
+        if updated.mode_b_after_splits != snapshot.mode_b_after_splits { other.mode_b_after_splits = updated.mode_b_after_splits; }
+        if updated.child_a_after_split_keep_adhesion != snapshot.child_a_after_split_keep_adhesion { other.child_a_after_split_keep_adhesion = updated.child_a_after_split_keep_adhesion; }
+        if updated.child_b_after_split_keep_adhesion != snapshot.child_b_after_split_keep_adhesion { other.child_b_after_split_keep_adhesion = updated.child_b_after_split_keep_adhesion; }
+
+        // Membrane
+        if (updated.membrane_stiffness - snapshot.membrane_stiffness).abs() > f32::EPSILON { other.membrane_stiffness = updated.membrane_stiffness; }
+
+        // Glueocyte
+        if updated.glueocyte_cell_adhesion != snapshot.glueocyte_cell_adhesion { other.glueocyte_cell_adhesion = updated.glueocyte_cell_adhesion; }
+        if updated.glueocyte_env_adhesion != snapshot.glueocyte_env_adhesion { other.glueocyte_env_adhesion = updated.glueocyte_env_adhesion; }
+        if updated.glueocyte_cell_adhesion_signal_channel != snapshot.glueocyte_cell_adhesion_signal_channel { other.glueocyte_cell_adhesion_signal_channel = updated.glueocyte_cell_adhesion_signal_channel; }
+        if (updated.glueocyte_cell_adhesion_signal_threshold - snapshot.glueocyte_cell_adhesion_signal_threshold).abs() > f32::EPSILON { other.glueocyte_cell_adhesion_signal_threshold = updated.glueocyte_cell_adhesion_signal_threshold; }
+
+        // Flagellocyte
+        if (updated.swim_force - snapshot.swim_force).abs() > f32::EPSILON { other.swim_force = updated.swim_force; }
+        if updated.flagellocyte_use_signal != snapshot.flagellocyte_use_signal { other.flagellocyte_use_signal = updated.flagellocyte_use_signal; }
+        if updated.flagellocyte_signal_channel != snapshot.flagellocyte_signal_channel { other.flagellocyte_signal_channel = updated.flagellocyte_signal_channel; }
+        if (updated.flagellocyte_speed_a - snapshot.flagellocyte_speed_a).abs() > f32::EPSILON { other.flagellocyte_speed_a = updated.flagellocyte_speed_a; }
+        if (updated.flagellocyte_speed_b - snapshot.flagellocyte_speed_b).abs() > f32::EPSILON { other.flagellocyte_speed_b = updated.flagellocyte_speed_b; }
+        if (updated.flagellocyte_threshold_c - snapshot.flagellocyte_threshold_c).abs() > f32::EPSILON { other.flagellocyte_threshold_c = updated.flagellocyte_threshold_c; }
+
+        // Buoyocyte
+        if (updated.buoyancy_force - snapshot.buoyancy_force).abs() > f32::EPSILON { other.buoyancy_force = updated.buoyancy_force; }
+
+        // Oculocyte
+        if updated.oculocyte_sense_type != snapshot.oculocyte_sense_type { other.oculocyte_sense_type = updated.oculocyte_sense_type; }
+        if updated.oculocyte_signal_channel != snapshot.oculocyte_signal_channel { other.oculocyte_signal_channel = updated.oculocyte_signal_channel; }
+        if (updated.oculocyte_signal_value - snapshot.oculocyte_signal_value).abs() > f32::EPSILON { other.oculocyte_signal_value = updated.oculocyte_signal_value; }
+        if updated.oculocyte_signal_hops != snapshot.oculocyte_signal_hops { other.oculocyte_signal_hops = updated.oculocyte_signal_hops; }
+        if (updated.oculocyte_ray_length - snapshot.oculocyte_ray_length).abs() > f32::EPSILON { other.oculocyte_ray_length = updated.oculocyte_ray_length; }
+
+        // Ciliocyte
+        if (updated.cilia_speed - snapshot.cilia_speed).abs() > f32::EPSILON { other.cilia_speed = updated.cilia_speed; }
+        if updated.cilia_push_bonded != snapshot.cilia_push_bonded { other.cilia_push_bonded = updated.cilia_push_bonded; }
+        if updated.cilia_use_signal != snapshot.cilia_use_signal { other.cilia_use_signal = updated.cilia_use_signal; }
+        if updated.cilia_signal_channel != snapshot.cilia_signal_channel { other.cilia_signal_channel = updated.cilia_signal_channel; }
+        if (updated.cilia_speed_below - snapshot.cilia_speed_below).abs() > f32::EPSILON { other.cilia_speed_below = updated.cilia_speed_below; }
+        if (updated.cilia_speed_above - snapshot.cilia_speed_above).abs() > f32::EPSILON { other.cilia_speed_above = updated.cilia_speed_above; }
+        if (updated.cilia_threshold - snapshot.cilia_threshold).abs() > f32::EPSILON { other.cilia_threshold = updated.cilia_threshold; }
+        if (updated.cilia_attract_force - snapshot.cilia_attract_force).abs() > f32::EPSILON { other.cilia_attract_force = updated.cilia_attract_force; }
+
+        // Myocyte
+        if (updated.myocyte_contraction - snapshot.myocyte_contraction).abs() > f32::EPSILON { other.myocyte_contraction = updated.myocyte_contraction; }
+        if updated.myocyte_use_signal != snapshot.myocyte_use_signal { other.myocyte_use_signal = updated.myocyte_use_signal; }
+        if updated.myocyte_signal_channel != snapshot.myocyte_signal_channel { other.myocyte_signal_channel = updated.myocyte_signal_channel; }
+        if (updated.myocyte_contraction_above - snapshot.myocyte_contraction_above).abs() > f32::EPSILON { other.myocyte_contraction_above = updated.myocyte_contraction_above; }
+        if (updated.myocyte_contraction_below - snapshot.myocyte_contraction_below).abs() > f32::EPSILON { other.myocyte_contraction_below = updated.myocyte_contraction_below; }
+        if (updated.myocyte_threshold - snapshot.myocyte_threshold).abs() > f32::EPSILON { other.myocyte_threshold = updated.myocyte_threshold; }
+        if (updated.myocyte_pulse_rate - snapshot.myocyte_pulse_rate).abs() > f32::EPSILON { other.myocyte_pulse_rate = updated.myocyte_pulse_rate; }
+        if updated.myocyte_pulse_phase != snapshot.myocyte_pulse_phase { other.myocyte_pulse_phase = updated.myocyte_pulse_phase; }
+
+        // Embryocyte
+        if updated.embryocyte_use_timer != snapshot.embryocyte_use_timer { other.embryocyte_use_timer = updated.embryocyte_use_timer; }
+        if (updated.embryocyte_release_timer - snapshot.embryocyte_release_timer).abs() > f32::EPSILON { other.embryocyte_release_timer = updated.embryocyte_release_timer; }
+        if updated.embryocyte_use_threshold != snapshot.embryocyte_use_threshold { other.embryocyte_use_threshold = updated.embryocyte_use_threshold; }
+        if updated.embryocyte_threshold_value != snapshot.embryocyte_threshold_value { other.embryocyte_threshold_value = updated.embryocyte_threshold_value; }
+        if updated.embryocyte_use_signal != snapshot.embryocyte_use_signal { other.embryocyte_use_signal = updated.embryocyte_use_signal; }
+        if updated.embryocyte_signal_channel != snapshot.embryocyte_signal_channel { other.embryocyte_signal_channel = updated.embryocyte_signal_channel; }
+        if (updated.embryocyte_signal_value - snapshot.embryocyte_signal_value).abs() > f32::EPSILON { other.embryocyte_signal_value = updated.embryocyte_signal_value; }
+
+        // Regulation emit
+        if updated.regulation_emit_channel != snapshot.regulation_emit_channel { other.regulation_emit_channel = updated.regulation_emit_channel; }
+        if (updated.regulation_emit_value - snapshot.regulation_emit_value).abs() > f32::EPSILON { other.regulation_emit_value = updated.regulation_emit_value; }
+        if updated.regulation_emit_hops != snapshot.regulation_emit_hops { other.regulation_emit_hops = updated.regulation_emit_hops; }
+
+        // Signal conditions — division
+        if updated.division_signal_channel != snapshot.division_signal_channel { other.division_signal_channel = updated.division_signal_channel; }
+        if (updated.division_signal_threshold - snapshot.division_signal_threshold).abs() > f32::EPSILON { other.division_signal_threshold = updated.division_signal_threshold; }
+        if updated.division_signal_invert != snapshot.division_signal_invert { other.division_signal_invert = updated.division_signal_invert; }
+
+        // Signal conditions — apoptosis
+        if updated.apoptosis_signal_channel != snapshot.apoptosis_signal_channel { other.apoptosis_signal_channel = updated.apoptosis_signal_channel; }
+        if (updated.apoptosis_signal_threshold - snapshot.apoptosis_signal_threshold).abs() > f32::EPSILON { other.apoptosis_signal_threshold = updated.apoptosis_signal_threshold; }
+        if updated.apoptosis_signal_invert != snapshot.apoptosis_signal_invert { other.apoptosis_signal_invert = updated.apoptosis_signal_invert; }
+
+        // Signal conditions — child routing
+        if updated.signal_child_a_channel != snapshot.signal_child_a_channel { other.signal_child_a_channel = updated.signal_child_a_channel; }
+        if (updated.signal_child_a_threshold - snapshot.signal_child_a_threshold).abs() > f32::EPSILON { other.signal_child_a_threshold = updated.signal_child_a_threshold; }
+        if updated.signal_child_a_mode_above != snapshot.signal_child_a_mode_above { other.signal_child_a_mode_above = updated.signal_child_a_mode_above; }
+        if updated.signal_child_a_mode_below != snapshot.signal_child_a_mode_below { other.signal_child_a_mode_below = updated.signal_child_a_mode_below; }
+        if updated.signal_child_b_channel != snapshot.signal_child_b_channel { other.signal_child_b_channel = updated.signal_child_b_channel; }
+        if (updated.signal_child_b_threshold - snapshot.signal_child_b_threshold).abs() > f32::EPSILON { other.signal_child_b_threshold = updated.signal_child_b_threshold; }
+        if updated.signal_child_b_mode_above != snapshot.signal_child_b_mode_above { other.signal_child_b_mode_above = updated.signal_child_b_mode_above; }
+        if updated.signal_child_b_mode_below != snapshot.signal_child_b_mode_below { other.signal_child_b_mode_below = updated.signal_child_b_mode_below; }
+
+        // Signal conditions — mode switch
+        if updated.mode_switch_signal_channel != snapshot.mode_switch_signal_channel { other.mode_switch_signal_channel = updated.mode_switch_signal_channel; }
+        if (updated.mode_switch_signal_threshold - snapshot.mode_switch_signal_threshold).abs() > f32::EPSILON { other.mode_switch_signal_threshold = updated.mode_switch_signal_threshold; }
+        if updated.mode_switch_target != snapshot.mode_switch_target { other.mode_switch_target = updated.mode_switch_target; }
+        if updated.mode_switch_invert != snapshot.mode_switch_invert { other.mode_switch_invert = updated.mode_switch_invert; }
+
+        // Devorocyte
+        if (updated.devorocyte_consume_range - snapshot.devorocyte_consume_range).abs() > f32::EPSILON { other.devorocyte_consume_range = updated.devorocyte_consume_range; }
+        if (updated.devorocyte_consume_rate - snapshot.devorocyte_consume_rate).abs() > f32::EPSILON { other.devorocyte_consume_rate = updated.devorocyte_consume_rate; }
+
+        // Vasculocyte
+        if updated.vascular_outlet != snapshot.vascular_outlet { other.vascular_outlet = updated.vascular_outlet; }
+    }
 }
 
 /// Render the CircleSliders panel with pitch and yaw controls for parent split direction.
@@ -3506,6 +3749,9 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
     // Get the currently selected mode
     let selected_index = context.editor_state.selected_mode_index;
     if let Some(mode) = context.genome.modes.get_mut(selected_index) {
+        // Snapshot before rendering for multi-select diff
+        let prev_dir = mode.parent_split_direction;
+
         // Calculate responsive slider size - use more of the available width
         let available_width = ui.available_width();
         let max_radius = ((available_width - 20.0) / 2.0 - 10.0) / 2.0; // Reduced margins
@@ -3541,12 +3787,34 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
                 );
             });
         });
+
+        // Multi-select: propagate changed split direction to all other selected modes
+        let new_dir = mode.parent_split_direction;
+        let pitch_changed = (new_dir.x - prev_dir.x).abs() > f32::EPSILON;
+        let yaw_changed   = (new_dir.y - prev_dir.y).abs() > f32::EPSILON;
+        if pitch_changed || yaw_changed {
+            let secondary_indices: Vec<usize> = context.editor_state.selected_mode_indices
+                .iter()
+                .copied()
+                .filter(|&i| i != selected_index && i < context.genome.modes.len())
+                .collect();
+            for other_idx in secondary_indices {
+                if pitch_changed { context.genome.modes[other_idx].parent_split_direction.x = new_dir.x; }
+                if yaw_changed   { context.genome.modes[other_idx].parent_split_direction.y = new_dir.y; }
+            }
+        }
     }
 }
 
 /// Render the QuaternionBall panel with two quaternion balls for Child A and Child B.
 fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
     context.editor_state.panel_rects.insert("QuaternionBall".to_string(), ui.max_rect());
+
+    // Snapshot child settings before rendering for multi-select diff
+    let selected_idx = context.editor_state.selected_mode_index;
+    let pre_child_a = context.genome.modes.get(selected_idx).map(|m| m.child_a.clone());
+    let pre_child_b = context.genome.modes.get(selected_idx).map(|m| m.child_b.clone());
+
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -3906,6 +4174,49 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
             );
         });
     });
+
+    // Multi-select: propagate changed child settings to all other selected modes
+    if let (Some(pre_a), Some(pre_b)) = (pre_child_a, pre_child_b) {
+        if selected_idx < context.genome.modes.len() {
+            let new_a = context.genome.modes[selected_idx].child_a.clone();
+            let new_b = context.genome.modes[selected_idx].child_b.clone();
+
+            let secondary_indices: Vec<usize> = context.editor_state.selected_mode_indices
+                .iter()
+                .copied()
+                .filter(|&i| i != selected_idx && i < context.genome.modes.len())
+                .collect();
+
+            for other_idx in secondary_indices {
+                let other = &mut context.genome.modes[other_idx];
+
+                // Child A orientation
+                if new_a.orientation != pre_a.orientation {
+                    other.child_a.orientation = new_a.orientation;
+                }
+                // Child B orientation
+                if new_b.orientation != pre_b.orientation {
+                    other.child_b.orientation = new_b.orientation;
+                }
+                // Child A keep_adhesion
+                if new_a.keep_adhesion != pre_a.keep_adhesion {
+                    other.child_a.keep_adhesion = new_a.keep_adhesion;
+                }
+                // Child B keep_adhesion
+                if new_b.keep_adhesion != pre_b.keep_adhesion {
+                    other.child_b.keep_adhesion = new_b.keep_adhesion;
+                }
+                // Child A mode_number
+                if new_a.mode_number != pre_a.mode_number {
+                    other.child_a.mode_number = new_a.mode_number;
+                }
+                // Child B mode_number
+                if new_b.mode_number != pre_b.mode_number {
+                    other.child_b.mode_number = new_b.mode_number;
+                }
+            }
+        }
+    }
 }
 
 /// Render the TimeSlider panel with yellow progress bar.

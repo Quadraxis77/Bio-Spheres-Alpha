@@ -100,6 +100,10 @@ pub struct App {
     editor_state: crate::ui::panel_context::GenomeEditorState,
     /// Current mouse position for tool interactions
     mouse_position: (f32, f32),
+    /// Current keyboard modifier state (Ctrl, Shift, Alt, etc.)
+    keyboard_modifiers: winit::event::Modifiers,
+    /// Whether a Ctrl+drag selection sweep is currently active in the preview
+    ctrl_drag_selecting: bool,
     /// Current working genome (shared between preview and GPU scenes)
     working_genome: crate::genome::Genome,
     /// Performance metrics tracker
@@ -148,6 +152,8 @@ impl App {
             fps_timer: std::time::Instant::now(),
             editor_state: crate::ui::panel_context::GenomeEditorState::new(),
             mouse_position: (0.0, 0.0),
+            keyboard_modifiers: winit::event::Modifiers::default(),
+            ctrl_drag_selecting: false,
             working_genome: crate::genome::Genome::new_with_random_colors(),
             performance: PerformanceMetrics::new(),
             next_frame_time: std::time::Instant::now(),
@@ -212,6 +218,12 @@ impl App {
                     && *state == ElementState::Pressed
                     && !self.ui.wants_pointer_input()
                 {
+                    let ctrl_held = self.keyboard_modifiers.state().control_key();
+                    // Start a Ctrl+drag sweep if Ctrl is held
+                    if ctrl_held {
+                        self.ctrl_drag_selecting = true;
+                    }
+
                     if let Some(preview_scene) = self.scene_manager.preview_scene_mut() {
                         let (mx, my) = self.mouse_position;
                         let w = self.config.width as f32;
@@ -257,18 +269,66 @@ impl App {
                         }
 
                         if let Some(mode_idx) = hit_mode {
-                            preview_scene.selected_mode_index = Some(mode_idx);
-                            self.editor_state.selected_mode_index = mode_idx;
-                            // Sync quaternion ball orientations from the selected mode's genome
-                            // data — same sync that happens when clicking a mode button directly.
-                            if let Some(mode) = self.working_genome.modes.get(mode_idx) {
-                                self.editor_state.child_a_orientation = mode.child_a.orientation;
-                                self.editor_state.child_b_orientation = mode.child_b.orientation;
+                            let ctrl_held = self.keyboard_modifiers.state().control_key();
+                            let shift_held = self.keyboard_modifiers.state().shift_key();
+
+                            // Ensure selected_mode_indices is consistent before modifying
+                            if self.editor_state.selected_mode_indices.is_empty() {
+                                self.editor_state.selected_mode_indices = vec![self.editor_state.selected_mode_index];
                             }
-                            log::info!("Preview cell click: selected mode {}", mode_idx);
+
+                            if ctrl_held {
+                                // Ctrl+click: toggle this mode in the multi-selection
+                                if self.editor_state.selected_mode_indices.contains(&mode_idx) {
+                                    // Don't deselect if it's the only one selected
+                                    if self.editor_state.selected_mode_indices.len() > 1 {
+                                        self.editor_state.selected_mode_indices.retain(|&i| i != mode_idx);
+                                        // If we removed the primary, promote the first remaining
+                                        if self.editor_state.selected_mode_index == mode_idx {
+                                            let new_primary = self.editor_state.selected_mode_indices[0];
+                                            self.editor_state.selected_mode_index = new_primary;
+                                            if let Some(mode) = self.working_genome.modes.get(new_primary) {
+                                                self.editor_state.child_a_orientation = mode.child_a.orientation;
+                                                self.editor_state.child_b_orientation = mode.child_b.orientation;
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Add to selection without changing the primary
+                                    self.editor_state.selected_mode_indices.push(mode_idx);
+                                }
+                                log::info!("Preview Ctrl+click: multi-selection now {:?}", self.editor_state.selected_mode_indices);
+                            } else if shift_held {
+                                // Shift+click: range select from current primary to clicked mode
+                                let anchor = self.editor_state.selected_mode_index;
+                                let lo = anchor.min(mode_idx);
+                                let hi = anchor.max(mode_idx);
+                                for i in lo..=hi {
+                                    if !self.editor_state.selected_mode_indices.contains(&i) {
+                                        self.editor_state.selected_mode_indices.push(i);
+                                    }
+                                }
+                                log::info!("Preview Shift+click: range selection {:?}", self.editor_state.selected_mode_indices);
+                            } else {
+                                // Plain click: single selection
+                                self.editor_state.selected_mode_index = mode_idx;
+                                self.editor_state.selected_mode_indices = vec![mode_idx];
+                                // Sync quaternion ball orientations from the selected mode's genome
+                                // data — same sync that happens when clicking a mode button directly.
+                                if let Some(mode) = self.working_genome.modes.get(mode_idx) {
+                                    self.editor_state.child_a_orientation = mode.child_a.orientation;
+                                    self.editor_state.child_b_orientation = mode.child_b.orientation;
+                                }
+                                log::info!("Preview cell click: selected mode {}", mode_idx);
+                            }
                         }
                     }
                     self.window.request_redraw();
+                }
+
+                // Clear Ctrl+drag sweep on left button release
+                if *button == MouseButton::Left && *state == ElementState::Released {
+                    self.ctrl_drag_selecting = false;
                 }
 
                 // Handle right-click in Preview mode for cell context menu
@@ -440,10 +500,72 @@ impl App {
                     self.scene_manager.active_scene_mut().camera_mut().handle_mouse_button(*button, *state);
                 }
             }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.keyboard_modifiers = *modifiers;
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 // Track mouse position for tool interactions
                 self.mouse_position = (position.x as f32, position.y as f32);
-                
+
+                // Ctrl+drag: continuously add hovered cells' modes to the selection
+                if self.ctrl_drag_selecting
+                    && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Preview
+                    && !self.ui.wants_pointer_input()
+                {
+                    if let Some(preview_scene) = self.scene_manager.preview_scene_mut() {
+                        let mx = position.x as f32;
+                        let my = position.y as f32;
+                        let w = self.config.width as f32;
+                        let h = self.config.height as f32;
+                        let aspect = w / h;
+
+                        let cam_pos = preview_scene.camera.position();
+                        let cam_rot = preview_scene.camera.rotation;
+                        let fov_y = 45.0_f32.to_radians();
+                        let tan_half_fov = (fov_y / 2.0).tan();
+
+                        let ndc_x = (mx / w) * 2.0 - 1.0;
+                        let ndc_y = 1.0 - (my / h) * 2.0;
+
+                        let ray_dir_cam = glam::Vec3::new(
+                            ndc_x * aspect * tan_half_fov,
+                            ndc_y * tan_half_fov,
+                            -1.0,
+                        ).normalize();
+                        let ray_dir = cam_rot * ray_dir_cam;
+
+                        let cell_count = preview_scene.state.display_state.cell_count;
+                        let mut best_t = f32::MAX;
+                        let mut hit_mode: Option<usize> = None;
+
+                        for i in 0..cell_count {
+                            let center = preview_scene.state.display_state.positions[i];
+                            let radius = preview_scene.state.display_state.radii[i];
+                            let oc = cam_pos - center;
+                            let b = oc.dot(ray_dir);
+                            let c = oc.dot(oc) - radius * radius;
+                            let disc = b * b - c;
+                            if disc >= 0.0 {
+                                let t = -b - disc.sqrt();
+                                if t > 0.001 && t < best_t {
+                                    best_t = t;
+                                    hit_mode = Some(preview_scene.state.display_state.mode_indices[i]);
+                                }
+                            }
+                        }
+
+                        if let Some(mode_idx) = hit_mode {
+                            if self.editor_state.selected_mode_indices.is_empty() {
+                                self.editor_state.selected_mode_indices = vec![self.editor_state.selected_mode_index];
+                            }
+                            if !self.editor_state.selected_mode_indices.contains(&mode_idx) {
+                                self.editor_state.selected_mode_indices.push(mode_idx);
+                                self.window.request_redraw();
+                            }
+                        }
+                    }
+                }
+
                 // Update radial menu hover state (GPU mode only)
                 if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
                     let menu = &mut self.editor_state.radial_menu;
@@ -1621,7 +1743,7 @@ impl App {
                     );
                     
                     // Bidirectional sync: genome panel selection → preview highlight
-                    preview_scene.selected_mode_index = Some(self.editor_state.selected_mode_index);
+                    preview_scene.selected_mode_indices = self.editor_state.selected_mode_indices.clone();
                     
                     // Sync test signals to preview scene (must happen before resimulation trigger)
                     preview_scene.test_signals = self.test_signal_emissions.clone();

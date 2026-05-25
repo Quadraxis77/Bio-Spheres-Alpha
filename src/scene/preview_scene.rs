@@ -39,8 +39,9 @@ pub struct PreviewScene {
     last_ui_time_value: f32,
     /// Whether to show adhesion lines
     pub show_adhesion_lines: bool,
-    /// Mode index selected by clicking a cell in the preview (None = no selection)
-    pub selected_mode_index: Option<usize>,
+    /// Mode indices selected by clicking cells in the preview (empty = no selection).
+    /// Mirrors `editor_state.selected_mode_indices` for rendering.
+    pub selected_mode_indices: Vec<usize>,
     /// Right-click context menu: cell index that was right-clicked (None = menu closed)
     pub context_menu_cell: Option<usize>,
     /// Active test signal emissions (toggleable)
@@ -89,7 +90,7 @@ impl PreviewScene {
             camera: CameraController::new_for_preview_scene(),
             last_ui_time_value: 0.0,
             show_adhesion_lines: true,
-            selected_mode_index: None,
+            selected_mode_indices: Vec::new(),
             context_menu_cell: None,
             test_signals: Vec::new(),
             context_menu_screen_pos: (0.0, 0.0),
@@ -238,7 +239,7 @@ impl Scene for PreviewScene {
             lod_threshold_high,
             lod_debug_colors,
             outline_width,
-            self.selected_mode_index,
+            &self.selected_mode_indices,
         );
 
         // Pass 2.5: Render flagellocyte tails
@@ -348,9 +349,9 @@ impl Scene for PreviewScene {
                 self.gizmo_renderer.render_queued(&mut render_pass, queue, view_proj, self.camera.position());
                 self.split_ring_renderer.render_queued(&mut render_pass, queue, view_proj, self.camera.position());
 
-                // Render FOV cones for all cells of the selected mode (if it's an oculocyte mode)
+                // Render FOV cones for all cells of the selected modes (if any are oculocyte modes)
                 self.fov_cone_renderer.begin_frame();
-                if let Some(selected_mode) = self.selected_mode_index {
+                for &selected_mode in &self.selected_mode_indices {
                     if let Some(mode) = self.genome.modes.get(selected_mode) {
                         if mode.cell_type == 7 { // Oculocyte
                             let ray_length = mode.oculocyte_ray_length.clamp(1.0, 100.0);

@@ -885,6 +885,7 @@ pub fn modes_list_items(
     ui: &mut egui::Ui,
     modes: &[(String, (u8, u8, u8))], // Changed to RGB tuple
     selected_index: &mut usize,
+    selected_indices: &mut Vec<usize>,
     initial_mode: &mut usize,
     width: f32,
     copy_into_mode: bool,
@@ -974,13 +975,9 @@ pub fn modes_list_items(
             let is_renaming = renaming_mode.map_or(false, |idx| idx == index);
             
             // Calculate button colors based on selection state
-            let button_color = if is_selected {
-                color // Full color for selected
-            } else {
-                color_utils::color_with_brightness(color, 0.8) // Dimmed for unselected
-            };
-            
-            let hovered_color = color_utils::color_with_brightness(color, 0.9);
+            let button_color = color; // Always full color
+
+            let hovered_color = color_utils::color_with_brightness(color, 1.1);
             
             // Calculate text color for readability
             let text_color = color_utils::text_color_for_background(button_color);
@@ -1052,10 +1049,13 @@ pub fn modes_list_items(
                 
                 // Draw button background
                 let button_rect = button_response.rect;
+                
+                // Determine visual state: primary selected, multi-selected, or normal
+                let is_multi_selected = selected_indices.contains(&index);
                 let fill_color = if button_response.hovered() {
                     hovered_color
                 } else {
-                    button_color
+                    button_color // Full color always
                 };
                 
                 ui.painter().rect_filled(
@@ -1064,9 +1064,17 @@ pub fn modes_list_items(
                     fill_color
                 );
                 
-                // Draw dashed border for selected mode
+                // Draw dashed border for primary selected mode
                 if is_selected {
                     draw_dashed_border(ui, button_rect);
+                } else if is_multi_selected {
+                    // Solid thin border for secondary selections
+                    ui.painter().rect_stroke(
+                        button_rect,
+                        egui::CornerRadius::same(4),
+                        egui::Stroke::new(1.5, egui::Color32::WHITE),
+                        egui::StrokeKind::Inside,
+                    );
                 }
                 
                 // Draw text
@@ -1079,9 +1087,48 @@ pub fn modes_list_items(
                 );
                 
                 // Handle button interactions
-                if button_response.clicked() && !is_selected {
-                    *selected_index = index;
-                    selection_changed = true;
+                if button_response.clicked() {
+                    let ctrl_held = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
+                    let shift_held = ui.input(|i| i.modifiers.shift);
+
+                    if copy_into_mode {
+                        // In copy-into mode, any click is a target selection
+                        *selected_index = index;
+                        selection_changed = true;
+                    } else if ctrl_held {
+                        // Ctrl+click: toggle this mode in the multi-selection
+                        if selected_indices.contains(&index) {
+                            // Don't deselect if it's the only one selected
+                            if selected_indices.len() > 1 {
+                                selected_indices.retain(|&i| i != index);
+                                // If we removed the primary, promote the first remaining
+                                if *selected_index == index {
+                                    *selected_index = *selected_indices.first().unwrap_or(&0);
+                                    selection_changed = true;
+                                }
+                            }
+                        } else {
+                            selected_indices.push(index);
+                            // Ctrl+click doesn't change the primary (editing) mode
+                        }
+                    } else if shift_held && !selected_indices.is_empty() {
+                        // Shift+click: range select from primary to clicked
+                        let anchor = *selected_index;
+                        let lo = anchor.min(index);
+                        let hi = anchor.max(index);
+                        // Keep the primary, add the range
+                        for i in lo..=hi {
+                            if !selected_indices.contains(&i) {
+                                selected_indices.push(i);
+                            }
+                        }
+                        // Don't change the primary selection
+                    } else if !is_selected {
+                        // Plain click: single selection
+                        *selected_index = index;
+                        *selected_indices = vec![index];
+                        selection_changed = true;
+                    }
                 }
                 
                 // Handle double-click for rename (not in copy-into mode)
