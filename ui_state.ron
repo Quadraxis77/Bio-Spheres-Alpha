@@ -19,15 +19,15 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "QuaternionBall",
-                "RightPanel",
-                "TimeSlider",
+                "Modes",
                 "LeftPanel",
                 "CircleSliders",
+                "TimeSlider",
                 "NameTypeEditor",
-                "Modes",
                 "BottomPanel",
+                "QuaternionBall",
                 "SceneManager",
+                "RightPanel",
                 "Viewport",
             ],
             lock_settings: (
@@ -49,9 +49,9 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "RightPanel",
                 "SceneManager",
                 "Viewport",
+                "RightPanel",
             ],
             lock_settings: (
                 lock_tab_bar: false,

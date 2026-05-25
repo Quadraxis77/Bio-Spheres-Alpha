@@ -1899,14 +1899,25 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         }
         
         if reset_clicked {
-            // Reset the selected mode to its original default values
-            if selected_index < context.genome.modes.len() {
-                // Generate a random color for the reset mode using LCG seeded from system time
-                let seed = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.subsec_nanos())
-                    .unwrap_or(12345);
-                let mut rng = seed as u64;
+            // Collect all indices to reset (all selected modes, or just the primary if only one)
+            let indices_to_reset: Vec<usize> = if context.editor_state.selected_mode_indices.len() > 1 {
+                context.editor_state.selected_mode_indices
+                    .iter()
+                    .copied()
+                    .filter(|&i| i < context.genome.modes.len())
+                    .collect()
+            } else {
+                if selected_index < context.genome.modes.len() { vec![selected_index] } else { vec![] }
+            };
+
+            // Seed the LCG once; each mode advances it to get a distinct color
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(12345);
+            let mut rng = seed as u64;
+
+            for idx in indices_to_reset {
                 rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 let r = ((rng >> 33) & 0xFF) as f32 / 255.0;
                 rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -1914,18 +1925,17 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                 rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 let b = ((rng >> 33) & 0xFF) as f32 / 255.0;
 
-                // Reset to original default values
-                context.genome.modes[selected_index] = crate::genome::ModeSettings {
-                    name: format!("M{}", selected_index + 1), // M1, M2, M3, etc.
-                    default_name: format!("M{}", selected_index + 1), // Same as name
+                context.genome.modes[idx] = crate::genome::ModeSettings {
+                    name: format!("M{}", idx + 1),
+                    default_name: format!("M{}", idx + 1),
                     color: glam::Vec3::new(r, g, b),
                     opacity: 1.0,
                     emissive: 0.0,
-                    cell_type: 0, // Default to Test
-                    parent_make_adhesion: false, // Default to no adhesion
+                    cell_type: 0,
+                    parent_make_adhesion: false,
                     split_mass: 1.5,
                     split_interval: 1.0,
-                    nutrient_gain_rate: 20.0,  // 20 nutrients/sec for auto-gain cells (Phagocyte, Photocyte, Test)
+                    nutrient_gain_rate: 20.0,
                     max_cell_size: 2.0,
                     split_ratio: 0.5,
                     nutrient_priority: 1.0,
@@ -1934,7 +1944,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     max_adhesions: 20,
                     min_adhesions: 0,
                     enable_parent_angle_snapping: true,
-                    max_splits: -1, // -1 means infinite
+                    max_splits: -1,
                     mode_a_after_splits: -1,
                     mode_b_after_splits: -1,
                     child_a_after_split_orientation: glam::Quat::IDENTITY,
@@ -1974,13 +1984,13 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     embryocyte_use_signal: false,
                     embryocyte_signal_channel: 0,
                     embryocyte_signal_value: 1.0,
-                    buoyancy_force: 0.5, // Default buoyancy force for buoyocytes
+                    buoyancy_force: 0.5,
                     oculocyte_sense_type: 0,
                     oculocyte_signal_channel: 0,
                     oculocyte_signal_value: 10.0,
                     oculocyte_signal_hops: 3,
                     oculocyte_ray_length: 20.0,
-                    membrane_stiffness: 50.0, // Default: moderate membrane stiffness
+                    membrane_stiffness: 50.0,
                     regulation_emit_channel: -1,
                     regulation_emit_value: 10.0,
                     regulation_emit_hops: 3,
@@ -2006,16 +2016,16 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     devorocyte_consume_rate: 30.0,
                     vascular_outlet: false,
                     child_a: crate::genome::ChildSettings {
-                        mode_number: selected_index as i32,
+                        mode_number: idx as i32,
                         ..Default::default()
                     },
                     child_b: crate::genome::ChildSettings {
-                        mode_number: selected_index as i32,
+                        mode_number: idx as i32,
                         ..Default::default()
                     },
                     adhesion_settings: crate::genome::AdhesionSettings::default(),
                 };
-                log::info!("Reset mode M{} to original defaults", selected_index + 1);
+                log::info!("Reset mode M{} to original defaults", idx + 1);
             }
         }
     });
