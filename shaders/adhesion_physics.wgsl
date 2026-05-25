@@ -265,19 +265,26 @@ fn compute_adhesion_forces_for_cell(
         anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
     }
     
-    // Geometric spring force: use anchor-defined target positions
-    // instead of the raw physical direction between cells.
-    // This makes genome-defined angles the authority for cell placement,
-    // preventing structures from deforming when physics perturbs positions.
-    // Each cell uses its own contracted reach for its anchor.
-    let target_b = pos_a + anchor_a * effective_rest_length;  // Where B should be according to A's (contracted) anchor
-    let target_a = pos_b + anchor_b * effective_rest_length;  // Where A should be according to B's (contracted) anchor
+    // Spring force: standard Hooke's law along the bond axis, plus a geometric
+    // correction that enforces the genome-defined anchor angles.
+    //
+    // Component 1 — axial spring (Hooke's law):
+    //   Pulls/pushes cells along the bond to maintain rest_length.
+    //   This is the dominant stiffness term and responds directly to stretch/compression.
+    let extension = dist - effective_rest_length;
+    let axial_force_on_a = adhesion_dir * extension * settings.linear_spring_stiffness;
+
+    // Component 2 — geometric anchor correction:
+    //   Pulls each cell toward the position its anchor says it should be at.
+    //   Uses a fraction of stiffness so it shapes structure without fighting the axial spring.
+    let target_b = pos_a + anchor_a * effective_rest_length;
+    let target_a = pos_b + anchor_b * effective_rest_length;
     let error_a = target_a - pos_a;
     let error_b = target_b - pos_b;
-    
-    // Symmetric geometric correction (obeys Newton's 3rd law: force_on_a + force_on_b = 0)
-    let geo_force_on_a = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness;
-    *spring_force_mag_out = length(geo_force_on_a);
+    let geo_correction_on_a = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness * 0.3;
+
+    let geo_force_on_a = axial_force_on_a + geo_correction_on_a;
+    *spring_force_mag_out = length(axial_force_on_a);
     
     // Linear damping: pure velocity-damping along the bond axis.
     // Only the component of relative velocity along the bond is damped,
@@ -538,8 +545,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Clamp forces and torques to prevent instability
-    let max_force = 5000.0;
-    let max_torque = 500.0;
+    let max_force = 50000.0;
+    let max_torque = 5000.0;
     let force_mag = length(total_force);
     let torque_mag = length(total_torque);
     

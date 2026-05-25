@@ -665,8 +665,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     birth_times[cell_idx] = params.current_time;
     mode_indices[cell_idx] = child_a_mode_idx;
     
-    // Split count: reset if mode changes, otherwise increment
-    if (child_a_mode_idx != parent_mode_idx) {
+    // Split count: reset if mode changes OR if the after-splits routing fires with an
+    // explicit mode_a/b_after_splits configured (lifecycle transition — stem cycling).
+    // When will_reach_max_splits fires but no after-splits mode is set, keep incrementing
+    // so the count stays >= max_splits and the cell stops dividing permanently.
+    let parent_props_4_for_count = mode_properties_v4[parent_mode_idx];
+    let after_splits_a_fires = will_reach_max_splits && parent_props_4_for_count.y >= 0.0;
+    let after_splits_b_fires = will_reach_max_splits && parent_props_4_for_count.z >= 0.0;
+    if (child_a_mode_idx != parent_mode_idx || after_splits_a_fires) {
         split_counts[cell_idx] = 0u;
     } else {
         split_counts[cell_idx] = parent_split_count + 1u;
@@ -717,7 +723,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_b_split_mass = child_b_props_1.x;
     split_nutrient_thresholds[child_b_slot] = (child_b_split_mass - 1.0) * 100.0;
     
-    if (child_b_mode_idx != parent_mode_idx) {
+    if (child_b_mode_idx != parent_mode_idx || after_splits_b_fires) {
         split_counts[child_b_slot] = 0u;
     } else {
         split_counts[child_b_slot] = parent_split_count + 1u;

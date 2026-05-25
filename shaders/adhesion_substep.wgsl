@@ -255,12 +255,23 @@ fn compute_substep_forces(
         anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
     }
 
-    // Geometric spring force: anchor-defined target positions
+    // Spring force: standard Hooke's law along the bond axis, plus a geometric
+    // correction that enforces the genome-defined anchor angles.
+    //
+    // Component 1 — axial spring (Hooke's law):
+    //   Pulls/pushes cells along the bond to maintain rest_length.
+    let extension = dist - effective_rest_length;
+    let axial_force_on_a = adhesion_dir * extension * settings.linear_spring_stiffness;
+
+    // Component 2 — geometric anchor correction:
+    //   Pulls each cell toward the position its anchor says it should be at.
     let target_b = pos_a + anchor_a * effective_rest_length;
     let target_a = pos_b + anchor_b * effective_rest_length;
     let error_a = target_a - pos_a;
     let error_b = target_b - pos_b;
-    let geo_force_on_a = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness;
+    let geo_correction_on_a = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness * 0.3;
+
+    let geo_force_on_a = axial_force_on_a + geo_correction_on_a;
 
     // Linear damping: pure velocity-damping along the bond axis.
     // Only the component of relative velocity along the bond is damped,
@@ -445,8 +456,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Clamp forces and torques
-    let max_force = 5000.0;
-    let max_torque = 500.0;
+    let max_force = 50000.0;
+    let max_torque = 5000.0;
     let force_mag = length(total_force);
     let torque_mag = length(total_torque);
 

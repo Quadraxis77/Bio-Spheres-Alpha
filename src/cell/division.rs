@@ -311,19 +311,24 @@ pub fn division_step(
                     }
                 }
 
-                // Determine split counts: reset to 0 if mode changes, otherwise inherit parent's count + 1
-                // Determine split counts: reset to 0 if mode changes, otherwise inherit parent's count + 1.
-                // Also reset to 0 when the after-splits routing fires — the explicit mode_a/b_after_splits
-                // fields represent a deliberate lifecycle transition (e.g. stem cell shedding an egg and
-                // then continuing to grow). Without the reset, the child that stays in the same mode via
-                // mode_b_after_splits would accumulate a split_count >= max_splits and immediately fail
-                // can_split_by_count on the very next tick, halting the stem forever.
-                let child_a_split_count = if child_a_mode_idx != mode_index || will_reach_max_splits {
+                // Determine split counts for children:
+                // - Reset to 0 when the child's mode changes (new mode starts fresh).
+                // - Reset to 0 when the after-splits routing fires AND an explicit
+                //   mode_a/b_after_splits was configured — this is a deliberate lifecycle
+                //   transition (e.g. stem cell shedding an egg then continuing to grow).
+                //   Without the reset, the child that stays in the same mode via
+                //   mode_b_after_splits would have split_count >= max_splits and immediately
+                //   fail can_split_by_count on the very next tick, halting the stem forever.
+                // - Otherwise increment. If max_splits is reached with no after-splits
+                //   routing, the count stays >= max_splits and the cell stops dividing.
+                let after_splits_a_fires = will_reach_max_splits && mode.mode_a_after_splits >= 0;
+                let after_splits_b_fires = will_reach_max_splits && mode.mode_b_after_splits >= 0;
+                let child_a_split_count = if child_a_mode_idx != mode_index || after_splits_a_fires {
                     0
                 } else {
                     parent_split_count + 1
                 };
-                let child_b_split_count = if child_b_mode_idx != mode_index || will_reach_max_splits {
+                let child_b_split_count = if child_b_mode_idx != mode_index || after_splits_b_fires {
                     0
                 } else {
                     parent_split_count + 1

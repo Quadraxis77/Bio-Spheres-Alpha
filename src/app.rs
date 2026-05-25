@@ -1757,11 +1757,17 @@ impl App {
                 }
             }
             
-            // NOTE: In GPU mode, we do NOT call update_genome here because that would
-            // modify the existing genome in place, changing the behavior of all existing
-            // cells using that genome. Instead, edited genomes are added as NEW genomes
-            // during cell insertion (via add_genome in insert_cell_from_genome), preserving
-            // existing cells' behavior while allowing new cells to use the edited settings.
+            // In GPU mode, push physics parameter changes (stiffness, damping, rest length,
+            // break force, etc.) to the GPU settings buffers so existing cells pick them up
+            // immediately. update_genome only rewrites the per-mode settings arrays — it does
+            // not touch cell positions, velocities, mode_indices, or adhesion connections, so
+            // existing cells are unaffected structurally. New cells spawned after the edit
+            // will also use the updated settings via the same genome slot.
+            if current_mode == crate::ui::types::SimulationMode::Gpu {
+                if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                    gpu_scene.update_genome(&self.device, &self.queue, &self.working_genome);
+                }
+            }
             
             output
         };
