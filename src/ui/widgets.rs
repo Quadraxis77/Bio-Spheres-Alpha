@@ -878,7 +878,8 @@ pub fn modes_buttons(
 }
 
 /// Modes list items widget with full functionality
-/// Returns (selection_changed, initial_changed, rename_completed, color_change, row_rects)
+/// Returns (selection_changed, initial_changed, rename_completed, color_change, row_rects, reorder)
+/// reorder: Some((from, to)) when the user drag-reordered a mode row.
 /// row_rects contains the screen rect for each rendered mode row (index-matched to modes).
 /// Validates: Requirements 3.3, 3.5, 3.6, 3.12
 pub fn modes_list_items(
@@ -892,12 +893,22 @@ pub fn modes_list_items(
     color_picker_state: &mut Option<(usize, egui::ecolor::Hsva)>,
     renaming_mode: &mut Option<usize>,
     rename_buffer: &mut String,
-) -> (bool, bool, Option<(usize, String)>, Option<(usize, (u8, u8, u8))>, Vec<egui::Rect>) {
+) -> (bool, bool, Option<(usize, String)>, Option<(usize, (u8, u8, u8))>, Vec<egui::Rect>, Option<(usize, usize)>) {
     let mut selection_changed = false;
     let mut initial_changed = false;
     let mut rename_completed = None;
     let mut color_change = None;
     let mut row_rects: Vec<egui::Rect> = Vec::new();
+    let mut reorder: Option<(usize, usize)> = None;
+
+    // Drag-reorder state stored in egui temp data.
+    // (drag_source_index, current_drop_target_index, has_moved)
+    // drop_target is the slot *before* which the dragged item will be inserted.
+    // has_moved becomes true once the mouse has moved enough to be a real drag.
+    let drag_state_id = egui::Id::new("mode_list_drag_state");
+    let drag_state: Option<(usize, usize, bool)> =
+        ui.ctx().data(|d| d.get_temp(drag_state_id));
+    let _is_dragging = drag_state.is_some();
     
     // Handle color picker if open - take ownership to avoid borrowing issues
     let picker_state = color_picker_state.take();
@@ -1043,8 +1054,8 @@ pub fn modes_list_items(
             } else {
                 // Show normal button
                 let button_response = ui.allocate_response(
-                    egui::Vec2::new(width - 30.0, 20.0), // Reduced height from 24.0 to 20.0, reduced width margin from 40.0 to 30.0
-                    egui::Sense::click()
+                    egui::Vec2::new(width - 30.0, 20.0),
+                    egui::Sense::click_and_drag(),
                 );
                 
                 // Draw button background
@@ -1212,12 +1223,113 @@ pub fn modes_list_items(
                     let hsva = egui::ecolor::Hsva::from(color);
                     *color_picker_state = Some((index, hsva));
                 }
+
+                // Handle drag start — drag_started() already implies the threshold was crossed,
+                // so set has_moved = true immediately.
+                if !copy_into_mode && button_response.drag_started() {
+                    ui.ctx().data_mut(|d| d.insert_temp(drag_state_id, (index, index, true)));
+                    ui.ctx().request_repaint();
+                }
+
+                // Keep requesting repaint while dragging
+                if !copy_into_mode && button_response.dragged() {
+                    ui.ctx().request_repaint();
+                }
+
+                // Handle drag release — emit reorder (handled post-loop using complete row_rects)
+                // drag_stopped on the button is not used; release is detected after all rows render.
             }
         });
         row_rects.push(row_resp.response.rect);
     }
 
-    (selection_changed, initial_changed, rename_completed, color_change, row_rects)
+    // After all rows are rendered, update drop target using the complete row_rects.
+    // This is the only place where the target is computed — row_rects is now fully populated.
+    if let Some((src, _old_tgt, has_moved)) = drag_state {
+        let mouse_down = ui.input(|i| i.pointer.primary_down());
+        let mouse_released = ui.input(|i| i.pointer.primary_released());
+
+        // Compute the current drop target from mouse position
+        let mouse_y = ui.input(|i| i.pointer.hover_pos()).map(|p| p.y);
+        if let Some(my) = mouse_y {
+            let mut best_target = row_rects.len();
+            for (ri, rr) in row_rects.iter().enumerate() {
+                if my < rr.center().y {
+                    best_target = ri;
+                    break;
+                }
+            }
+            ui.ctx().data_mut(|d| d.insert_temp(drag_state_id, (src, best_target, has_moved)));
+        }
+
+        if mouse_down {
+            ui.ctx().request_repaint();
+        } else if mouse_released {
+            // Only emit reorder if the drag was intentional (mouse moved enough)
+            if has_moved {
+                let final_state: Option<(usize, usize, bool)> =
+                    ui.ctx().data(|d| d.get_temp(drag_state_id));
+                if let Some((s, tgt, _)) = final_state {
+                    // Pass the raw pre-removal insertion slot directly to the reorder
+                    // handler. tab_viewer adjusts for the removal via `to - before_count`.
+                    // We allow tgt == modes.len() so "drop after last item" works.
+                    if s < modes.len() && tgt != s && tgt != s + 1 {
+                        reorder = Some((s, tgt));
+                    }
+                }
+            }
+            ui.ctx().data_mut(|d| d.remove::<(usize, usize, bool)>(drag_state_id));
+        }
+    } // end if let Some((src, _old_tgt, has_moved)) = drag_state
+
+    // Draw drop indicator line and ghost row while dragging
+    if let Some((src, tgt, has_moved)) = ui.ctx().data(|d| d.get_temp::<(usize, usize, bool)>(drag_state_id)) {
+        if !has_moved { return (selection_changed, initial_changed, rename_completed, color_change, row_rects, reorder); }
+        // Ghost: dim the dragged row (and all selected rows if dragging a selection)
+        let ghost_indices: Vec<usize> = if selected_indices.contains(&src) {
+            selected_indices.clone()
+        } else {
+            vec![src]
+        };
+        for gi in &ghost_indices {
+            if *gi < row_rects.len() {
+                ui.painter().rect_filled(
+                    row_rects[*gi],
+                    egui::CornerRadius::same(4),
+                    egui::Color32::from_black_alpha(120),
+                );
+            }
+        }
+
+        // Drop indicator: draw at the gap corresponding to raw insertion slot `tgt`
+        // in the *current* (pre-move) row layout. tgt is the slot before which the
+        // item would be inserted if the list were not shifted by the removal.
+        let effective_tgt = if tgt > src { tgt - 1 } else { tgt };
+        let indicator_y = if tgt == 0 {
+            row_rects.first().map(|r| r.min.y - 2.0).unwrap_or(0.0)
+        } else if tgt >= row_rects.len() {
+            row_rects.last().map(|r| r.max.y + 2.0).unwrap_or(0.0)
+        } else {
+            let above = row_rects[tgt - 1].max.y;
+            let below = row_rects[tgt].min.y;
+            (above + below) / 2.0
+        };
+        let _ = effective_tgt; // used in reorder logic above
+
+        if let Some(first) = row_rects.first() {
+            let x_min = first.min.x;
+            let x_max = first.max.x;
+            ui.painter().line_segment(
+                [egui::pos2(x_min, indicator_y), egui::pos2(x_max, indicator_y)],
+                egui::Stroke::new(2.0, egui::Color32::WHITE),
+            );
+            // Small triangular nubs at each end
+            ui.painter().circle_filled(egui::pos2(x_min, indicator_y), 3.0, egui::Color32::WHITE);
+            ui.painter().circle_filled(egui::pos2(x_max, indicator_y), 3.0, egui::Color32::WHITE);
+        }
+    }
+
+    (selection_changed, initial_changed, rename_completed, color_change, row_rects, reorder)
 }
 
 /// Draw dashed border selection indicator with 6.0 pixel segments

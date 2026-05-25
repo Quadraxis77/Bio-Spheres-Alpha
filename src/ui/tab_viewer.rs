@@ -2103,12 +2103,13 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
     let mut rename_completed: Option<(usize, String)> = None;
     let mut color_change: Option<(usize, (u8, u8, u8))> = None;
     let mut row_rects: Vec<egui::Rect> = Vec::new();
+    let mut reorder: Option<(usize, usize)> = None;
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            let (sc, ic, rc, cc, rr) = modes_list_items(
+            let (sc, ic, rc, cc, rr, ro) = modes_list_items(
                 ui,
                 &modes_data,
                 &mut selected_index,
@@ -2125,6 +2126,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             rename_completed = rc;
             color_change = cc;
             row_rects = rr;
+            reorder = ro;
 
             // Status line inside the scroll area so it stays with the list
             if selected_index < modes_data.len() {
@@ -2217,6 +2219,98 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                 g as f32 / 255.0,
                 b as f32 / 255.0
             );
+        }
+    }
+
+    // Handle drag reorder
+    if let Some((from, to)) = reorder {
+        let n = context.genome.modes.len();
+        // `to` is the raw pre-removal insertion slot (0..=n), so allow to == n
+        // for "insert after last item".
+        if from < n && to <= n && from != to {
+            // Determine which indices to move: the whole multi-selection if the dragged
+            // item is part of it, otherwise just the single dragged item.
+            let mut moving: Vec<usize> = if context.editor_state.selected_mode_indices.contains(&from)
+                && context.editor_state.selected_mode_indices.len() > 1
+            {
+                let mut v = context.editor_state.selected_mode_indices.clone();
+                v.sort_unstable();
+                v
+            } else {
+                vec![from]
+            };
+            moving.sort_unstable();
+
+            // Only proceed if the drop target actually changes position
+            // (skip if dropping inside the selected block itself)
+            let min_sel = *moving.first().unwrap();
+            let max_sel = *moving.last().unwrap();
+            let drop_inside = to >= min_sel && to <= max_sel + 1;
+            if !drop_inside || moving.len() == 1 {
+                // Extract the modes to move (back-to-front to keep indices valid)
+                let mut extracted: Vec<crate::genome::ModeSettings> = Vec::with_capacity(moving.len());
+                for &idx in moving.iter().rev() {
+                    extracted.insert(0, context.genome.modes.remove(idx));
+                }
+
+                // Compute insertion point: how many selected indices are before `to`
+                let before_count = moving.iter().filter(|&&i| i < to).count();
+                let insert_at = (to - before_count).min(context.genome.modes.len());
+
+                // Insert all extracted modes at the new position
+                for (offset, mode) in extracted.into_iter().enumerate() {
+                    context.genome.modes.insert(insert_at + offset, mode);
+                }
+
+                // Build a full remap table: old_index -> new_index
+                // After removal and re-insertion, compute where each original index ended up.
+                let mut remap_table: Vec<usize> = (0..n).collect();
+                {
+                    // Simulate the same remove+insert on the index table
+                    let mut table: Vec<usize> = (0..n).collect();
+                    let mut extracted_indices: Vec<usize> = Vec::with_capacity(moving.len());
+                    for &idx in moving.iter().rev() {
+                        extracted_indices.insert(0, table.remove(idx));
+                    }
+                    let before_count = moving.iter().filter(|&&i| i < to).count();
+                    let insert_at = (to - before_count).min(table.len());
+                    for (offset, orig) in extracted_indices.into_iter().enumerate() {
+                        table.insert(insert_at + offset, orig);
+                    }
+                    // table[new_pos] = old_index; invert to get old_index -> new_pos
+                    for (new_pos, &old_idx) in table.iter().enumerate() {
+                        remap_table[old_idx] = new_pos;
+                    }
+                }
+
+                let remap = |idx: i32| -> i32 {
+                    if idx < 0 || idx as usize >= n { return idx; }
+                    remap_table[idx as usize] as i32
+                };
+
+                for mode in &mut context.genome.modes {
+                    mode.child_a.mode_number = remap(mode.child_a.mode_number);
+                    mode.child_b.mode_number = remap(mode.child_b.mode_number);
+                    mode.mode_a_after_splits = remap(mode.mode_a_after_splits);
+                    mode.mode_b_after_splits = remap(mode.mode_b_after_splits);
+                    mode.signal_child_a_mode_above = remap(mode.signal_child_a_mode_above);
+                    mode.signal_child_a_mode_below = remap(mode.signal_child_a_mode_below);
+                    mode.signal_child_b_mode_above = remap(mode.signal_child_b_mode_above);
+                    mode.signal_child_b_mode_below = remap(mode.signal_child_b_mode_below);
+                    if mode.mode_switch_target >= 0 {
+                        mode.mode_switch_target = remap(mode.mode_switch_target);
+                    }
+                }
+
+                context.genome.initial_mode = remap(context.genome.initial_mode);
+                context.editor_state.selected_mode_index =
+                    remap(context.editor_state.selected_mode_index as i32) as usize;
+                for idx in &mut context.editor_state.selected_mode_indices {
+                    *idx = remap(*idx as i32) as usize;
+                }
+
+                log::info!("Reordered {:?} → insert before slot {}", moving, to);
+            }
         }
     }
 }
