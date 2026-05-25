@@ -2024,9 +2024,15 @@ impl ApplicationHandler for AppState {
                 label: Some("Bio-Spheres Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits {
-                    // Cell state write bind group uses 35 storage buffers (0-34) after splitting
-                    // genome_mode_data and mode_properties into 5 sub-buffers each
-                    max_storage_buffers_per_shader_stage: 40,
+                    // Cell state write bind group uses up to 40 storage buffers on Vulkan/DX12.
+                    // Metal (macOS) hard-caps at 31 — requesting 40 panics request_device on Metal.
+                    // Use backend to pick the right value; never use adapter.limits() as the
+                    // requested value since some drivers report low numbers that would cause
+                    // wgpu to validate every bind group against that cap, dropping FPS.
+                    max_storage_buffers_per_shader_stage: match adapter_info.backend {
+                        wgpu::Backend::Metal => 31,
+                        _ => 40,
+                    },
                     // Clamp to what the adapter actually supports — requesting more than the
                     // adapter limit causes request_device to fail (panic on .unwrap()).
                     max_storage_buffer_binding_size: storage_binding_limit,
