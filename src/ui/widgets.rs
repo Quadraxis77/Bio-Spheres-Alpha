@@ -1077,14 +1077,84 @@ pub fn modes_list_items(
                     );
                 }
                 
-                // Draw text
-                ui.painter().text(
-                    button_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    name,
-                    egui::FontId::default(),
+                // Draw text — marquee scroll on hover if text is too long, else truncate.
+                let text_max_width = button_rect.width() - 6.0; // 3px padding each side
+                let font_id = egui::FontId::default();
+                let full_galley = ui.painter().layout_no_wrap(
+                    name.clone(),
+                    font_id.clone(),
                     text_color,
                 );
+                let text_overflows = full_galley.rect.width() > text_max_width;
+
+                if text_overflows {
+                    // Marquee state: (scroll_offset_px, hover_timer_secs)
+                    // scroll_offset_px: how many pixels the text has scrolled left
+                    // hover_timer_secs: accumulated hover time (used for start delay + loop pause)
+                    let marquee_id = button_rect.min.x.to_bits() as u64 ^ (index as u64 * 0x9e3779b97f4a7c15);
+                    let marquee_id = egui::Id::new(("marquee", marquee_id));
+
+                    // Scroll speed and timing constants
+                    const START_DELAY_SECS: f32 = 0.6;  // pause before scrolling starts
+                    const SCROLL_SPEED: f32 = 40.0;     // pixels per second
+                    const END_PAUSE_SECS: f32 = 0.8;    // pause at end before looping
+
+                    let dt = ui.input(|i| i.stable_dt).min(0.1);
+                    let is_hovered = button_response.hovered();
+
+                    // Load state: (offset, timer)
+                    let (mut offset, mut timer): (f32, f32) = ui
+                        .ctx()
+                        .data(|d| d.get_temp(marquee_id).unwrap_or((0.0f32, 0.0f32)));
+
+                    if is_hovered {
+                        timer += dt;
+                        if timer > START_DELAY_SECS {
+                            let scroll_time = timer - START_DELAY_SECS;
+                            let overflow = full_galley.rect.width() - text_max_width;
+                            let max_offset = overflow + 8.0; // small extra gap before loop
+
+                            // Advance offset
+                            offset = (scroll_time * SCROLL_SPEED).min(max_offset);
+
+                            // Once we've reached the end, pause then loop
+                            if offset >= max_offset {
+                                let end_pause_elapsed = scroll_time - max_offset / SCROLL_SPEED;
+                                if end_pause_elapsed >= END_PAUSE_SECS {
+                                    // Reset for next loop
+                                    timer = START_DELAY_SECS; // skip start delay on loop
+                                    offset = 0.0;
+                                }
+                            }
+                        }
+                        ui.ctx().request_repaint();
+                    } else {
+                        // Not hovered — reset smoothly (instant reset is fine)
+                        offset = 0.0;
+                        timer = 0.0;
+                    }
+
+                    // Save state
+                    ui.ctx().data_mut(|d| d.insert_temp(marquee_id, (offset, timer)));
+
+                    // Paint clipped text at the scrolled position
+                    let clip_rect = button_rect.shrink2(egui::vec2(3.0, 0.0));
+                    let painter = ui.painter().with_clip_rect(clip_rect);
+                    let text_pos = egui::pos2(
+                        button_rect.min.x + 3.0 - offset,
+                        button_rect.center().y - full_galley.rect.height() / 2.0,
+                    );
+                    painter.galley(text_pos, full_galley, text_color);
+                } else {
+                    // Text fits — draw centered, no truncation needed
+                    ui.painter().text(
+                        button_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        name,
+                        font_id,
+                        text_color,
+                    );
+                }
                 
                 // Handle button interactions
                 if button_response.clicked() {

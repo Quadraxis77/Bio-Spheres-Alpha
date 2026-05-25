@@ -102,6 +102,9 @@ pub struct AdhesionBuffers {
     /// During propagation: read from signal_flags, write to signal_flags_next, then swap.
     pub signal_flags_next: wgpu::Buffer,
 
+    /// Current allocated size of the adhesion settings mode pool (in number of modes).
+    /// Starts at 16K and doubles on demand up to MAX_TOTAL_MODES.
+    pub adhesion_mode_pool_capacity: u64,
 }
 
 impl AdhesionBuffers {
@@ -125,16 +128,17 @@ impl AdhesionBuffers {
         );
         
         // Per-mode adhesion settings split into 3 × vec4 sub-buffers (16 bytes each).
-        // 8M modes × 16 bytes = 128 MB per sub-buffer — stays under wgpu's 256 MB limit.
-        let max_modes_u64 = crate::simulation::gpu_physics::mutation::MAX_TOTAL_MODES as u64;
+        // Start with the same initial pool size as triple_buffer.rs (16K modes).
+        // grow_adhesion_mode_pool_if_needed() doubles the pool on demand up to MAX_TOTAL_MODES.
+        const INITIAL_MODE_POOL_SIZE: u64 = 16_384;
         let adhesion_settings_v0 = Self::create_storage_buffer(
-            device, max_modes_u64 * 16, "Adhesion Settings V0",
+            device, INITIAL_MODE_POOL_SIZE * 16, "Adhesion Settings V0",
         );
         let adhesion_settings_v1 = Self::create_storage_buffer(
-            device, max_modes_u64 * 16, "Adhesion Settings V1",
+            device, INITIAL_MODE_POOL_SIZE * 16, "Adhesion Settings V1",
         );
         let adhesion_settings_v2 = Self::create_storage_buffer(
-            device, max_modes_u64 * 16, "Adhesion Settings V2",
+            device, INITIAL_MODE_POOL_SIZE * 16, "Adhesion Settings V2",
         );
         
         // Adhesion counts: 4 * u32 = 16 bytes
@@ -219,6 +223,7 @@ impl AdhesionBuffers {
             needs_sync: true,
             signal_flags,
             signal_flags_next,
+            adhesion_mode_pool_capacity: INITIAL_MODE_POOL_SIZE,
         }
     }
     
@@ -265,6 +270,39 @@ impl AdhesionBuffers {
         self.needs_sync = false;
     }
     
+    /// Grow the adhesion settings mode pool if `total_modes` exceeds the current capacity.
+    ///
+    /// Must be called before `sync_adhesion_settings` when new genomes are added.
+    /// Returns `true` if the pool was grown (bind groups referencing these buffers must be rebuilt).
+    pub fn grow_adhesion_mode_pool_if_needed(&mut self, device: &wgpu::Device, total_modes: u64) -> bool {
+        use crate::simulation::gpu_physics::mutation::MAX_TOTAL_MODES;
+        let hard_cap = MAX_TOTAL_MODES as u64;
+
+        if total_modes <= self.adhesion_mode_pool_capacity {
+            return false;
+        }
+
+        let mut new_capacity = self.adhesion_mode_pool_capacity;
+        while new_capacity < total_modes {
+            new_capacity = (new_capacity * 2).min(hard_cap);
+        }
+
+        log::info!(
+            "Growing adhesion mode pool: {} → {} modes ({:.1} MB → {:.1} MB)",
+            self.adhesion_mode_pool_capacity,
+            new_capacity,
+            self.adhesion_mode_pool_capacity as f64 * 3.0 * 16.0 / 1_048_576.0,
+            new_capacity as f64 * 3.0 * 16.0 / 1_048_576.0,
+        );
+
+        let m16 = new_capacity * 16;
+        self.adhesion_settings_v0 = Self::create_storage_buffer(device, m16, "Adhesion Settings V0");
+        self.adhesion_settings_v1 = Self::create_storage_buffer(device, m16, "Adhesion Settings V1");
+        self.adhesion_settings_v2 = Self::create_storage_buffer(device, m16, "Adhesion Settings V2");
+        self.adhesion_mode_pool_capacity = new_capacity;
+        true
+    }
+
     /// Sync adhesion settings from genomes to GPU
     pub fn sync_adhesion_settings(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
         let mut v0: Vec<[f32; 4]> = Vec::new();

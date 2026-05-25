@@ -383,6 +383,13 @@ pub struct GpuTripleBufferSystem {
     
     /// Cell capacity
     pub capacity: u32,
+
+    /// Current allocated size of all mode pool sub-buffers (in number of modes).
+    /// Starts at INITIAL_MODE_POOL_SIZE and doubles on demand up to MAX_TOTAL_MODES.
+    /// All mode sub-buffers (genome_mode_data_v*, mode_properties_v*, signal_settings_v*,
+    /// child_mode_indices, flags, oculocyte_params, regulation_params, etc.) are always
+    /// exactly this many modes in size.
+    pub mode_pool_capacity: u64,
     
     /// Whether buffers need full sync from canonical state (initial setup only)
     pub needs_sync: bool,
@@ -590,10 +597,13 @@ impl GpuTripleBufferSystem {
         });
 
         
-        // Each mode buffer is split into 5 vec4 sub-buffers (16 bytes each) to stay under
-        // wgpu's 256 MB/buffer limit. At 8M modes × 16 bytes = 128 MB per sub-buffer.
-        // Must match MAX_TOTAL_MODES in mutation.rs (8_000_000)
-        let max_modes = 8_000_000u64; // Total mode pool — independent of max modes per genome
+        // Mode pool: start small and grow on demand via grow_mode_pool_if_needed().
+        // Initial size covers ~200 genomes × 80 modes = 16K modes (~26 MB total across all
+        // sub-buffers), vs the old fixed 8M allocation (~4.8 GB).
+        // The pool doubles when sync_genome_mode_data detects it is too small, up to
+        // MAX_TOTAL_MODES (8_000_000) which is the hard cap used by the mutation ring buffer.
+        const INITIAL_MODE_POOL_SIZE: u64 = 16_384;
+        let max_modes = INITIAL_MODE_POOL_SIZE;
         let genome_mode_data_v0 = Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V0");
         let genome_mode_data_v1 = Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V1");
         let genome_mode_data_v2 = Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V2");
@@ -781,6 +791,7 @@ impl GpuTripleBufferSystem {
             indirect_dispatch_buffer,
             current_index: AtomicUsize::new(0),
             capacity,
+            mode_pool_capacity: max_modes,
             needs_sync: true,
             pending_cell_insertions: Vec::new(),
             slot_allocator: DeterministicSlotAllocator::new(capacity),
@@ -861,7 +872,13 @@ impl GpuTripleBufferSystem {
     /// Upload canonical state data to all GPU buffer sets
     /// WARNING: This overwrites ALL GPU positions with CPU data.
     /// Only use for initial setup, not during simulation.
-    pub fn sync_from_canonical_state(&mut self, queue: &wgpu::Queue, state: &CanonicalState, genomes: &[crate::genome::Genome]) {
+    pub fn sync_from_canonical_state(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, state: &CanonicalState, genomes: &[crate::genome::Genome]) {
+        // Grow mode pool if needed before any genome data sync
+        let total_modes: u64 = genomes.iter().map(|g| g.modes.len() as u64).sum();
+        if total_modes > 0 {
+            self.grow_mode_pool_if_needed(device, total_modes);
+        }
+
         // Sync slot allocator with canonical state
         self.sync_slot_allocator_with_canonical(state);
         
@@ -1140,6 +1157,86 @@ impl GpuTripleBufferSystem {
         queue.write_buffer(&self.cell_types, 0, bytemuck::cast_slice(&cell_types_data));
     }
     
+    /// Grow all mode pool sub-buffers if the current pool is too small for `total_modes`.
+    ///
+    /// Call this before any sync that writes genome data to the GPU. The pool doubles
+    /// until it fits `total_modes`, capped at `MAX_TOTAL_MODES` (8,000,000).
+    /// All existing GPU data is lost on resize — callers must re-sync everything
+    /// after calling this (which they do anyway, since this is called at sync time).
+    ///
+    /// Returns `true` if the pool was grown (bind groups that reference mode buffers
+    /// must be rebuilt by the caller).
+    pub fn grow_mode_pool_if_needed(&mut self, device: &wgpu::Device, total_modes: u64) -> bool {
+        use crate::simulation::gpu_physics::mutation::MAX_TOTAL_MODES;
+        let hard_cap = MAX_TOTAL_MODES as u64;
+
+        if total_modes <= self.mode_pool_capacity {
+            return false; // Already large enough
+        }
+
+        // Double until we fit, capped at the hard limit
+        let mut new_capacity = self.mode_pool_capacity;
+        while new_capacity < total_modes {
+            new_capacity = (new_capacity * 2).min(hard_cap);
+        }
+
+        log::info!(
+            "Growing mode pool: {} → {} modes ({:.1} MB → {:.1} MB across ~34 sub-buffers)",
+            self.mode_pool_capacity,
+            new_capacity,
+            self.mode_pool_capacity as f64 * 34.0 * 16.0 / 1_048_576.0,
+            new_capacity as f64 * 34.0 * 16.0 / 1_048_576.0,
+        );
+
+        // Reallocate every mode-indexed sub-buffer at the new capacity.
+        // Buffers that are per-cell (position_and_mass, velocity, etc.) are NOT touched.
+        let m16 = new_capacity * 16; // 16 bytes per mode (vec4)
+        let m8  = new_capacity * 8;  // 8 bytes per mode (2×i32)
+        let m4  = new_capacity * 4;  // 4 bytes per mode (1×u32)
+
+        self.genome_mode_data_v0 = Self::create_storage_buffer(device, m16, "Genome Mode Data V0");
+        self.genome_mode_data_v1 = Self::create_storage_buffer(device, m16, "Genome Mode Data V1");
+        self.genome_mode_data_v2 = Self::create_storage_buffer(device, m16, "Genome Mode Data V2");
+        self.genome_mode_data_v3 = Self::create_storage_buffer(device, m16, "Genome Mode Data V3");
+        self.genome_mode_data_v4 = Self::create_storage_buffer(device, m16, "Genome Mode Data V4");
+
+        self.child_mode_indices                    = Self::create_storage_buffer(device, m8,  "Child Mode Indices");
+        self.parent_make_adhesion_flags            = Self::create_storage_buffer(device, m4,  "Parent Make Adhesion Flags");
+        self.child_a_keep_adhesion_flags           = Self::create_storage_buffer(device, m4,  "Child A Keep Adhesion Flags");
+        self.child_b_keep_adhesion_flags           = Self::create_storage_buffer(device, m4,  "Child B Keep Adhesion Flags");
+        self.child_a_after_split_keep_adhesion_flags = Self::create_storage_buffer(device, m4, "Child A After Split Keep Adhesion Flags");
+        self.child_b_after_split_keep_adhesion_flags = Self::create_storage_buffer(device, m4, "Child B After Split Keep Adhesion Flags");
+
+        self.mode_properties_v0  = Self::create_storage_buffer(device, m16, "Mode Properties V0");
+        self.mode_properties_v1  = Self::create_storage_buffer(device, m16, "Mode Properties V1");
+        self.mode_properties_v2  = Self::create_storage_buffer(device, m16, "Mode Properties V2");
+        self.mode_properties_v3  = Self::create_storage_buffer(device, m16, "Mode Properties V3");
+        self.mode_properties_v4  = Self::create_storage_buffer(device, m16, "Mode Properties V4");
+        self.mode_properties_v5  = Self::create_storage_buffer(device, m16, "Mode Properties V5");
+        self.mode_properties_v6  = Self::create_storage_buffer(device, m16, "Mode Properties V6");
+        self.mode_properties_v7  = Self::create_storage_buffer(device, m16, "Mode Properties V7");
+        self.mode_properties_v8  = Self::create_storage_buffer(device, m16, "Mode Properties V8");
+        self.mode_properties_v9  = Self::create_storage_buffer(device, m16, "Mode Properties V9");
+        self.mode_properties_v10 = Self::create_storage_buffer(device, m16, "Mode Properties V10");
+        self.mode_properties_v11 = Self::create_storage_buffer(device, m16, "Mode Properties V11");
+        self.mode_properties_v12 = Self::create_storage_buffer(device, m16, "Mode Properties V12");
+
+        self.mode_cell_types              = Self::create_storage_buffer(device, m4,  "Mode Cell Types");
+        self.glueocyte_env_adhesion_flags = Self::create_storage_buffer(device, m4,  "Glueocyte Env Adhesion Flags");
+        self.glueocyte_cell_adhesion_flags = Self::create_storage_buffer(device, m16, "Glueocyte Cell Adhesion Flags");
+        self.oculocyte_params             = Self::create_storage_buffer(device, m16, "Oculocyte Params");
+        self.regulation_params            = Self::create_storage_buffer(device, m16, "Regulation Params");
+
+        self.signal_settings_v0 = Self::create_storage_buffer(device, m16, "Signal Settings V0");
+        self.signal_settings_v1 = Self::create_storage_buffer(device, m16, "Signal Settings V1");
+        self.signal_settings_v2 = Self::create_storage_buffer(device, m16, "Signal Settings V2");
+        self.signal_settings_v3 = Self::create_storage_buffer(device, m16, "Signal Settings V3");
+        self.signal_settings_v4 = Self::create_storage_buffer(device, m16, "Signal Settings V4");
+
+        self.mode_pool_capacity = new_capacity;
+        true
+    }
+
     /// Sync genome mode data (child orientations and split orientations) for division shader.
     /// Data is written into 5 separate vec4 sub-buffers (v0..v4), each 16 bytes/mode.
     pub fn sync_genome_mode_data(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {

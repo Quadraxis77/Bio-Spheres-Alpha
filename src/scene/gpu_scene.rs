@@ -2093,7 +2093,14 @@ impl GpuScene {
     
     /// Sync adhesion settings from genomes to GPU
     /// Call this after adding genomes to ensure settings are uploaded to GPU
-    pub fn sync_adhesion_settings(&mut self, queue: &wgpu::Queue) {
+    pub fn sync_adhesion_settings(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        // Grow mode pool if needed before syncing
+        let total_modes: u64 = self.genomes.iter().map(|g| g.modes.len() as u64).sum();
+        if total_modes > 0 {
+            self.gpu_triple_buffers.grow_mode_pool_if_needed(device, total_modes);
+            self.adhesion_buffers.grow_adhesion_mode_pool_if_needed(device, total_modes);
+        }
+
         self.adhesion_buffers.sync_adhesion_settings(queue, &self.genomes);
         
         // Sync parent_make_adhesion_flags to triple buffer system
@@ -2238,7 +2245,7 @@ impl GpuScene {
         
         // Sync settings to GPU if genome was added or updated
         if needs_sync {
-            self.sync_adhesion_settings(queue);
+            self.sync_adhesion_settings(device, queue);
         }
         
         // Calculate initial radius from mass (mass = 4/3 * pi * r^3 for unit density)
@@ -5067,7 +5074,7 @@ impl Scene for GpuScene {
     ) {
         // Sync adhesion settings to GPU only when genomes are added or modified
         if self.genomes_dirty {
-            self.sync_adhesion_settings(queue);
+            self.sync_adhesion_settings(device, queue);
             // Sync mutation system genome metadata when genomes change
             if let Some(mutation_system) = &mut self.mutation_system {
                 mutation_system.sync_genome_metadata(queue, &self.genomes);

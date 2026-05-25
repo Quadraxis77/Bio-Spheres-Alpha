@@ -334,6 +334,7 @@ impl GpuScene {
     /// smaller, this returns `SnapshotError::CapacityMismatch`.
     pub fn restore_from_snapshot(
         &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         snapshot: &GpuSceneSnapshot,
     ) -> Result<(), SnapshotError> {
@@ -468,7 +469,7 @@ impl GpuScene {
 
             // Push canonical state to all three GPU buffer sets.
             self.gpu_triple_buffers
-                .sync_from_canonical_state(queue, &canonical, &self.genomes);
+                .sync_from_canonical_state(device, queue, &canonical, &self.genomes);
 
             // Sync embryocyte reserve buffer to GPU (sync_from_canonical_state doesn't cover it)
             if !snapshot.embryocyte_reserves.is_empty() {
@@ -489,6 +490,11 @@ impl GpuScene {
         // sync_from_canonical_state already calls sync_genome_mode_data, but
         // we also need to sync the adhesion settings for the restored genomes.
         if !self.genomes.is_empty() {
+            // Ensure mode pool is large enough (sync_from_canonical_state may have grown it,
+            // but call again here in case genomes changed between the two sync paths)
+            let total_modes: u64 = self.genomes.iter().map(|g| g.modes.len() as u64).sum();
+            self.gpu_triple_buffers.grow_mode_pool_if_needed(device, total_modes);
+
             self.gpu_triple_buffers
                 .sync_genome_mode_data(queue, &self.genomes);
             self.gpu_triple_buffers

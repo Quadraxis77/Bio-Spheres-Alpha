@@ -36,6 +36,12 @@ pub struct SerializableGenome {
     #[serde(skip_serializing_if = "is_identity_quat")]
     #[serde(default = "default_quat")]
     pub initial_orientation: [f32; 4],
+    /// Total number of modes in this genome.
+    /// Stored so loading restores the exact mode count rather than defaulting to 1.
+    /// Old files without this field default to 80 for backward compatibility.
+    #[serde(skip_serializing_if = "is_default_mode_count")]
+    #[serde(default = "default_mode_count")]
+    pub mode_count: usize,
     /// Only modes that differ from defaults are stored
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[serde(default)]
@@ -56,6 +62,12 @@ fn is_identity_quat(q: &[f32; 4]) -> bool {
 fn default_quat() -> [f32; 4] {
     [0.0, 0.0, 0.0, 1.0]
 }
+
+/// Old files without mode_count default to 80 for backward compatibility.
+fn default_mode_count() -> usize { 80 }
+
+/// Skip serializing mode_count when it equals 10 (the new default).
+fn is_default_mode_count(n: &usize) -> bool { *n == 10 }
 
 /// A mode with its index and only the fields that differ from default
 #[derive(Serialize, Deserialize, Debug)]
@@ -321,12 +333,12 @@ impl Genome {
 
     /// Convert to serializable format, only including modified modes.
     fn to_serializable(&self) -> SerializableGenome {
-        let default_genome = Genome::default();
+        // Use a single-mode default as the diff baseline for each mode.
+        let default_mode = ModeSettings::default();
         let mut modified_modes = Vec::new();
 
         for (i, mode) in self.modes.iter().enumerate() {
-            let default_mode = &default_genome.modes[i];
-            if let Some(serializable) = mode_to_serializable(mode, default_mode, i) {
+            if let Some(serializable) = mode_to_serializable(mode, &default_mode, i) {
                 modified_modes.push(serializable);
             }
         }
@@ -335,21 +347,46 @@ impl Genome {
             name: self.name.clone(),
             initial_mode: self.initial_mode,
             initial_orientation: quat_to_array(self.initial_orientation),
+            mode_count: self.modes.len(),
             modified_modes,
         }
     }
 
     /// Create genome from serializable format, applying modifications to defaults.
     fn from_serializable(ser: SerializableGenome) -> Result<Self, GenomeDeserializeError> {
-        let mut genome = Genome::default();
+        use super::MAX_MODES;
+
+        // Determine how many modes to create. Old files without mode_count default to 80.
+        // Clamp to MAX_MODES so corrupt/future files can't allocate unbounded memory.
+        let target_count = ser.mode_count.min(MAX_MODES).max(1);
+
+        // Build a genome with the right number of modes.
+        // We use new_with_mode_count so each mode gets a deterministic color and
+        // self-referencing children — the same baseline the old default() used.
+        let mut genome = super::Genome::new_with_mode_count(target_count);
         genome.name = ser.name;
         genome.initial_mode = ser.initial_mode;
         genome.initial_orientation = array_to_quat(ser.initial_orientation);
 
-        // Apply modified modes
+        // Apply modified modes. If a mode index exceeds the current vec length
+        // (e.g. a file saved with 80 modes but mode_count was missing), extend.
         for modified in ser.modified_modes {
-            if modified.index >= genome.modes.len() {
-                return Err(GenomeDeserializeError::InvalidModeIndex(modified.index));
+            // Extend the vec if needed (handles old files referencing high indices)
+            while modified.index >= genome.modes.len() {
+                if genome.modes.len() >= MAX_MODES {
+                    return Err(GenomeDeserializeError::InvalidModeIndex(modified.index));
+                }
+                let idx = genome.modes.len();
+                let mode_name = format!("M {}", idx + 1);
+                let mut mode = super::ModeSettings {
+                    name: mode_name.clone(),
+                    default_name: mode_name,
+                    cell_type: 2, // Phagocyte — all modes after the first default to Phagocyte
+                    ..Default::default()
+                };
+                mode.child_a.mode_number = idx as i32;
+                mode.child_b.mode_number = idx as i32;
+                genome.modes.push(mode);
             }
             apply_mode_settings(&mut genome.modes[modified.index], &modified.settings);
         }

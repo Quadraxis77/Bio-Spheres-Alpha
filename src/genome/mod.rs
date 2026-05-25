@@ -5,6 +5,10 @@ use glam::{Vec2, Vec3, Quat};
 
 pub use serialization::{GenomeDeserializeError, GenomeSerializeError};
 
+/// Maximum number of modes a genome can have.
+/// Raised from 80 to 128 to give more room for complex creatures.
+pub const MAX_MODES: usize = 128;
+
 #[derive(Debug, Clone)]
 pub struct Genome {
     pub name: String,
@@ -333,36 +337,37 @@ impl Default for ModeSettings {
 }
 
 impl Default for Genome {
+    /// Creates a genome with 10 default modes.
+    ///
+    /// M1 is Embryocyte; M2–M10 are Phagocyte. This is the serialization
+    /// baseline — `from_serializable` starts from this and applies diffs.
+    ///
+    /// Old `.genome` files still load correctly because `from_serializable`
+    /// extends or trims the vec to match the saved `mode_count`.
     fn default() -> Self {
         let mut genome = Self {
             name: "Untitled Genome".to_string(),
-            initial_mode: 0, // Default to first mode
+            initial_mode: 0,
             initial_orientation: Quat::IDENTITY,
-            modes: Vec::new(),
+            modes: Vec::with_capacity(10),
         };
-        
-        // Create all 80 modes with evenly distributed hues (stable defaults for serialization)
-        for i in 0..80 {
-            let mode_name = format!("M {}", i + 1);  // Start mode numbering from 1
+
+        for i in 0..10 {
+            let mode_name = format!("M {}", i + 1);
+            let hue = (i as f32 / 10.0) * 360.0;
+            let (r, g, b) = hue_to_rgb(hue);
             let mut mode = ModeSettings {
                 name: mode_name.clone(),
                 default_name: mode_name,
+                cell_type: if i == 0 { 10 } else { 2 }, // M1 = Embryocyte, rest = Phagocyte
+                color: Vec3::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0),
                 ..Default::default()
             };
-
-            // Deterministic color spread — must stay stable so serialization diffs work correctly.
-            // Random colors are assigned by the UI when the user creates a new genome.
-            let hue = (i as f32 / 80.0) * 360.0;
-            let (r, g, b) = hue_to_rgb(hue);
-            mode.color = Vec3::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
-            
-            // Set child modes to split back to themselves
             mode.child_a.mode_number = i as i32;
             mode.child_b.mode_number = i as i32;
-            
             genome.modes.push(mode);
         }
-        
+
         genome
     }
 }
@@ -424,13 +429,13 @@ impl Genome {
         }
     }
 
-    /// Create a new genome with random colors for each mode.
+    /// Create a new genome with a single mode and a random color.
     /// Use this for user-facing "new genome" creation.
     /// Do NOT use this as a serialization baseline — `Default::default()` must stay deterministic.
     pub fn new_with_random_colors() -> Self {
         let mut genome = Self::default();
 
-        // Randomize colors using LCG seeded from system time
+        // Randomize the single starting mode's color
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos())
@@ -445,13 +450,137 @@ impl Genome {
             rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             let b = ((rng >> 33) & 0xFF) as f32 / 255.0;
             mode.color = Vec3::new(r, g, b);
-
-            // Default to Phagocyte (2) — it auto-gains nutrients and can divide,
-            // making it a useful starting point. Test cell (0) is a debug type.
-            mode.cell_type = 2;
         }
 
         genome
+    }
+
+    /// Create a genome pre-populated with `n` modes (clamped to `MAX_MODES`).
+    /// Used by `generate_procedural` which needs a fixed slot pool to assign roles into.
+    /// Each mode gets a deterministic hue spread and self-referencing children.
+    pub fn new_with_mode_count(n: usize) -> Self {
+        let count = n.min(MAX_MODES).max(1);
+        let mut genome = Self {
+            name: "Untitled Genome".to_string(),
+            initial_mode: 0,
+            initial_orientation: Quat::IDENTITY,
+            modes: Vec::with_capacity(count),
+        };
+
+        // Randomize colors using LCG seeded from system time
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(12345);
+        let mut rng = seed as u64;
+
+        for i in 0..count {
+            let mode_name = format!("M {}", i + 1);
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let r = ((rng >> 33) & 0xFF) as f32 / 255.0;
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let g = ((rng >> 33) & 0xFF) as f32 / 255.0;
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let b = ((rng >> 33) & 0xFF) as f32 / 255.0;
+
+            let mut mode = ModeSettings {
+                name: mode_name.clone(),
+                default_name: mode_name,
+                color: Vec3::new(r, g, b),
+                cell_type: 2, // Phagocyte default
+                ..Default::default()
+            };
+            mode.child_a.mode_number = i as i32;
+            mode.child_b.mode_number = i as i32;
+            genome.modes.push(mode);
+        }
+
+        genome
+    }
+
+    /// Add a new mode to this genome, returning its index.
+    /// Returns `None` if the genome is already at `MAX_MODES`.
+    /// The new mode gets a random color and self-referencing children.
+    pub fn add_mode(&mut self) -> Option<usize> {
+        if self.modes.len() >= MAX_MODES {
+            return None;
+        }
+        let idx = self.modes.len();
+        let mode_name = format!("M {}", idx + 1);
+
+        // Random color from system time + index mix
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(12345) as u64;
+        let mut rng = seed.wrapping_add((idx as u64).wrapping_mul(0x9e3779b97f4a7c15));
+        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let r = ((rng >> 33) & 0xFF) as f32 / 255.0;
+        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let g = ((rng >> 33) & 0xFF) as f32 / 255.0;
+        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let b = ((rng >> 33) & 0xFF) as f32 / 255.0;
+
+        let mut mode = ModeSettings {
+            name: mode_name.clone(),
+            default_name: mode_name,
+            color: Vec3::new(r, g, b),
+            cell_type: 2, // Phagocyte — all modes after the first default to Phagocyte
+            ..Default::default()
+        };
+        mode.child_a.mode_number = idx as i32;
+        mode.child_b.mode_number = idx as i32;
+        self.modes.push(mode);
+        Some(idx)
+    }
+
+    /// Remove the last mode from this genome.
+    /// Returns `false` if the genome only has 1 mode (minimum).
+    /// Clamps `initial_mode` and any child references that pointed at the removed index.
+    pub fn remove_last_mode(&mut self) -> bool {
+        if self.modes.len() <= 1 {
+            return false;
+        }
+        let removed_idx = self.modes.len() - 1;
+        self.modes.pop();
+
+        // Clamp initial_mode
+        if self.initial_mode as usize >= self.modes.len() {
+            self.initial_mode = (self.modes.len() - 1) as i32;
+        }
+
+        // Clamp any child references that pointed at the removed index
+        let last_valid = (self.modes.len() - 1) as i32;
+        for mode in &mut self.modes {
+            if mode.child_a.mode_number >= removed_idx as i32 {
+                mode.child_a.mode_number = last_valid;
+            }
+            if mode.child_b.mode_number >= removed_idx as i32 {
+                mode.child_b.mode_number = last_valid;
+            }
+            if mode.mode_a_after_splits >= removed_idx as i32 {
+                mode.mode_a_after_splits = last_valid;
+            }
+            if mode.mode_b_after_splits >= removed_idx as i32 {
+                mode.mode_b_after_splits = last_valid;
+            }
+            if mode.signal_child_a_mode_above >= removed_idx as i32 {
+                mode.signal_child_a_mode_above = last_valid;
+            }
+            if mode.signal_child_a_mode_below >= removed_idx as i32 {
+                mode.signal_child_a_mode_below = last_valid;
+            }
+            if mode.signal_child_b_mode_above >= removed_idx as i32 {
+                mode.signal_child_b_mode_above = last_valid;
+            }
+            if mode.signal_child_b_mode_below >= removed_idx as i32 {
+                mode.signal_child_b_mode_below = last_valid;
+            }
+            if mode.mode_switch_target >= removed_idx as i32 {
+                mode.mode_switch_target = -1; // disable rather than clamp
+            }
+        }
+        true
     }
     pub fn generate_procedural(seed: u64) -> Self {
         // ── Seeded RNG (splitmix64 + LCG) ───────────────────────────────────
@@ -494,7 +623,10 @@ impl Genome {
         }
 
         let mut rng = Rng::new(seed);
-        let mut genome = Self::new_with_random_colors();
+        // Pre-allocate exactly as many modes as the generator will use (8–12 roles).
+        // We don't know num_roles yet, so allocate the maximum (13) and trim unused
+        // slots at the end. This keeps the genome lean vs the old 80-mode allocation.
+        let mut genome = Self::new_with_mode_count(13);
 
         // ── Name ─────────────────────────────────────────────────────────────
         let label = (rng.step() & 0xFFFF) as u16;
@@ -508,6 +640,8 @@ impl Genome {
         // together with signal channels. Nothing is locked to a fixed index.
         // ══════════════════════════════════════════════════════════════════════
         let num_roles: usize = rng.i32_range(8, 13) as usize;
+        // Trim the genome to exactly num_roles modes (we pre-allocated 13 above)
+        genome.modes.truncate(num_roles);
         let mut slots: Vec<usize> = (0..num_roles).collect();
         for i in (1..slots.len()).rev() {
             let j = rng.u32(i as u32 + 1) as usize;

@@ -1856,7 +1856,6 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
     // Record panel rect for the tutorial pointer.
     context.editor_state.panel_rects.insert("Modes".to_string(), ui.max_rect());
 
-    // The genome should always have 40 modes by default
     if context.genome.modes.is_empty() {
         log::warn!("Genome has no modes, this should not happen with default genome");
         return;
@@ -1878,15 +1877,56 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         context.genome.initial_mode = 0;
     }
     
-    // Control buttons (Copy Into and Reset) - more compact layout
+    // Control buttons row: Copy Into, Reset, Add (+), Remove (−)
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0; // Reduce button spacing
+        ui.spacing_mut().item_spacing.x = 4.0;
         let (copy_into_clicked, reset_clicked) = modes_buttons(
             ui,
             context.genome.modes.len(),
             selected_index,
             initial_mode,
         );
+
+        // Add mode button
+        let at_cap = context.genome.modes.len() >= crate::genome::MAX_MODES;
+        let add_btn = ui.add_enabled(
+            !at_cap,
+            egui::Button::new("+").min_size(egui::Vec2::new(20.0, 0.0)),
+        );
+        if add_btn.on_hover_text(if at_cap {
+            format!("At maximum ({} modes)", crate::genome::MAX_MODES)
+        } else {
+            format!("Add mode ({}/{})", context.genome.modes.len(), crate::genome::MAX_MODES)
+        }).clicked() {
+            if let Some(new_idx) = context.genome.add_mode() {
+                context.editor_state.selected_mode_index = new_idx;
+                context.editor_state.selected_mode_indices = vec![new_idx];
+                log::info!("Added mode M{}", new_idx + 1);
+            }
+        }
+
+        // Remove last mode button
+        let can_remove = context.genome.modes.len() > 1;
+        let remove_btn = ui.add_enabled(
+            can_remove,
+            egui::Button::new("−").min_size(egui::Vec2::new(20.0, 0.0)),
+        );
+        if remove_btn.on_hover_text(if can_remove {
+            format!("Remove last mode ({})", context.genome.modes.len())
+        } else {
+            "Need at least 1 mode".to_string()
+        }).clicked() {
+            context.genome.remove_last_mode();
+            // Clamp selection after removal
+            if context.editor_state.selected_mode_index >= context.genome.modes.len() {
+                context.editor_state.selected_mode_index = context.genome.modes.len().saturating_sub(1);
+            }
+            context.editor_state.selected_mode_indices.retain(|&i| i < context.genome.modes.len());
+            if context.editor_state.selected_mode_indices.is_empty() {
+                context.editor_state.selected_mode_indices = vec![context.editor_state.selected_mode_index];
+            }
+            log::info!("Removed last mode, now {} modes", context.genome.modes.len());
+        }
         
         if copy_into_clicked {
             let selected_idx = selected_index;
@@ -2030,9 +2070,9 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         }
     });
     
-    ui.add_space(4.0); // Reduced spacing instead of separator
-    
-    // Show copy into mode indicator just above the modes list
+    ui.add_space(4.0);
+
+    // Show copy into mode indicator — pinned above the scrollable list
     if context.editor_state.copy_into_dialog_open {
         ui.colored_label(egui::Color32::YELLOW, "Select target mode to copy into:");
         if ui.small_button("Cancel").clicked() {
@@ -2041,7 +2081,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         }
         ui.add_space(5.0);
     }
-    
+
     // Prepare modes data for the widget (name, color tuples)
     let modes_data: Vec<(String, (u8, u8, u8))> = context.genome.modes
         .iter()
@@ -2053,30 +2093,63 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             (mode.name.clone(), (r, g, b))
         })
         .collect();
-    
-    // Modes list with compact spacing
-    ui.spacing_mut().item_spacing.y = 2.0; // Reduce vertical spacing between mode items
+
     let available_width = ui.available_width();
     let copy_into_mode = context.editor_state.copy_into_dialog_open;
-    
-    let (selection_changed, initial_changed, rename_completed, color_change, row_rects) = modes_list_items(
-        ui,
-        &modes_data,
-        &mut selected_index,
-        &mut context.editor_state.selected_mode_indices,
-        &mut initial_mode,
-        available_width,
-        copy_into_mode,
-        &mut context.editor_state.color_picker_state,
-        &mut context.editor_state.renaming_mode,
-        &mut context.editor_state.rename_buffer,
-    );
+
+    // Scrollable mode list — buttons above stay pinned
+    let mut selection_changed = false;
+    let mut initial_changed = false;
+    let mut rename_completed: Option<(usize, String)> = None;
+    let mut color_change: Option<(usize, (u8, u8, u8))> = None;
+    let mut row_rects: Vec<egui::Rect> = Vec::new();
+
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            let (sc, ic, rc, cc, rr) = modes_list_items(
+                ui,
+                &modes_data,
+                &mut selected_index,
+                &mut context.editor_state.selected_mode_indices,
+                &mut initial_mode,
+                available_width,
+                copy_into_mode,
+                &mut context.editor_state.color_picker_state,
+                &mut context.editor_state.renaming_mode,
+                &mut context.editor_state.rename_buffer,
+            );
+            selection_changed = sc;
+            initial_changed = ic;
+            rename_completed = rc;
+            color_change = cc;
+            row_rects = rr;
+
+            // Status line inside the scroll area so it stays with the list
+            if selected_index < modes_data.len() {
+                ui.add_space(4.0);
+                let multi_count = context.editor_state.selected_mode_indices.len();
+                if multi_count > 1 {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(255, 200, 80),
+                        format!("✦ {} modes selected — edits apply to all", multi_count),
+                    );
+                } else if selected_index < context.genome.modes.len() {
+                    ui.small(format!("Selected: {}", context.genome.modes[selected_index].name));
+                }
+                if initial_mode < context.genome.modes.len() {
+                    ui.small(format!("Initial: {}", context.genome.modes[initial_mode].name));
+                }
+                ui.small(format!("Total: {}", modes_data.len()));
+            }
+        });
 
     // Store each mode row's rect so the tutorial arrow can point at specific rows.
     for (i, rect) in row_rects.iter().enumerate() {
         context.editor_state.panel_rects.insert(format!("mode_row_{}", i), *rect);
     }
-    
+
     // Handle mode selection change
     if selection_changed {
         // If in copy into mode, this is the target selection
@@ -2146,21 +2219,72 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             );
         }
     }
-    
-    // Show current mode info (for debugging/feedback) - more compact
-    if selected_index < context.genome.modes.len() {
-        ui.add_space(4.0); // Reduced spacing
-        let multi_count = context.editor_state.selected_mode_indices.len();
-        if multi_count > 1 {
-            ui.colored_label(
-                egui::Color32::from_rgb(255, 200, 80),
-                format!("✦ {} modes selected — edits apply to all", multi_count),
-            );
+}
+
+/// Draw text inside `rect`, scrolling it horizontally (marquee) when hovered and too long to fit.
+/// `marquee_id` must be unique per call site + item index.
+/// Returns the `Response` from the allocated rect so callers can detect clicks.
+fn draw_marquee_text(
+    ui: &mut Ui,
+    rect: egui::Rect,
+    name: &str,
+    text_color: egui::Color32,
+    is_hovered: bool,
+    marquee_id: egui::Id,
+) {
+    const START_DELAY_SECS: f32 = 0.6;
+    const SCROLL_SPEED: f32 = 40.0;
+    const END_PAUSE_SECS: f32 = 0.8;
+
+    let font_id = egui::FontId::default();
+    let text_max_width = rect.width() - 6.0;
+
+    let full_galley = ui.painter().layout_no_wrap(name.to_owned(), font_id.clone(), text_color);
+    let text_overflows = full_galley.rect.width() > text_max_width;
+
+    if text_overflows {
+        let dt = ui.input(|i| i.stable_dt).min(0.1);
+        let (mut offset, mut timer): (f32, f32) =
+            ui.ctx().data(|d| d.get_temp(marquee_id).unwrap_or((0.0f32, 0.0f32)));
+
+        if is_hovered {
+            timer += dt;
+            if timer > START_DELAY_SECS {
+                let scroll_time = timer - START_DELAY_SECS;
+                let overflow = full_galley.rect.width() - text_max_width;
+                let max_offset = overflow + 8.0;
+                offset = (scroll_time * SCROLL_SPEED).min(max_offset);
+                if offset >= max_offset {
+                    let end_pause_elapsed = scroll_time - max_offset / SCROLL_SPEED;
+                    if end_pause_elapsed >= END_PAUSE_SECS {
+                        timer = START_DELAY_SECS;
+                        offset = 0.0;
+                    }
+                }
+            }
+            ui.ctx().request_repaint();
         } else {
-            ui.small(format!("Selected: {}", context.genome.modes[selected_index].name));
+            offset = 0.0;
+            timer = 0.0;
         }
-        ui.small(format!("Initial: {}", context.genome.modes[initial_mode].name));
-        ui.small(format!("Total: {}", context.genome.modes.len()));
+
+        ui.ctx().data_mut(|d| d.insert_temp(marquee_id, (offset, timer)));
+
+        let clip_rect = rect.shrink2(egui::vec2(3.0, 0.0));
+        let painter = ui.painter().with_clip_rect(clip_rect);
+        let text_pos = egui::pos2(
+            rect.min.x + 3.0 - offset,
+            rect.center().y - full_galley.rect.height() / 2.0,
+        );
+        painter.galley(text_pos, full_galley, text_color);
+    } else {
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            name,
+            font_id,
+            text_color,
+        );
     }
 }
 
@@ -3941,10 +4065,18 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                     if has_valid_mode {
                         let current_mode = context.genome.modes[selected_idx].child_a.mode_number;
                         let mode_count = context.genome.modes.len();
-                        let selected_text = if current_mode >= 0 && (current_mode as usize) < mode_count {
+                        let full_name = if current_mode >= 0 && (current_mode as usize) < mode_count {
                             context.genome.modes[current_mode as usize].name.clone()
                         } else {
                             "Invalid".to_string()
+                        };
+                        // Truncate the button label so it never expands the dropdown width.
+                        // Reserve ~20px for the dropdown arrow; ~7px per character is a safe estimate.
+                        let max_chars = ((ball_container_width - 28.0) / 7.0).max(3.0) as usize;
+                        let selected_text = if full_name.len() > max_chars {
+                            format!("{}…", &full_name[..full_name.char_indices().nth(max_chars.saturating_sub(1)).map(|(i, _)| i).unwrap_or(full_name.len())])
+                        } else {
+                            full_name.clone()
                         };
                         // Collect mode info to avoid borrow issues
                         let mode_info: Vec<_> = context.genome.modes.iter()
@@ -3963,7 +4095,6 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                                         (color.y * 255.0) as u8,
                                         (color.z * 255.0) as u8,
                                     );
-                                    // Calculate luminance for text contrast
                                     let luminance = 0.299 * color.x + 0.587 * color.y + 0.114 * color.z;
                                     let text_color = if luminance > 0.5 {
                                         egui::Color32::BLACK
@@ -3976,7 +4107,6 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                                         egui::Sense::click(),
                                     );
                                     
-                                    // Draw background
                                     let bg = if response.hovered() {
                                         bg_color.gamma_multiply(1.2)
                                     } else {
@@ -3984,19 +4114,12 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                                     };
                                     ui.painter().rect_filled(rect, 2.0, bg);
                                     
-                                    // Draw selection indicator
                                     if is_selected {
                                         ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
                                     }
                                     
-                                    // Draw text centered
-                                    ui.painter().text(
-                                        rect.center(),
-                                        egui::Align2::CENTER_CENTER,
-                                        name,
-                                        egui::FontId::default(),
-                                        text_color,
-                                    );
+                                    let marquee_id = egui::Id::new(("qball1_item", i));
+                                    draw_marquee_text(ui, rect, name, text_color, response.hovered(), marquee_id);
                                     
                                     if response.clicked() {
                                         new_mode = Some(i as i32);
@@ -4109,10 +4232,17 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                     if has_valid_mode {
                         let current_mode = context.genome.modes[selected_idx].child_b.mode_number;
                         let mode_count = context.genome.modes.len();
-                        let selected_text = if current_mode >= 0 && (current_mode as usize) < mode_count {
+                        let full_name = if current_mode >= 0 && (current_mode as usize) < mode_count {
                             context.genome.modes[current_mode as usize].name.clone()
                         } else {
                             "Invalid".to_string()
+                        };
+                        // Truncate the button label so it never expands the dropdown width.
+                        let max_chars = ((ball_container_width - 28.0) / 7.0).max(3.0) as usize;
+                        let selected_text = if full_name.len() > max_chars {
+                            format!("{}…", &full_name[..full_name.char_indices().nth(max_chars.saturating_sub(1)).map(|(i, _)| i).unwrap_or(full_name.len())])
+                        } else {
+                            full_name.clone()
                         };
                         // Collect mode info to avoid borrow issues
                         let mode_info: Vec<_> = context.genome.modes.iter()
@@ -4131,7 +4261,6 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                                         (color.y * 255.0) as u8,
                                         (color.z * 255.0) as u8,
                                     );
-                                    // Calculate luminance for text contrast
                                     let luminance = 0.299 * color.x + 0.587 * color.y + 0.114 * color.z;
                                     let text_color = if luminance > 0.5 {
                                         egui::Color32::BLACK
@@ -4144,7 +4273,6 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                                         egui::Sense::click(),
                                     );
                                     
-                                    // Draw background
                                     let bg = if response.hovered() {
                                         bg_color.gamma_multiply(1.2)
                                     } else {
@@ -4152,19 +4280,12 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                                     };
                                     ui.painter().rect_filled(rect, 2.0, bg);
                                     
-                                    // Draw selection indicator
                                     if is_selected {
                                         ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
                                     }
                                     
-                                    // Draw text centered
-                                    ui.painter().text(
-                                        rect.center(),
-                                        egui::Align2::CENTER_CENTER,
-                                        name,
-                                        egui::FontId::default(),
-                                        text_color,
-                                    );
+                                    let marquee_id = egui::Id::new(("qball2_item", i));
+                                    draw_marquee_text(ui, rect, name, text_color, response.hovered(), marquee_id);
                                     
                                     if response.clicked() {
                                         new_mode = Some(i as i32);

@@ -2120,7 +2120,7 @@ impl MutationSystem {
                 current_frame,
                 param_table_size: self.vulnerability_table.len() as u32,
                 total_mode_count: MAX_TOTAL_MODES,
-                max_modes_per_genome: 80,
+                max_modes_per_genome: crate::genome::MAX_MODES as u32,
                 genome_ring_capacity: GENOME_RING_CAPACITY,
                 subtle_color_mutation: if self.subtle_mutations { 1 } else { 0 },
             };

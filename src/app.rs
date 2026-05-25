@@ -116,8 +116,13 @@ pub struct App {
     test_signals_changed: bool,
     /// Deferred post-present action (save/load sphere — runs after frame is on screen)
     deferred_action: Option<DeferredAction>,
-    device: wgpu::Device,
+    // IMPORTANT: surface must be declared before device so it drops first.
+    // Rust drops fields in declaration order; wgpu/Vulkan requires the surface
+    // to be destroyed before the device, otherwise the Vulkan validation layer
+    // panics with "Trying to destroy a SurfaceAcquireSemaphores that is still
+    // in use by a SurfaceTexture".
     surface: wgpu::Surface<'static>,
+    device: wgpu::Device,
     /// Current high-level application phase (main menu vs in-game).
     app_phase: AppPhase,
     /// Main menu scene (two live genome previews + egui overlay).
@@ -2060,7 +2065,7 @@ impl App {
                         match crate::scene::GpuSceneSnapshot::load_from_file(&path) {
                             Ok(snapshot) => {
                                 gpu_scene.paused = true;
-                                match gpu_scene.restore_from_snapshot(&self.queue, &snapshot) {
+                                match gpu_scene.restore_from_snapshot(&self.device, &self.queue, &snapshot) {
                                     Ok(()) => log::info!("Sphere loaded from {:?}", path),
                                     Err(e) => log::error!("Failed to restore sphere: {}", e),
                                 }
