@@ -79,9 +79,9 @@ impl MainMenuScene {
         // guaranteeing every genome is eventually shown regardless of timing.
         let counter = MENU_COUNTER.fetch_add(2, Ordering::Relaxed);
 
-        // Left preview — load a saved genome, fall back to random colors
+        // Left preview — load a saved genome, fall back to procedural generation
         let left_genome = Genome::load_from_genomes_dir_at(counter)
-            .unwrap_or_else(Genome::new_with_random_colors);
+            .unwrap_or_else(|| Genome::generate_procedural(counter));
         let left_name = left_genome.name.clone();
         let mut left_preview = crate::scene::PreviewScene::new(device, queue, &panel_config);
         left_preview.show_adhesion_lines = true;
@@ -100,7 +100,7 @@ impl MainMenuScene {
 
         // Right preview — load a different saved genome (counter+1 ensures a different pick)
         let right_genome = Genome::load_from_genomes_dir_at(counter + 1)
-            .unwrap_or_else(Genome::new_with_random_colors);
+            .unwrap_or_else(|| Genome::generate_procedural(counter + 1));
         let right_name = right_genome.name.clone();
         let mut right_preview = crate::scene::PreviewScene::new(device, queue, &panel_config);
         right_preview.show_adhesion_lines = true;
