@@ -161,10 +161,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Nutrient cap: 2x split_nutrient_threshold
-    let max_nutrients = split_nutrient_thresholds[cell_idx] * 2.0;
-    
-    // Sample light field — used only as a binary shadow/occluded test.
+    // Nutrient cap: 2x split_nutrient_threshold.
+    // Cap at 200 before doubling so the "never split" sentinel (threshold > 100)
+    // doesn't inflate the cap to an absurd value.
+    let max_nutrients = min(split_nutrient_thresholds[cell_idx], 200.0) * 2.0;
     // The actual nutrient gain rate comes from mass_per_second_full_light
     // (which is base_rate * sun_intensity, set on the CPU).
     let light_intensity = sample_light(pos);

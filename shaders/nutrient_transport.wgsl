@@ -577,7 +577,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Clamp by available nutrients and receiver capacity
         let min_nutrients_a = select(0.0, 10.0, prioritize_a);
         let min_nutrients_b = select(0.0, 10.0, prioritize_b);
-        let max_nutrients_a = split_nutrient_thresholds[cell_idx] * 2.0;
+        // Cap at 200 before doubling so the "never split" sentinel (threshold > 100)
+        // doesn't inflate the nutrient cap to an absurd value.
+        let max_nutrients_a = min(split_nutrient_thresholds[cell_idx], 200.0) * 2.0;
 
         // For Embryocyte receivers: capacity = space left in reserve (×1000 fixed-point)
         var max_recv_b: f32;
@@ -585,7 +587,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let cur_reserve_b = atomicLoad(&embryocyte_reserves[cell_b_idx]);
             max_recv_b = f32(65535000u - min(cur_reserve_b, 65535000u)) / FIXED_POINT_SCALE;
         } else {
-            max_recv_b = split_nutrient_thresholds[cell_b_idx] * 2.0;
+            max_recv_b = min(split_nutrient_thresholds[cell_b_idx], 200.0) * 2.0;
         }
 
         var actual_transfer: f32;

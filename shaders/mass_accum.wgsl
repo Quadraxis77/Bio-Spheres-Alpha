@@ -125,8 +125,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let nutrient_gain_rate = nutrient_gain_rates[cell_idx];
     let split_nutrient_threshold = split_nutrient_thresholds[cell_idx];
     
-    // Nutrient cap: 2x split_nutrient_threshold (allows storage for division plus buffer)
-    let max_nutrients = split_nutrient_threshold * 2.0;
+    // Nutrient cap: 2x split_nutrient_threshold (allows storage for division plus buffer).
+    // Cap at 200 before doubling so the "never split" sentinel (threshold > 100) doesn't
+    // inflate the cap to an absurd value.
+    let max_nutrients = min(split_nutrient_threshold, 200.0) * 2.0;
     
     // Only grow if below nutrient cap
     if (current_nutrients < max_nutrients) {

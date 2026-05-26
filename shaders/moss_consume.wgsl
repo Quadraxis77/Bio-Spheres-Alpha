@@ -151,9 +151,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // Check nutrient cap
+    // Check nutrient cap.
+    // Cap at 200 before doubling so the "never split" sentinel (threshold > 100)
+    // doesn't inflate the cap to an absurd value.
     let current_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
-    let max_nutrients = split_nutrient_thresholds[cell_idx] * 2.0;
+    let max_nutrients = min(split_nutrient_thresholds[cell_idx], 200.0) * 2.0;
     if (current_nutrients >= max_nutrients) {
         return;
     }

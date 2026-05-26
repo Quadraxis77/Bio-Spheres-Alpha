@@ -169,10 +169,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Nutrient cap: 2x split_nutrient_threshold
-    let max_nutrients = split_nutrient_thresholds[cell_idx] * 2.0;
-    
-    // Don't consume if already at max nutrients
+    // Nutrient cap: 2x split_nutrient_threshold.
+    // Cap at 200 before doubling so the "never split" sentinel (threshold > 100)
+    // doesn't inflate the cap to an absurd value.
+    let max_nutrients = min(split_nutrient_thresholds[cell_idx], 200.0) * 2.0;
     if (current_nutrients >= max_nutrients) {
         return;
     }

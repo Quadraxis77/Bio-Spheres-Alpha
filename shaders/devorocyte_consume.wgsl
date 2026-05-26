@@ -156,9 +156,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let consume_range = v7.x; // extra contact distance beyond sum of radii
     let consume_rate  = v7.y; // nutrients/sec stolen per victim
 
-    // Current nutrients and cap
+    // Current nutrients and cap.
+    // Cap at 200 before doubling so the "never split" sentinel (threshold > 100)
+    // doesn't inflate the cap to an absurd value.
     let current_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
-    let max_nutrients = split_nutrient_thresholds[cell_idx] * 2.0;
+    let max_nutrients = min(split_nutrient_thresholds[cell_idx], 200.0) * 2.0;
 
     // Don't steal if already full
     if (current_nutrients >= max_nutrients) {

@@ -541,8 +541,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_b_mass = nutrients_to_mass(child_b_nutrients);
 
     // Transform split direction from local to world space for child positioning
-    let split_dir = normalize(rotate_vector_by_quat(split_dir_local, parent_rotation));
-    
+    let split_dir_world = normalize(rotate_vector_by_quat(split_dir_local, parent_rotation));
+
+    // Apply a tiny positional jitter to break degenerate symmetric splits,
+    // matching the CPU preview path in src/cell/division.rs.
+    // The parent cell ID drives the hash so each cell gets a unique, stable jitter.
+    let parent_cell_id = cell_ids[cell_idx];
+    let jitter_quat = pseudo_random_rotation(parent_cell_id);
+    let split_dir = normalize(rotate_vector_by_quat(split_dir_world, jitter_quat));
+
     // 75% overlap: offset_distance = parent_radius * 0.25
     let offset = parent_radius * 0.25;
     let child_a_pos = parent_pos + split_dir * offset;
