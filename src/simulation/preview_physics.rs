@@ -507,7 +507,10 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
                 // Test cells: pure auto-gain, no drain (matches mass_accum.wgsl)
                 // Phagocyte/Photocyte: gain - base drain (matches GPU: gain via specialized shader, drain via nutrient_transport.wgsl)
                 let is_test_cell = mode.cell_type == 0;
-                let max_nutrients = split_nutrient_threshold * 2.0;
+                // Cap threshold at 200 before doubling so the "never split" sentinel
+                // (threshold > 100 for normal cells, > 200 for lipocytes) doesn't inflate
+                // the nutrient cap to an absurd value.
+                let max_nutrients = split_nutrient_threshold.min(200.0) * 2.0;
                 let net_gain = if is_test_cell {
                     AUTO_GAIN_RATE * dt
                 } else {
@@ -792,8 +795,9 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         let mode_b = genome.modes.get(state.mode_indices[cell_b]).unwrap();
         let min_a = if mode_a.prioritize_when_low { 10.0 } else { 0.0 };
         let min_b = if mode_b.prioritize_when_low { 10.0 } else { 0.0 };
-        let max_a = state.split_nutrient_thresholds[cell_a] * 2.0;
-        let max_b = state.split_nutrient_thresholds[cell_b] * 2.0;
+        // Cap at 200 before doubling so the "never split" sentinel doesn't inflate the cap.
+        let max_a = state.split_nutrient_thresholds[cell_a].min(200.0) * 2.0;
+        let max_b = state.split_nutrient_thresholds[cell_b].min(200.0) * 2.0;
 
         // Embryocyte rules:
         //   - An Embryocyte NEVER sends nutrients out (block outgoing).

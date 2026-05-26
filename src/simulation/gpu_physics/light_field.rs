@@ -651,7 +651,7 @@ impl LightFieldSystem {
             absorption_cell: 10.0,
             ambient_floor: 0.02,
             scattering_coefficient: 0.2,
-            mass_per_second_full_light: 0.012,
+            mass_per_second_full_light: 0.05,
             min_light_threshold: 0.05,
             shadow_strength: 0.7,
             shadow_enabled: true,

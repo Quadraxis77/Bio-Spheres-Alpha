@@ -1480,10 +1480,10 @@ impl GpuScene {
         // Use cached bind groups - select by output buffer index (where physics wrote positions)
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
         if let (Some(ref physics_bgs), Some(ref nutrient_bg)) = (&self.phagocyte_physics_bind_groups, &self.phagocyte_nutrient_bind_group) {
-            // Dispatch based on high-water mark, not full capacity.
-            // At 2K cells with 200K capacity this reduces from 782 to 8 workgroups.
-            let dispatch_count = self.total_cell_slots.max(1).min(self.gpu_triple_buffers.capacity);
-            consumption_system.run(encoder, &physics_bgs[output_idx], nutrient_bg, dispatch_count);
+            // Dispatch at full capacity — the shader reads cell_count_buffer[0] internally.
+            // Using total_cell_slots (async readback, lags 1-3 frames) would under-dispatch
+            // and miss cells at higher slot indices during the lag window.
+            consumption_system.run(encoder, &physics_bgs[output_idx], nutrient_bg, self.gpu_triple_buffers.capacity);
         }
     }
     
@@ -1628,10 +1628,11 @@ impl GpuScene {
         let photocyte_physics_bg = &self.cached_photocyte_physics_bind_groups.as_ref().unwrap()[output_idx];
         let photocyte_system_bg = self.cached_photocyte_system_bind_group.as_ref().unwrap();
         
-        // Dispatch based on high-water mark, not full capacity.
-        // At 2K cells with 200K capacity this reduces from 782 to 8 workgroups.
-        let dispatch_count = self.total_cell_slots.max(1).min(self.gpu_triple_buffers.capacity);
-        let cell_workgroups = (dispatch_count + 255) / 256;
+        // Dispatch at full capacity — the shader reads cell_count_buffer[0] (the GPU-side
+        // high-water mark) for its own bounds check. Using total_cell_slots (the async
+        // readback value, which lags 1-3 frames) would under-dispatch and miss photocytes
+        // at higher slot indices during the lag window, causing them to receive no light.
+        let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Photocyte Light Consumption (physics step)"),
             timestamp_writes: None,
@@ -3995,9 +3996,8 @@ impl GpuScene {
             &self.devorocyte_cell_data_bind_group,
             &self.devorocyte_spatial_bind_group,
         ) {
-            // Dispatch based on high-water mark, not full capacity.
-            let dispatch_count = self.total_cell_slots.max(1).min(self.gpu_triple_buffers.capacity);
-            system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, dispatch_count);
+            // Dispatch at full capacity — the shader reads cell_count_buffer[0] internally.
+            system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, self.gpu_triple_buffers.capacity);
         }
     }
 
@@ -4100,9 +4100,8 @@ impl GpuScene {
 
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
         if let (Some(ref physics_bgs), Some(ref moss_bg)) = (&self.moss_consume_physics_bind_groups, &self.moss_consume_moss_bind_group) {
-            // Dispatch based on high-water mark, not full capacity.
-            let dispatch_count = self.total_cell_slots.max(1).min(self.gpu_triple_buffers.capacity);
-            moss.run_consumption(encoder, queue, &physics_bgs[output_idx], moss_bg, dispatch_count);
+            // Dispatch at full capacity — the shader reads cell_count_buffer[0] internally.
+            moss.run_consumption(encoder, queue, &physics_bgs[output_idx], moss_bg, self.gpu_triple_buffers.capacity);
         }
     }
 

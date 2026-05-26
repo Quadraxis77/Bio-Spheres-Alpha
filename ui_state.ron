@@ -6,29 +6,6 @@
     lock_tabs: false,
     lock_close_buttons: false,
     scene_configs: {
-        Gpu: (
-            visibility: (
-                show_cell_inspector: true,
-                show_genome_editor: false,
-                show_scene_manager: true,
-                show_performance_monitor: true,
-                show_rendering_controls: true,
-                show_time_scrubber: false,
-                show_theme_editor: false,
-                show_camera_settings: true,
-                show_lighting_settings: false,
-            ),
-            locked_windows: [
-                "SceneManager",
-                "Viewport",
-                "RightPanel",
-            ],
-            lock_settings: (
-                lock_tab_bar: false,
-                lock_tabs: false,
-                lock_close_buttons: false,
-            ),
-        ),
         Preview: (
             visibility: (
                 show_cell_inspector: false,
@@ -42,14 +19,37 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "CircleSliders",
-                "Modes",
-                "LeftPanel",
                 "NameTypeEditor",
+                "CircleSliders",
+                "SceneManager",
+                "LeftPanel",
+                "BottomPanel",
+                "RightPanel",
+                "Modes",
                 "Viewport",
                 "TimeSlider",
-                "BottomPanel",
                 "QuaternionBall",
+            ],
+            lock_settings: (
+                lock_tab_bar: false,
+                lock_tabs: false,
+                lock_close_buttons: false,
+            ),
+        ),
+        Gpu: (
+            visibility: (
+                show_cell_inspector: true,
+                show_genome_editor: false,
+                show_scene_manager: true,
+                show_performance_monitor: true,
+                show_rendering_controls: true,
+                show_time_scrubber: false,
+                show_theme_editor: false,
+                show_camera_settings: true,
+                show_lighting_settings: false,
+            ),
+            locked_windows: [
+                "Viewport",
                 "RightPanel",
                 "SceneManager",
             ],
@@ -76,7 +76,7 @@
     lod_debug_colors: false,
     world_settings: (
         cell_capacity: 75000,
-        gravity: 50.0,
+        gravity: 44.0,
         gravity_mode: 1,
         constraint_iterations: 3,
         acceleration_damping: 0.8,
@@ -106,7 +106,7 @@
     ),
     tutorial: (
         active: false,
-        current_step: 2,
+        current_step: 0,
         ever_shown: true,
     ),
 )

@@ -3969,7 +3969,10 @@ fn sync_mode_changes_to_others(
 /// Render the CircleSliders panel with pitch and yaw controls for parent split direction.
 fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
     use crate::ui::widgets::circular_slider_float;
-    
+
+    // Record panel rect for the tutorial pointer.
+    context.editor_state.panel_rects.insert("CircleSliders".to_string(), ui.max_rect());
+
     ui.checkbox(&mut context.editor_state.enable_snapping, "Enable Snapping (15°)");
     ui.add_space(4.0); // Reduced spacing
     
