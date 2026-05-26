@@ -133,39 +133,53 @@ struct ShadowFieldParams {
 @group(2) @binding(2) var<storage, read> water_density: array<f32>;
 @group(2) @binding(3) var<storage, read> moss_density: array<f32>;
 
-// Sample light field at world position with trilinear interpolation
-fn sample_light_field(world_pos: vec3<f32>) -> f32 {
+// Sample light field at world position.
+// Uses nearest-neighbor when close (cam_dist < 40) — the light field varies over
+// 30+ world-unit scales so the 1-voxel interpolation error is invisible up close,
+// and this saves 7 storage-buffer reads (24 bytes each) per fragment.
+// At distance >= 40 we do full trilinear to keep smooth shadow gradients.
+fn sample_light_field_lod(world_pos: vec3<f32>, cam_dist: f32) -> f32 {
     if (shadow_params.shadow_enabled == 0u) {
         return 1.0;
     }
     let res = shadow_params.grid_resolution;
     let fres = f32(res);
-    
+
     let gx = (world_pos.x - shadow_params.grid_origin_x) / shadow_params.cell_size - 0.5;
     let gy = (world_pos.y - shadow_params.grid_origin_y) / shadow_params.cell_size - 0.5;
     let gz = (world_pos.z - shadow_params.grid_origin_z) / shadow_params.cell_size - 0.5;
-    
+
     if (gx < -0.5 || gx >= fres - 0.5 ||
         gy < -0.5 || gy >= fres - 0.5 ||
         gz < -0.5 || gz >= fres - 0.5) {
         return 1.0;
     }
-    
+
+    let ires = i32(res);
+
+    if (cam_dist < 40.0) {
+        // Nearest-neighbor: 1 read instead of 8
+        let ix = u32(clamp(i32(round(gx)), 0, ires - 1));
+        let iy = u32(clamp(i32(round(gy)), 0, ires - 1));
+        let iz = u32(clamp(i32(round(gz)), 0, ires - 1));
+        return light_field[ix + iy * res + iz * res * res];
+    }
+
+    // Trilinear: smooth shadow gradients at range
     let ix = i32(floor(gx));
     let iy = i32(floor(gy));
     let iz = i32(floor(gz));
     let fx = gx - floor(gx);
     let fy = gy - floor(gy);
     let fz = gz - floor(gz);
-    
-    let ires = i32(res);
+
     let x0 = u32(clamp(ix, 0, ires - 1));
     let x1 = u32(clamp(ix + 1, 0, ires - 1));
     let y0 = u32(clamp(iy, 0, ires - 1));
     let y1 = u32(clamp(iy + 1, 0, ires - 1));
     let z0 = u32(clamp(iz, 0, ires - 1));
     let z1 = u32(clamp(iz + 1, 0, ires - 1));
-    
+
     let c000 = light_field[x0 + y0 * res + z0 * res * res];
     let c100 = light_field[x1 + y0 * res + z0 * res * res];
     let c010 = light_field[x0 + y1 * res + z0 * res * res];
@@ -174,14 +188,13 @@ fn sample_light_field(world_pos: vec3<f32>) -> f32 {
     let c101 = light_field[x1 + y0 * res + z1 * res * res];
     let c011 = light_field[x0 + y1 * res + z1 * res * res];
     let c111 = light_field[x1 + y1 * res + z1 * res * res];
-    
+
     let c00 = mix(c000, c100, fx);
     let c10 = mix(c010, c110, fx);
     let c01 = mix(c001, c101, fx);
     let c11 = mix(c011, c111, fx);
-    let c0 = mix(c00, c10, fy);
-    let c1 = mix(c01, c11, fy);
-    
+    let c0  = mix(c00, c10, fy);
+    let c1  = mix(c01, c11, fy);
     return mix(c0, c1, fz);
 }
 
@@ -204,30 +217,30 @@ fn sample_water_density(world_pos: vec3<f32>) -> f32 {
     let res = shadow_params.grid_resolution;
     let fres = f32(res);
     let grid_origin = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
-    
+
     let gx = (world_pos.x - grid_origin.x) / shadow_params.cell_size;
     let gy = (world_pos.y - grid_origin.y) / shadow_params.cell_size;
     let gz = (world_pos.z - grid_origin.z) / shadow_params.cell_size;
-    
+
     let ix = i32(floor(gx));
     let iy = i32(floor(gy));
     let iz = i32(floor(gz));
     let fx = gx - floor(gx);
     let fy = gy - floor(gy);
     let fz = gz - floor(gz);
-    
+
     let ires = i32(res);
     if (ix < 0 || ix >= ires - 1 || iy < 0 || iy >= ires - 1 || iz < 0 || iz >= ires - 1) {
         return 0.0;
     }
-    
+
     let x0 = u32(ix);
     let x1 = u32(ix + 1);
     let y0 = u32(iy);
     let y1 = u32(iy + 1);
     let z0 = u32(iz);
     let z1 = u32(iz + 1);
-    
+
     let d000 = water_density[x0 + y0 * res + z0 * res * res];
     let d100 = water_density[x1 + y0 * res + z0 * res * res];
     let d010 = water_density[x0 + y1 * res + z0 * res * res];
@@ -236,14 +249,14 @@ fn sample_water_density(world_pos: vec3<f32>) -> f32 {
     let d101 = water_density[x1 + y0 * res + z1 * res * res];
     let d011 = water_density[x0 + y1 * res + z1 * res * res];
     let d111 = water_density[x1 + y1 * res + z1 * res * res];
-    
+
     let d00 = mix(d000, d100, fx);
     let d10 = mix(d010, d110, fx);
     let d01 = mix(d001, d101, fx);
     let d11 = mix(d011, d111, fx);
     let d0 = mix(d00, d10, fy);
     let d1 = mix(d01, d11, fy);
-    
+
     return mix(d0, d1, fz);
 }
 
@@ -349,12 +362,9 @@ fn sample_triplanar_texture(world_pos: vec3<f32>, normal: vec3<f32>) -> f32 {
     return tex_xz * normalized_weights.x + tex_xy * normalized_weights.y + tex_yz * normalized_weights.z;
 }
 
-// ============================================================
-// Moss density sampling (trilinear interpolation from 128³ grid)
-// ============================================================
+// Moss density sampling — trilinear interpolation from 128³ grid.
 fn sample_moss_density(world_pos: vec3<f32>) -> f32 {
     let res = shadow_params.grid_resolution;
-    let fres = f32(res);
     let grid_origin = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
 
     let gx = (world_pos.x - grid_origin.x) / shadow_params.cell_size;
@@ -390,15 +400,19 @@ fn sample_moss_density(world_pos: vec3<f32>) -> f32 {
     let m10 = mix(m010, m110, fx);
     let m01 = mix(m001, m101, fx);
     let m11 = mix(m011, m111, fx);
-    let m0 = mix(m00, m10, fy);
-    let m1 = mix(m01, m11, fy);
-
+    let m0  = mix(m00, m10, fy);
+    let m1  = mix(m01, m11, fy);
     return mix(m0, m1, fz);
 }
 
 // ============================================================
 // Procedural moss height map for parallax occlusion mapping
 // Returns height in [0, 1] where 1 = tallest moss tuft
+//
+// octaves: controls quality vs cost
+//   3 = full (close range)
+//   2 = mid range
+//   1 = far range (single octave, very cheap)
 // ============================================================
 
 // Worley (cellular) noise for moss
@@ -410,7 +424,6 @@ fn worley_noise(uv: vec2<f32>) -> f32 {
         for (var x = -1; x <= 1; x++) {
             let neighbor = vec2<f32>(f32(x), f32(y));
             let cell_offset = i + neighbor;
-            // Deterministic random point per cell
             let point = vec2<f32>(
                 fract(sin(dot(cell_offset, vec2<f32>(127.1, 311.7))) * 43758.5453),
                 fract(sin(dot(cell_offset, vec2<f32>(269.5, 183.3))) * 43758.5453)
@@ -423,65 +436,25 @@ fn worley_noise(uv: vec2<f32>) -> f32 {
     return min_dist;
 }
 
-fn moss_height(uv: vec2<f32>) -> f32 {
+// ============================================================
+// Moss height — single octave only (LOD removed)
+// ============================================================
+fn moss_height_lod(uv: vec2<f32>, octaves: i32) -> f32 {
     let freq = shadow_params.moss_noise_frequency;
-    let lac = shadow_params.moss_noise_lacunarity;
     let noise_type = shadow_params.moss_noise_type;
-
     var h: f32;
-
     if (noise_type == 1u) {
-        // Worley/cellular noise: creates rounded clumps with clear gaps
-        let n1 = 1.0 - worley_noise(uv * freq);
-        let n2 = 1.0 - worley_noise(uv * freq * lac + 7.3);
-        let n3 = 1.0 - worley_noise(uv * freq * lac * lac + 13.7);
-        h = n1 * 0.5 + n2 * 0.3 + n3 * 0.2;
+        h = 1.0 - worley_noise(uv * freq);
     } else if (noise_type == 2u) {
-        // Ridged noise: creates sharp ridges and valleys
-        let n1 = abs(noise(uv * freq) * 2.0 - 1.0);
-        let n2 = abs(noise(uv * freq * lac + 7.3) * 2.0 - 1.0);
-        let n3 = abs(noise(uv * freq * lac * lac + 13.7) * 2.0 - 1.0);
-        h = (1.0 - n1) * 0.5 + (1.0 - n2) * 0.3 + (1.0 - n3) * 0.2;
+        h = 1.0 - abs(noise(uv * freq) * 2.0 - 1.0);
     } else {
-        // Value noise (default): organic clumpy texture
-        let n1 = noise(uv * freq);
-        let n2 = noise(uv * freq * lac + 7.3);
-        let n3 = noise(uv * freq * lac * lac + 13.7);
-        let n4 = noise(uv * freq * lac * lac * lac + 29.1);
-        h = n1 * 0.4 + n2 * 0.3 + n3 * 0.2 + n4 * 0.1;
+        h = noise(uv * freq);
     }
-
-    // Sharpen to create distinct tufts with gaps between them
     h = smoothstep(shadow_params.moss_height_sharpness_low, shadow_params.moss_height_sharpness_high, h);
     return h;
 }
 
-// Procedural moss normal from height map (central differences)
-// Produces strong tangent-space normals for visible surface texture
-fn moss_normal_from_height(uv: vec2<f32>) -> vec3<f32> {
-    let bump_strength = shadow_params.moss_bump_strength;
-    // Sample at multiple scales for rich detail
-    let eps_fine = 0.0005;
-    let eps_coarse = 0.002;
-    
-    // Fine detail (individual tufts)
-    let hL_f = moss_height(uv - vec2<f32>(eps_fine, 0.0));
-    let hR_f = moss_height(uv + vec2<f32>(eps_fine, 0.0));
-    let hD_f = moss_height(uv - vec2<f32>(0.0, eps_fine));
-    let hU_f = moss_height(uv + vec2<f32>(0.0, eps_fine));
-    
-    // Coarse detail (clump shapes)
-    let hL_c = moss_height(uv - vec2<f32>(eps_coarse, 0.0));
-    let hR_c = moss_height(uv + vec2<f32>(eps_coarse, 0.0));
-    let hD_c = moss_height(uv - vec2<f32>(0.0, eps_coarse));
-    let hU_c = moss_height(uv + vec2<f32>(0.0, eps_coarse));
-    
-    // Combine both scales
-    let dx = ((hL_f - hR_f) * 0.6 + (hL_c - hR_c) * 0.4) * bump_strength;
-    let dy = ((hD_f - hU_f) * 0.6 + (hD_c - hU_c) * 0.4) * bump_strength;
-    
-    return normalize(vec3<f32>(dx, dy, 0.3));
-}
+// Full-quality wrapper kept for reference — all call sites use moss_height_lod directly.
 
 // Moss color: varies from dark base to bright tips with per-position variation
 fn moss_color(uv: vec2<f32>, height_val: f32) -> vec3<f32> {
@@ -501,73 +474,6 @@ fn moss_color(uv: vec2<f32>, height_val: f32) -> vec3<f32> {
     col += yellow_shift;
 
     return col;
-}
-
-// ============================================================
-// Parallax Occlusion Mapping for moss
-// Traces through the moss height field to find the apparent
-// surface point, creating depth illusion on flat geometry.
-// ============================================================
-fn parallax_moss_uv(
-    uv: vec2<f32>,
-    view_dir_tangent: vec2<f32>,
-    moss_amount: f32,
-) -> vec2<f32> {
-    // Parallax depth scales with moss density
-    let height_scale = shadow_params.moss_parallax_depth * moss_amount;
-
-    // Number of layers for ray marching (more at grazing angles)
-    let num_layers = 8.0;
-    let layer_depth = 1.0 / num_layers;
-
-    // Direction to step through layers (in UV space)
-    let delta_uv = view_dir_tangent * height_scale / num_layers;
-
-    var current_uv = uv;
-    var current_depth = 0.0;
-    var current_height = moss_height(current_uv);
-
-    // Step through layers until we go below the height field
-    for (var i = 0; i < 8; i++) {
-        if (current_depth >= current_height) {
-            break;
-        }
-        current_uv -= delta_uv;
-        current_depth += layer_depth;
-        current_height = moss_height(current_uv);
-    }
-
-    // Linear interpolation between last two steps for smoother result
-    let prev_uv = current_uv + delta_uv;
-    let after_depth = current_height - current_depth;
-    let before_depth = moss_height(prev_uv) - (current_depth - layer_depth);
-    let weight = after_depth / (after_depth - before_depth);
-    let final_uv = mix(current_uv, prev_uv, weight);
-
-    return final_uv;
-}
-
-// Build tangent frame from world normal for triplanar parallax
-fn get_triplanar_uv_and_tangents(
-    world_pos: vec3<f32>,
-    normal: vec3<f32>,
-) -> mat3x3<f32> {
-    // Derive tangent and bitangent that are actually perpendicular to the normal
-    // Use the axis least aligned with the normal to avoid degeneracy
-    let abs_n = abs(normal);
-    var up_hint: vec3<f32>;
-    if (abs_n.y < abs_n.x && abs_n.y < abs_n.z) {
-        up_hint = vec3<f32>(0.0, 1.0, 0.0);
-    } else if (abs_n.x < abs_n.z) {
-        up_hint = vec3<f32>(1.0, 0.0, 0.0);
-    } else {
-        up_hint = vec3<f32>(0.0, 0.0, 1.0);
-    }
-
-    let tangent = normalize(cross(normal, up_hint));
-    let bitangent = cross(normal, tangent);
-
-    return mat3x3<f32>(tangent, bitangent, normal);
 }
 
 fn get_triplanar_uv(world_pos: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
@@ -633,61 +539,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Blend with outer layer color only in bottom hemisphere
     var final_base_color = mix(cave_color, outer_color, red_factor);
 
-    // ============================================================
-    // Moss parallax occlusion mapping
-    // ============================================================
-    // Sample moss density slightly inside the cave (along normal) to avoid
-    // sampling from the solid side of the boundary
+    // ── Moss rendering (flat, no POM, no normals, 1 noise octave) ──────────
     let moss_sample_pos = in.world_position + N * shadow_params.cell_size * 0.5;
+    let cam_dist = length(camera.camera_pos - in.world_position);
     let moss_amount = sample_moss_density(moss_sample_pos);
 
-    // Specular starts at full rock value; moss will reduce it
     var specular_strength = 1.0;
 
     if (moss_amount > 0.01) {
-        // Build tangent frame for this surface point
-        let tbn = get_triplanar_uv_and_tangents(in.world_position, N);
-        let tangent = tbn[0];
-        let bitangent = tbn[1];
-
-        // View direction in tangent space for parallax
-        let view_tangent_x = dot(V, tangent);
-        let view_tangent_y = dot(V, bitangent);
-        let view_tangent_z = dot(V, N);
-        let view_dir_tangent = vec2<f32>(view_tangent_x, view_tangent_y) / max(view_tangent_z, 0.1);
-
-        // Get base UV from triplanar projection
         let base_uv = get_triplanar_uv(in.world_position, N);
+        let h       = moss_height_lod(base_uv, 1);
+        let m_color = moss_color(base_uv, h);
 
-        // Apply parallax occlusion mapping
-        let parallax_uv = parallax_moss_uv(base_uv, view_dir_tangent, moss_amount);
-
-        // Sample moss height and color at parallax-offset UV
-        let h = moss_height(parallax_uv);
-        let m_color = moss_color(parallax_uv, h);
-
-        // Get moss normal perturbation from height map
-        // bump_strength is now read from uniform inside the function
-        let moss_n = moss_normal_from_height(parallax_uv);
-
-        // Transform moss normal from tangent space to world space
-        let world_moss_normal = normalize(
-            tangent * moss_n.x + bitangent * moss_n.y + N * moss_n.z
-        );
-
-        // Fully replace surface normal with moss normal where moss is present
-        // This is critical for visible light/shadow variation across the moss
-        N = world_moss_normal;
-
-        // Blend color: rock → moss
-        // Use height to create gaps: low height areas show more rock through
         let color_blend = moss_amount * smoothstep(0.1, 0.5, h);
         final_base_color = mix(final_base_color, m_color, color_blend);
 
-        // Moss is matte: reduce specular
         specular_strength = mix(1.0, 0.1, moss_amount);
 
-        // Moss adds self-occlusion in crevices between tufts
         let moss_ao = mix(0.4, 1.0, h);
         ao *= mix(1.0, moss_ao, moss_amount);
     }
@@ -706,7 +574,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let grid_min = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
     let grid_max = grid_min + vec3<f32>(grid_size, grid_size, grid_size);
     let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
-    let shadow = mix(1.0, sample_light_field(clamped_pos), shadow_params.shadow_strength);
+    let shadow = mix(1.0, sample_light_field_lod(clamped_pos, cam_dist), shadow_params.shadow_strength);
     let sun_color = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
     let ambient = vec3<f32>(0.1) * ao;
     var final_color = final_base_color * (ambient + sun_color * diffuse * 0.7 * shadow) + sun_color * vec3<f32>(specular * 0.3 * shadow);

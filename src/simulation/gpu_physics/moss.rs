@@ -29,7 +29,7 @@ pub struct MossGrowthParams {
     pub world_radius: f32,
     pub water_radius: f32,
     pub wetness_evaporation: f32,
-    pub wetness_radius: f32,
+    pub slice_index: u32,  // unused, kept for struct alignment
     pub _pad1: f32,
     pub _pad2: f32,
 }
@@ -79,6 +79,11 @@ pub struct MossSystem {
     grid_resolution: u32,
     cell_size: f32,
     grid_origin: [f32; 3],
+
+    // Frame counter for throttle (run every 4th frame)
+    frame_counter: u32,
+    /// How many rendered frames to skip between growth dispatches (default 3 = run every 4th frame)
+    pub growth_frame_skip: u32,
 }
 
 impl MossSystem {
@@ -391,6 +396,8 @@ impl MossSystem {
             grid_resolution,
             cell_size,
             grid_origin,
+            frame_counter: 0,
+            growth_frame_skip: 3,
         }
     }
 
@@ -519,16 +526,23 @@ impl MossSystem {
         })
     }
 
-    /// Run the moss growth/erosion compute pass
+    /// Run the moss growth/erosion compute pass.
+    /// Throttled to every `growth_frame_skip + 1` frames (default: every 4th frame).
     pub fn run_growth(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         growth_bind_group: &wgpu::BindGroup,
         delta_time: f32,
         world_radius: f32,
     ) {
-        // Update growth params
+        self.frame_counter += 1;
+        if self.frame_counter <= self.growth_frame_skip {
+            return;
+        }
+        let accumulated_dt = delta_time * (self.growth_frame_skip + 1) as f32;
+        self.frame_counter = 0;
+
         let params = MossGrowthParams {
             grid_resolution: self.grid_resolution,
             cell_size: self.cell_size,
@@ -539,31 +553,24 @@ impl MossSystem {
             erosion_rate: self.erosion_rate,
             decay_rate: self.decay_rate,
             min_light: self.min_light,
-            delta_time,
+            delta_time: accumulated_dt,
             world_radius,
             water_radius: self.water_radius,
             wetness_evaporation: self.wetness_evaporation,
-            wetness_radius: 0.0, // reserved for future use
+            slice_index: 0,
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        queue.write_buffer(
-            &self.growth_params_buffer,
-            0,
-            bytemuck::cast_slice(&[params]),
-        );
+        queue.write_buffer(&self.growth_params_buffer, 0, bytemuck::cast_slice(&[params]));
 
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Moss Growth Pass"),
             timestamp_writes: None,
         });
-
         pass.set_pipeline(&self.growth_pipeline);
         pass.set_bind_group(0, growth_bind_group, &[]);
-
         let workgroup_size = 4u32;
-        let workgroups =
-            (self.grid_resolution + workgroup_size - 1) / workgroup_size;
+        let workgroups = (self.grid_resolution + workgroup_size - 1) / workgroup_size;
         pass.dispatch_workgroups(workgroups, workgroups, workgroups);
     }
 

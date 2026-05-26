@@ -153,15 +153,22 @@ pub fn execute_gpu_physics_step(
     let position_update_rotations_bind_group = &cached_bind_groups.position_update_rotations[current_index];
     let mass_accum_bind_group = &cached_bind_groups.mass_accum;
     
+    // IDLE EARLY-OUT: Skip all compute dispatches when there are no cells.
+    // With 0 cells every shader would early-exit on the first thread, but the dispatch
+    // overhead, pipeline barrier cost, and DMA clears above still consume GPU time.
+    // Returning here eliminates ~18 compute dispatches + 4 buffer copies per physics step
+    // when the simulation is empty, which is the dominant cost at idle.
+    if _cell_count_hint == 0 {
+        return;
+    }
+
     // PERFORMANCE: Dispatch based on actual cell count, not full capacity.
     // At 100K cells, this reduces dispatch from 1024 to ~390 workgroups (2.6x reduction).
     // CRITICAL: Must use the HIGH WATER MARK (total slots used), not the live count.
     // Dead cells can be at any index — they're not compacted to the end. Using the
     // live count would skip cells at higher indices, preventing their metabolism from
     // running, so they'd never lose nutrients and never die.
-    // We read cell_count_buffer[0] via the async readback's `total` field, but since
-    // that can lag a few frames we fall back to capacity when the hint is 0.
-    let effective_cell_count = (_cell_count_hint.max(1) + 255) / 256 * 256; // Round up to workgroup boundary
+    let effective_cell_count = (_cell_count_hint + 255) / 256 * 256; // Round up to workgroup boundary
     let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
     
     // Muscle contraction pass: compute per-cell contraction values BEFORE the main physics pass.
@@ -587,6 +594,7 @@ pub fn execute_lifecycle_pipeline(
     cached_bind_groups: &CachedBindGroups,
     adhesion_buffers: &super::AdhesionBuffers,
     _current_time: f32,
+    total_cell_slots: u32,
 ) {
     // Get current buffer index (already rotated by physics pipeline)
     let current_index = triple_buffers.current_index();
@@ -597,11 +605,18 @@ pub fn execute_lifecycle_pipeline(
     let cell_state_read_bind_group = &cached_bind_groups.cell_state_read;
     let cell_state_write_bind_group = &cached_bind_groups.cell_state_write[current_index];
     
-    // Always dispatch lifecycle at full capacity — the async readback hint lags 1-3 frames
-    // behind the true GPU cell count, so using it here would cause death_scan/division_scan
-    // to miss newly-divided cells and halt further splitting. Lifecycle shaders early-exit
-    // on dead/empty slots so over-dispatch is cheap.
-    let cell_workgroups_lifecycle = (triple_buffers.capacity + WORKGROUP_SIZE_LIFECYCLE - 1) / WORKGROUP_SIZE_LIFECYCLE;
+    // Dispatch lifecycle based on the high-water mark (total_cell_slots), not full capacity.
+    // total_cell_slots is the highest slot index ever used — dead cells can be at any index
+    // up to this mark, so we must cover all of them. Using full capacity when only a fraction
+    // of slots are occupied wastes GPU time iterating empty slots. The lifecycle shaders
+    // early-exit on empty slots, but the dispatch overhead and memory bandwidth for reading
+    // death_flags across unused slots is still real.
+    // When total_cell_slots == 0 there is nothing to scan — skip all lifecycle work.
+    if total_cell_slots == 0 {
+        return;
+    }
+    let effective_slots = total_cell_slots.min(triple_buffers.capacity);
+    let cell_workgroups_lifecycle = (effective_slots + WORKGROUP_SIZE_LIFECYCLE - 1) / WORKGROUP_SIZE_LIFECYCLE;
     
     // Execute 3-stage lifecycle pipeline with ring buffer for slot recycling
     // Stage 1: Death scan - detects dead cells and pushes slots to ring buffer
@@ -679,6 +694,10 @@ pub fn execute_lifecycle_pipeline(
     // (stale_idx) still holds old dead-cell data at recycled slot indices. Two physics steps
     // later that stale buffer rotates back into positions_in, causing ghost flickering.
     // Copying output → stale keeps all 3 triple buffers consistent after every division.
+    // MUST use full capacity — divided cells land at recycled slot indices scattered
+    // throughout the buffer, not at the front. Truncating by total_cell_slots would leave
+    // stale data at higher indices, causing explosive teleportation when those slots rotate
+    // back into positions_in two steps later.
     let output_idx = (current_index + 1) % 3;
     let stale_idx  = (current_index + 2) % 3;
     let buf_size   = triple_buffers.capacity as u64 * 16; // Vec4<f32> = 16 bytes per slot
@@ -776,8 +795,8 @@ pub fn execute_signal_system(
     
     let current_index = triple_buffers.current_index();
     
-    // Dispatch size: round up to workgroup boundary (workgroup_size = 64)
-    let signal_workgroups = (cell_count_hint.max(1) + 63) / 64;
+    // Dispatch size: round up to workgroup boundary (workgroup_size = 256, matching all other cell passes)
+    let signal_workgroups = (cell_count_hint.max(1) + 255) / 256;
 
     // Step 1: Clear signal flags
     {

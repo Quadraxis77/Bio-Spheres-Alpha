@@ -275,6 +275,8 @@ pub struct GpuScene {
     pub moss_system: Option<MossSystem>,
     /// Whether to show moss on cave walls
     pub show_moss: bool,
+    /// Set to true when show_moss transitions false to trigger a one-shot buffer clear
+    moss_needs_clear: bool,
     /// Cached moss growth bind group (buffers don't change)
     moss_growth_bind_group: Option<wgpu::BindGroup>,
     /// Cached moss consumption physics bind groups (one per triple buffer index)
@@ -313,6 +315,9 @@ pub struct GpuScene {
     pub sun_intensity: f32,
     /// Index of cell currently being dragged (u32::MAX = none)
     pub dragged_cell_index: u32,
+    /// Last value written to cell_count_buffer[2] for drag tracking.
+    /// Used to avoid redundant write_buffer calls every frame when not dragging.
+    last_written_dragged_index: u32,
     /// Cached shared camera buffer for environment renderers (voxel, particles)
     /// Updated once per frame via queue.write_buffer instead of creating new buffers
     env_camera_buffer: Option<wgpu::Buffer>,
@@ -330,6 +335,8 @@ pub struct GpuScene {
     cave_shadow_bind_group_set: bool,
     /// Whether the water surface shadow bind group has been created and set
     water_shadow_bind_group_set: bool,
+    /// Whether the cell renderer shadow bind group has been created and set
+    cell_shadow_bind_group_set: bool,
     /// Whether the reflection cubemap has been captured
     reflection_cubemap_captured: bool,
     /// Whether genome settings are dirty and need GPU sync
@@ -606,6 +613,7 @@ impl GpuScene {
             devorocyte_physics_bind_groups: None,
             moss_system: None,
             show_moss: true,
+            moss_needs_clear: false,
             moss_growth_bind_group: None,
             moss_consume_physics_bind_groups: None,
             moss_consume_moss_bind_group: None,
@@ -625,6 +633,11 @@ impl GpuScene {
             show_sun: true,
             sun_intensity: 10.0,
             dragged_cell_index: u32::MAX,
+            // Initialize to a value that differs from both dragged_cell_index (u32::MAX)
+            // AND the GPU buffer's zero-initialized value (0), so the first frame always
+            // writes u32::MAX to cell_count_buffer[2]. Without this, the GPU buffer starts
+            // at 0 and the position_update shader freezes cell index 0 (the first placed cell).
+            last_written_dragged_index: 0,
             env_camera_buffer: None,
             env_camera_bind_group_voxel: None,
             env_camera_bind_group_steam: None,
@@ -633,6 +646,7 @@ impl GpuScene {
             cached_adhesion_data_bind_groups: None,
             cave_shadow_bind_group_set: false,
             water_shadow_bind_group_set: false,
+            cell_shadow_bind_group_set: false,
             reflection_cubemap_captured: false,
             genomes_dirty: false,
             signal_sense_world_params_buffer,
@@ -668,6 +682,10 @@ impl GpuScene {
         self.paused = false;
         self.first_frame = true;
         self.dragged_cell_index = u32::MAX;
+        // Force a write of u32::MAX to cell_count_buffer[2] on the next frame.
+        // The GPU buffer is reset to 0 below, so last_written must differ from
+        // dragged_cell_index (u32::MAX) to trigger the change-detection write.
+        self.last_written_dragged_index = 0;
         
         // Reset adhesion buffers
         self.adhesion_buffers.reset(queue);
@@ -1319,7 +1337,11 @@ impl GpuScene {
             self.cave_renderer.as_ref(),
             self.cave_physics_bind_groups.as_ref(),
             &self.adhesion_buffers,
-            self.total_cell_slots,
+            // Use max(1) so the first cell is processed even before the async readback
+            // (which lags 1-3 frames) has reported total_cell_slots > 0.
+            // The shaders read cell_count_buffer[0] internally, so 1 extra workgroup
+            // when truly empty is harmless — threads early-exit immediately.
+            self.total_cell_slots.max(1),
             self.constraint_iterations,
             self.solo_metabolism_multiplier,
         );
@@ -1339,6 +1361,9 @@ impl GpuScene {
             &self.cached_bind_groups,
             &self.adhesion_buffers,
             self.current_time,
+            // Use max(1) so lifecycle runs on the first cell even before the async
+            // readback has reported total_cell_slots > 0 (lags 1-3 frames).
+            self.total_cell_slots.max(1),
         );
 
         // Mutation pass: collect candidates from division results, then apply mutations.
@@ -1455,7 +1480,10 @@ impl GpuScene {
         // Use cached bind groups - select by output buffer index (where physics wrote positions)
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
         if let (Some(ref physics_bgs), Some(ref nutrient_bg)) = (&self.phagocyte_physics_bind_groups, &self.phagocyte_nutrient_bind_group) {
-            consumption_system.run(encoder, &physics_bgs[output_idx], nutrient_bg, self.gpu_triple_buffers.capacity);
+            // Dispatch based on high-water mark, not full capacity.
+            // At 2K cells with 200K capacity this reduces from 782 to 8 workgroups.
+            let dispatch_count = self.total_cell_slots.max(1).min(self.gpu_triple_buffers.capacity);
+            consumption_system.run(encoder, &physics_bgs[output_idx], nutrient_bg, dispatch_count);
         }
     }
     
@@ -1522,6 +1550,14 @@ impl GpuScene {
             pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
         
+        // Compute light field — skip entirely when there are no cells and volumetric fog
+        // is not shown. The ray-march dispatches 32,768 workgroups (128³/64) every frame;
+        // with no photocytes the result is a uniform dark field, so the work is wasted.
+        // Volumetric fog reads the light field, so we must still run it when fog is on.
+        if self.current_cell_count == 0 && !self.show_volumetric_fog {
+            return;
+        }
+
         // Compute light field
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -1592,7 +1628,10 @@ impl GpuScene {
         let photocyte_physics_bg = &self.cached_photocyte_physics_bind_groups.as_ref().unwrap()[output_idx];
         let photocyte_system_bg = self.cached_photocyte_system_bind_group.as_ref().unwrap();
         
-        let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
+        // Dispatch based on high-water mark, not full capacity.
+        // At 2K cells with 200K capacity this reduces from 782 to 8 workgroups.
+        let dispatch_count = self.total_cell_slots.max(1).min(self.gpu_triple_buffers.capacity);
+        let cell_workgroups = (dispatch_count + 255) / 256;
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Photocyte Light Consumption (physics step)"),
             timestamp_writes: None,
@@ -1612,12 +1651,16 @@ impl GpuScene {
         // For cell insertion, we write to ALL 3 buffer sets, so any buffer index works
         // For physics output, we use output_buffer_index which is where physics wrote
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
-        // Must copy full capacity — divided cells land at recycled slot indices scattered
-        // throughout the buffer, not at the front. Truncating by cell_count would leave
-        // those slots with stale data causing broken rendering.
-        let capacity = self.gpu_triple_buffers.capacity as usize;
-        let vec4_copy_size = (capacity * 16) as u64; // Vec4<f32> = 16 bytes
-        let u32_copy_size = (capacity * 4) as u64; // u32 = 4 bytes
+        // Copy only the used portion of the buffer (up to the high-water mark).
+        // Divided cells land at recycled slot indices scattered throughout the buffer,
+        // so we must cover all slots up to total_cell_slots, not just the live count.
+        // However, slots beyond total_cell_slots have never been written and the
+        // instance builder shader reads cell_count_buffer[0] for its upper bound,
+        // so those slots are never accessed — no need to copy them.
+        // At 2K cells with 200K capacity this reduces from 9.6 MB to ~96 KB per frame.
+        let used_slots = self.total_cell_slots.max(1).min(self.gpu_triple_buffers.capacity as u32) as usize;
+        let vec4_copy_size = (used_slots * 16) as u64; // Vec4<f32> = 16 bytes
+        let u32_copy_size = (used_slots * 4) as u64; // u32 = 4 bytes
         
         // Copy positions (Vec4: x, y, z, mass)
         encoder.copy_buffer_to_buffer(
@@ -3952,7 +3995,9 @@ impl GpuScene {
             &self.devorocyte_cell_data_bind_group,
             &self.devorocyte_spatial_bind_group,
         ) {
-            system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, self.gpu_triple_buffers.capacity);
+            // Dispatch based on high-water mark, not full capacity.
+            let dispatch_count = self.total_cell_slots.max(1).min(self.gpu_triple_buffers.capacity);
+            system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, dispatch_count);
         }
     }
 
@@ -3973,6 +4018,8 @@ impl GpuScene {
             self.moss_system = Some(moss);
             // Force cave shadow bind group rebuild to include moss buffer
             self.cave_shadow_bind_group_set = false;
+            // Force cell shadow bind group rebuild (light field buffers may have changed)
+            self.cell_shadow_bind_group_set = false;
             log::info!("Moss system initialized");
         }
     }
@@ -3983,13 +4030,12 @@ impl GpuScene {
             return;
         }
 
-        let (moss, fluid_sim, light_field) = match (&self.moss_system, &self.fluid_simulator, &self.light_field_system) {
-            (Some(m), Some(f), Some(l)) => (m, f, l),
-            _ => return,
-        };
-
-        // Create growth bind group if not cached
+        // Create growth bind group if not cached (needs immutable borrows of multiple fields)
         if self.moss_growth_bind_group.is_none() {
+            let (moss, fluid_sim, light_field) = match (&self.moss_system, &self.fluid_simulator, &self.light_field_system) {
+                (Some(m), Some(f), Some(l)) => (m, f, l),
+                _ => return,
+            };
             self.moss_growth_bind_group = Some(moss.create_growth_bind_group(
                 device,
                 fluid_sim.solid_mask_buffer(),
@@ -3999,8 +4045,10 @@ impl GpuScene {
             ));
         }
 
-        if let Some(ref growth_bg) = self.moss_growth_bind_group {
-            moss.run_growth(encoder, queue, growth_bg, delta_time, self.config.sphere_radius);
+        // Run growth pass — needs &mut self.moss_system for frame throttle counter
+        let world_radius = self.config.sphere_radius;
+        if let (Some(ref mut moss), Some(ref growth_bg)) = (&mut self.moss_system, &self.moss_growth_bind_group) {
+            moss.run_growth(encoder, queue, growth_bg, delta_time, world_radius);
         }
     }
 
@@ -4052,7 +4100,9 @@ impl GpuScene {
 
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
         if let (Some(ref physics_bgs), Some(ref moss_bg)) = (&self.moss_consume_physics_bind_groups, &self.moss_consume_moss_bind_group) {
-            moss.run_consumption(encoder, queue, &physics_bgs[output_idx], moss_bg, self.gpu_triple_buffers.capacity);
+            // Dispatch based on high-water mark, not full capacity.
+            let dispatch_count = self.total_cell_slots.max(1).min(self.gpu_triple_buffers.capacity);
+            moss.run_consumption(encoder, queue, &physics_bgs[output_idx], moss_bg, dispatch_count);
         }
     }
 
@@ -4109,6 +4159,14 @@ impl GpuScene {
             simulator.paused = !simulator.paused;
             log::info!("Fluid simulation {}", if simulator.paused { "paused" } else { "resumed" });
         }
+    }
+
+    /// Disable moss and schedule a one-shot clear of the moss_density buffer.
+    /// The clear is issued at the start of the next render() call so the cave
+    /// fragment shader immediately stops rendering stale moss.
+    pub fn disable_moss(&mut self) {
+        self.show_moss = false;
+        self.moss_needs_clear = true;
     }
 
     /// Initialize the steam particle renderer
@@ -5118,6 +5176,17 @@ impl Scene for GpuScene {
             label: Some("GPU Scene Encoder"),
         });
 
+        // If moss was just disabled, clear the moss_density buffer so the cave shader
+        // immediately stops rendering stale moss. The buffer persists between frames and
+        // the cave fragment shader reads it unconditionally, so without this clear the
+        // old moss stays visible until the buffer is overwritten by new growth.
+        if self.moss_needs_clear {
+            if let Some(ref moss) = self.moss_system {
+                encoder.clear_buffer(moss.moss_density_buffer(), 0, None);
+            }
+            self.moss_needs_clear = false;
+        }
+
         // Update shared environment camera buffer once per frame (reused by voxel, particle renderers)
         // This replaces 4+ per-frame buffer allocations with a single write_buffer call
         self.ensure_env_camera_buffer(device, queue);
@@ -5173,20 +5242,27 @@ impl Scene for GpuScene {
             self.run_light_field(device, &mut encoder, queue);
         }
 
-        // Run moss growth/erosion after light field (reads light_field) and fluid sim (reads fluid_state, water_velocity)
-        if !self.paused && self.show_moss {
-            let dt = self.config.fixed_timestep;
-            self.run_moss_growth(device, &mut encoder, queue, dt);
-        }
-
-        // Write dragged cell index to cell_count_buffer[2] so position_update shader can skip it
-        queue.write_buffer(
-            &self.gpu_triple_buffers.cell_count_buffer,
-            8, // byte offset for slot [2]
-            bytemuck::cast_slice(&[self.dragged_cell_index]),
-        );
+        // NOTE: Moss growth is dispatched AFTER the cave render pass (near queue.submit)
+        // to avoid a read-after-write pipeline stall on moss_density_buffer.
+        // The cave fragment shader reads moss_density; if growth runs before the render
+        // pass in the same encoder, the GPU serializes them — stalling the render pass
+        // until the 32K-workgroup compute finishes. Moving it after rendering means the
+        // write lands in the buffer that the NEXT frame's render pass will read, which
+        // is a 1-frame lag that is completely invisible for a slowly-changing moss field.
 
         let is_dragging = self.dragged_cell_index != u32::MAX;
+
+        // Write dragged cell index to cell_count_buffer[2] so position_update shader can skip it.
+        // Only write when the value has changed — the buffer retains its last value between frames,
+        // so we only need to update it when dragging starts, the target changes, or dragging stops.
+        if self.dragged_cell_index != self.last_written_dragged_index {
+            queue.write_buffer(
+                &self.gpu_triple_buffers.cell_count_buffer,
+                8, // byte offset for slot [2]
+                bytemuck::cast_slice(&[self.dragged_cell_index]),
+            );
+            self.last_written_dragged_index = self.dragged_cell_index;
+        }
 
         // Execute drag position update BEFORE physics so adhesion springs see the
         // correct dragged cell position and can pull connected cells toward it.
@@ -5281,7 +5357,13 @@ impl Scene for GpuScene {
         // Copy buffers to instance builder after physics (always needed for division)
         // Division creates new cells with updated cell_types that must be copied before rendering
         // Also copy after position update, cell removal, or cell boost
-        if !self.paused || position_updated || cell_removed || cell_boosted {
+        // Skip entirely when there are no cells — the copies are full-capacity DMA transfers
+        // (positions, rotations, mode_indices, cell_ids, genome_ids, cell_types, mode_properties)
+        // and with 0 cells the instance builder will produce 0 visible instances regardless.
+        // IMPORTANT: also copy when cell_inserted is true — total_cell_slots lags 1-3 frames
+        // behind the async readback, so the first cell would be invisible without this override.
+        let has_cells = self.total_cell_slots > 0 || cell_inserted;
+        if has_cells && (!self.paused || position_updated || cell_removed || cell_boosted || cell_inserted) {
             self.copy_buffers_to_instance_builder(&mut encoder);
         }
 
@@ -5316,7 +5398,9 @@ impl Scene for GpuScene {
             self.lod_threshold_medium,
             self.lod_threshold_high,
             self.lod_debug_colors,
-            self.total_cell_slots, // Total slots for dispatch scaling (live cells can be at any index)
+            // Use max(1) when a cell was just inserted so the instance builder
+            // doesn't early-out before the async readback has caught up.
+            self.total_cell_slots.max(if cell_inserted { 1 } else { 0 }),
         );
 
         // When DoF is enabled, render the scene to an intermediate texture so the
@@ -5370,10 +5454,15 @@ impl Scene for GpuScene {
 
         // Render cells using GPU-culled instance buffer
         let visible_count = self.instance_builder.visible_count();
-        // Update shadow bind group for cell renderer
-        if let Some(ref light_field) = self.light_field_system {
-            let shadow_bg = light_field.create_shadow_bind_group(device);
-            self.renderer.set_shadow_bind_group(shadow_bg);
+        // Update shadow bind group for cell renderer — created once and cached.
+        // The light field buffers never change after initialization, so there is no
+        // need to recreate this bind group every frame.
+        if !self.cell_shadow_bind_group_set {
+            if let Some(ref light_field) = self.light_field_system {
+                let shadow_bg = light_field.create_shadow_bind_group(device);
+                self.renderer.set_shadow_bind_group(shadow_bg);
+                self.cell_shadow_bind_group_set = true;
+            }
         }
         self.renderer.render_with_encoder(
             &mut encoder,
@@ -5567,24 +5656,34 @@ impl Scene for GpuScene {
 
         // Extract and render GPU density mesh if enabled
         if self.show_gpu_density_mesh {
-            // First extract density from fluid simulator to surface nets buffers
-            if let (Some(ref fluid_sim), Some(ref gpu_surface_nets)) = (&self.fluid_simulator, &self.gpu_surface_nets) {
-                fluid_sim.extract_to_surface_nets(
-                    device,
-                    &mut encoder,
-                    gpu_surface_nets.density_buffer(),
-                    gpu_surface_nets.fluid_type_buffer(),
-                );
+            // Only re-extract the mesh when the fluid state has actually changed.
+            // When the simulation is paused and there are no cells (nothing can disturb
+            // the fluid), the density field is static — re-running extract_to_surface_nets,
+            // smooth_density, and extract_mesh every frame wastes ~100K workgroups for
+            // an identical result. We still render the last extracted mesh every frame.
+            let fluid_changed = !self.paused || self.current_cell_count > 0;
+
+            if fluid_changed {
+                // First extract density from fluid simulator to surface nets buffers
+                if let (Some(ref fluid_sim), Some(ref gpu_surface_nets)) = (&self.fluid_simulator, &self.gpu_surface_nets) {
+                    fluid_sim.extract_to_surface_nets(
+                        device,
+                        &mut encoder,
+                        gpu_surface_nets.density_buffer(),
+                        gpu_surface_nets.fluid_type_buffer(),
+                    );
+                }
+
+                if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
+                    // Smooth the raw density: spatial blur + temporal blend
+                    gpu_surface_nets.smooth_density(&mut encoder);
+                    
+                    // Run compute shaders to extract mesh from smoothed density buffer
+                    gpu_surface_nets.extract_mesh(&mut encoder);
+                }
             }
 
             if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
-                // Smooth the raw density: spatial blur + temporal blend
-                gpu_surface_nets.smooth_density(&mut encoder);
-                
-                // Run compute shaders to extract mesh from smoothed density buffer
-                gpu_surface_nets.extract_mesh(&mut encoder);
-
-                // Set shadow bind group once (buffers never change, params updated via write_buffer)
                 if !self.water_shadow_bind_group_set {
                     if let Some(ref light_field) = self.light_field_system {
                         let shadow_bg = light_field.create_shadow_bind_group(device);
@@ -5770,6 +5869,19 @@ impl Scene for GpuScene {
 
         // Single submit for all GPU work
         queue.submit(std::iter::once(encoder.finish()));
+
+        // Moss growth runs in a SEPARATE submit after the main frame.
+        // This prevents it from competing with rendering on the GPU timeline —
+        // the driver can schedule it in background while the CPU prepares the next frame.
+        // The 1-frame lag on moss_density is invisible for a slowly-changing field.
+        if !self.paused && self.show_moss {
+            let mut moss_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Moss Growth Encoder"),
+            });
+            let dt = self.config.fixed_timestep;
+            self.run_moss_growth(device, &mut moss_encoder, queue, dt);
+            queue.submit(std::iter::once(moss_encoder.finish()));
+        }
 
         // Debug: poll label buffer readback.
         if let Some(label_system) = &mut self.organism_label_system {

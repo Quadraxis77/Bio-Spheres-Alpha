@@ -434,11 +434,11 @@ impl GpuToolOperations {
             return None;
         }
         
-        // Poll the device to process GPU work
-        let _ = self.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(std::time::Duration::from_millis(5)),
-        });
+        // Poll the device non-blocking — the map callback fires asynchronously
+        // after queue.submit() completes. Using PollType::Wait with a timeout
+        // would stall the render thread for up to 5ms per call (10ms total when
+        // called twice), consuming a significant fraction of the 16ms frame budget.
+        let _ = self.device.poll(wgpu::PollType::Poll);
         
         // Check if we already have a pending map request
         if self.map_receiver.is_none() {
@@ -452,11 +452,8 @@ impl GpuToolOperations {
             
             self.map_receiver = Some(receiver);
             
-            // Poll again to process the map request
-            let _ = self.device.poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(std::time::Duration::from_millis(5)),
-            });
+            // Poll once more to give the driver a chance to process the map request
+            let _ = self.device.poll(wgpu::PollType::Poll);
         }
         
         // Check if mapping completed

@@ -894,7 +894,11 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
         let mut show_moss = gpu_scene.show_moss;
         let mut moss_changed = false;
         if ui.checkbox(&mut show_moss, "Enable Moss").changed() {
-            gpu_scene.show_moss = show_moss;
+            if show_moss {
+                gpu_scene.show_moss = true;
+            } else {
+                gpu_scene.disable_moss();
+            }
             context.editor_state.show_moss = show_moss;
             moss_changed = true;
         }

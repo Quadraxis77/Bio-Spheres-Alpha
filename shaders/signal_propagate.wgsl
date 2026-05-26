@@ -62,7 +62,7 @@ var<storage, read> mode_cell_types: array<u32>;
 
 const OCULOCYTE_TYPE: u32 = 7u;
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
     let cell_count = cell_count_buffer[0];

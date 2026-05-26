@@ -1302,6 +1302,19 @@ impl InstanceBuilder {
             self.last_visible_count = 0;
             return;
         }
+
+        // IDLE EARLY-OUT: Skip all GPU work when there are no live cells.
+        // cell_count_hint is the high-water mark (total_cell_slots) — when it's 0 no cells
+        // have ever been placed (or all were cleared by reset). Zero the indirect buffer so
+        // the renderer issues 0 draw calls, then return early.
+        if cell_count_hint == 0 {
+            self.last_visible_count = 0;
+            // Zero the indirect buffer's instance_count field so no cells are drawn.
+            // This handles the reset case where the previous frame had live cells.
+            let indirect_data: [u32; 4] = [4, 0, 0, 0];
+            queue.write_buffer(&self.indirect_buffer, 0, bytemuck::cast_slice(&indirect_data));
+            return;
+        }
         
         // Extract frustum planes
         let frustum_planes = Self::extract_frustum_planes(view_proj);

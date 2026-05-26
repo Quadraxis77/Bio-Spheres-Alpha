@@ -1,41 +1,11 @@
 (
-    current_mode: Gpu,
+    current_mode: Preview,
     ui_scale: 1.0,
     windows_locked: false,
     lock_tab_bar: false,
     lock_tabs: false,
     lock_close_buttons: false,
     scene_configs: {
-        Preview: (
-            visibility: (
-                show_cell_inspector: false,
-                show_genome_editor: true,
-                show_scene_manager: false,
-                show_performance_monitor: false,
-                show_rendering_controls: false,
-                show_time_scrubber: false,
-                show_theme_editor: false,
-                show_camera_settings: false,
-                show_lighting_settings: false,
-            ),
-            locked_windows: [
-                "NameTypeEditor",
-                "Modes",
-                "BottomPanel",
-                "RightPanel",
-                "SceneManager",
-                "LeftPanel",
-                "CircleSliders",
-                "TimeSlider",
-                "Viewport",
-                "QuaternionBall",
-            ],
-            lock_settings: (
-                lock_tab_bar: false,
-                lock_tabs: false,
-                lock_close_buttons: false,
-            ),
-        ),
         Gpu: (
             visibility: (
                 show_cell_inspector: true,
@@ -49,9 +19,39 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
-                "SceneManager",
                 "Viewport",
+                "SceneManager",
                 "RightPanel",
+            ],
+            lock_settings: (
+                lock_tab_bar: false,
+                lock_tabs: false,
+                lock_close_buttons: false,
+            ),
+        ),
+        Preview: (
+            visibility: (
+                show_cell_inspector: false,
+                show_genome_editor: true,
+                show_scene_manager: false,
+                show_performance_monitor: false,
+                show_rendering_controls: false,
+                show_time_scrubber: false,
+                show_theme_editor: false,
+                show_camera_settings: false,
+                show_lighting_settings: false,
+            ),
+            locked_windows: [
+                "BottomPanel",
+                "CircleSliders",
+                "Viewport",
+                "QuaternionBall",
+                "NameTypeEditor",
+                "Modes",
+                "LeftPanel",
+                "TimeSlider",
+                "RightPanel",
+                "SceneManager",
             ],
             lock_settings: (
                 lock_tab_bar: false,
