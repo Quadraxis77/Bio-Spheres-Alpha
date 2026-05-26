@@ -10,8 +10,19 @@ use egui::TextureId;
 use glam::{Quat, Vec3};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Monotonically increasing counter so each menu creation picks the next genome pair.
+/// Counter seeded from the current time on first use, then incremented by 2 per
+/// menu creation. This ensures a different genome pair is shown on each app launch
+/// rather than always starting at index 0 of the sorted genomes directory.
 static MENU_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Returns a time-seeded starting value for MENU_COUNTER, initialised once.
+fn time_seeded_counter() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0xdeadbeef_cafebabe)
+}
 
 // ── orbit constants ───────────────────────────────────────────────────────────
 
@@ -75,8 +86,11 @@ impl MainMenuScene {
             desired_maximum_frame_latency: surface_config.desired_maximum_frame_latency,
         };
 
-        // Use a global counter so each menu creation advances to the next genome pair,
-        // guaranteeing every genome is eventually shown regardless of timing.
+        // Seed the counter from the current time on first use (compare-exchange from 0),
+        // then advance by 2 for this menu creation. This ensures a different genome pair
+        // is shown on each app launch instead of always starting at index 0.
+        let seed = time_seeded_counter();
+        let _ = MENU_COUNTER.compare_exchange(0, seed, Ordering::Relaxed, Ordering::Relaxed);
         let counter = MENU_COUNTER.fetch_add(2, Ordering::Relaxed);
 
         // Left preview — load a saved genome, fall back to procedural generation
