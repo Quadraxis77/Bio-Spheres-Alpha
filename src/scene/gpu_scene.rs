@@ -481,6 +481,7 @@ impl GpuScene {
             &signal_sense_dummy_solid_buffer,
             &signal_sense_dummy_density_buffer,
             organism_label_system.as_ref().map(|s| &s.label_buffer),
+            organism_label_system.as_ref().map(|s| &s.organism_size_buffer),
         );
 
         // Create GPU cell inspector system (will be initialized later with device)

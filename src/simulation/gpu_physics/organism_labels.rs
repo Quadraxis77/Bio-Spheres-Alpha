@@ -33,19 +33,17 @@ use super::{AdhesionBuffers, GpuTripleBufferSystem};
 
 // ── GPU-side state (must match WGSL LabelState exactly) ─────────────────────
 
-// Constants matching shader values
-const COOLDOWN_FRAMES: u32 = 30u32;
-
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct LabelState {
-    iteration:         u32,  // remaining hook+compress pairs (0 = idle)
-    frames_since_init: u32,  // frames since last init
-    last_cell_count:   u32,  // cell count at last trigger
-    last_bond_count:   u32,  // live bond count at last trigger
-    run_init:          u32,  // 1 = init_labels runs this frame
-    run_hc:            u32,  // 1 = hook+compress runs this frame
-    _pad:              [u32; 2],
+    _pad0:    u32,
+    _pad1:    u32,
+    _pad2:    u32,
+    _pad3:    u32,
+    run_init: u32,
+    run_hc:   u32,
+    _pad4:    u32,
+    _pad5:    u32,
 }
 
 const _: () = assert!(std::mem::size_of::<LabelState>() == 32);
@@ -56,13 +54,21 @@ pub struct OrganismLabelSystem {
     /// Per-cell label buffer.  Consumers bind this read-only as `array<u32>`.
     pub label_buffer: wgpu::Buffer,
 
+    /// Per-organism cell count, indexed by root cell index.
+    /// `organism_size_buffer[label_buffer[cell_i]]` == number of cells in that organism.
+    /// Updated every frame by the clear + count passes.
+    pub organism_size_buffer: wgpu::Buffer,
+
     #[allow(dead_code)]
     label_state_buffer: wgpu::Buffer,
 
-    controller_pipeline: wgpu::ComputePipeline,
-    init_pipeline:       wgpu::ComputePipeline,
-    hook_pipeline:       wgpu::ComputePipeline,
-    compress_pipeline:   wgpu::ComputePipeline,
+    controller_pipeline:     wgpu::ComputePipeline,
+    init_pipeline:           wgpu::ComputePipeline,
+    hook_pipeline:           wgpu::ComputePipeline,
+    compress_pipeline:       wgpu::ComputePipeline,
+    clear_sizes_pipeline:        wgpu::ComputePipeline,
+    count_sizes_accumulate_pipeline: wgpu::ComputePipeline,
+    count_sizes_broadcast_pipeline:  wgpu::ComputePipeline,
 
     bind_group: wgpu::BindGroup,
 
@@ -96,14 +102,23 @@ impl OrganismLabelSystem {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         });
 
+        // Organism size buffer: one u32 per cell slot, indexed by root label.
+        // Initialised to zero; cleared and recomputed every frame.
+        let organism_size_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Organism Size Buffer"),
+            contents: bytemuck::cast_slice(&vec![0u32; cell_capacity as usize]),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        });
+
         let initial_state = LabelState {
-            iteration:         0u32,
-            frames_since_init: COOLDOWN_FRAMES,  // Ready to trigger immediately on first topology change
-            last_cell_count:   0u32,             // Differs from actual count → triggers on frame 1
-            last_bond_count:   0u32,
-            run_init:          0u32,
-            run_hc:            0u32,
-            _pad:              [0; 2],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+            _pad3: 0,
+            run_init: 0,
+            run_hc:   0,
+            _pad4: 0,
+            _pad5: 0,
         };
         let label_state_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label:    Some("Organism Label State"),
@@ -141,6 +156,9 @@ impl OrganismLabelSystem {
         let init_pipeline       = make("init_labels",       "Label Init");
         let hook_pipeline       = make("hook_labels",       "Label Hook");
         let compress_pipeline   = make("compress_labels",   "Label Compress");
+        let clear_sizes_pipeline = make("clear_organism_sizes", "Organism Size Clear");
+        let count_sizes_accumulate_pipeline = make("count_organism_sizes_accumulate", "Organism Size Accumulate");
+        let count_sizes_broadcast_pipeline  = make("count_organism_sizes_broadcast",  "Organism Size Broadcast");
 
         // ── Bind group ────────────────────────────────────────────────────────
 
@@ -155,6 +173,7 @@ impl OrganismLabelSystem {
                 wgpu::BindGroupEntry { binding: 4, resource: triple_buffers.death_flags.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 5, resource: adhesion_buffers.cell_adhesion_indices.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: adhesion_buffers.adhesion_connections.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: organism_size_buffer.as_entire_binding() },
             ],
         });
 
@@ -168,11 +187,15 @@ impl OrganismLabelSystem {
 
         Self {
             label_buffer,
+            organism_size_buffer,
             label_state_buffer,
             controller_pipeline,
             init_pipeline,
             hook_pipeline,
             compress_pipeline,
+            clear_sizes_pipeline,
+            count_sizes_accumulate_pipeline,
+            count_sizes_broadcast_pipeline,
             bind_group,
             cell_workgroups,
             debug_staging,
@@ -212,6 +235,17 @@ impl OrganismLabelSystem {
         pass.set_pipeline(&self.hook_pipeline);
         pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
         pass.set_pipeline(&self.compress_pipeline);
+        pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
+
+        // Clear organism sizes, then recount from current labels.
+        // Runs every frame so sizes stay accurate even when labels don't change.
+        pass.set_pipeline(&self.clear_sizes_pipeline);
+        pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
+        // Accumulate: each live cell adds 1 to organism_size_buffer[root_label]
+        pass.set_pipeline(&self.count_sizes_accumulate_pipeline);
+        pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
+        // Broadcast: copy root count to every cell's own slot for O(1) consumer lookup
+        pass.set_pipeline(&self.count_sizes_broadcast_pipeline);
         pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
 
         drop(pass);
@@ -277,6 +311,7 @@ impl OrganismLabelSystem {
                 ro(4), // death_flags
                 ro(5), // cell_adhesion_indices
                 ro(6), // adhesion_connections_raw
+                rw(7), // organism_size_buffer (atomic writes)
             ],
         })
     }

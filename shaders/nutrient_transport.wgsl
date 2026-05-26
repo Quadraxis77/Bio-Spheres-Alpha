@@ -150,6 +150,12 @@ var<storage, read> mode_properties_v9: array<vec4<f32>>;
 @group(3) @binding(13)
 var<storage, read> mode_properties_v12: array<vec4<f32>>;
 
+// Organism size buffer: organism_size_buffer[cell_i] == cell count for that organism.
+// Populated each frame by the clear/accumulate/broadcast passes in organism_label.wgsl.
+// Consumers index directly by cell_idx — no label lookup needed.
+@group(3) @binding(14)
+var<storage, read> organism_size_buffer: array<u32>;
+
 struct AdhesionConnection {
     cell_a_index: u32,
     cell_b_index: u32,
@@ -285,6 +291,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Base metabolism: consume nutrients to stay alive (1.0 nutrients/sec)
         let mode_v3 = mode_properties_v3[mode_idx];
         var nutrient_loss = BASE_METABOLISM_RATE * params.delta_time;
+
+        // Kleiber's Law metabolic discount: larger organisms burn fewer nutrients per cell.
+        // Discount = 1 / size^0.25, capped so organisms above KLEIBER_CAP cells get
+        // the maximum discount. Solo cells (size == 1) pay full rate.
+        // Cap at 100 cells → discount = 1/100^0.25 ≈ 0.316 (saves ~68% per cell).
+        const KLEIBER_CAP: f32 = 100.0;
+        let org_size = f32(max(organism_size_buffer[cell_idx], 1u));
+        let capped_size = min(org_size, KLEIBER_CAP);
+        let kleiber_discount = 1.0 / pow(capped_size, 0.25);
+        nutrient_loss *= kleiber_discount;
 
         // Additional consumption from swim force (Flagellocytes only)
         let swim_force = mode_v1.z; // mode_properties_v1.z = swim_force

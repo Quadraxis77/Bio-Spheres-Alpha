@@ -1461,6 +1461,7 @@ impl GpuPhysicsPipelines {
         signal_sense_solid_mask_buffer: &wgpu::Buffer,
         signal_sense_density_field_buffer: &wgpu::Buffer,
         organism_label_buffer: Option<&wgpu::Buffer>,
+        organism_size_buffer: Option<&wgpu::Buffer>,
     ) -> CachedBindGroups {
         // Create physics bind groups for all 3 buffer indices
         let physics = [
@@ -1552,7 +1553,7 @@ impl GpuPhysicsPipelines {
         
         // Nutrient transport bind groups (same for all frames)
         let nutrient_system = self.create_nutrient_system_bind_group(device, buffers);
-        let nutrient_transport = self.create_nutrient_transport_bind_group(device, buffers);
+        let nutrient_transport = self.create_nutrient_transport_bind_group(device, buffers, organism_size_buffer);
         let nutrient_apply = self.create_nutrient_apply_bind_group(device, buffers);
         
         // Swim force bind groups
@@ -3796,6 +3797,8 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupLayoutEntry { binding: 12, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 // Binding 13: Mode properties v12 (Vasculocyte params)
                 wgpu::BindGroupLayoutEntry { binding: 13, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // Binding 14: Organism size buffer (read-only: cell count per organism, indexed by root label)
+                wgpu::BindGroupLayoutEntry { binding: 14, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
             ],
         })
     }
@@ -3836,7 +3839,22 @@ impl GpuPhysicsPipelines {
         &self,
         device: &wgpu::Device,
         buffers: &GpuTripleBufferSystem,
+        organism_size_buffer: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
+        // Use a dummy buffer if organism sizes aren't available yet
+        let dummy_size_buffer;
+        let size_buf = if let Some(buf) = organism_size_buffer {
+            buf
+        } else {
+            dummy_size_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Organism Size Buffer"),
+                size: buffers.capacity as u64 * 4,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            &dummy_size_buffer
+        };
+
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Nutrient Transport Bind Group"),
             layout: &self.nutrient_transport_layout,
@@ -3861,6 +3879,7 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry { binding: 11, resource: buffers.embryocyte_reserve_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 12, resource: buffers.mode_properties_v9.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 13, resource: buffers.mode_properties_v12.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 14, resource: size_buf.as_entire_binding() },
             ],
         })
     }

@@ -22,14 +22,6 @@
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-// Total hook+compress pairs executed per convergence cycle (2 per frame).
-// 12 pairs handles linear chains of up to 2^12 = 4096 cells.
-const LABEL_ITERATIONS: u32 = 12u;
-
-// Minimum frames between convergence cycles (cooldown / debounce).
-// ~30 frames ≈ 0.5 s at 60 fps.
-const COOLDOWN_FRAMES: u32 = 30u;
-
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 
 const DEAD_LABEL: u32 = 0xFFFFFFFFu;
@@ -54,14 +46,14 @@ struct AdhesionConnection {
 // ── Bind group 0 ─────────────────────────────────────────────────────────────
 
 struct LabelState {
-    iteration:         u32,  // remaining hook+compress pairs (0 = idle)
-    frames_since_init: u32,  // frames elapsed since last init (cooldown counter)
-    last_cell_count:   u32,  // cell count observed at last trigger
-    last_bond_count:   u32,  // live bond count observed at last trigger
-    run_init:          u32,  // 1 = init_labels should execute this frame
-    run_hc:            u32,  // 1 = hook+compress should execute this frame
-    _pad0:             u32,
-    _pad1:             u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
+    run_init: u32,  // always 1
+    run_hc:   u32,  // always 1
+    _pad4:    u32,
+    _pad5:    u32,
 }
 
 @group(0) @binding(0) var<storage, read_write> label_state:              LabelState;
@@ -70,44 +62,20 @@ struct LabelState {
 @group(0) @binding(3) var<storage, read_write> label_buffer:             array<atomic<u32>>;
 @group(0) @binding(4) var<storage, read>       death_flags:              array<u32>;
 @group(0) @binding(5) var<storage, read>       cell_adhesion_indices:    array<i32>;
-@group(0) @binding(6) var<storage, read> adhesion_connections: array<AdhesionConnection>;
+@group(0) @binding(6) var<storage, read>       adhesion_connections:     array<AdhesionConnection>;
+// Per-organism cell count. Indexed by root cell index (= label value).
+// Only the root slot is meaningful; all other slots are 0 after the count pass.
+@group(0) @binding(7) var<storage, read_write> organism_size_buffer:     array<atomic<u32>>;
 
 // ── label_controller ─────────────────────────────────────────────────────────
-// Single thread. Updates the state machine and writes run_init / run_hc flags
-// that the subsequent dispatches read (ordering guaranteed within the same pass).
+// Runs every frame unconditionally. Labels are recomputed from scratch each
+// frame so GPU-created bonds (from division) are always reflected immediately.
+// The hook+compress passes are cheap enough to run every frame.
 
 @compute @workgroup_size(1, 1, 1)
 fn label_controller() {
-    let cells_now = cell_count_buffer[0];
-    let bonds_now = adhesion_counts[1];
-
-    label_state.frames_since_init += 1u;
-
-    if label_state.iteration > 0u {
-        // Mid-convergence: run hook+compress, skip init.
-        label_state.run_init = 0u;
-        label_state.run_hc   = 1u;
-        label_state.iteration -= 1u;
-
-    } else {
-        let cells_changed = cells_now != label_state.last_cell_count;
-        let bonds_changed = bonds_now != label_state.last_bond_count;
-
-        if (cells_changed || bonds_changed) && label_state.frames_since_init >= COOLDOWN_FRAMES {
-            // Kick a new convergence cycle.
-            label_state.last_cell_count   = cells_now;
-            label_state.last_bond_count   = bonds_now;
-            label_state.frames_since_init = 0u;
-            // -1: one pair runs this frame alongside init.
-            label_state.iteration         = LABEL_ITERATIONS - 1u;
-            label_state.run_init          = 1u;
-            label_state.run_hc            = 1u;
-        } else {
-            // Idle.
-            label_state.run_init = 0u;
-            label_state.run_hc   = 0u;
-        }
-    }
+    label_state.run_init = 1u;
+    label_state.run_hc   = 1u;
 }
 
 // ── init_labels ──────────────────────────────────────────────────────────────
@@ -184,4 +152,60 @@ fn compress_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
             atomicStore(&label_buffer[i], parent);
         }
     }
+}
+
+// ── clear_organism_sizes ──────────────────────────────────────────────────────
+// Zeroes the organism_size_buffer before the count pass.
+// Must run every frame (not just on topology change) so stale counts from
+// dead organisms are cleared even when labels are not recomputed.
+
+@compute @workgroup_size(256, 1, 1)
+fn clear_organism_sizes(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if i >= cell_count_buffer[0] { return; }
+    atomicStore(&organism_size_buffer[i], 0u);
+}
+
+// ── count_organism_sizes ──────────────────────────────────────────────────────
+// Two-pass approach:
+//   Pass A (this shader, first invocation): each live cell atomicAdds 1 into
+//           organism_size_buffer[root_label], accumulating the true organism count.
+//   Pass B (second invocation of same entry, after a barrier — handled by running
+//           the shader twice): each live cell reads organism_size_buffer[root_label]
+//           and writes it to organism_size_buffer[cell_i], so every cell slot holds
+//           its organism's size directly. Consumers can then index by cell_idx with
+//           no label lookup.
+//
+// Because WGSL has no cross-workgroup barrier, we split into two separate entry
+// points dispatched sequentially in the same compute pass.
+
+@compute @workgroup_size(256, 1, 1)
+fn count_organism_sizes_accumulate(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if i >= cell_count_buffer[0] { return; }
+
+    let lbl = atomicLoad(&label_buffer[i]);
+    if lbl == DEAD_LABEL { return; }
+    if lbl >= cell_count_buffer[0] { return; }
+
+    atomicAdd(&organism_size_buffer[lbl], 1u);
+}
+
+@compute @workgroup_size(256, 1, 1)
+fn count_organism_sizes_broadcast(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if i >= cell_count_buffer[0] { return; }
+
+    let lbl = atomicLoad(&label_buffer[i]);
+    if lbl == DEAD_LABEL {
+        // Dead/isolated cells get size 1 so they still pay full metabolism
+        atomicStore(&organism_size_buffer[i], 1u);
+        return;
+    }
+    if lbl >= cell_count_buffer[0] { return; }
+
+    // Read the accumulated count at the root and copy it to this cell's slot.
+    // After this pass, organism_size_buffer[cell_i] == organism size for all live cells.
+    let org_size = atomicLoad(&organism_size_buffer[lbl]);
+    atomicStore(&organism_size_buffer[i], org_size);
 }
