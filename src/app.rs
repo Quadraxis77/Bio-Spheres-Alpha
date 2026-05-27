@@ -1283,6 +1283,32 @@ impl App {
             gpu_scene.nutrient_spawn_end = self.editor_state.nutrient_spawn_end;
             gpu_scene.nutrient_despawn_start = self.editor_state.nutrient_despawn_start;
 
+            // Apply boulder/mossrock settings from editor_state (loaded from cave_settings.ron)
+            gpu_scene.show_boulders = self.editor_state.show_boulders;
+            gpu_scene.boulder_target_count = self.editor_state.boulder_target_count;
+            gpu_scene.boulder_initial_moss = self.editor_state.boulder_initial_moss;
+            gpu_scene.boulder_radius = self.editor_state.boulder_radius;
+            gpu_scene.boulder_size_gate = self.editor_state.boulder_size_gate;
+            gpu_scene.boulder_spawn_interval = self.editor_state.boulder_spawn_interval;
+            gpu_scene.boulder_buoyancy = self.editor_state.boulder_buoyancy;
+            gpu_scene.boulder_radius_min = self.editor_state.boulder_radius_min;
+            gpu_scene.boulder_radius_max = self.editor_state.boulder_radius_max;
+            gpu_scene.boulder_moss_min = self.editor_state.boulder_moss_min;
+            gpu_scene.boulder_moss_max = self.editor_state.boulder_moss_max;
+            // Propagate to live boulder system if it exists
+            if let Some(ref mut bs) = gpu_scene.boulder_system {
+                bs.target_count = self.editor_state.boulder_target_count;
+                bs.spawn_interval = self.editor_state.boulder_spawn_interval;
+                bs.radius_min = self.editor_state.boulder_radius_min;
+                bs.radius_max = self.editor_state.boulder_radius_max;
+                bs.moss_min = self.editor_state.boulder_moss_min;
+                bs.moss_max = self.editor_state.boulder_moss_max;
+                if (bs.buoyancy - self.editor_state.boulder_buoyancy).abs() > 1e-6 {
+                    bs.buoyancy = self.editor_state.boulder_buoyancy;
+                    bs.buoyancy_dirty = true;
+                }
+            }
+
             // Set culling mode based on enabled flags
             let culling_mode = match (self.ui.state.frustum_enabled, self.ui.state.occlusion_enabled) {
                 (true, true) => crate::rendering::CullingMode::FrustumAndOcclusion,

@@ -186,13 +186,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var particle: WaterParticle;
     particle.position = world_pos;
     
-    // Water particles size based on prominence factor
-    let base_size = params.cell_size * 0.4;  // Base size for smallest particles
-    let max_size = params.cell_size * 1.2;   // Maximum size for prominent particles
+    // Water particle size — small droplets, clearly visible but not oversized
+    let base_size = params.cell_size * 0.4;
+    let max_size = params.cell_size * 1.2;
     particle.size = mix(base_size, max_size, params.prominence_factor);
 
-    // Water color: blue with consistent transparency
-    particle.color = vec4<f32>(0.2, 0.5, 0.8, 0.3);
+    // Water color: bright blue, opaque enough to read as solid drops
+    particle.color = vec4<f32>(0.35, 0.6, 0.95, 0.75);
 
     // Sample water velocity at this voxel
     let vel = decode_water_velocity(water_velocity[idx]);

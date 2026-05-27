@@ -1106,10 +1106,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
         let mut show_boulders = gpu_scene.show_boulders;
         if ui.checkbox(&mut show_boulders, "Enable Mossrocks").changed() {
             gpu_scene.show_boulders = show_boulders;
+            context.editor_state.show_boulders = show_boulders;
+            context.editor_state.save_cave_settings();
         }
 
         if show_boulders {
             ui.add_space(5.0);
+            let mut boulder_changed = false;
 
             // Target count
             let mut target = gpu_scene.boulder_target_count as i32;
@@ -1119,6 +1122,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 if let Some(ref mut bs) = gpu_scene.boulder_system {
                     bs.target_count = target as u32;
                 }
+                boulder_changed = true;
             }
 
             ui.add_space(3.0);
@@ -1133,6 +1137,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 if let Some(ref mut bs) = gpu_scene.boulder_system {
                     bs.spawn_interval = interval;
                 }
+                boulder_changed = true;
             }
 
             ui.add_space(5.0);
@@ -1147,6 +1152,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                     .suffix(" u")).changed() {
                     gpu_scene.boulder_radius_min = rmin;
                     if let Some(ref mut bs) = gpu_scene.boulder_system { bs.radius_min = rmin; }
+                    boulder_changed = true;
                 }
                 ui.label("–  Max");
                 let mut rmax = gpu_scene.boulder_radius_max;
@@ -1157,6 +1163,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                     .suffix(" u")).changed() {
                     gpu_scene.boulder_radius_max = rmax;
                     if let Some(ref mut bs) = gpu_scene.boulder_system { bs.radius_max = rmax; }
+                    boulder_changed = true;
                 }
             });
 
@@ -1171,6 +1178,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                     .speed(100.0)).changed() {
                     gpu_scene.boulder_moss_min = mmin;
                     if let Some(ref mut bs) = gpu_scene.boulder_system { bs.moss_min = mmin; }
+                    boulder_changed = true;
                 }
                 ui.label("–  Max");
                 let mut mmax = gpu_scene.boulder_moss_max;
@@ -1180,6 +1188,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                     .speed(500.0)).changed() {
                     gpu_scene.boulder_moss_max = mmax;
                     if let Some(ref mut bs) = gpu_scene.boulder_system { bs.moss_max = mmax; }
+                    boulder_changed = true;
                 }
             });
 
@@ -1195,11 +1204,11 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             if ui.add(egui::Slider::new(&mut buoyancy, 0.0..=1.0)
                 .step_by(0.01)).changed() {
                 gpu_scene.boulder_buoyancy = buoyancy;
-                // Mark dirty — applied in physics step via queue
                 if let Some(ref mut bs) = gpu_scene.boulder_system {
                     bs.buoyancy = buoyancy;
                     bs.buoyancy_dirty = true;
                 }
+                boulder_changed = true;
             }
 
             ui.add_space(3.0);
@@ -1213,6 +1222,23 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             ).small().weak());
             if ui.add(egui::Slider::new(&mut gate, 1.0..=200.0).text("cells")).changed() {
                 gpu_scene.boulder_size_gate = gate;
+                boulder_changed = true;
+            }
+
+            if boulder_changed {
+                // Mirror to editor_state so save_cave_settings picks them up
+                context.editor_state.show_boulders = gpu_scene.show_boulders;
+                context.editor_state.boulder_target_count = gpu_scene.boulder_target_count;
+                context.editor_state.boulder_initial_moss = gpu_scene.boulder_initial_moss;
+                context.editor_state.boulder_radius = gpu_scene.boulder_radius;
+                context.editor_state.boulder_size_gate = gpu_scene.boulder_size_gate;
+                context.editor_state.boulder_spawn_interval = gpu_scene.boulder_spawn_interval;
+                context.editor_state.boulder_buoyancy = gpu_scene.boulder_buoyancy;
+                context.editor_state.boulder_radius_min = gpu_scene.boulder_radius_min;
+                context.editor_state.boulder_radius_max = gpu_scene.boulder_radius_max;
+                context.editor_state.boulder_moss_min = gpu_scene.boulder_moss_min;
+                context.editor_state.boulder_moss_max = gpu_scene.boulder_moss_max;
+                context.editor_state.save_cave_settings();
             }
 
             ui.add_space(5.0);

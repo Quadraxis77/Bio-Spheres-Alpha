@@ -58,17 +58,54 @@ fn vs_main(
     @builtin(vertex_index) vertex_id: u32,
     instance: VertexInput,
 ) -> VertexOutput {
-    let world_pos = instance.position;
-    let size = instance.size;
-
     // Extract velocity from animation.yzw
     let velocity = vec3<f32>(instance.animation.y, instance.animation.z, instance.animation.w);
     let speed = length(velocity);
-
-    // Determine elongation factor based on whether the particle is moving
-    // speed is 0 or ~1.0 (normalized direction) or ~1.7 (diagonal)
     let is_moving = speed > 0.1;
-    let elongation_factor = select(0.0, 1.8, is_moving);  // 1.8x stretch when moving
+
+    // Sub-voxel lerp: smoothly slide the particle toward the next voxel position.
+    // The fluid sim moves voxels discretely; we animate the visual position continuously
+    // by offsetting along the velocity direction by a fraction of one cell_size.
+    // step_freq controls how many voxel-steps per second the animation assumes.
+    // At ~8 steps/sec the particle glides one full cell every ~0.125s, which matches
+    // typical fluid sim throughput at 60fps with 4 sub-steps.
+    let step_freq = 8.0;
+    let phase = fract(instance.animation.x * step_freq);  // 0→1 within current step
+    let cell_size = instance.size / 0.7;  // recover approximate cell_size from particle size
+    // Lerp moving particles toward next voxel. For stationary ones (zero velocity),
+    // add a tiny time-based wobble so they don't appear frozen in place.
+    var lerp_offset: vec3<f32>;
+    if is_moving {
+        lerp_offset = velocity * phase * cell_size;
+    } else {
+        // Sub-pixel drift: oscillate gently so the particle doesn't look glued to a grid point
+        let t = instance.animation.x;
+        let drift_scale = cell_size * 0.08;
+        lerp_offset = vec3<f32>(
+            sin(t * 3.7 + instance.position.x) * drift_scale,
+            sin(t * 2.9 + instance.position.y) * drift_scale,
+            sin(t * 4.1 + instance.position.z) * drift_scale
+        );
+    }
+
+    let world_pos = instance.position + lerp_offset;
+    // Scale size down for stationary/slow particles — rain drops are larger,
+    // circular stationary ones should be smaller so they don't dominate.
+    let size_scale = mix(0.35, 1.0, smoothstep(0.0, 0.5, speed));
+    let size = instance.size * size_scale;
+
+    // Determine elongation factor for teardrop shape when moving.
+    // Use a soft speed threshold so the elongated shape lingers briefly after
+    // the particle slows — prevents snapping instantly to a circle.
+    // speed is 0 (stationary), ~1.0 (cardinal move), or ~1.7 (diagonal).
+    // We map speed through a smooth curve and blend with a slow decay driven
+    // by the time phase so the shape fades over ~0.3s rather than one frame.
+    let speed_factor = smoothstep(0.05, 0.8, speed);
+    // Decay: fract(time * decay_freq) gives a 0→1 ramp; when speed is zero the
+    // elongation rides this ramp down to 0 over one cycle (~0.25s at 4Hz).
+    let decay_phase = fract(instance.animation.x * 4.0);
+    let lingering = speed_factor + (1.0 - speed_factor) * (1.0 - decay_phase);
+    let elongation_factor = lingering * 1.8;
 
     // Get corner index for this vertex
     let corner = QUAD_INDICES[vertex_id];
@@ -84,7 +121,7 @@ fn vs_main(
     var right: vec3<f32>;
     var up: vec3<f32>;
 
-    if is_moving {
+    if elongation_factor > 0.05 {
         // Get gravity axis and use it as the stretch direction
         var stretch_dir: vec3<f32>;
         if render_params.gravity_mode == 3u {
@@ -132,7 +169,7 @@ fn vs_main(
         out.elongation = elongation_factor;
         return out;
     } else {
-        // Standard circular billboard for stationary particles
+        // Standard circular billboard for stationary/slow particles — apply lerp offset too
         right = normalize(cross(to_camera, vec3<f32>(0.0, 1.0, 0.0)));
         up = cross(right, to_camera);
 
@@ -157,39 +194,40 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let centered_uv = in.uv - vec2<f32>(0.5);
+    let uv = in.uv - vec2<f32>(0.5);  // center at (0,0), range -0.5..0.5
 
-    // For elongated particles, use an ellipse shape instead of a circle
-    // Scale the UV so the ellipse fits within the stretched quad
-    var dist: f32;
+    var alpha: f32;
+
     if in.elongation > 0.1 {
-        // Elliptical shape: compress distance check along stretch axis
-        // This makes the particle look like an elongated teardrop
-        let stretch_y = 1.0 + in.elongation;
-        let compress_x = 1.0 / (1.0 + in.elongation * 0.3);
-        let scaled_uv = vec2<f32>(
-            centered_uv.x / compress_x,
-            centered_uv.y / stretch_y
-        );
-        dist = length(scaled_uv);
+        // Teardrop shape for falling droplets.
+        // The vertex shader stretches along the gravity axis, so uv.y maps to that axis.
+        // uv.y > 0 = tip (pointed, against motion), uv.y < 0 = belly (round).
+        var dist: f32;
+        if uv.y > 0.0 {
+            // Tip: narrow parabolic cone — squash x to create a sharp point
+            dist = length(vec2<f32>(uv.x * 2.8, uv.y));
+        } else {
+            // Belly: standard circle
+            dist = length(uv) / 0.38;
+        }
+        alpha = 1.0 - smoothstep(0.38, 0.52, dist);
+
+        // Specular highlight — small bright spot on the belly
+        let hl = length(uv - vec2<f32>(-0.09, -0.11));
+        alpha = max(alpha, (1.0 - smoothstep(0.0, 0.11, hl)) * 0.65);
     } else {
-        // Standard circular particle
-        dist = length(centered_uv);
+        // Stationary droplet — round with a crisp edge and a highlight
+        let dist = length(uv);
+        alpha = 1.0 - smoothstep(0.35, 0.48, dist);
+
+        let hl = length(uv - vec2<f32>(-0.09, -0.09));
+        alpha = max(alpha, (1.0 - smoothstep(0.0, 0.09, hl)) * 0.55);
     }
 
-    // Water droplets should have more defined edges than steam
-    let circle_alpha = 1.0 - smoothstep(0.2, 0.4, dist);
-    
-    // Add a subtle shimmer effect
-    let shimmer = sin(in.animation.x * 3.0) * 0.1 + 0.9;
-    
-    // Discard pixels outside the shape
-    if circle_alpha < 0.01 {
+    if alpha < 0.01 {
         discard;
     }
 
-    // Apply shimmer to color brightness
-    let final_color = in.color.rgb * shimmer;
-    
-    return vec4<f32>(final_color, in.color.a * circle_alpha);
+    let shimmer = sin(in.animation.x * 3.0) * 0.05 + 0.95;
+    return vec4<f32>(in.color.rgb * shimmer, in.color.a * alpha);
 }

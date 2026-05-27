@@ -106,25 +106,24 @@ fn is_at_boundary(x: i32, y: i32, z: i32) -> bool {
 // Sample density with aggressive smoothing to eliminate fine details
 fn sample_density_height_filtered(x: i32, y: i32, z: i32) -> f32 {
     // If center maps to outside the density data, return 0 immediately.
-    // This prevents the 3x3x3 kernel from bleeding density across the boundary.
+    // This prevents the kernel from bleeding density across the boundary.
     if !is_in_density_bounds(x, y, z) {
         return 0.0;
     }
-    // Use a 3x3x3 kernel for strong averaging
+    // Use a 5x5x5 kernel so density bleeds further into cave walls,
+    // hiding the gap between the water surface and solid geometry.
     var sum = 0.0;
     var weight_sum = 0.0;
     
-    // Sample surrounding voxels in a 3x3x3 kernel
-    for (var dx = -1; dx <= 1; dx++) {
-        for (var dy = -1; dy <= 1; dy++) {
-            for (var dz = -1; dz <= 1; dz++) {
+    for (var dx = -2; dx <= 2; dx++) {
+        for (var dy = -2; dy <= 2; dy++) {
+            for (var dz = -2; dz <= 2; dz++) {
                 let nx = x + dx;
                 let ny = y + dy;
                 let nz = z + dz;
                 
-                // Strong Gaussian weighting for aggressive smoothing
                 let dist_sq = f32(dx * dx + dy * dy + dz * dz);
-                let weight = exp(-dist_sq * 0.8); // Strong falloff for more smoothing
+                let weight = exp(-dist_sq * 0.8);
                 
                 // sample_density_clamped returns 0.0 for out-of-bounds
                 sum += sample_density_clamped(nx, ny, nz) * weight;

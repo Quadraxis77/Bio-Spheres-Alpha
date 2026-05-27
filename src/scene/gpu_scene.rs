@@ -5887,6 +5887,7 @@ impl Scene for GpuScene {
                     fluid_sim.extract_to_surface_nets(
                         device,
                         &mut encoder,
+                        queue,
                         gpu_surface_nets.density_buffer(),
                         gpu_surface_nets.fluid_type_buffer(),
                     );

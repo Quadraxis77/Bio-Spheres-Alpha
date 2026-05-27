@@ -421,12 +421,13 @@ fn water_is_supported(gid: vec3<u32>) -> bool {
         return true;
     }
     
-    // Water or lava below = supported (resting on fluid)
+    // Water, lava, or steam below = supported (resting on fluid)
     let neighbor_idx = u32(nx) + u32(ny) * res + u32(nz) * res * res;
     let neighbor_state = atomicLoad(&voxels[neighbor_idx]);
     let neighbor_type = get_fluid_type(neighbor_state);
     
-    return neighbor_type >= 1u && neighbor_type <= 2u;
+    // Steam (3) also supports water — water sits on top of steam bubbles
+    return neighbor_type >= 1u && neighbor_type <= 3u;
 }
 
 // Check if a voxel is at or very close to the sphere boundary
@@ -679,113 +680,144 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Steam teleportation - find topmost water and swap with it (directional mode only)
+    // Steam teleportation - find nearest water above and swap with it (directional mode only)
+    // Steam rises by swapping with the lowest water voxel directly above it.
+    // The scan passes through empty cells and other steam, but stops at solids.
     if fluid_type == 3u && params.gravity_mode != 3u {
-        // Scan upward to find the topmost water voxel above this steam
-        var found_water_above = false;
-        var water_top_y = gid.y;
-        
-        for (var scan_y = gid.y + 1u; scan_y < params.grid_resolution; scan_y++) {
-            let scan_idx = grid_index(gid.x, scan_y, gid.z);
-            let scan_state = atomicLoad(&voxels[scan_idx]);
-            let scan_fluid_type = get_fluid_type(scan_state);
-            
-            if scan_fluid_type == 1u {
-                // Found water - update the top position
-                found_water_above = true;
-                water_top_y = scan_y;
-            } else if scan_fluid_type != 3u {
-                // Hit something other than steam (empty or solid), stop scanning
+        let grav_dir_for_steam = get_effective_gravity(gid);
+        let gravity_dir_index_steam = gravity_dir_to_index(grav_dir_for_steam);
+        // "Up" for steam is opposite to gravity
+        let up_offset = get_offset(gravity_dir_index_steam ^ 1u);
+
+        // Scan upward (against gravity) to find the nearest water voxel
+        for (var step = 1; step <= 64; step++) {
+            let sx = i32(gid.x) + up_offset.x * step;
+            let sy = i32(gid.y) + up_offset.y * step;
+            let sz = i32(gid.z) + up_offset.z * step;
+
+            if sx < 0 || sx >= i32(params.grid_resolution) ||
+               sy < 0 || sy >= i32(params.grid_resolution) ||
+               sz < 0 || sz >= i32(params.grid_resolution) {
                 break;
             }
-        }
-        
-        // If we found water above, swap with the topmost water
-        if found_water_above {
-            let water_idx = grid_index(gid.x, water_top_y, gid.z);
-            let water_state = atomicLoad(&voxels[water_idx]);
-            
-            // Use two-phase CAS swap to exchange positions
-            // First claim the water position
-            let water_result = atomicCompareExchangeWeak(&voxels[water_idx], water_state, 0xFFFFFFFFu);
-            if water_result.exchanged {
-                // Water position claimed, now claim steam position
-                let steam_result = atomicCompareExchangeWeak(&voxels[idx], state, 0xFFFFFFFFu);
-                if steam_result.exchanged {
-                    // Both positions claimed, perform the swap
-                    atomicStore(&voxels[water_idx], state);        // Move steam to water position
-                    atomicStore(&voxels[idx], water_state);        // Move water to steam position
-                    
-                    // Check if the swapped water is now unsupported (clinging to cave surface)
-                    let water_gid = vec3<u32>(gid.x, gid.y, gid.z); // Water is now at steam's old position
-                    if !water_is_supported(water_gid) {
-                        // Water is unsupported - trigger fast-drop immediately
-                        let grav_dir = get_effective_gravity(water_gid);
-                        let gravity_dir_index = gravity_dir_to_index(grav_dir);
-                        
-                        let down = get_offset(gravity_dir_index);
-                        
-                        // Scan downward to find the lowest empty cell above a surface
-                        var target_y = -1;
-                        for (var step = 1; step <= 64; step++) {
-                            let sx = i32(gid.x) + down.x * step;
-                            let sy = i32(gid.y) + down.y * step;
-                            let sz = i32(gid.z) + down.z * step;
-                            
-                            if sx < 0 || sx >= i32(res) || sy < 0 || sy >= i32(res) || sz < 0 || sz >= i32(res) {
-                                break;
-                            }
-                            
-                            if is_solid(u32(sx), u32(sy), u32(sz)) {
-                                break; // Hit solid, target is one step above
-                            }
-                            
-                            let scan_idx = grid_index(u32(sx), u32(sy), u32(sz));
-                            let scan_state = atomicLoad(&voxels[scan_idx]);
-                            let scan_type = get_fluid_type(scan_state);
-                            
-                            if scan_type == 3u {
-                                // Steam - skip through it, keep scanning
-                                continue;
-                            } else if scan_type == 0u {
-                                // Empty cell - this is the target (don't skip through empty space)
-                                if !is_solid(u32(sx), u32(sy), u32(sz)) {
-                                    target_y = step;
-                                    break; // Found empty space, stop scanning
-                                }
-                            } else if scan_type == 1u || scan_type == 2u {
-                                break; // Hit water/lava surface, target is one step above
-                            }
-                        }
-                        
-                        // If we found a position lower than current, teleport the water there
-                        if target_y > 1 {
-                            let tx = i32(gid.x) + down.x * target_y;
-                            let ty = i32(gid.y) + down.y * target_y;
-                            let tz = i32(gid.z) + down.z * target_y;
-                            let target_idx = grid_index(u32(tx), u32(ty), u32(tz));
-                            
-                            let target_state = atomicLoad(&voxels[target_idx]);
-                            if get_fluid_type(target_state) == 0u {
-                                let result = atomicCompareExchangeWeak(&voxels[target_idx], target_state, water_state);
-                                if result.exchanged {
-                                    // We own idx (placed water_state there on line above),
-                                    // clear it directly — no CAS needed since we control it
-                                    atomicStore(&voxels[idx], 0u);
-                                    // Record water velocity (falling in gravity direction)
-                                    write_water_velocity(target_idx, 1u, down.x, down.y, down.z);
-                                }
-                            }
-                        }
-                    }
-                    
-                    return; // Steam-water swap complete
-                } else {
-                    // Steam position was modified, restore water and abort
-                    atomicStore(&voxels[water_idx], water_state);
-                }
+
+            if is_solid(u32(sx), u32(sy), u32(sz)) {
+                break; // Solid blocks the path
             }
-            // CAS failed — positions were modified, fall through to normal movement
+
+            let scan_idx = grid_index(u32(sx), u32(sy), u32(sz));
+            let scan_state = atomicLoad(&voxels[scan_idx]);
+            let scan_fluid_type = get_fluid_type(scan_state);
+
+            if scan_fluid_type == 1u {
+                // Found water — swap with it (nearest water above, not topmost)
+                let water_idx_tele = scan_idx;
+                let water_state_tele = scan_state;
+
+                // Two-phase CAS swap: claim water first, then steam
+                let water_result_tele = atomicCompareExchangeWeak(&voxels[water_idx_tele], water_state_tele, 0xFFFFFFFFu);
+                if water_result_tele.exchanged {
+                    let steam_result_tele = atomicCompareExchangeWeak(&voxels[idx], state, 0xFFFFFFFFu);
+                    if steam_result_tele.exchanged {
+                        atomicStore(&voxels[water_idx_tele], state);       // steam goes up
+                        atomicStore(&voxels[idx], water_state_tele);       // water comes down
+                        return;
+                    } else {
+                        atomicStore(&voxels[water_idx_tele], water_state_tele);
+                    }
+                }
+                break; // Whether swap succeeded or not, stop scanning
+            }
+            // Empty (0) or steam (3): keep scanning upward through them
+        }
+        // Swap is handled inline above; fall through to normal movement if no swap occurred
+    }
+
+    // Steam lateral escape: when the upward path is blocked (solid or out of bounds),
+    // try all 4 lateral directions with high probability so steam spreads around obstacles.
+    if fluid_type == 3u && params.gravity_mode != 3u {
+        let grav_dir_lat = get_effective_gravity(gid);
+        let gravity_dir_index_lat = gravity_dir_to_index(grav_dir_lat);
+        let up_offset_lat = get_offset(gravity_dir_index_lat ^ 1u);
+
+        // Check if the cell directly above is blocked (solid, out of bounds, or water that
+        // the teleportation already handled — meaning we're still here because it failed)
+        let above_x = i32(gid.x) + up_offset_lat.x;
+        let above_y = i32(gid.y) + up_offset_lat.y;
+        let above_z = i32(gid.z) + up_offset_lat.z;
+        let res_i = i32(params.grid_resolution);
+
+        // Check if the cell directly above is blocked (solid or out of bounds).
+        // We check bounds first, then solid, then fluid type.
+        let above_oob =
+            above_x < 0 || above_x >= res_i ||
+            above_y < 0 || above_y >= res_i ||
+            above_z < 0 || above_z >= res_i;
+
+        var above_blocked = above_oob;
+        if !above_oob {
+            let ux = u32(above_x);
+            let uy = u32(above_y);
+            let uz = u32(above_z);
+            if is_solid(ux, uy, uz) {
+                above_blocked = true;
+            } else {
+                let above_type = get_fluid_type(atomicLoad(&voxels[grid_index(ux, uy, uz)]));
+                // Non-empty above means blocked: water is handled by teleport (we're still
+                // here because it failed or CAS raced), steam above = already occupied
+                above_blocked = above_type != 0u;
+            }
+        }
+
+        if above_blocked {
+            // Try all 4 lateral directions in randomised order
+            let lateral_order = get_horizontal_direction_order(gid, params.time, gravity_dir_index_lat);
+            for (var li = 0u; li < 4u; li++) {
+                let lat_dir = lateral_order[li];
+                let lat_off = get_offset(lat_dir);
+                let lx = i32(gid.x) + lat_off.x;
+                let ly = i32(gid.y) + lat_off.y;
+                let lz = i32(gid.z) + lat_off.z;
+
+                if lx < 0 || lx >= res_i || ly < 0 || ly >= res_i || lz < 0 || lz >= res_i {
+                    continue;
+                }
+                if is_solid(u32(lx), u32(ly), u32(lz)) {
+                    continue;
+                }
+
+                let lat_idx = grid_index(u32(lx), u32(ly), u32(lz));
+                let lat_state = atomicLoad(&voxels[lat_idx]);
+                let lat_type = get_fluid_type(lat_state);
+
+                // Only move into empty cells laterally (steam-water lateral handled by process_direction)
+                if lat_type != 0u {
+                    continue;
+                }
+
+                // High probability lateral escape — steam behaves like a gas
+                let time_hash = u32(params.time * 1000.0) + lat_dir * 12345u;
+                let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
+                let combined_hash = time_hash ^ pos_hash;
+                let lateral_prob = params.lateral_flow_probability_steam;
+                if (combined_hash & 255u) > u32(lateral_prob * 255.0) {
+                    continue;
+                }
+
+                // CAS swap
+                let claim_src = atomicCompareExchangeWeak(&voxels[idx], state, 0xFFFFFFFFu);
+                if !claim_src.exchanged { break; }
+
+                let claim_dst = atomicCompareExchangeWeak(&voxels[lat_idx], lat_state, 0xFFFFFFFFu);
+                if !claim_dst.exchanged {
+                    atomicStore(&voxels[idx], state);
+                    continue;
+                }
+
+                atomicStore(&voxels[idx], lat_state);   // empty goes to steam's old spot
+                atomicStore(&voxels[lat_idx], state);   // steam moves laterally
+                return;
+            }
         }
     }
 
@@ -818,8 +850,8 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
             let scan_type = get_fluid_type(scan_state);
             
             if scan_type == 3u {
-                // Steam - skip through it, keep scanning
-                continue;
+                // Steam blocks water from falling through — water sits on top of steam
+                break;
             } else if scan_type == 0u {
                 // Empty cell - this is the target (don't skip through empty space)
                 if !is_solid(u32(sx), u32(sy), u32(sz)) {

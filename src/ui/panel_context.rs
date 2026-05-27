@@ -408,6 +408,30 @@ pub struct GenomeEditorState {
     pub moss_water_radius: f32,
     /// Flag to sync moss params to GPU
     pub moss_params_dirty: bool,
+
+    // ── Boulder / Mossrock settings ───────────────────────────────────────────
+    /// Whether mossrocks are enabled
+    pub show_boulders: bool,
+    /// Target number of boulders to maintain
+    pub boulder_target_count: u32,
+    /// Initial moss store per boulder (nutrients)
+    pub boulder_initial_moss: f32,
+    /// Boulder radius (legacy single value)
+    pub boulder_radius: f32,
+    /// Boulder size gate half-saturation constant (cells)
+    pub boulder_size_gate: f32,
+    /// Seconds between boulder spawn attempts
+    pub boulder_spawn_interval: f32,
+    /// Gravity multiplier when boulder is submerged (0=float, 1=full gravity)
+    pub boulder_buoyancy: f32,
+    /// Minimum boulder radius
+    pub boulder_radius_min: f32,
+    /// Maximum boulder radius
+    pub boulder_radius_max: f32,
+    /// Minimum boulder moss store (nutrients)
+    pub boulder_moss_min: f32,
+    /// Maximum boulder moss store (nutrients)
+    pub boulder_moss_max: f32,
     /// Skin radius scale (multiplier on cell radius for skin thickness)
     pub skin_radius_scale: f32,
     /// Iso level for organism skin surface extraction
@@ -470,7 +494,11 @@ impl GenomeEditorState {
              moss_wetness_evaporation, moss_parallax_depth, moss_scale, moss_water_radius,
              moss_noise_type, moss_noise_frequency, moss_noise_lacunarity,
              moss_height_sharpness_low, moss_height_sharpness_high, moss_bump_strength,
-             moss_color_dark, moss_color_bright) = Self::load_cave_settings();
+             moss_color_dark, moss_color_bright,
+             show_boulders, boulder_target_count, boulder_initial_moss, boulder_radius,
+             boulder_size_gate, boulder_spawn_interval, boulder_buoyancy,
+             boulder_radius_min, boulder_radius_max, boulder_moss_min, boulder_moss_max,
+             ) = Self::load_cave_settings();
         
         let (fluid_gravity, fluid_gravity_x, fluid_gravity_y, fluid_gravity_z, 
              fluid_vorticity_epsilon, fluid_pressure_iterations, fluid_lateral_flow_probabilities,
@@ -666,6 +694,17 @@ impl GenomeEditorState {
             moss_color_bright,
             moss_water_radius,
             moss_params_dirty: false,
+            show_boulders,
+            boulder_target_count,
+            boulder_initial_moss,
+            boulder_radius,
+            boulder_size_gate,
+            boulder_spawn_interval,
+            boulder_buoyancy,
+            boulder_radius_min,
+            boulder_radius_max,
+            boulder_moss_min,
+            boulder_moss_max,
             skin_radius_scale: 5.0,
             skin_iso_level: 0.3,
             skin_base_color: [0.85, 0.55, 0.35],
@@ -724,6 +763,17 @@ impl GenomeEditorState {
             self.moss_bump_strength,
             self.moss_color_dark,
             self.moss_color_bright,
+            self.show_boulders,
+            self.boulder_target_count,
+            self.boulder_initial_moss,
+            self.boulder_radius,
+            self.boulder_size_gate,
+            self.boulder_spawn_interval,
+            self.boulder_buoyancy,
+            self.boulder_radius_min,
+            self.boulder_radius_max,
+            self.boulder_moss_min,
+            self.boulder_moss_max,
         ) {
             log::error!("Failed to save cave settings: {}", e);
         }
@@ -777,6 +827,17 @@ impl GenomeEditorState {
         moss_bump_strength: f32,
         moss_color_dark: [f32; 3],
         moss_color_bright: [f32; 3],
+        show_boulders: bool,
+        boulder_target_count: u32,
+        boulder_initial_moss: f32,
+        boulder_radius: f32,
+        boulder_size_gate: f32,
+        boulder_spawn_interval: f32,
+        boulder_buoyancy: f32,
+        boulder_radius_min: f32,
+        boulder_radius_max: f32,
+        boulder_moss_min: f32,
+        boulder_moss_max: f32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct CaveSettings {
@@ -807,6 +868,17 @@ impl GenomeEditorState {
             moss_bump_strength: f32,
             moss_color_dark: [f32; 3],
             moss_color_bright: [f32; 3],
+            show_boulders: bool,
+            boulder_target_count: u32,
+            boulder_initial_moss: f32,
+            boulder_radius: f32,
+            boulder_size_gate: f32,
+            boulder_spawn_interval: f32,
+            boulder_buoyancy: f32,
+            boulder_radius_min: f32,
+            boulder_radius_max: f32,
+            boulder_moss_min: f32,
+            boulder_moss_max: f32,
         }
         
         let settings = CaveSettings {
@@ -837,6 +909,17 @@ impl GenomeEditorState {
             moss_bump_strength,
             moss_color_dark,
             moss_color_bright,
+            show_boulders,
+            boulder_target_count,
+            boulder_initial_moss,
+            boulder_radius,
+            boulder_size_gate,
+            boulder_spawn_interval,
+            boulder_buoyancy,
+            boulder_radius_min,
+            boulder_radius_max,
+            boulder_moss_min,
+            boulder_moss_max,
         };
         
         let path = PathBuf::from("cave_settings.ron");
@@ -900,7 +983,8 @@ impl GenomeEditorState {
     #[allow(clippy::type_complexity)]
     pub fn load_cave_settings() -> (f32, f32, u32, f32, f32, f32, u32, u32,
                                      bool, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32,
-                                     u32, f32, f32, f32, f32, f32, [f32; 3], [f32; 3]) {
+                                     u32, f32, f32, f32, f32, f32, [f32; 3], [f32; 3],
+                                     bool, u32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
         #[derive(serde::Deserialize)]
         struct CaveSettings {
             density: f32,
@@ -950,6 +1034,28 @@ impl GenomeEditorState {
             moss_color_dark: [f32; 3],
             #[serde(default = "default_moss_color_bright")]
             moss_color_bright: [f32; 3],
+            #[serde(default = "default_show_boulders")]
+            show_boulders: bool,
+            #[serde(default = "default_boulder_target_count")]
+            boulder_target_count: u32,
+            #[serde(default = "default_boulder_initial_moss")]
+            boulder_initial_moss: f32,
+            #[serde(default = "default_boulder_radius")]
+            boulder_radius: f32,
+            #[serde(default = "default_boulder_size_gate")]
+            boulder_size_gate: f32,
+            #[serde(default = "default_boulder_spawn_interval")]
+            boulder_spawn_interval: f32,
+            #[serde(default = "default_boulder_buoyancy")]
+            boulder_buoyancy: f32,
+            #[serde(default = "default_boulder_radius_min")]
+            boulder_radius_min: f32,
+            #[serde(default = "default_boulder_radius_max")]
+            boulder_radius_max: f32,
+            #[serde(default = "default_boulder_moss_min")]
+            boulder_moss_min: f32,
+            #[serde(default = "default_boulder_moss_max")]
+            boulder_moss_max: f32,
         }
         
         fn default_resolution() -> u32 { 128 }
@@ -972,6 +1078,17 @@ impl GenomeEditorState {
         fn default_moss_bump_strength() -> f32 { 5.0 }
         fn default_moss_color_dark() -> [f32; 3] { [0.06, 0.12, 0.04] }
         fn default_moss_color_bright() -> [f32; 3] { [0.20, 0.38, 0.10] }
+        fn default_show_boulders() -> bool { true }
+        fn default_boulder_target_count() -> u32 { 32 }
+        fn default_boulder_initial_moss() -> f32 { 10_000.0 }
+        fn default_boulder_radius() -> f32 { 4.0 }
+        fn default_boulder_size_gate() -> f32 { 20.0 }
+        fn default_boulder_spawn_interval() -> f32 { 5.0 }
+        fn default_boulder_buoyancy() -> f32 { 0.08 }
+        fn default_boulder_radius_min() -> f32 { 2.0 }
+        fn default_boulder_radius_max() -> f32 { 8.0 }
+        fn default_boulder_moss_min() -> f32 { 2_000.0 }
+        fn default_boulder_moss_max() -> f32 { 20_000.0 }
         
         let path = PathBuf::from("cave_settings.ron");
         
@@ -1008,6 +1125,17 @@ impl GenomeEditorState {
                                 settings.moss_bump_strength,
                                 settings.moss_color_dark,
                                 settings.moss_color_bright,
+                                settings.show_boulders,
+                                settings.boulder_target_count,
+                                settings.boulder_initial_moss,
+                                settings.boulder_radius,
+                                settings.boulder_size_gate,
+                                settings.boulder_spawn_interval,
+                                settings.boulder_buoyancy,
+                                settings.boulder_radius_min,
+                                settings.boulder_radius_max,
+                                settings.boulder_moss_min,
+                                settings.boulder_moss_max,
                             );
                         }
                         Err(e) => {
@@ -1024,7 +1152,8 @@ impl GenomeEditorState {
         // Return defaults
         (0.5, 100.0, 2u32, 0.5, 1.0, 0.0, 12345u32, 128u32,
          true, 0.15, 0.3, 0.05, 0.05, 50.0, 5.0, 0.02, 0.08, 0.15, 20.0,
-         0, 18.0, 2.5, 0.25, 0.7, 5.0, [0.06, 0.12, 0.04], [0.20, 0.38, 0.10])
+         0, 18.0, 2.5, 0.25, 0.7, 5.0, [0.06, 0.12, 0.04], [0.20, 0.38, 0.10],
+         true, 32u32, 10_000.0f32, 4.0f32, 20.0f32, 5.0f32, 0.08f32, 2.0f32, 8.0f32, 2_000.0f32, 20_000.0f32)
     }
     
     /// Save light settings to disk.

@@ -60,9 +60,17 @@ pub struct GpuFluidParams {
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct ExtractParams {
     pub grid_resolution: u32,
-    pub _pad0: u32,
+    pub gravity_mode: u32,
     pub _pad1: u32,
     pub _pad2: u32,
+    pub grid_origin_x: f32,
+    pub grid_origin_y: f32,
+    pub grid_origin_z: f32,
+    pub cell_size: f32,
+    pub gravity_magnitude: f32,
+    pub _pad3: f32,
+    pub _pad4: f32,
+    pub _pad5: f32,
 }
 
 /// Bitfield params (must match shader)
@@ -131,6 +139,9 @@ pub struct GpuFluidSimulator {
 
     // Gravity mode: 0=X, 1=Y, 2=Z, 3=radial
     gravity_mode: std::cell::Cell<u32>,
+
+    // Last gravity magnitude (updated each step, used by density extraction)
+    gravity_magnitude: std::cell::Cell<f32>,
 
     // Surface pressure: tangential smoothing strength for radial mode (0.0-1.0)
     surface_pressure: std::cell::Cell<f32>,
@@ -390,6 +401,16 @@ impl GpuFluidSimulator {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -416,15 +437,23 @@ impl GpuFluidSimulator {
 
         let extract_params = ExtractParams {
             grid_resolution: GRID_RESOLUTION,
-            _pad0: 0,
+            gravity_mode: 1, // default Y axis, updated each frame
             _pad1: 0,
             _pad2: 0,
+            grid_origin_x: grid_origin.x,
+            grid_origin_y: grid_origin.y,
+            grid_origin_z: grid_origin.z,
+            cell_size,
+            gravity_magnitude: 9.8,
+            _pad3: 0.0,
+            _pad4: 0.0,
+            _pad5: 0.0,
         };
 
         let extract_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fluid Extract Params Buffer"),
             contents: bytemuck::cast_slice(&[extract_params]),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         // === Water Bitfield for fast cell-water detection ===
@@ -714,6 +743,7 @@ impl GpuFluidSimulator {
             cached_extract_bind_group: std::cell::RefCell::new(None),
             fluid_type: std::cell::Cell::new(1u32), // Default to water
             gravity_mode: std::cell::Cell::new(1), // default Y axis
+            gravity_magnitude: std::cell::Cell::new(9.8), // default gravity
             surface_pressure: std::cell::Cell::new(0.5),
             paused: false,
         }
@@ -893,6 +923,7 @@ impl GpuFluidSimulator {
         // raw time exceeds ~8M seconds, adding dt has no effect on a f32.
         let current_time = (self.time.get() + dt) % 65536.0;
         self.time.set(current_time);
+        self.gravity_magnitude.set(gravity_magnitude);
         
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
@@ -964,9 +995,30 @@ impl GpuFluidSimulator {
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
         density_buffer: &wgpu::Buffer,
         fluid_type_buffer: &wgpu::Buffer,
     ) {
+        // Update extract params with current gravity mode each frame
+        let world_diameter = self.world_radius * 2.0;
+        let cell_size = world_diameter / GRID_RESOLUTION as f32;
+        let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
+        let extract_params = ExtractParams {
+            grid_resolution: GRID_RESOLUTION,
+            gravity_mode: self.gravity_mode.get(),
+            _pad1: 0,
+            _pad2: 0,
+            grid_origin_x: grid_origin.x,
+            grid_origin_y: grid_origin.y,
+            grid_origin_z: grid_origin.z,
+            cell_size,
+            gravity_magnitude: self.gravity_magnitude.get(),
+            _pad3: 0.0,
+            _pad4: 0.0,
+            _pad5: 0.0,
+        };
+        queue.write_buffer(&self.extract_params_buffer, 0, bytemuck::cast_slice(&[extract_params]));
+
         // Lazily create and cache the extract bind group (buffers never change after init)
         let mut cached = self.cached_extract_bind_group.borrow_mut();
         if cached.is_none() {
@@ -989,6 +1041,10 @@ impl GpuFluidSimulator {
                     wgpu::BindGroupEntry {
                         binding: 3,
                         resource: fluid_type_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: self.solid_mask_buffer.as_entire_binding(),
                     },
                 ],
             }));

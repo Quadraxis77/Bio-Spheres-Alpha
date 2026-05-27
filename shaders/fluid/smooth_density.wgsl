@@ -56,8 +56,12 @@ fn smooth_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let blurred = sum / count;
 
-    // Temporal blend: exponential moving average toward new blurred value
-    // Low blend_factor = very stable/slow changes, high = more responsive
+    // Temporal blend: asymmetric exponential moving average.
+    // Decay fast (high blend) when density drops — removes ghost mesh left by moving steam.
+    // Grow slowly (low blend) when density rises — keeps pools and puddles stable.
     let prev = prev_smoothed[idx];
-    output[idx] = mix(prev, blurred, params.blend_factor);
+    let decay_blend  = 0.6;  // fast decay: ghost mesh from steam clears in ~2 frames
+    let growth_blend = 0.12; // slow growth: water surface stays smooth and stable
+    let blend = select(growth_blend, decay_blend, blurred < prev);
+    output[idx] = mix(prev, blurred, blend);
 }
