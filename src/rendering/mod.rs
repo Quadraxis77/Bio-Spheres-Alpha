@@ -123,6 +123,8 @@
 //! 4. **Optimize**: Consider culling, instancing, and GPU memory usage
 
 pub mod adhesion_lines;
+pub mod boulder_bubbles;
+pub mod boulder_renderer;
 pub mod boundary_crossing;
 pub mod cave_system;
 pub mod cells;
@@ -148,7 +150,9 @@ pub mod world_sphere;
 pub mod fov_cone;
 
 pub use adhesion_lines::AdhesionLineRenderer;
-pub use cave_system::{CaveSystemRenderer, CaveParams};
+pub use boulder_renderer::BoulderRenderer;
+pub use boulder_bubbles::BoulderBubbleSystem;
+pub use cave_system::{CaveSystemRenderer, CaveParams, cave_sdf_push_out};
 pub use cells::CellRenderer;
 pub use death_particles::DeathParticleRenderer;
 pub use gpu_adhesion_lines::GpuAdhesionLineRenderer;

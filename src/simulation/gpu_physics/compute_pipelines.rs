@@ -8,58 +8,8 @@
 //! | Binding | Type | Buffer |
 //! |---------|------|--------|
 //! | 0 | Uniform | physics_params |
-//! | 1 | Storage (read) | positions_in |
-//! | 2 | Storage (read) | velocities_in |
-//! | 3 | Storage (read_write) | positions_out |
-//! | 4 | Storage (read_write) | velocities_out |
-//! | 5 | Storage (read_write) | cell_count_buffer |
-//! 
-//! ### Spatial Grid Bind Group (Group 1)
-//! | Binding | Type | Buffer |
-//! |---------|------|--------|
-//! | 0 | Storage (read_write) | spatial_grid_counts |
-//! | 1 | Storage (read_write) | spatial_grid_offsets |
-//! | 2 | Storage (read_write) | cell_grid_indices |
-//! | 3 | Storage (read_write) | spatial_grid_cells |
-//!
-//! ### Lifecycle Bind Group (Group 1 for lifecycle shaders)
-//! | Binding | Type | Buffer |
-//! |---------|------|--------|
-//! | 0 | Storage (read_write) | death_flags |
-//! | 1 | Storage (read_write) | division_flags |
-//! | 2 | Storage (read_write) | free_slot_indices |
-//! | 3 | Storage (read_write) | division_slot_assignments |
-//! | 4 | Storage (read_write) | lifecycle_counts |
-//!
-//! ### Cell State Bind Group (Group 2 for division shaders)
-//! | Binding | Type | Buffer |
-//! |---------|------|--------|
-//! | 0 | Storage (read/write) | birth_times |
-//! | 1 | Storage (read/write) | split_intervals |
-//! | 2 | Storage (read/write) | split_nutrient_thresholds |
-//! | 3 | Storage (read/write) | split_counts |
-//! | 4 | Storage (read/write) | max_splits |
-//! | 5 | Storage (read/write) | genome_ids |
-//! | 6 | Storage (read/write) | mode_indices |
-//! | 7 | Storage (read/write) | cell_ids |
-//! | 8 | Storage (read_write) | next_cell_id |
-//! | 9 | Storage (read_write) | nutrient_gain_rates |
-//!
-//! ### Mass Accumulation Bind Group (Group 1 for mass_accum shader)
-//! | Binding | Type | Buffer |
-//! |---------|------|--------|
-//! | 0 | Storage (read) | nutrient_gain_rates |
-//!
-//! ### Position Update Force Accum Bind Group (Group 2 for position_update shader)
-//! | Binding | Type | Buffer |
-//! |---------|------|--------|
-//! | 0 | Storage (read) | force_accum_x |
-//! | 1 | Storage (read) | force_accum_y |
-//! | 2 | Storage (read) | force_accum_z |
-//! | 3 | Storage (read_write) | prev_accelerations |
-//! | 4 | Uniform | water_grid_params |
-//! | 5 | Storage (read) | water_bitfield |
 
+use wgpu::util::DeviceExt;
 use super::GpuTripleBufferSystem;
 
 /// Cell insertion parameters for GPU cell insertion compute shader
@@ -279,6 +229,22 @@ pub struct CachedBindGroups {
     /// Mode switch bind groups (Group 0: cell state, Group 1: signal data)
     pub mode_switch_group0: wgpu::BindGroup,
     pub mode_switch_group1: wgpu::BindGroup,
+
+    // Boulder bind groups
+    /// Boulder physics group 1: boulder_state, boulder_moss, boulder_moss_dir, boulder_eat_dir, boulder_count
+    pub boulder_physics_buffers: wgpu::BindGroup,
+    /// Boulder consume group 0: minimal params uniform (delta_time, world_size, grid params)
+    pub boulder_consume_params: wgpu::BindGroup,
+    /// Boulder consume group 1: spatial grid (read-only)
+    pub boulder_consume_spatial: wgpu::BindGroup,
+    /// Boulder consume group 2: cell data (positions, types, nutrients, org_size, death_flags, thresholds, cell_count)
+    /// One per buffer index — positions rotate each frame.
+    pub boulder_consume_cell_data: [wgpu::BindGroup; 3],
+    /// Boulder consume group 3: boulder buffers (state, moss, eat_dir, count)
+    pub boulder_consume_buffers: wgpu::BindGroup,
+    /// Dummy cave params bind group for boulder physics when no cave exists.
+    /// Has collision_enabled = 0 so the SDF code is skipped.
+    pub boulder_dummy_cave: wgpu::BindGroup,
 }
 
 /// GPU physics compute pipelines
@@ -350,6 +316,20 @@ pub struct GpuPhysicsPipelines {
 
     // Muscle contraction pipeline (modifies adhesion rest lengths for Myocyte cells)
     pub muscle_contraction: wgpu::ComputePipeline,
+
+    // Boulder pipelines
+    pub boulder_physics: wgpu::ComputePipeline,
+    pub boulder_consume: wgpu::ComputePipeline,
+
+    // Boulder bind group layouts
+    pub boulder_physics_buffers_layout: wgpu::BindGroupLayout,
+    pub boulder_consume_params_layout: wgpu::BindGroupLayout,
+    pub boulder_consume_spatial_layout: wgpu::BindGroupLayout,
+    pub boulder_consume_cell_data_layout: wgpu::BindGroupLayout,
+    pub boulder_consume_buffers_layout: wgpu::BindGroupLayout,
+
+    /// Uniform buffer for boulder consume params (updated each frame).
+    pub boulder_consume_params_buffer: wgpu::Buffer,
     
     // Bind group layouts
     pub physics_layout: wgpu::BindGroupLayout,
@@ -978,6 +958,141 @@ impl GpuPhysicsPipelines {
             &[&mode_switch_layout0, &mode_switch_layout1],
             "Mode Switch",
         );
+
+        // ── Boulder bind group layouts ─────────────────────────────────────────
+        let rw_storage = |b: u32| wgpu::BindGroupLayoutEntry {
+            binding: b,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let ro_storage = |b: u32| wgpu::BindGroupLayoutEntry {
+            binding: b,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+
+        // Group 1 for boulder_physics: state(rw), moss(rw), moss_dir(rw), eat_dir(rw), count(ro), force_accum(rw), water_params(uniform), water_bitfield(ro), buoyancy_params(uniform)
+        let boulder_physics_buffers_layout = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Boulder Physics Buffers Layout"),
+                entries: &[
+                    rw_storage(0), rw_storage(1), rw_storage(2), rw_storage(3), ro_storage(4), rw_storage(5),
+                    // Binding 6: water_params uniform
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 7: water_bitfield (read-only storage)
+                    ro_storage(7),
+                    // Binding 8: buoyancy_params uniform [gravity_multiplier, drag_coeff, 0, 0]
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            },
+        );
+
+        // Group 0 for boulder_consume: minimal uniform (delta_time, world_size, grid_cell_size, grid_resolution)
+        let boulder_consume_params_layout = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Boulder Consume Params Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            },
+        );
+
+        // Group 1 for boulder_consume: spatial grid counts(ro), offsets(ro), cells(ro)
+        let boulder_consume_spatial_layout = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Boulder Consume Spatial Layout"),
+                entries: &[ro_storage(0), ro_storage(1), ro_storage(2)],
+            },
+        );
+
+        // Group 2 for boulder_consume: positions(ro), cell_types(ro), nutrients(rw),
+        //   organism_size(ro), death_flags(ro), split_thresholds(ro)
+        // cell_count_buffer is NOT included — we use arrayLength() in the shader instead,
+        // avoiding a conflict with the physics group which binds it read-write.
+        let boulder_consume_cell_data_layout = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Boulder Consume Cell Data Layout"),
+                entries: &[
+                    ro_storage(0), ro_storage(1), rw_storage(2),
+                    ro_storage(3), ro_storage(4), ro_storage(5),
+                ],
+            },
+        );
+
+        // Group 3 for boulder_consume: state(ro), moss(rw), eat_dir(rw), count(ro)
+        let boulder_consume_buffers_layout = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Boulder Consume Buffers Layout"),
+                entries: &[ro_storage(0), rw_storage(1), rw_storage(2), ro_storage(3)],
+            },
+        );
+
+        // Boulder consume params buffer: 16 bytes (4 × f32/i32)
+        let boulder_consume_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Boulder Consume Params"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Boulder physics pipeline: group 0 = physics_layout, group 1 = boulder_physics_buffers_layout, group 2 = cave_params_layout
+        let boulder_physics = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/boulder_physics.wgsl"),
+            "main",
+            &[&physics_layout, &boulder_physics_buffers_layout, &cave_params_layout],
+            "Boulder Physics",
+        );
+
+        // Boulder consume pipeline: group 0 = boulder_consume_params_layout, group 1 = boulder_consume_spatial_layout,
+        //   group 2 = boulder_consume_cell_data_layout, group 3 = boulder_consume_buffers_layout
+        let boulder_consume = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/boulder_consume.wgsl"),
+            "main",
+            &[
+                &boulder_consume_params_layout,
+                &boulder_consume_spatial_layout,
+                &boulder_consume_cell_data_layout,
+                &boulder_consume_buffers_layout,
+            ],
+            "Boulder Consume",
+        );
         
         Self {
             spatial_grid_clear,
@@ -1066,6 +1181,14 @@ impl GpuPhysicsPipelines {
             signal_propagate_adhesion_layout,
             mode_switch_layout0,
             mode_switch_layout1,
+            boulder_physics,
+            boulder_consume,
+            boulder_physics_buffers_layout,
+            boulder_consume_params_layout,
+            boulder_consume_spatial_layout,
+            boulder_consume_cell_data_layout,
+            boulder_consume_buffers_layout,
+            boulder_consume_params_buffer,
         }
     }
     
@@ -1462,6 +1585,7 @@ impl GpuPhysicsPipelines {
         signal_sense_density_field_buffer: &wgpu::Buffer,
         organism_label_buffer: Option<&wgpu::Buffer>,
         organism_size_buffer: Option<&wgpu::Buffer>,
+        boulder_buffers: Option<&super::boulder_buffers::BoulderBuffers>,
     ) -> CachedBindGroups {
         // Create physics bind groups for all 3 buffer indices
         let physics = [
@@ -1526,9 +1650,9 @@ impl GpuPhysicsPipelines {
         
         // Collision force accum bind groups (one for each buffer index)
         let collision_force_accum = [
-            self.create_collision_force_accum_bind_group(device, adhesion_buffers, buffers, 0),
-            self.create_collision_force_accum_bind_group(device, adhesion_buffers, buffers, 1),
-            self.create_collision_force_accum_bind_group(device, adhesion_buffers, buffers, 2),
+            self.create_collision_force_accum_bind_group(device, adhesion_buffers, buffers, 0, boulder_buffers),
+            self.create_collision_force_accum_bind_group(device, adhesion_buffers, buffers, 1, boulder_buffers),
+            self.create_collision_force_accum_bind_group(device, adhesion_buffers, buffers, 2, boulder_buffers),
         ];
         
         // Position update force accum bind group (same for all frames)
@@ -1604,9 +1728,9 @@ impl GpuPhysicsPipelines {
 
         // Glueocyte env adhesion bind groups
         let env_adhesion_force_accum = [
-            self.create_env_adhesion_force_accum_bind_group(device, adhesion_buffers, buffers, 0),
-            self.create_env_adhesion_force_accum_bind_group(device, adhesion_buffers, buffers, 1),
-            self.create_env_adhesion_force_accum_bind_group(device, adhesion_buffers, buffers, 2),
+            self.create_env_adhesion_force_accum_bind_group(device, adhesion_buffers, buffers, 0, boulder_buffers),
+            self.create_env_adhesion_force_accum_bind_group(device, adhesion_buffers, buffers, 1, boulder_buffers),
+            self.create_env_adhesion_force_accum_bind_group(device, adhesion_buffers, buffers, 2, boulder_buffers),
         ];
         let env_adhesion_mode_data = self.create_env_adhesion_mode_data_bind_group(device, buffers);
 
@@ -1631,6 +1755,8 @@ impl GpuPhysicsPipelines {
             signal_sense_light_field_buffer,
             signal_sense_solid_mask_buffer,
             signal_sense_density_field_buffer,
+            boulder_buffers.map(|bb| &bb.boulder_state),
+            boulder_buffers.map(|bb| &bb.boulder_count),
         );
 
         // Mode switch bind groups
@@ -1696,7 +1822,219 @@ impl GpuPhysicsPipelines {
             cell_adhesion_adhesion,
             cell_adhesion_spatial,
             cell_adhesion_mode,
+            boulder_physics_buffers: self.create_boulder_physics_buffers_bind_group(device, boulder_buffers, None, None),
+            boulder_consume_params: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Boulder Consume Params BG"),
+                layout: &self.boulder_consume_params_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.boulder_consume_params_buffer.as_entire_binding(),
+                }],
+            }),
+            boulder_consume_spatial: self.create_boulder_consume_spatial_bind_group(device, buffers),
+            boulder_consume_cell_data: [
+                self.create_boulder_consume_cell_data_bind_group(device, buffers, organism_size_buffer, 0),
+                self.create_boulder_consume_cell_data_bind_group(device, buffers, organism_size_buffer, 1),
+                self.create_boulder_consume_cell_data_bind_group(device, buffers, organism_size_buffer, 2),
+            ],
+            boulder_consume_buffers: self.create_boulder_consume_buffers_bind_group(device, boulder_buffers),
+            boulder_dummy_cave: {
+                // 256-byte CaveParams with collision_enabled = 0 (all zeros).
+                // The shader early-exits when collision_enabled == 0.
+                let dummy_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Boulder Dummy Cave Params"),
+                    contents: &vec![0u8; 256],
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Boulder Dummy Cave BG"),
+                    layout: &self.cave_params_layout,
+                    entries: &[wgpu::BindGroupEntry { binding: 0, resource: dummy_buf.as_entire_binding() }],
+                })
+            },
         }
+    }
+
+    pub fn create_boulder_physics_buffers_bind_group(
+        &self,
+        device: &wgpu::Device,
+        boulder_buffers: Option<&super::boulder_buffers::BoulderBuffers>,
+        water_params_buffer: Option<&wgpu::Buffer>,
+        water_bitfield_buffer: Option<&wgpu::Buffer>,
+    ) -> wgpu::BindGroup {
+        // Dummy buffers when boulder system not yet initialized
+        let dummy = |size: u64, label: &str| device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let n = super::boulder_buffers::MAX_BOULDERS as u64;
+        let (state_buf, moss_buf, dir_buf, eat_buf, count_buf, force_buf);
+        let (state_ref, moss_ref, dir_ref, eat_ref, count_ref, force_ref): (&wgpu::Buffer, &wgpu::Buffer, &wgpu::Buffer, &wgpu::Buffer, &wgpu::Buffer, &wgpu::Buffer);
+        if let Some(bb) = boulder_buffers {
+            state_ref = &bb.boulder_state;
+            moss_ref  = &bb.boulder_moss;
+            dir_ref   = &bb.boulder_moss_dir;
+            eat_ref   = &bb.boulder_eat_dir_accum;
+            count_ref = &bb.boulder_count;
+            force_ref = &bb.boulder_force_accum;
+        } else {
+            state_buf = dummy(n * 80, "Dummy Boulder State");
+            moss_buf  = dummy(n * 4,  "Dummy Boulder Moss");
+            dir_buf   = dummy(n * 16, "Dummy Boulder Moss Dir");
+            eat_buf   = dummy(n * 12, "Dummy Boulder Eat Dir");
+            count_buf = dummy(16,     "Dummy Boulder Count");
+            force_buf = dummy(n * 12, "Dummy Boulder Force Accum");
+            state_ref = &state_buf; moss_ref = &moss_buf; dir_ref = &dir_buf;
+            eat_ref = &eat_buf; count_ref = &count_buf; force_ref = &force_buf;
+        }
+
+        // Water buffers — dummy when fluid system not initialized
+        let dummy_water_params;
+        let dummy_water_bitfield;
+        let water_params_buf: &wgpu::Buffer = if let Some(b) = water_params_buffer {
+            b
+        } else {
+            dummy_water_params = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Water Params (Boulder)"),
+                size: 32,
+                usage: wgpu::BufferUsages::UNIFORM,
+                mapped_at_creation: false,
+            });
+            &dummy_water_params
+        };
+        let water_bitfield_buf: &wgpu::Buffer = if let Some(b) = water_bitfield_buffer {
+            b
+        } else {
+            dummy_water_bitfield = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Water Bitfield (Boulder)"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            &dummy_water_bitfield
+        };
+
+        // Buoyancy params buffer
+        let dummy_buoyancy;
+        let buoyancy_buf: &wgpu::Buffer = if let Some(bb) = boulder_buffers {
+            &bb.boulder_buoyancy_params
+        } else {
+            dummy_buoyancy = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Boulder Buoyancy"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM,
+                mapped_at_creation: false,
+            });
+            &dummy_buoyancy
+        };
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Boulder Physics Buffers BG"),
+            layout: &self.boulder_physics_buffers_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: state_ref.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: moss_ref.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: dir_ref.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: eat_ref.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: count_ref.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: force_ref.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: water_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: water_bitfield_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8, resource: buoyancy_buf.as_entire_binding() },
+            ],
+        })
+    }
+
+    pub fn create_boulder_consume_spatial_bind_group(
+        &self,
+        device: &wgpu::Device,
+        buffers: &GpuTripleBufferSystem,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Boulder Consume Spatial BG"),
+            layout: &self.boulder_consume_spatial_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: buffers.spatial_grid_counts.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: buffers.spatial_grid_offsets.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: buffers.spatial_grid_cells.as_entire_binding() },
+            ],
+        })
+    }
+
+    pub fn create_boulder_consume_cell_data_bind_group(
+        &self,
+        device: &wgpu::Device,
+        buffers: &GpuTripleBufferSystem,
+        organism_size_buffer: Option<&wgpu::Buffer>,
+        buffer_index: usize,
+    ) -> wgpu::BindGroup {
+        let dummy_size_buf;
+        let size_buf = if let Some(b) = organism_size_buffer {
+            b
+        } else {
+            dummy_size_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Org Size (Boulder Consume)"),
+                size: buffers.capacity as u64 * 4,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            &dummy_size_buf
+        };
+        // Bind the position buffer for this index as read-only.
+        // The dispatch uses the INPUT index (previous frame's output), so this buffer
+        // is never simultaneously bound read-write by the physics group.
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("Boulder Consume Cell Data BG {}", buffer_index)),
+            layout: &self.boulder_consume_cell_data_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: buffers.position_and_mass[buffer_index].as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: buffers.cell_types.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: buffers.nutrients_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: size_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: buffers.death_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: buffers.split_nutrient_thresholds.as_entire_binding() },
+            ],
+        })
+    }
+
+    pub fn create_boulder_consume_buffers_bind_group(
+        &self,
+        device: &wgpu::Device,
+        boulder_buffers: Option<&super::boulder_buffers::BoulderBuffers>,
+    ) -> wgpu::BindGroup {
+        let dummy = |size: u64, label: &str| device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let n = super::boulder_buffers::MAX_BOULDERS as u64;
+        let (state_buf, moss_buf, eat_buf, count_buf);
+        let (state_ref, moss_ref, eat_ref, count_ref): (&wgpu::Buffer, &wgpu::Buffer, &wgpu::Buffer, &wgpu::Buffer);
+        if let Some(bb) = boulder_buffers {
+            state_ref = &bb.boulder_state;
+            moss_ref  = &bb.boulder_moss;
+            eat_ref   = &bb.boulder_eat_dir_accum;
+            count_ref = &bb.boulder_count;
+        } else {
+            state_buf = dummy(n * 80, "Dummy Boulder State (Consume)");
+            moss_buf  = dummy(n * 4,  "Dummy Boulder Moss (Consume)");
+            eat_buf   = dummy(n * 12, "Dummy Boulder Eat Dir (Consume)");
+            count_buf = dummy(16,     "Dummy Boulder Count (Consume)");
+            state_ref = &state_buf; moss_ref = &moss_buf;
+            eat_ref = &eat_buf; count_ref = &count_buf;
+        }
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Boulder Consume Buffers BG"),
+            layout: &self.boulder_consume_buffers_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: state_ref.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: moss_ref.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: eat_ref.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: count_ref.as_entire_binding() },
+            ],
+        })
     }
     
     /// Create physics bind group for a specific buffer index
@@ -3316,6 +3654,39 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 8: Boulder state (read-only — position and radius for cell-boulder collision)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 9: Boulder count (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 10: Boulder force accumulator (read-write atomic — cells push boulders)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -3508,50 +3879,56 @@ impl GpuPhysicsPipelines {
         })
     }
     
-    /// Create collision force accum bind group (Group 2 in collision_detection shader)
-    fn create_collision_force_accum_bind_group(
+    pub fn create_collision_force_accum_bind_group(
         &self,
         device: &wgpu::Device,
         adhesion_buffers: &super::AdhesionBuffers,
         triple_buffers: &GpuTripleBufferSystem,
         buffer_index: usize,
+        boulder_buffers: Option<&super::boulder_buffers::BoulderBuffers>,
     ) -> wgpu::BindGroup {
+        let n = super::boulder_buffers::MAX_BOULDERS as u64;
+        let dummy_state;
+        let dummy_count;
+        let dummy_force;
+        let (state_buf, count_buf, force_accum_buf): (&wgpu::Buffer, &wgpu::Buffer, &wgpu::Buffer) = if let Some(bb) = boulder_buffers {
+            (&bb.boulder_state, &bb.boulder_count, &bb.boulder_force_accum)
+        } else {
+            dummy_state = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Boulder State (Collision)"),
+                size: n * 80,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            dummy_count = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Boulder Count (Collision)"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            dummy_force = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Boulder Force Accum (Collision)"),
+                size: n * 12,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            (&dummy_state, &dummy_count, &dummy_force)
+        };
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(&format!("Collision Force Accum Bind Group {}", buffer_index)),
             layout: &self.collision_force_accum_layout,
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: adhesion_buffers.force_accum_x.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: adhesion_buffers.force_accum_y.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: adhesion_buffers.force_accum_z.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: adhesion_buffers.torque_accum_x.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: adhesion_buffers.torque_accum_y.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: adhesion_buffers.torque_accum_z.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: triple_buffers.rotations[buffer_index].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: adhesion_buffers.angular_velocities[buffer_index].as_entire_binding(),
-                },
+                wgpu::BindGroupEntry { binding: 0, resource: adhesion_buffers.force_accum_x.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: adhesion_buffers.force_accum_y.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: adhesion_buffers.force_accum_z.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: adhesion_buffers.torque_accum_x.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: adhesion_buffers.torque_accum_y.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: adhesion_buffers.torque_accum_z.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: triple_buffers.rotations[buffer_index].as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: adhesion_buffers.angular_velocities[buffer_index].as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8, resource: state_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 9, resource: count_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 10, resource: force_accum_buf.as_entire_binding() },
             ],
         })
     }
@@ -5138,6 +5515,28 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 4: Boulder state (read-only — position and radius for glueocyte attachment)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: Boulder count (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -5182,34 +5581,44 @@ impl GpuPhysicsPipelines {
         })
     }
 
-    /// Create env adhesion force accum bind group (Group 1)
-    fn create_env_adhesion_force_accum_bind_group(
+    pub fn create_env_adhesion_force_accum_bind_group(
         &self,
         device: &wgpu::Device,
         adhesion_buffers: &super::AdhesionBuffers,
         triple_buffers: &GpuTripleBufferSystem,
         _buffer_index: usize,
+        boulder_buffers: Option<&super::boulder_buffers::BoulderBuffers>,
     ) -> wgpu::BindGroup {
+        let n = super::boulder_buffers::MAX_BOULDERS as u64;
+        let dummy_state;
+        let dummy_count;
+        let (state_buf, count_buf): (&wgpu::Buffer, &wgpu::Buffer) = if let Some(bb) = boulder_buffers {
+            (&bb.boulder_state, &bb.boulder_count)
+        } else {
+            dummy_state = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Boulder State (Env Adhesion)"),
+                size: n * 80,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            dummy_count = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Boulder Count (Env Adhesion)"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            (&dummy_state, &dummy_count)
+        };
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Env Adhesion Force Accum Bind Group"),
             layout: &self.env_adhesion_force_accum_layout,
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: adhesion_buffers.force_accum_x.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: adhesion_buffers.force_accum_y.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: adhesion_buffers.force_accum_z.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: triple_buffers.env_anchor_buffer.as_entire_binding(),
-                },
+                wgpu::BindGroupEntry { binding: 0, resource: adhesion_buffers.force_accum_x.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: adhesion_buffers.force_accum_y.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: adhesion_buffers.force_accum_z.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: triple_buffers.env_anchor_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: state_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: count_buf.as_entire_binding() },
             ],
         })
     }
@@ -5562,6 +5971,28 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 5: boulder_state_sense (read-only) — for sense_type 5 (Boulder)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 6: boulder_count_sense (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -5577,31 +6008,41 @@ impl GpuPhysicsPipelines {
         light_field_buffer: &wgpu::Buffer,
         solid_mask_buffer: &wgpu::Buffer,
         density_field_buffer: &wgpu::Buffer,
+        boulder_state_buffer: Option<&wgpu::Buffer>,
+        boulder_count_buffer: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
+        let n = super::boulder_buffers::MAX_BOULDERS as u64;
+        let dummy_state;
+        let dummy_count;
+        let bstate: &wgpu::Buffer = if let Some(b) = boulder_state_buffer { b } else {
+            dummy_state = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Boulder State (Signal Sense)"),
+                size: n * 80,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            &dummy_state
+        };
+        let bcount: &wgpu::Buffer = if let Some(b) = boulder_count_buffer { b } else {
+            dummy_count = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Boulder Count (Signal Sense)"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            &dummy_count
+        };
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Signal Sense World Data Bind Group"),
             layout: &self.signal_sense_world_data_layout,
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: world_params_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: nutrient_voxels_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: light_field_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: solid_mask_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: density_field_buffer.as_entire_binding(),
-                },
+                wgpu::BindGroupEntry { binding: 0, resource: world_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: nutrient_voxels_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: light_field_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: solid_mask_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: density_field_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: bstate.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: bcount.as_entire_binding() },
             ],
         })
     }

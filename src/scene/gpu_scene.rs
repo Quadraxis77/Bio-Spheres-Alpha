@@ -8,7 +8,7 @@ use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, DeathParti
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
-use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, execute_signal_system, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem, DevorocyteConsumptionSystem, MossSystem};
+use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, execute_signal_system, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem, DevorocyteConsumptionSystem, MossSystem, BoulderSystem};
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
@@ -283,6 +283,32 @@ pub struct GpuScene {
     moss_consume_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// Cached moss consumption moss bind group (shared across frames)
     moss_consume_moss_bind_group: Option<wgpu::BindGroup>,
+    /// Boulder system — falling cave debris with size-gated moss nutrients
+    pub boulder_system: Option<BoulderSystem>,
+    /// Whether boulders are enabled
+    pub show_boulders: bool,
+    /// Last physics delta_time (stored so render pass can use it for bubble update)
+    last_delta_time: f32,
+    /// Target number of boulders to maintain
+    pub boulder_target_count: u32,
+    /// Boulder initial moss store (nutrients)
+    pub boulder_initial_moss: f32,
+    /// Boulder radius
+    pub boulder_radius: f32,
+    /// Boulder size gate half-saturation constant (cells)
+    pub boulder_size_gate: f32,
+    /// Seconds between boulder spawn attempts
+    pub boulder_spawn_interval: f32,
+    /// Gravity multiplier when boulder is submerged (0 = float, 1 = full gravity)
+    pub boulder_buoyancy: f32,
+    /// Minimum boulder radius
+    pub boulder_radius_min: f32,
+    /// Maximum boulder radius
+    pub boulder_radius_max: f32,
+    /// Minimum boulder moss store (nutrients)
+    pub boulder_moss_min: f32,
+    /// Maximum boulder moss store (nutrients)
+    pub boulder_moss_max: f32,
     /// Organism label system — GPU-driven connected-component labeling
     pub organism_label_system: Option<crate::simulation::gpu_physics::OrganismLabelSystem>,
     /// Mutation system — GPU-driven genome mutation during cell division
@@ -482,6 +508,7 @@ impl GpuScene {
             &signal_sense_dummy_density_buffer,
             organism_label_system.as_ref().map(|s| &s.label_buffer),
             organism_label_system.as_ref().map(|s| &s.organism_size_buffer),
+            None, // boulder_buffers — created later
         );
 
         // Create GPU cell inspector system (will be initialized later with device)
@@ -575,6 +602,19 @@ impl GpuScene {
             cave_params_dirty: false,
             cave_physics_bind_groups: None,
             previous_world_diameter: 400.0, // Default world diameter
+            boulder_system: None,
+            show_boulders: true,
+            last_delta_time: 0.016,
+            boulder_target_count: 32,
+            boulder_initial_moss: 10_000.0,
+            boulder_radius: 4.0,
+            boulder_size_gate: 20.0,
+            boulder_spawn_interval: 5.0,
+            boulder_buoyancy: 0.08,
+            boulder_radius_min: 2.0,
+            boulder_radius_max: 8.0,
+            boulder_moss_min: 2_000.0,
+            boulder_moss_max: 20_000.0,
             fluid_buffers: None,
             voxel_renderer: None,
             show_fluid_voxels: false,
@@ -721,6 +761,12 @@ impl GpuScene {
         }
 
         // Note: Fluid reset is handled separately via reset_fluid() which requires encoder
+
+        // Clear all boulders — they are environmental objects tied to the session,
+        // not to the cell simulation, but should still be removed on any reset.
+        if let Some(ref mut bs) = self.boulder_system {
+            bs.clear(queue);
+        }
     }
     
     /// Remove unused genomes from the scene.
@@ -1292,6 +1338,15 @@ impl GpuScene {
         self.run_moss_consumption(device, encoder, queue);
         // Run photocyte light consumption each physics step (reads pre-computed light field)
         self.run_photocyte_light_consumption(device, encoder, queue);
+
+        // Update boulder system: spawn new boulders, poll dead readback, update instance buffer.
+        // Must run BEFORE execute_gpu_physics_step so active_count() is current and the
+        // GPU boulder_count buffer is populated before the boulder physics dispatch.
+        if self.show_boulders {
+            if let Some(ref mut bs) = self.boulder_system {
+                bs.update(device, queue, delta_time);
+            }
+        }
         
         // Update signal sense world params (boundary_radius, light_dir, fluid grid params)
         {
@@ -1345,10 +1400,13 @@ impl GpuScene {
             self.total_cell_slots.max(1),
             self.constraint_iterations,
             self.solo_metabolism_multiplier,
+            self.boulder_system.as_ref().map(|bs| bs.active_count()).unwrap_or(0),
+            self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_force_accum),
         );
         
         // Increment frame counter for time-based shader logic
         self.current_frame = self.current_frame.wrapping_add(1);
+        self.last_delta_time = delta_time;
         
         // Execute lifecycle pipeline for cell division (4 compute shader stages)
         // This handles death detection, free slot compaction, and cell division
@@ -2920,6 +2978,9 @@ impl GpuScene {
             
             // Update solid mask after cave system is initialized
             self.update_solid_mask(&queue); // Note: This needs queue parameter
+
+            // Initialize boulder system now that cave params are available
+            self.initialize_boulder_system(device, queue, surface_format);
             
             return true; // Cave was just initialized, params need to be applied
         }
@@ -3281,6 +3342,8 @@ impl GpuScene {
                     light_field_system.light_field_buffer(),
                     solid_buf,
                     density_buf,
+                    self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_state),
+                    self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_count),
                 );
         }
 
@@ -3839,6 +3902,27 @@ impl GpuScene {
             simulator.water_velocity_buffer(),
         );
 
+        // Also rebuild boulder physics bind group with real water buffers if boulder system exists
+        if self.boulder_system.is_some() {
+            let boulder_bufs = self.boulder_system.as_ref().map(|bs| &bs.buffers);
+            self.cached_bind_groups.boulder_physics_buffers =
+                self.gpu_physics_pipelines.create_boulder_physics_buffers_bind_group(
+                    device, boulder_bufs,
+                    Some(simulator.water_grid_params_buffer()),
+                    Some(simulator.water_bitfield_buffer()),
+                );
+            // Build bubble compute bind group now that both boulder and water are ready
+            if let Some(ref mut bs) = self.boulder_system {
+                let bg = bs.bubbles.create_compute_bind_group(
+                    device,
+                    &bs.buffers,
+                    simulator.water_grid_params_buffer(),
+                    simulator.water_bitfield_buffer(),
+                );
+                bs.bubble_compute_bg = Some(bg);
+            }
+        }
+
         // Start with empty fluid - no initial sphere spawn
         // Fluid will only appear when continuous spawning is enabled
 
@@ -3858,6 +3942,8 @@ impl GpuScene {
                     light_buf,
                     simulator.solid_mask_buffer(),
                     density_buf,
+                    self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_state),
+                    self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_count),
                 );
         }
 
@@ -3999,6 +4085,121 @@ impl GpuScene {
         ) {
             // Dispatch at full capacity — the shader reads cell_count_buffer[0] internally.
             system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, self.gpu_triple_buffers.capacity);
+        }
+    }
+
+    /// Initialize the boulder system after cave is ready
+    fn initialize_boulder_system(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
+        if self.boulder_system.is_some() {
+            return;
+        }
+        if let Some(ref cave_renderer) = self.cave_renderer {
+            let world_radius = self.config.sphere_radius;
+            let width = self.renderer.width;
+            let height = self.renderer.height;
+            let mut bs = BoulderSystem::new(
+                device, queue,
+                surface_format,
+                wgpu::TextureFormat::Depth32Float,
+                width, height,
+                cave_renderer.params(),
+                world_radius,
+                self.gravity_mode,
+            );
+            // Apply current settings
+            bs.set_target_count(self.boulder_target_count);
+            bs.set_initial_moss(self.boulder_initial_moss);
+            bs.set_radius(self.boulder_radius);
+            bs.radius_min = self.boulder_radius_min;
+            bs.radius_max = self.boulder_radius_max;
+            bs.moss_min   = self.boulder_moss_min;
+            bs.moss_max   = self.boulder_moss_max;
+            bs.spawn_interval = self.boulder_spawn_interval;
+            bs.buoyancy = self.boulder_buoyancy;
+            bs.buoyancy_dirty = true; // write to GPU on first update
+            self.boulder_system = Some(bs);
+
+            // Build the renderer's boulder storage bind group from the real buffers.
+            let boulder_bg = self.boulder_system.as_ref()
+                .map(|bs| bs.renderer.create_boulder_bind_group(device, &bs.buffers));
+            if let (Some(ref mut bs), Some(bg)) = (self.boulder_system.as_mut(), boulder_bg) {
+                bs.renderer.boulder_bind_group = Some(bg);
+            }
+
+            // Rebuild the boulder bind groups now that real buffers exist.
+            // The cached bind groups were created at init with dummy buffers;
+            // they must be replaced so the shaders read from the actual boulder data.
+            let boulder_bufs = self.boulder_system.as_ref().map(|bs| &bs.buffers);
+            let org_size_buf = self.organism_label_system.as_ref().map(|s| &s.organism_size_buffer);
+            let water_params_buf = self.fluid_simulator.as_ref().map(|fs| fs.water_grid_params_buffer());
+            let water_bitfield_buf = self.fluid_simulator.as_ref().map(|fs| fs.water_bitfield_buffer());
+            self.cached_bind_groups.boulder_physics_buffers =
+                self.gpu_physics_pipelines.create_boulder_physics_buffers_bind_group(device, boulder_bufs, water_params_buf, water_bitfield_buf);
+            self.cached_bind_groups.boulder_consume_spatial =
+                self.gpu_physics_pipelines.create_boulder_consume_spatial_bind_group(device, &self.gpu_triple_buffers);
+            self.cached_bind_groups.boulder_consume_cell_data = [
+                self.gpu_physics_pipelines.create_boulder_consume_cell_data_bind_group(device, &self.gpu_triple_buffers, org_size_buf, 0),
+                self.gpu_physics_pipelines.create_boulder_consume_cell_data_bind_group(device, &self.gpu_triple_buffers, org_size_buf, 1),
+                self.gpu_physics_pipelines.create_boulder_consume_cell_data_bind_group(device, &self.gpu_triple_buffers, org_size_buf, 2),
+            ];
+            self.cached_bind_groups.boulder_consume_buffers =
+                self.gpu_physics_pipelines.create_boulder_consume_buffers_bind_group(device, boulder_bufs);
+
+            // Also rebuild collision and env adhesion bind groups with real boulder buffers
+            // so cells can collide with boulders and glueocytes can attach to them.
+            let boulder_bufs2 = self.boulder_system.as_ref().map(|bs| &bs.buffers);
+            self.cached_bind_groups.collision_force_accum = [
+                self.gpu_physics_pipelines.create_collision_force_accum_bind_group(device, &self.adhesion_buffers, &self.gpu_triple_buffers, 0, boulder_bufs2),
+                self.gpu_physics_pipelines.create_collision_force_accum_bind_group(device, &self.adhesion_buffers, &self.gpu_triple_buffers, 1, boulder_bufs2),
+                self.gpu_physics_pipelines.create_collision_force_accum_bind_group(device, &self.adhesion_buffers, &self.gpu_triple_buffers, 2, boulder_bufs2),
+            ];
+            self.cached_bind_groups.env_adhesion_force_accum = [
+                self.gpu_physics_pipelines.create_env_adhesion_force_accum_bind_group(device, &self.adhesion_buffers, &self.gpu_triple_buffers, 0, boulder_bufs2),
+                self.gpu_physics_pipelines.create_env_adhesion_force_accum_bind_group(device, &self.adhesion_buffers, &self.gpu_triple_buffers, 1, boulder_bufs2),
+                self.gpu_physics_pipelines.create_env_adhesion_force_accum_bind_group(device, &self.adhesion_buffers, &self.gpu_triple_buffers, 2, boulder_bufs2),
+            ];
+
+            log::info!("Boulder system initialized");
+
+            // If fluid is already running, build the bubble compute bind group now
+            if let Some(ref simulator) = self.fluid_simulator {
+                if let Some(ref mut bs) = self.boulder_system {
+                    let bg = bs.bubbles.create_compute_bind_group(
+                        device,
+                        &bs.buffers,
+                        simulator.water_grid_params_buffer(),
+                        simulator.water_bitfield_buffer(),
+                    );
+                    bs.bubble_compute_bg = Some(bg);
+                }
+            }
+
+            // Rebuild signal sense world data bind group with boulder buffers
+            {
+                let nutrient_buf = self.fluid_simulator.as_ref()
+                    .map(|fs| fs.nutrient_voxels_buffer())
+                    .unwrap_or(&self.signal_sense_dummy_nutrient_buffer);
+                let light_buf = self.light_field_system.as_ref()
+                    .map(|lfs| lfs.light_field_buffer())
+                    .unwrap_or(&self.signal_sense_dummy_light_buffer);
+                let solid_buf = self.fluid_simulator.as_ref()
+                    .map(|fs| fs.solid_mask_buffer())
+                    .unwrap_or(&self.signal_sense_dummy_solid_buffer);
+                let density_buf = self.gpu_surface_nets.as_ref()
+                    .map(|sn| sn.density_buffer())
+                    .unwrap_or(&self.signal_sense_dummy_density_buffer);
+                self.cached_bind_groups.signal_sense_world_data = self.gpu_physics_pipelines
+                    .create_signal_sense_world_data_bind_group(
+                        device,
+                        &self.signal_sense_world_params_buffer,
+                        nutrient_buf,
+                        light_buf,
+                        solid_buf,
+                        density_buf,
+                        self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_state),
+                        self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_count),
+                    );
+            }
         }
     }
 
@@ -5531,6 +5732,23 @@ impl Scene for GpuScene {
                 self.camera.position(),
                 self.camera.rotation,
             );
+        }
+
+        // Render boulders after cave (they share the same depth buffer)
+        if self.show_boulders {
+            if let Some(ref mut bs) = self.boulder_system {
+                // Run bubble compute passes before rendering
+                bs.update_bubbles(&mut encoder, queue, self.last_delta_time, self.gravity_mode);
+                bs.render(
+                    &mut encoder,
+                    queue,
+                    scene_target,
+                    &self.renderer.depth_view,
+                    self.camera.position(),
+                    self.camera.rotation,
+                    self.current_time,
+                );
+            }
         }
         
         // Render procedural sun if enabled (after caves but before world sphere,

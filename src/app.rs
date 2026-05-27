@@ -1100,6 +1100,30 @@ impl App {
             );
         }
         self.scene_manager.active_scene_mut().camera_mut().update(dt);
+
+        // Push the camera out of cave walls using the same SDF the cells use.
+        // Only applies in GPU scene mode when a cave is active.
+        // We correct `camera.center` (the freefly position / orbit pivot) so
+        // both modes benefit. The camera is treated as a small sphere so it
+        // stays a comfortable distance from the surface.
+        if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
+            if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                if let Some(cave_renderer) = gpu_scene.cave_renderer.as_ref() {
+                    let params = cave_renderer.params();
+                    if params.collision_enabled != 0 {
+                        use crate::rendering::cave_sdf_push_out;
+                        const CAMERA_RADIUS: f32 = 3.0;
+                        // `camera` is a public field on GpuScene — no trait import needed.
+                        gpu_scene.camera.center = cave_sdf_push_out(
+                            gpu_scene.camera.center,
+                            params,
+                            CAMERA_RADIUS,
+                        );
+                    }
+                }
+            }
+        }
+
         self.scene_manager.update(dt);
         
         // Poll for async tool operation results (GPU mode only)

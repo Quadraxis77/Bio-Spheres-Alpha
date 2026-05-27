@@ -11,6 +11,7 @@
 // sense_type 2 = Light (DDA ray march through light voxels)
 // sense_type 3 = Barrier (ray-sphere vs world boundary + DDA for solid voxels + water surface isosurface)
 // sense_type 4 = Self (always detects)
+// sense_type 5 = Mossrock (ray-vs-sphere test against all live mossrocks)
 
 const OCULOCYTE_TYPE: u32 = 7u;
 const LIGHT_THRESHOLD: f32 = 0.1;
@@ -74,6 +75,17 @@ var<storage, read> solid_mask: array<u32>;
 // Values are fluid density per voxel (f32); the isosurface threshold is 0.5
 @group(2) @binding(4)
 var<storage, read> density_field: array<f32>;
+
+// binding 5: boulder state — for sense_type 5 (Boulder detection)
+struct SenseBoulder {
+    position: vec3<f32>,
+    radius:   f32,
+    velocity: vec3<f32>,
+    dead:     u32,
+    // remaining fields not needed for sensing
+}
+@group(2) @binding(5) var<storage, read> boulder_state_sense: array<SenseBoulder>;
+@group(2) @binding(6) var<storage, read> boulder_count_sense: array<u32>;
 
 // Rotate vector by quaternion: q * v * q^-1
 fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
@@ -268,6 +280,22 @@ fn sense_barrier(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> bool
     return false;
 }
 
+// sense_type 5: ray-vs-sphere test against all live boulders.
+// Same pattern as sense_cells but reads from boulder_state_sense.
+fn sense_boulders(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> bool {
+    let count = boulder_count_sense[0];
+    for (var i = 0u; i < count; i++) {
+        let b = boulder_state_sense[i];
+        if (b.dead != 0u || b.radius <= 0.0) { continue; }
+        let oc = b.position - my_pos;
+        let tca = dot(oc, forward);
+        if (tca < 0.0 || tca > ray_length) { continue; }
+        let dist_sq = dot(oc, oc) - tca * tca;
+        if (dist_sq <= b.radius * b.radius) { return true; }
+    }
+    return false;
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
@@ -302,6 +330,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 case 2u: { detected = dda_march_light(my_pos, forward, ray_length); }
                 case 3u: { detected = sense_barrier(my_pos, forward, ray_length); }
                 case 4u: { detected = true; } // Self-sense: always fires
+                case 5u: { detected = sense_boulders(my_pos, forward, ray_length); }
                 default: {}
             }
 

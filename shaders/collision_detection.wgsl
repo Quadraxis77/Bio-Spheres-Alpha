@@ -107,6 +107,26 @@ var<storage, read> rotations: array<vec4<f32>>;
 @group(2) @binding(7)
 var<storage, read> angular_velocities: array<vec4<f32>>;
 
+// Boulder state and count for cell-boulder collision (read-only).
+// Boulders are not in the cell slot system so they don't appear in the spatial grid.
+// Each cell thread checks all live boulders directly — with max 256 boulders this
+// is at most 256 extra reads per cell, which is negligible.
+struct GpuBoulder {
+    position:         vec3<f32>,
+    radius:           f32,
+    velocity:         vec3<f32>,
+    dead:             u32,
+    seed:             u32,
+    _pad:             array<u32, 3>,
+    angular_velocity: vec4<f32>,
+    orientation:      vec4<f32>,
+}
+@group(2) @binding(8) var<storage, read> boulder_state: array<GpuBoulder>;
+@group(2) @binding(9) var<storage, read> boulder_count: array<u32>;
+// Boulder force accumulator — cells write reaction forces here so boulders can be pushed.
+// Cleared by DMA each frame before collision detection runs.
+@group(2) @binding(10) var<storage, read_write> boulder_force_accum: array<atomic<i32>>; // 3 per boulder
+
 const MAX_CELLS_PER_GRID: u32 = 16u;
 const PI: f32 = 3.14159265359;
 const FIXED_POINT_SCALE: f32 = 1000.0;
@@ -352,6 +372,49 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
     
+    // ── Cell-boulder collision ────────────────────────────────────────────────
+    let num_boulders = boulder_count[0];
+    for (var bi = 0u; bi < num_boulders; bi++) {
+        let bld = boulder_state[bi];
+        if (bld.dead != 0u || bld.radius <= 0.0) { continue; }
+
+        let delta = pos - bld.position;
+        let dist  = length(delta);
+        let min_dist = radius + bld.radius;
+
+        if (dist < min_dist && dist > 0.0001) {
+            let penetration = min_dist - dist;
+            let coll_normal = delta / dist;
+
+            let normal_force_mag = penetration * my_stiffness;
+            force += coll_normal * normal_force_mag;
+
+            // Newton's third law: push the boulder in the opposite direction.
+            // The boulder has very high mass so this produces small acceleration.
+            let reaction = -coll_normal * normal_force_mag;
+            atomicAdd(&boulder_force_accum[bi * 3u + 0u], i32(reaction.x * FIXED_POINT_SCALE));
+            atomicAdd(&boulder_force_accum[bi * 3u + 1u], i32(reaction.y * FIXED_POINT_SCALE));
+            atomicAdd(&boulder_force_accum[bi * 3u + 2u], i32(reaction.z * FIXED_POINT_SCALE));
+
+            // Rolling friction against boulder surface
+            let r_a = -coll_normal * radius;
+            let omega_a = angular_velocities[cell_idx].xyz;
+            let v_contact_a = vel + cross(omega_a, r_a);
+            let v_slip = v_contact_a;
+            let v_slip_tangential = v_slip - dot(v_slip, coll_normal) * coll_normal;
+            let slip_speed = length(v_slip_tangential);
+            if (slip_speed > 0.0001) {
+                let friction_dir = -v_slip_tangential / slip_speed;
+                let friction_mag = min(
+                    FRICTION_COEFF * abs(normal_force_mag),
+                    slip_speed * my_stiffness * 0.1
+                );
+                force  += friction_dir * friction_mag;
+                torque += cross(r_a, friction_dir * friction_mag);
+            }
+        }
+    }
+
     // No gravity in this simulation (cells float in fluid)
     // force.y -= params.gravity * mass;
     

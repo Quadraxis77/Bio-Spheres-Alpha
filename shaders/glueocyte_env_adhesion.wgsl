@@ -111,6 +111,21 @@ struct CaveParams {
 @group(1) @binding(2) var<storage, read_write> force_accum_z: array<atomic<i32>>;
 @group(1) @binding(3) var<storage, read_write> env_anchors: array<vec4<f32>>;
 
+// Boulder state and count for glueocyte attachment.
+// Glueocytes can anchor to boulder surfaces the same way they anchor to cave walls.
+struct GpuBoulder {
+    position:         vec3<f32>,
+    radius:           f32,
+    velocity:         vec3<f32>,
+    dead:             u32,
+    seed:             u32,
+    _pad:             array<u32, 3>,
+    angular_velocity: vec4<f32>,
+    orientation:      vec4<f32>,
+}
+@group(1) @binding(4) var<storage, read> boulder_state: array<GpuBoulder>;
+@group(1) @binding(5) var<storage, read> boulder_count: array<u32>;
+
 // Group 2: Mode data
 @group(2) @binding(0) var<storage, read> mode_indices: array<u32>;
 @group(2) @binding(1) var<storage, read> mode_cell_types: array<u32>;
@@ -204,7 +219,7 @@ fn sample_cave_density(pos: vec3<f32>) -> f32 {
     }
 }
 
-// Returns true if pos is touching a solid surface (cave wall or boundary sphere)
+// Returns true if pos is touching a solid surface (cave wall, boundary sphere, or boulder)
 fn is_touching_surface(pos: vec3<f32>, contact_threshold: f32) -> bool {
     let boundary_radius = cave_params.world_radius;
     let dist_from_center = length(pos - cave_params.world_center);
@@ -215,7 +230,6 @@ fn is_touching_surface(pos: vec3<f32>, contact_threshold: f32) -> bool {
     }
 
     // Cave wall contact (only when caves are enabled)
-    // Sample density at 6 offset positions to detect nearby walls within contact_threshold
     if (cave_params.collision_enabled != 0u) {
         let offsets = array<vec3<f32>, 6>(
             vec3<f32>( contact_threshold, 0.0, 0.0),
@@ -231,6 +245,17 @@ fn is_touching_surface(pos: vec3<f32>, contact_threshold: f32) -> bool {
             if (density > cave_params.threshold) {
                 return true;
             }
+        }
+    }
+
+    // Boulder surface contact
+    let num_boulders = boulder_count[0];
+    for (var bi = 0u; bi < num_boulders; bi++) {
+        let bld = boulder_state[bi];
+        if (bld.dead != 0u || bld.radius <= 0.0) { continue; }
+        let dist = length(pos - bld.position);
+        if (dist <= bld.radius + contact_threshold) {
+            return true;
         }
     }
 

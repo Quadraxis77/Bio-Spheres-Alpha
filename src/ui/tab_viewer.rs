@@ -1095,6 +1095,139 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             context.editor_state.save_cave_settings();
         }
     }
+
+    // ── Boulder Section ──────────────────────────────────────────────────────
+    ui.add_space(10.0);
+    ui.separator();
+    ui.heading("🪨 Mossrocks");
+    ui.add_space(5.0);
+
+    if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+        let mut show_boulders = gpu_scene.show_boulders;
+        if ui.checkbox(&mut show_boulders, "Enable Mossrocks").changed() {
+            gpu_scene.show_boulders = show_boulders;
+        }
+
+        if show_boulders {
+            ui.add_space(5.0);
+
+            // Target count
+            let mut target = gpu_scene.boulder_target_count as i32;
+            ui.label("Target Count:");
+            if ui.add(egui::Slider::new(&mut target, 1..=128)).changed() {
+                gpu_scene.boulder_target_count = target as u32;
+                if let Some(ref mut bs) = gpu_scene.boulder_system {
+                    bs.target_count = target as u32;
+                }
+            }
+
+            ui.add_space(3.0);
+
+            // Spawn frequency
+            let mut interval = gpu_scene.boulder_spawn_interval;
+            ui.label("Approx. Spawn Interval (seconds):");
+            if ui.add(egui::Slider::new(&mut interval, 0.5..=60.0)
+                .logarithmic(true)
+                .text("sec")).changed() {
+                gpu_scene.boulder_spawn_interval = interval;
+                if let Some(ref mut bs) = gpu_scene.boulder_system {
+                    bs.spawn_interval = interval;
+                }
+            }
+
+            ui.add_space(5.0);
+            ui.label("Radius Range:");
+            ui.horizontal(|ui| {
+                ui.label("Min");
+                let mut rmin = gpu_scene.boulder_radius_min;
+                let rmax_cur = gpu_scene.boulder_radius_max;
+                if ui.add(egui::DragValue::new(&mut rmin)
+                    .range(0.5..=rmax_cur - 0.5)
+                    .speed(0.1)
+                    .suffix(" u")).changed() {
+                    gpu_scene.boulder_radius_min = rmin;
+                    if let Some(ref mut bs) = gpu_scene.boulder_system { bs.radius_min = rmin; }
+                }
+                ui.label("–  Max");
+                let mut rmax = gpu_scene.boulder_radius_max;
+                let rmin_cur = gpu_scene.boulder_radius_min;
+                if ui.add(egui::DragValue::new(&mut rmax)
+                    .range(rmin_cur + 0.5..=30.0)
+                    .speed(0.1)
+                    .suffix(" u")).changed() {
+                    gpu_scene.boulder_radius_max = rmax;
+                    if let Some(ref mut bs) = gpu_scene.boulder_system { bs.radius_max = rmax; }
+                }
+            });
+
+            ui.add_space(3.0);
+            ui.label("Moss Store Range (nutrients):");
+            ui.horizontal(|ui| {
+                ui.label("Min");
+                let mut mmin = gpu_scene.boulder_moss_min;
+                let mmax_cur = gpu_scene.boulder_moss_max;
+                if ui.add(egui::DragValue::new(&mut mmin)
+                    .range(100.0..=mmax_cur - 100.0)
+                    .speed(100.0)).changed() {
+                    gpu_scene.boulder_moss_min = mmin;
+                    if let Some(ref mut bs) = gpu_scene.boulder_system { bs.moss_min = mmin; }
+                }
+                ui.label("–  Max");
+                let mut mmax = gpu_scene.boulder_moss_max;
+                let mmin_cur = gpu_scene.boulder_moss_min;
+                if ui.add(egui::DragValue::new(&mut mmax)
+                    .range(mmin_cur + 100.0..=500_000.0)
+                    .speed(500.0)).changed() {
+                    gpu_scene.boulder_moss_max = mmax;
+                    if let Some(ref mut bs) = gpu_scene.boulder_system { bs.moss_max = mmax; }
+                }
+            });
+
+            ui.add_space(5.0);
+
+            // Buoyancy slider
+            let mut buoyancy = gpu_scene.boulder_buoyancy;
+            ui.label("Buoyancy in Water:");
+            ui.add_space(2.0);
+            ui.label(egui::RichText::new(
+                "0 = floats, 1 = sinks at full gravity"
+            ).small().weak());
+            if ui.add(egui::Slider::new(&mut buoyancy, 0.0..=1.0)
+                .step_by(0.01)).changed() {
+                gpu_scene.boulder_buoyancy = buoyancy;
+                // Mark dirty — applied in physics step via queue
+                if let Some(ref mut bs) = gpu_scene.boulder_system {
+                    bs.buoyancy = buoyancy;
+                    bs.buoyancy_dirty = true;
+                }
+            }
+
+            ui.add_space(3.0);
+
+            // Size gate
+            let mut gate = gpu_scene.boulder_size_gate;
+            ui.label("Size Gate (half-saturation):");
+            ui.add_space(2.0);
+            ui.label(egui::RichText::new(
+                "Organism size at which consumption reaches 50% of max rate."
+            ).small().weak());
+            if ui.add(egui::Slider::new(&mut gate, 1.0..=200.0).text("cells")).changed() {
+                gpu_scene.boulder_size_gate = gate;
+            }
+
+            ui.add_space(5.0);
+
+            // Live stats
+            if let Some(ref bs) = gpu_scene.boulder_system {
+                let live = bs.buffers.cpu_boulders.iter()
+                    .filter(|b| b.dead == 0 && b.radius > 0.0)
+                    .count();
+                ui.label(format!("Live mossrocks: {}", live));
+            } else {
+                ui.label(egui::RichText::new("Mossrock system not initialized. Requires cave system.").weak());
+            }
+        }
+    }
 }
 
 /// Render the Fluid Settings panel for fluid simulation controls and visualization.
@@ -2868,8 +3001,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 group_container(ui, "Oculocyte Functions", egui::Color32::from_rgb(200, 160, 220), |ui| {
                     // Sense Type dropdown
                     ui.label("Sense Type:");
-                    let sense_labels = ["Cell", "Food", "Light", "Barrier", "Self"];
-                    let current_sense = mode.oculocyte_sense_type.clamp(0, 4) as usize;
+                    let sense_labels = ["Cell", "Food", "Light", "Barrier", "Self", "Mossrock"];
+                    let current_sense = mode.oculocyte_sense_type.clamp(0, 5) as usize;
                     egui::ComboBox::from_id_salt("oculocyte_sense_type")
                         .selected_text(sense_labels[current_sense])
                         .show_ui(ui, |ui| {

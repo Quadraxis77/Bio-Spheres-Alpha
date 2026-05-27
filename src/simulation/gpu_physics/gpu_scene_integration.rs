@@ -102,8 +102,9 @@ pub fn execute_gpu_physics_step(
     _cell_count_hint: u32,
     constraint_iterations: u32,
     solo_metabolism_multiplier: f32,
+    boulder_count: u32,
+    boulder_force_accum: Option<&wgpu::Buffer>,
 ) {
-    // Rotate to next buffer set
     let current_index = triple_buffers.rotate_buffers();
 
     // Update physics params uniform buffer
@@ -144,6 +145,10 @@ pub fn execute_gpu_physics_step(
         encoder.clear_buffer(&adhesion_buffers.torque_accum_x, 0, None);
         encoder.clear_buffer(&adhesion_buffers.torque_accum_y, 0, None);
         encoder.clear_buffer(&adhesion_buffers.torque_accum_z, 0, None);
+        // Clear boulder force accumulator so cell-push forces don't accumulate across frames
+        if let Some(bfa) = boulder_force_accum {
+            encoder.clear_buffer(bfa, 0, None);
+        }
     }
     
     // Use cached bind groups (no per-frame allocation!)
@@ -297,6 +302,9 @@ pub fn execute_gpu_physics_step(
                 compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
             }
         }
+
+        // Stage 6.6: Boulder physics is now in a separate pass after nutrient apply.
+        // (Moved to avoid buffer aliasing with cell_count_buffer.)
         
         // Stage 7: Angular velocity integration (256 threads)
         // Applies accumulated torques to angular velocities and rotations.
@@ -344,8 +352,7 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(1, &cached_bind_groups.nutrient_system, &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.adhesion, &[]);
         compute_pass.set_bind_group(3, &cached_bind_groups.nutrient_transport, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-    }
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);    }
     
     // Stage 9b: Nutrient apply (separate compute pass)
     // CRITICAL: Must be a separate pass so all nutrient_transport workgroups finish
@@ -362,6 +369,71 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, &cached_bind_groups.nutrient_apply, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+    }
+
+    // Stage 9c: Boulder consume (separate compute pass).
+    // Must be after the main physics pass so cell_count_buffer is no longer bound
+    // read-write by the physics group. The pass boundary is a full pipeline barrier.
+    // Must also be after nutrient apply so boulder nutrients are visible to transport
+    // on the next frame (transport already ran this frame).
+    // Boulder physics runs in the same pass immediately after consume.
+    if boulder_count > 0 {
+        let boulder_workgroups = (boulder_count + 63) / 64;
+        // Use the input position buffer (previous frame's output) — it's idle this frame.
+        let input_index = (current_index + 2) % 3;
+
+        // Write the minimal boulder consume params (no storage buffers, no conflicts).
+        // Layout: [delta_time: f32, world_size: f32, grid_cell_size: f32, grid_resolution: i32]
+        #[repr(C)]
+        #[derive(bytemuck::Pod, bytemuck::Zeroable, Copy, Clone)]
+        struct BoulderConsumeParams {
+            delta_time:      f32,
+            world_size:      f32,
+            grid_cell_size:  f32,
+            grid_resolution: i32,
+        }
+        let boulder_params = BoulderConsumeParams {
+            delta_time:      params.delta_time,
+            world_size:      params.world_size,
+            grid_cell_size:  params.grid_cell_size,
+            grid_resolution: params.grid_resolution,
+        };
+        queue.write_buffer(
+            &pipelines.boulder_consume_params_buffer,
+            0,
+            bytemuck::bytes_of(&boulder_params),
+        );
+
+        {
+            let mut boulder_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Boulder Consume + Physics"),
+                timestamp_writes: None,
+            });
+
+            // Boulder consume: size-gated moss → cell nutrients
+            boulder_pass.set_pipeline(&pipelines.boulder_consume);
+            boulder_pass.set_bind_group(0, &cached_bind_groups.boulder_consume_params, &[]);
+            boulder_pass.set_bind_group(1, &cached_bind_groups.boulder_consume_spatial, &[]);
+            boulder_pass.set_bind_group(2, &cached_bind_groups.boulder_consume_cell_data[input_index], &[]);
+            boulder_pass.set_bind_group(3, &cached_bind_groups.boulder_consume_buffers, &[]);
+            boulder_pass.dispatch_workgroups(boulder_workgroups, 1, 1);
+
+            // Boulder physics: gravity, cave SDF, integration, death, moss_dir update.
+            // Runs in the same pass so eat_dir_accum written by consume is visible here
+            // (storage writes are ordered within a single compute pass).
+            // Boulder physics always runs — cave SDF collision is skipped if no cave.
+            boulder_pass.set_pipeline(&pipelines.boulder_physics);
+            boulder_pass.set_bind_group(0, physics_bind_group, &[]);
+            boulder_pass.set_bind_group(1, &cached_bind_groups.boulder_physics_buffers, &[]);
+            if let Some(cave_renderer) = cave_renderer {
+                boulder_pass.set_bind_group(2, cave_renderer.collision_bind_group(), &[]);
+            } else {
+                // Use a dummy cave bind group — the shader checks collision_enabled == 0
+                // which is set in the dummy buffer, so SDF code is skipped.
+                boulder_pass.set_bind_group(2, &cached_bind_groups.boulder_dummy_cave, &[]);
+            }
+            boulder_pass.dispatch_workgroups(boulder_workgroups, 1, 1);
+        }
     }
 }
 

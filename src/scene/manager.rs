@@ -167,47 +167,60 @@ impl SceneManager {
         // Initialize cave system automatically
         let _cave_initialized = gpu_scene.initialize_cave_system(device, queue, config.format, world_diameter);
         
-        // Initialize fluid system automatically
-        // Create camera bind group layout for voxel rendering
-        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Voxel Camera Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        
-        let fluid_initialized = gpu_scene.initialize_fluid_system(
-            device,
-            queue,
-            config.format,
-            &camera_bind_group_layout,
-        );
-        
-        if fluid_initialized {
-            log::info!("Fluid system auto-initialized on GPU scene recreation");
-            // Generate test voxels
-            gpu_scene.generate_test_voxels(queue);
-            // Update solid mask now that all required components exist
-            gpu_scene.update_solid_mask(queue);
+        // Transfer fluid simulator from old scene if it exists — preserves water state
+        // across cells-only resets. Only initialize fresh if there was no prior fluid.
+        let had_fluid = self.gpu_scene.as_ref().map(|s| s.fluid_simulator.is_some()).unwrap_or(false);
+        if had_fluid {
+            // Move the fluid simulator and related state from the old scene
+            if let Some(ref mut old_scene) = self.gpu_scene {
+                gpu_scene.fluid_simulator    = old_scene.fluid_simulator.take();
+                gpu_scene.fluid_buffers      = old_scene.fluid_buffers.take();
+                // Rebuild bind groups that reference fluid buffers in the new scene
+                if let Some(ref simulator) = gpu_scene.fluid_simulator {
+                    gpu_scene.cached_bind_groups.update_water_buffers(
+                        device,
+                        &gpu_scene.gpu_physics_pipelines,
+                        &gpu_scene.adhesion_buffers,
+                        &gpu_scene.gpu_triple_buffers,
+                        simulator.water_grid_params_buffer(),
+                        simulator.water_bitfield_buffer(),
+                        simulator.water_velocity_buffer(),
+                    );
+                }
+            }
+        } else {
+            // No prior fluid — initialize fresh
+            let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Voxel Camera Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+            let fluid_initialized = gpu_scene.initialize_fluid_system(
+                device, queue, config.format, &camera_bind_group_layout,
+            );
+            if fluid_initialized {
+                log::info!("Fluid system auto-initialized on GPU scene recreation");
+                gpu_scene.generate_test_voxels(queue);
+                gpu_scene.update_solid_mask(queue);
+            }
+            gpu_scene.initialize_fluid_simulator(device, queue, config.format);
         }
-        
-        // Initialize GPU surface nets for density mesh rendering
+
+        // Initialize GPU surface nets for density mesh rendering (always needed)
         gpu_scene.initialize_gpu_surface_nets(device, config.format);
-        
+
         // Set initial render parameters from editor state
         if let Some(ref surface_nets) = gpu_scene.gpu_surface_nets {
             surface_nets.set_initial_params(queue, editor_state);
         }
-
-        // Initialize fluid simulator with test water sphere
-        gpu_scene.initialize_fluid_simulator(device, queue, config.format);
 
         // Sync lighting and fog from current editor state so reset doesn't revert visuals
         gpu_scene.apply_light_params_from_editor(editor_state);

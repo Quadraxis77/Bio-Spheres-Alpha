@@ -325,7 +325,10 @@ impl CaveSystemRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,  // No culling - show both front and back faces
+                // Cull back faces — the camera is always inside the cave, so only the
+                // inward-facing (front) surfaces are ever visible. Culling the exterior
+                // faces halves the fragment load with no visual difference.
+                cull_mode: Some(wgpu::Face::Back),
                 unclipped_depth: false,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
@@ -686,6 +689,130 @@ impl CaveSystemRenderer {
     /// Get triangle count for collision
     pub fn triangle_count(&self) -> u32 {
         self.params.triangle_count
+    }
+}
+
+/// CPU-side cave SDF evaluation — exact port of the WGSL shader logic.
+///
+/// Returns the corrected position after pushing `pos` out of any solid rock.
+/// If `pos` is already in open space the input is returned unchanged.
+/// Call this once per frame on the camera position to prevent the camera
+/// from clipping through cave walls.
+///
+/// The camera is treated as a point with a small radius (`camera_radius`) so
+/// it stays a comfortable distance from the surface rather than touching it.
+pub fn cave_sdf_push_out(pos: glam::Vec3, params: &CaveParams, camera_radius: f32) -> glam::Vec3 {
+    if params.collision_enabled == 0 {
+        return pos;
+    }
+
+    // ── helpers (mirrors WGSL) ────────────────────────────────────────────────
+
+    fn hash1(x: i32, y: i32, z: i32, seed: u32) -> f32 {
+        let mut h = seed;
+        h = h.wrapping_mul(374761393).wrapping_add(x as u32);
+        h = h.wrapping_mul(668265263).wrapping_add(y as u32);
+        h = h.wrapping_mul(1274126177).wrapping_add(z as u32);
+        h ^= h >> 13;
+        h = h.wrapping_mul(1274126177);
+        h ^= h >> 16;
+        h as f32 / u32::MAX as f32
+    }
+
+    fn smoothstep(t: f32) -> f32 { t * t * (3.0 - 2.0 * t) }
+
+    fn value_noise_3d(p: glam::Vec3, seed: u32) -> f32 {
+        let ix = p.x.floor() as i32;
+        let iy = p.y.floor() as i32;
+        let iz = p.z.floor() as i32;
+        let fx = p.x - p.x.floor();
+        let fy = p.y - p.y.floor();
+        let fz = p.z - p.z.floor();
+        let ux = smoothstep(fx);
+        let uy = smoothstep(fy);
+        let uz = smoothstep(fz);
+        let c000 = hash1(ix,   iy,   iz,   seed);
+        let c100 = hash1(ix+1, iy,   iz,   seed);
+        let c010 = hash1(ix,   iy+1, iz,   seed);
+        let c110 = hash1(ix+1, iy+1, iz,   seed);
+        let c001 = hash1(ix,   iy,   iz+1, seed);
+        let c101 = hash1(ix+1, iy,   iz+1, seed);
+        let c011 = hash1(ix,   iy+1, iz+1, seed);
+        let c111 = hash1(ix+1, iy+1, iz+1, seed);
+        let x00 = c000 + (c100 - c000) * ux;
+        let x10 = c010 + (c110 - c010) * ux;
+        let x01 = c001 + (c101 - c001) * ux;
+        let x11 = c011 + (c111 - c011) * ux;
+        let y0  = x00  + (x10  - x00)  * uy;
+        let y1  = x01  + (x11  - x01)  * uy;
+        y0 + (y1 - y0) * uz
+    }
+
+    let sample = |p: glam::Vec3| -> f32 {
+        let world_center = glam::Vec3::from(params.world_center);
+        let dist = (p - world_center).length();
+        if dist > params.world_radius { return 1.0; }
+
+        // Domain warp
+        let warp_scale    = params.scale * 0.5;
+        let warp_strength = params.smoothness * params.scale;
+        let warp_seed     = params.seed + 9999;
+        let wx = value_noise_3d(p / warp_scale, warp_seed) - 0.5;
+        let wy = value_noise_3d(p / warp_scale + glam::Vec3::new(31.7, 47.3, 13.1), warp_seed) - 0.5;
+        let wz = value_noise_3d(p / warp_scale + glam::Vec3::new(73.9, 19.4, 67.2), warp_seed) - 0.5;
+        let warped = p + glam::Vec3::new(wx, wy, wz) * warp_strength;
+
+        // FBM
+        let mut value     = 0.0f32;
+        let mut amplitude = 1.0f32;
+        let mut frequency = 1.0f32;
+        let mut max_val   = 0.0f32;
+        for i in 0..params.octaves {
+            let sp = warped * frequency / params.scale;
+            let octave_seed = params.seed + i * 1337;
+            value     += amplitude * value_noise_3d(sp, octave_seed);
+            max_val   += amplitude;
+            amplitude *= params.persistence;
+            frequency *= 2.0;
+        }
+        let noise = value / max_val;
+
+        let cave_threshold = params.density.clamp(0.0, 1.0);
+        if noise > cave_threshold {
+            let wall_factor = (noise - cave_threshold) / (1.0 - cave_threshold).max(0.001);
+            params.threshold + wall_factor * 0.5
+        } else {
+            params.threshold - 0.5
+        }
+    };
+
+    // ── collision response ────────────────────────────────────────────────────
+
+    let center_density = sample(pos);
+    // Early exit: safely in open space
+    let open_threshold = params.threshold - 0.5 - 0.2;
+    if center_density <= open_threshold {
+        return pos;
+    }
+
+    if center_density > params.threshold {
+        // Compute gradient via central differences (same step as shader)
+        let h = (params.scale * 0.1).max(camera_radius * 0.5);
+        let gx = sample(pos + glam::Vec3::X * h) - sample(pos - glam::Vec3::X * h);
+        let gy = sample(pos + glam::Vec3::Y * h) - sample(pos - glam::Vec3::Y * h);
+        let gz = sample(pos + glam::Vec3::Z * h) - sample(pos - glam::Vec3::Z * h);
+        let grad = glam::Vec3::new(gx, gy, gz);
+        let grad_len = grad.length();
+        if grad_len < 0.0001 {
+            return pos;
+        }
+        // Normal points into open space (away from wall)
+        let normal = -grad / grad_len;
+        let penetration = (center_density - params.threshold) * params.scale;
+        // Push out by penetration + camera radius margin
+        pos + normal * (penetration + camera_radius * 0.1)
+    } else {
+        pos
     }
 }
 
