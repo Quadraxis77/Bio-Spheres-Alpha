@@ -2179,6 +2179,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     child_b_after_split_keep_adhesion: true,
                     glueocyte_cell_adhesion: false,
                     glueocyte_env_adhesion: true,
+                    glueocyte_boulder_adhesion: true,
                     glueocyte_cell_adhesion_signal_channel: -1,
                     glueocyte_cell_adhesion_signal_threshold: 1.0,
                     swim_force: 0.5,
@@ -2964,6 +2965,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         });
                     }
                     ui.checkbox(&mut mode.glueocyte_env_adhesion, "Environment Adhesion");
+                    if mode.glueocyte_env_adhesion {
+                        ui.indent("glue_boulder", |ui| {
+                            ui.checkbox(&mut mode.glueocyte_boulder_adhesion, "Include Boulders/Mossrocks");
+                        });
+                    }
                 });
             } else if mode.cell_type == 1 { // Flagellocyte (cell_type == 1)
                 group_container(ui, "Flagellocyte Functions", egui::Color32::from_rgb(140, 180, 220), |ui| {
@@ -4058,6 +4064,7 @@ fn sync_mode_changes_to_others(
         // Glueocyte
         if updated.glueocyte_cell_adhesion != snapshot.glueocyte_cell_adhesion { other.glueocyte_cell_adhesion = updated.glueocyte_cell_adhesion; }
         if updated.glueocyte_env_adhesion != snapshot.glueocyte_env_adhesion { other.glueocyte_env_adhesion = updated.glueocyte_env_adhesion; }
+        if updated.glueocyte_boulder_adhesion != snapshot.glueocyte_boulder_adhesion { other.glueocyte_boulder_adhesion = updated.glueocyte_boulder_adhesion; }
         if updated.glueocyte_cell_adhesion_signal_channel != snapshot.glueocyte_cell_adhesion_signal_channel { other.glueocyte_cell_adhesion_signal_channel = updated.glueocyte_cell_adhesion_signal_channel; }
         if (updated.glueocyte_cell_adhesion_signal_threshold - snapshot.glueocyte_cell_adhesion_signal_threshold).abs() > f32::EPSILON { other.glueocyte_cell_adhesion_signal_threshold = updated.glueocyte_cell_adhesion_signal_threshold; }
 

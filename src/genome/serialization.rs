@@ -134,6 +134,8 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub glueocyte_env_adhesion: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub glueocyte_boulder_adhesion: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub glueocyte_cell_adhesion_signal_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub glueocyte_cell_adhesion_signal_threshold: Option<f32>,
@@ -436,6 +438,7 @@ fn mode_to_serializable(
         child_b_after_split_keep_adhesion: diff_bool(mode.child_b_after_split_keep_adhesion, default.child_b_after_split_keep_adhesion),
         glueocyte_cell_adhesion: diff_bool(mode.glueocyte_cell_adhesion, default.glueocyte_cell_adhesion),
         glueocyte_env_adhesion: diff_bool(mode.glueocyte_env_adhesion, default.glueocyte_env_adhesion),
+        glueocyte_boulder_adhesion: diff_bool(mode.glueocyte_boulder_adhesion, default.glueocyte_boulder_adhesion),
         glueocyte_cell_adhesion_signal_channel: diff_i32(mode.glueocyte_cell_adhesion_signal_channel, default.glueocyte_cell_adhesion_signal_channel),
         glueocyte_cell_adhesion_signal_threshold: diff_f32(mode.glueocyte_cell_adhesion_signal_threshold, default.glueocyte_cell_adhesion_signal_threshold),
         swim_force: diff_f32(mode.swim_force, default.swim_force),
@@ -742,12 +745,9 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(keep_adhesion) = ser.child_b_after_split_keep_adhesion {
         mode.child_b_after_split_keep_adhesion = keep_adhesion;
     }
-    if let Some(v) = ser.glueocyte_cell_adhesion {
-        mode.glueocyte_cell_adhesion = v;
-    }
-    if let Some(v) = ser.glueocyte_env_adhesion {
-        mode.glueocyte_env_adhesion = v;
-    }
+    if let Some(v) = ser.glueocyte_cell_adhesion { mode.glueocyte_cell_adhesion = v; }
+    if let Some(v) = ser.glueocyte_env_adhesion  { mode.glueocyte_env_adhesion  = v; }
+    if let Some(v) = ser.glueocyte_boulder_adhesion { mode.glueocyte_boulder_adhesion = v; }
     if let Some(v) = ser.glueocyte_cell_adhesion_signal_channel {
         mode.glueocyte_cell_adhesion_signal_channel = v;
     }

@@ -189,6 +189,9 @@ pub struct CachedBindGroups {
     pub env_adhesion_force_accum: [wgpu::BindGroup; 3],
     /// Glueocyte env adhesion mode data bind group (same for all frames)
     pub env_adhesion_mode_data: wgpu::BindGroup,
+    /// Dummy cave collision bind group — used when glueocyte env adhesion runs without a cave
+    /// (e.g. boulder-only adhesion). Contains zeroed CaveParams with collision_enabled=0.
+    pub dummy_cave_collision: wgpu::BindGroup,
 
     // Glueocyte cell-to-cell adhesion bind groups
     /// Adhesion buffers bind group (connections, indices, next_id, free_slots, counts)
@@ -1738,6 +1741,42 @@ impl GpuPhysicsPipelines {
         ];
         let env_adhesion_mode_data = self.create_env_adhesion_mode_data_bind_group(device, buffers);
 
+        // Dummy cave collision bind group — used when glueocyte env adhesion runs without a cave.
+        // Contains a zeroed CaveParams buffer with collision_enabled=0 so cave wall checks are skipped.
+        let dummy_cave_params_buf = {
+            // CaveParams is a large uniform — we only need collision_enabled=0 (offset 32, u32).
+            // Allocate the full size (matching the shader struct) filled with zeros.
+            // The shader only reads collision_enabled and world_radius; both default to 0 safely.
+            let size = 256u64; // CaveParams is padded to 256 bytes in the shader
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Cave Params (Env Adhesion)"),
+                size,
+                usage: wgpu::BufferUsages::UNIFORM,
+                mapped_at_creation: false,
+            })
+        };
+        let dummy_cave_collision_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Dummy Cave Collision Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let dummy_cave_collision = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Dummy Cave Collision Bind Group"),
+            layout: &dummy_cave_collision_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: dummy_cave_params_buf.as_entire_binding(),
+            }],
+        });
+
         // Glueocyte cell-to-cell adhesion bind groups
         let cell_adhesion_adhesion = self.create_cell_adhesion_adhesion_bind_group(device, adhesion_buffers);
         let cell_adhesion_spatial = self.create_cell_adhesion_spatial_bind_group(device, buffers);
@@ -1818,6 +1857,7 @@ impl GpuPhysicsPipelines {
             muscle_contraction_group2,
             env_adhesion_force_accum,
             env_adhesion_mode_data,
+            dummy_cave_collision,
             signal_flags,
             signal_propagate_flags,
             signal_sense_cell_data,
@@ -5564,7 +5604,7 @@ impl GpuPhysicsPipelines {
     }
 
     /// Create env adhesion mode data bind group layout (Group 2)
-    /// Contains mode_indices, mode_cell_types, glueocyte_env_adhesion_flags
+    /// Contains mode_indices, mode_cell_types, glueocyte_env_adhesion_flags, glueocyte_boulder_adhesion_flags
     fn create_env_adhesion_mode_data_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Env Adhesion Mode Data Layout"),
@@ -5591,6 +5631,17 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 3: glueocyte_boulder_adhesion_flags (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -5666,6 +5717,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: triple_buffers.glueocyte_env_adhesion_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: triple_buffers.glueocyte_boulder_adhesion_flags.as_entire_binding(),
                 },
             ],
         })

@@ -438,6 +438,7 @@ pub struct GpuTripleBufferSystem {
 
     /// Per-mode glueocyte environment adhesion flags (one u32 per mode)
     pub glueocyte_env_adhesion_flags: wgpu::Buffer,
+    pub glueocyte_boulder_adhesion_flags: wgpu::Buffer,
 
     /// Per-mode glueocyte cell-adhesion flags packed as two u32 per mode:
     ///   [0] = cell_adhesion_enabled (0/1)
@@ -701,6 +702,7 @@ impl GpuTripleBufferSystem {
 
         // Per-mode glueocyte env adhesion flags (one u32 per mode)
         let glueocyte_env_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Glueocyte Env Adhesion Flags");
+        let glueocyte_boulder_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Glueocyte Boulder Adhesion Flags");
 
         // Per-mode glueocyte cell-adhesion flags: 4 u32 per mode
         // [0]=enabled, [1]=signal_channel (0xFFFFFFFF=disabled), [2]=signal_threshold bits, [3]=padding
@@ -804,6 +806,7 @@ impl GpuTripleBufferSystem {
             env_anchor_buffer,
             muscle_contraction_buffer,
             glueocyte_env_adhesion_flags,
+            glueocyte_boulder_adhesion_flags,
             glueocyte_cell_adhesion_flags,
             oculocyte_params,
             regulation_params,
@@ -1133,6 +1136,7 @@ impl GpuTripleBufferSystem {
 
         // Sync glueocyte env adhesion flags (one u32 per mode across all genomes)
         self.sync_glueocyte_env_adhesion_flags(queue, genomes);
+        self.sync_glueocyte_boulder_adhesion_flags(queue, genomes);
 
         // Sync behavior flags for all cell types (applies_swim_force, etc.)
         self.sync_behavior_flags(queue);
@@ -1248,6 +1252,7 @@ impl GpuTripleBufferSystem {
 
         self.mode_cell_types              = Self::create_storage_buffer(device, m4,  "Mode Cell Types");
         self.glueocyte_env_adhesion_flags = Self::create_storage_buffer(device, m4,  "Glueocyte Env Adhesion Flags");
+        self.glueocyte_boulder_adhesion_flags = Self::create_storage_buffer(device, m4, "Glueocyte Boulder Adhesion Flags");
         self.glueocyte_cell_adhesion_flags = Self::create_storage_buffer(device, m16, "Glueocyte Cell Adhesion Flags");
         self.oculocyte_params             = Self::create_storage_buffer(device, m16, "Oculocyte Params");
         self.regulation_params            = Self::create_storage_buffer(device, m16, "Regulation Params");
@@ -1652,6 +1657,18 @@ impl GpuTripleBufferSystem {
             .collect();
         if !flags.is_empty() {
             queue.write_buffer(&self.glueocyte_env_adhesion_flags, 0, bytemuck::cast_slice(&flags));
+        }
+    }
+
+    pub fn sync_glueocyte_boulder_adhesion_flags(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let flags: Vec<u32> = genomes
+            .iter()
+            .flat_map(|genome| {
+                genome.modes.iter().map(|mode| if mode.glueocyte_boulder_adhesion { 1u32 } else { 0u32 })
+            })
+            .collect();
+        if !flags.is_empty() {
+            queue.write_buffer(&self.glueocyte_boulder_adhesion_flags, 0, bytemuck::cast_slice(&flags));
         }
     }
 

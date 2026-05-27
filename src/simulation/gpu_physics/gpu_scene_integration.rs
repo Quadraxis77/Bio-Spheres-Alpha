@@ -253,15 +253,24 @@ pub fn execute_gpu_physics_step(
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
 
-        // Stage 5.6: Glueocyte environment adhesion (when cave is present)
+        // Stage 5.6: Glueocyte environment adhesion (cave and/or boulders)
         // Must run BEFORE position_update so forces are accumulated and applied this frame
-        if let (Some(cave_renderer), _) = (cave_renderer.as_ref(), cave_physics_bind_groups.as_ref()) {
-            compute_pass.set_pipeline(&pipelines.glueocyte_env_adhesion);
-            compute_pass.set_bind_group(0, physics_bind_group, &[]);
-            compute_pass.set_bind_group(1, &cached_bind_groups.env_adhesion_force_accum[current_index], &[]);
-            compute_pass.set_bind_group(2, &cached_bind_groups.env_adhesion_mode_data, &[]);
-            compute_pass.set_bind_group(3, cave_renderer.collision_bind_group(), &[]);
-            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        {
+            let has_cave = cave_renderer.is_some();
+            let has_boulders = boulder_count > 0;
+            if has_cave || has_boulders {
+                let cave_bg = if let Some(ref cave) = cave_renderer {
+                    cave.collision_bind_group()
+                } else {
+                    &cached_bind_groups.dummy_cave_collision
+                };
+                compute_pass.set_pipeline(&pipelines.glueocyte_env_adhesion);
+                compute_pass.set_bind_group(0, physics_bind_group, &[]);
+                compute_pass.set_bind_group(1, &cached_bind_groups.env_adhesion_force_accum[current_index], &[]);
+                compute_pass.set_bind_group(2, &cached_bind_groups.env_adhesion_mode_data, &[]);
+                compute_pass.set_bind_group(3, cave_bg, &[]);
+                compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+            }
         }
 
         // Stage 5.7: Glueocyte cell-to-cell adhesion
@@ -579,15 +588,24 @@ pub fn execute_gpu_mechanics_step(
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
 
-        // Stage 5.6: Glueocyte environment adhesion (when cave is present)
+        // Stage 5.6: Glueocyte environment adhesion (cave and/or boulders)
         // Must run BEFORE position_update so forces are accumulated and applied this frame
-        if let (Some(cave_renderer), _) = (cave_renderer.as_ref(), cave_physics_bind_groups.as_ref()) {
-            compute_pass.set_pipeline(&pipelines.glueocyte_env_adhesion);
-            compute_pass.set_bind_group(0, physics_bind_group, &[]);
-            compute_pass.set_bind_group(1, &cached_bind_groups.env_adhesion_force_accum[current_index], &[]);
-            compute_pass.set_bind_group(2, &cached_bind_groups.env_adhesion_mode_data, &[]);
-            compute_pass.set_bind_group(3, cave_renderer.collision_bind_group(), &[]);
-            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        {
+            let has_cave = cave_renderer.is_some();
+            let has_boulders = false; // boulder_count not available in mechanics step; cave-only here
+            if has_cave || has_boulders {
+                let cave_bg = if let Some(ref cave) = cave_renderer {
+                    cave.collision_bind_group()
+                } else {
+                    &cached_bind_groups.dummy_cave_collision
+                };
+                compute_pass.set_pipeline(&pipelines.glueocyte_env_adhesion);
+                compute_pass.set_bind_group(0, physics_bind_group, &[]);
+                compute_pass.set_bind_group(1, &cached_bind_groups.env_adhesion_force_accum[current_index], &[]);
+                compute_pass.set_bind_group(2, &cached_bind_groups.env_adhesion_mode_data, &[]);
+                compute_pass.set_bind_group(3, cave_bg, &[]);
+                compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+            }
         }
 
         // Stage 5.7: Glueocyte cell-to-cell adhesion (mechanics step)

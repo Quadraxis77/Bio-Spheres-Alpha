@@ -1043,6 +1043,7 @@ impl GpuScene {
                 child_b_after_split_keep_adhesion: false,
                 glueocyte_cell_adhesion: false,
                 glueocyte_env_adhesion: glueocyte_flags[i] != 0,
+                glueocyte_boulder_adhesion: true,
                 glueocyte_cell_adhesion_signal_channel: -1,
                 glueocyte_cell_adhesion_signal_threshold: 1.0,
                 swim_force: props[6],
@@ -2239,6 +2240,7 @@ impl GpuScene {
 
         // Sync glueocyte env adhesion flags (one u32 per mode)
         self.gpu_triple_buffers.sync_glueocyte_env_adhesion_flags(queue, &self.genomes);
+        self.gpu_triple_buffers.sync_glueocyte_boulder_adhesion_flags(queue, &self.genomes);
 
         // Sync glueocyte cell adhesion flags (4 u32 per mode: enabled, channel, threshold, padding)
         self.gpu_triple_buffers.sync_glueocyte_cell_adhesion_flags(queue, &self.genomes);
@@ -5862,9 +5864,29 @@ impl Scene for GpuScene {
             }
         }
 
+        // Run shrink-wrap compute THEN render skin, so the mesh is current this frame.
+        // Skin renders after adhesion lines so its alpha blending dims them.
         if self.show_organism_skins {
+            self.ensure_organism_skin_bind_groups(device);
+            let output_idx = self.gpu_triple_buffers.output_buffer_index();
+            let max_cells  = self.current_cell_count;
+
+            // Compute pass: update the shrink-wrap mesh
+            if let (Some(ref renderer), Some(ref compute_bgs)) =
+                (&self.organism_skin_renderer, &self.organism_skin_compute_bind_groups)
+            {
+                if max_cells > 0 {
+                    renderer.encode_shrinkwrap_frame(
+                        &mut encoder,
+                        &compute_bgs[output_idx],
+                        max_cells,
+                    );
+                }
+            }
+
+            // Render pass: draw the updated mesh over adhesion lines
             if let Some(ref renderer) = self.organism_skin_renderer {
-                if renderer.skinned_cell_count > 0 || renderer.index_count > 0 {
+                if self.current_cell_count > 0 {
                     renderer.set_time(queue, self.current_time);
                     renderer.render(
                         &mut encoder,
@@ -5911,26 +5933,6 @@ impl Scene for GpuScene {
             }
         }
         
-        // Extract and render organism skins if enabled
-        if self.show_organism_skins {
-            self.ensure_organism_skin_bind_groups(device);
-            let output_idx = self.gpu_triple_buffers.output_buffer_index();
-            let max_cells  = self.current_cell_count;
-
-            // Run shrink-wrap compute pipeline (compute only — render happens before cells below)
-            if let (Some(ref renderer), Some(ref compute_bgs)) =
-                (&self.organism_skin_renderer, &self.organism_skin_compute_bind_groups)
-            {
-                if max_cells > 0 {
-                    renderer.encode_shrinkwrap_frame(
-                        &mut encoder,
-                        &compute_bgs[output_idx],
-                        max_cells,
-                    );
-                }
-            }
-        }
-
         // Capture reflection cubemap once (cave + sun into 6 faces)
         if !self.reflection_cubemap_captured
             && self.cave_renderer.is_some()

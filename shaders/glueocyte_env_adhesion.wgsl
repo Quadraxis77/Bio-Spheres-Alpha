@@ -130,6 +130,7 @@ struct GpuBoulder {
 @group(2) @binding(0) var<storage, read> mode_indices: array<u32>;
 @group(2) @binding(1) var<storage, read> mode_cell_types: array<u32>;
 @group(2) @binding(2) var<storage, read> glueocyte_env_adhesion_flags: array<u32>;
+@group(2) @binding(3) var<storage, read> glueocyte_boulder_adhesion_flags: array<u32>;
 
 // Group 3: Cave params for SDF sampling
 @group(3) @binding(0) var<uniform> cave_params: CaveParams;
@@ -220,7 +221,7 @@ fn sample_cave_density(pos: vec3<f32>) -> f32 {
 }
 
 // Returns true if pos is touching a solid surface (cave wall, boundary sphere, or boulder)
-fn is_touching_surface(pos: vec3<f32>, contact_threshold: f32) -> bool {
+fn is_touching_surface(pos: vec3<f32>, contact_threshold: f32, mode_idx: u32) -> bool {
     let boundary_radius = cave_params.world_radius;
     let dist_from_center = length(pos - cave_params.world_center);
 
@@ -248,14 +249,18 @@ fn is_touching_surface(pos: vec3<f32>, contact_threshold: f32) -> bool {
         }
     }
 
-    // Boulder surface contact
-    let num_boulders = boulder_count[0];
-    for (var bi = 0u; bi < num_boulders; bi++) {
-        let bld = boulder_state[bi];
-        if (bld.dead != 0u || bld.radius <= 0.0) { continue; }
-        let dist = length(pos - bld.position);
-        if (dist <= bld.radius + contact_threshold) {
-            return true;
+    // Boulder surface contact — only when boulder adhesion is enabled for this mode
+    let boulder_adhesion_enabled = mode_idx < arrayLength(&glueocyte_boulder_adhesion_flags)
+        && glueocyte_boulder_adhesion_flags[mode_idx] != 0u;
+    if (boulder_adhesion_enabled) {
+        let num_boulders = boulder_count[0];
+        for (var bi = 0u; bi < num_boulders; bi++) {
+            let bld = boulder_state[bi];
+            if (bld.dead != 0u || bld.radius <= 0.0) { continue; }
+            let dist = length(pos - bld.position);
+            if (dist <= bld.radius + contact_threshold) {
+                return true;
+            }
         }
     }
 
@@ -306,7 +311,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let is_active = anchor.w > 0.5;
 
     // Acquire anchor on first surface contact
-    if (!is_active && is_touching_surface(pos, CONTACT_THRESHOLD)) {
+    if (!is_active && is_touching_surface(pos, CONTACT_THRESHOLD, mode_idx)) {
         env_anchors[cell_idx] = vec4<f32>(pos, 1.0);
     }
 

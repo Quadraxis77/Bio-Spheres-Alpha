@@ -282,11 +282,18 @@ impl OrganismLabelSystem {
         pass.set_pipeline(&self.init_pipeline);
         pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
 
-        // 6 hook+compress pairs — enough to converge organisms up to ~64 cells diameter.
-        // Each pair propagates labels one more hop through the adhesion graph.
-        for _ in 0..6 {
+        // Hook+compress convergence for long chains (tentacles, arms).
+        // A chain of N cells needs ~N hook passes to propagate the minimum label end-to-end.
+        // We run many hook passes first to spread labels, then compress passes to flatten
+        // the union-find tree. This handles organisms up to ~200 cells in diameter.
+        //
+        // Cost: 20 hook + 10 compress = 30 dispatches × ceil(cell_count/256) workgroups.
+        // At 10K cells that's 30 × 40 = 1200 workgroups — negligible GPU time.
+        for _ in 0..20 {
             pass.set_pipeline(&self.hook_pipeline);
             pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
+        }
+        for _ in 0..10 {
             pass.set_pipeline(&self.compress_pipeline);
             pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
         }
