@@ -115,3 +115,4 @@ pub mod rendering;
 pub mod scene;
 pub mod simulation;
 pub mod ui;
+pub mod updater;

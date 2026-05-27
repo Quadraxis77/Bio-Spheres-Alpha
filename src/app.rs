@@ -2402,6 +2402,12 @@ impl ApplicationHandler for AppState {
 }
 
 pub fn run() {
+    // ── Self-replace (update) ─────────────────────────────────────────────────
+    // If the user ran a new bio-spheres.exe from a different location than the
+    // previous install, this copies it to the canonical path and relaunches.
+    // Must run before logging so it can exit cleanly if a relaunch happens.
+    crate::updater::run_self_replace();
+
     // ── Logging setup ────────────────────────────────────────────────────────
     // Write logs to the AppData config directory so they're always findable
     // regardless of where the exe is launched from.
@@ -2477,11 +2483,9 @@ pub fn run() {
 
     log::warn!("Bio-Spheres starting — log: {}", log_path.display());
 
-    // Write embedded default .ron settings next to the executable when the
-    // files don't already exist.  This ensures a freshly-extracted build
-    // starts with the settings that were current at compile time, while
-    // still allowing the user to override them by editing the files.
-    extract_default_settings();
+    // Migrate config files: write defaults for first-time users, and add any
+    // new keys introduced in this version without touching existing user values.
+    crate::updater::migrate_config_files();
 
     let event_loop = EventLoop::new().unwrap();
     let mut state = AppState { app: None };
@@ -2489,25 +2493,4 @@ pub fn run() {
     event_loop.run_app(&mut state).unwrap();
 }
 
-/// Writes embedded .ron files to the AppData config directory if they don't already exist.
-fn extract_default_settings() {
-    const EMBEDDED_DEFAULTS: &[(&str, &str)] = &[
-        ("cave_settings.ron",          include_str!("../cave_settings.ron")),
-        ("cell_visuals.ron",           include_str!("../cell_visuals.ron")),
-        ("fluid_settings.ron",         include_str!("../fluid_settings.ron")),
-        ("light_settings.ron",         include_str!("../light_settings.ron")),
-        ("sun_settings.ron",           include_str!("../sun_settings.ron")),
-        ("fluid_render_settings.ron",  include_str!("../fluid_render_settings.ron")),
-    ];
 
-    for (filename, content) in EMBEDDED_DEFAULTS {
-        let path = crate::app_dirs::config_file(filename);
-        if !path.exists() {
-            if let Err(e) = std::fs::write(&path, content) {
-                log::warn!("Failed to write default {}: {}", filename, e);
-            } else {
-                log::info!("Extracted default {} to {:?}", filename, path);
-            }
-        }
-    }
-}

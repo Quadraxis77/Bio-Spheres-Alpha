@@ -40,6 +40,7 @@ dirs = "5.0"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["wincon", "consoleapi", "winuser", "libloaderapi", "basetsd"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
 winres = "0.1"
