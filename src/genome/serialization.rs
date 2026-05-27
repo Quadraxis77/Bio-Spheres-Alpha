@@ -154,7 +154,7 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buoyancy_force: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub oculocyte_sense_type: Option<i32>,
+    pub oculocyte_sense_type: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oculocyte_signal_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -448,7 +448,7 @@ fn mode_to_serializable(
         flagellocyte_speed_b: diff_f32(mode.flagellocyte_speed_b, default.flagellocyte_speed_b),
         flagellocyte_threshold_c: diff_f32(mode.flagellocyte_threshold_c, default.flagellocyte_threshold_c),
         buoyancy_force: diff_f32(mode.buoyancy_force, default.buoyancy_force),
-        oculocyte_sense_type: diff_i32(mode.oculocyte_sense_type, default.oculocyte_sense_type),
+        oculocyte_sense_type: diff_u32(mode.oculocyte_sense_type, default.oculocyte_sense_type),
         oculocyte_signal_channel: diff_i32(mode.oculocyte_signal_channel, default.oculocyte_signal_channel),
         oculocyte_signal_value: diff_f32(mode.oculocyte_signal_value, default.oculocyte_signal_value),
         oculocyte_signal_hops: diff_i32(mode.oculocyte_signal_hops, default.oculocyte_signal_hops),
@@ -1015,6 +1015,14 @@ fn diff_f32(value: f32, default: f32) -> Option<f32> {
 }
 
 fn diff_i32(value: i32, default: i32) -> Option<i32> {
+    if value != default {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn diff_u32(value: u32, default: u32) -> Option<u32> {
     if value != default {
         Some(value)
     } else {

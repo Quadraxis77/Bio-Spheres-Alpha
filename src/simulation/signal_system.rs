@@ -19,12 +19,13 @@ pub const SIGNAL_CHANNELS: usize = 16;
 /// Signal attenuation factor per hop (signals lose this fraction per hop)
 pub const SIGNAL_ATTENUATION_PER_HOP: f32 = 0.5; // 50% signal strength retained per hop
 
-/// Oculocyte sense types
-pub const SENSE_CELL: i32 = 0;
-pub const SENSE_FOOD: i32 = 1;
-pub const SENSE_LIGHT: i32 = 2;
-pub const SENSE_BARRIER: i32 = 3;
-pub const SENSE_SELF: i32 = 4;
+/// Oculocyte sense type bitmask bits
+pub const SENSE_CELL: u32    = 1 << 0; // bit 0
+pub const SENSE_FOOD: u32    = 1 << 1; // bit 1
+pub const SENSE_LIGHT: u32   = 1 << 2; // bit 2
+pub const SENSE_BARRIER: u32 = 1 << 3; // bit 3
+pub const SENSE_SELF: u32    = 1 << 4; // bit 4
+pub const SENSE_MOSSROCK: u32 = 1 << 5; // bit 5
 
 /// Oculocyte cell type index
 const OCULOCYTE_TYPE: i32 = 7;
@@ -74,7 +75,7 @@ pub fn sense_oculocytes(
             continue;
         }
 
-        let sense_type = mode.oculocyte_sense_type;
+        let sense_mask = mode.oculocyte_sense_type;
         let channel = mode.oculocyte_signal_channel.clamp(0, 7) as usize; // Oculocyte channels 0-7 only
         let signal_value = mode.oculocyte_signal_value.clamp(-100.0, 100.0);
         let hops = mode.oculocyte_signal_hops.clamp(1, 20) as usize;
@@ -84,14 +85,15 @@ pub fn sense_oculocytes(
         let forward = state.genome_orientations[cell_idx] * Vec3::Z;
         let pos = state.positions[cell_idx];
 
-        let detected = match sense_type {
-            SENSE_CELL => sense_cells_ray(state, cell_idx, pos, forward, ray_length),
-            SENSE_FOOD => false, // Food sensing requires fluid system access — not available in preview
-            SENSE_LIGHT => false, // Light sensing requires light field — not available in preview
-            SENSE_BARRIER => sense_barrier_ray(pos, forward, ray_length, boundary_radius),
-            SENSE_SELF => true, // Self-sense always detects — emits unconditional positional gradient signal
-            _ => false,
-        };
+        // Bitmask: detect if ANY of the enabled sense types fires.
+        // Each bit is checked independently; the cell emits if at least one hits.
+        let detected =
+            ((sense_mask & SENSE_SELF) != 0)  // Self always fires
+            || ((sense_mask & SENSE_CELL) != 0 && sense_cells_ray(state, cell_idx, pos, forward, ray_length))
+            || ((sense_mask & SENSE_BARRIER) != 0 && sense_barrier_ray(pos, forward, ray_length, boundary_radius))
+            // Food and Light require fluid/light systems — not available in preview
+            || (sense_mask & SENSE_FOOD) != 0 && false
+            || (sense_mask & SENSE_LIGHT) != 0 && false;
 
         if detected {
             emissions.push(SignalEmission {

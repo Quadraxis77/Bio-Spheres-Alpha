@@ -2212,7 +2212,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     embryocyte_signal_channel: 0,
                     embryocyte_signal_value: 1.0,
                     buoyancy_force: 0.5,
-                    oculocyte_sense_type: 0,
+                    oculocyte_sense_type: 1, // bit0 = Cell
                     oculocyte_signal_channel: 0,
                     oculocyte_signal_value: 10.0,
                     oculocyte_signal_hops: 3,
@@ -3054,17 +3054,28 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
             } else if mode.cell_type == 7 { // Oculocyte (cell_type == 7)
                 group_container(ui, "Oculocyte Functions", egui::Color32::from_rgb(200, 160, 220), |ui| {
-                    // Sense Type dropdown
+                    // Sense Type checkboxes (bitmask: multiple types can be active simultaneously)
                     ui.label("Sense Type:");
-                    let sense_labels = ["Cell", "Food", "Light", "Barrier", "Self", "Mossrock"];
-                    let current_sense = mode.oculocyte_sense_type.clamp(0, 5) as usize;
-                    egui::ComboBox::from_id_salt("oculocyte_sense_type")
-                        .selected_text(sense_labels[current_sense])
-                        .show_ui(ui, |ui| {
-                            for (i, label) in sense_labels.iter().enumerate() {
-                                ui.selectable_value(&mut mode.oculocyte_sense_type, i as i32, *label);
+                    let sense_bits: &[(&str, u32)] = &[
+                        ("Cell",     1 << 0),
+                        ("Food",     1 << 1),
+                        ("Light",    1 << 2),
+                        ("Barrier",  1 << 3),
+                        ("Self",     1 << 4),
+                        ("Mossrock", 1 << 5),
+                    ];
+                    ui.horizontal_wrapped(|ui| {
+                        for (label, bit) in sense_bits {
+                            let mut checked = (mode.oculocyte_sense_type & bit) != 0;
+                            if ui.checkbox(&mut checked, *label).changed() {
+                                if checked {
+                                    mode.oculocyte_sense_type |= bit;
+                                } else {
+                                    mode.oculocyte_sense_type &= !bit;
+                                }
                             }
-                        });
+                        }
+                    });
 
                     // Signal Channel (oculocyte: 0-7 only)
                     ui.label("Signal Channel:");

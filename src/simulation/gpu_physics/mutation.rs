@@ -1047,11 +1047,12 @@ impl MutationSystem {
                 weight: 1.0, min_delta: 2.0, max_delta: 10.0,
                 min_value: 1.0, max_value: 100.0, data_type: data_type::CONTINUOUS_F32,
             },
-            // oculocyte_sense_type [0, 4]: changes what the cell detects entirely (0=Cell,1=Food,2=Light,3=Barrier,4=Self)
+            // oculocyte_sense_type: flip a random bit in the bitmask (0=Cell,1=Food,2=Light,3=Barrier,4=Self,5=Mossrock)
+            // element_offset 0 = sense_type u32 bitmask; data_type INTEGER with delta 1 = XOR a single bit
             MutationParamEntry {
                 buffer_id: buffer_id::OCULOCYTE_PARAMS, element_offset: 0,
-                weight: 0.5, min_delta: 1.0, max_delta: 4.0,
-                min_value: 0.0, max_value: 4.0, data_type: data_type::INTEGER,
+                weight: 0.5, min_delta: 1.0, max_delta: 5.0,
+                min_value: 0.0, max_value: 63.0, data_type: data_type::INTEGER,
             },
             // oculocyte_signal_hops [1, 20]: nudge by 1–3
             MutationParamEntry {

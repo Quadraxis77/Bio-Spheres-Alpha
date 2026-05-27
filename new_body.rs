@@ -445,7 +445,7 @@ Bs— child rienion is thpimry spitoladgbdgpratist312tista23:s →
             m.enable_parent_angle_snapping     = false;
             m.membrane_stiffness               = membrane;
             // Sense food for phagocytes/photocytes, cells for devorocytes
-            m.oculocyte_sense_type             = if feed_cell_type == 11 { 0 } else { 1 };
+            m.oculocyte_sense_type             = if feed_cell_type == 11 { 1 << 1 } else { 1 << 0 }; // Food=bit1, Cell=bit0
             m.oculocyte_signal_channel         = ch_sense;
             m.oculocyte_signal_value           = rng.f32(5.0, 20.0);
             m.oculocyte_signal_hops            = rng.i32_range(3, 12);

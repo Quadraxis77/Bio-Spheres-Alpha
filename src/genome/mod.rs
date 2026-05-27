@@ -18,7 +18,7 @@ pub struct Genome {
 }
 
 /// Child settings for mode transitions
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChildSettings {
     pub mode_number: i32,
     pub orientation: Quat,
@@ -84,7 +84,7 @@ impl Default for AdhesionSettings {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ModeSettings {
     pub name: String,
     pub default_name: String, // Original/default name to revert to when user clears the name
@@ -138,7 +138,7 @@ pub struct ModeSettings {
     pub buoyancy_force: f32, // Upward buoyancy force (0.0 to 1.0, for Buoyocyte cells)
     
     // Oculocyte settings
-    pub oculocyte_sense_type: i32, // 0=Cell, 1=Food, 2=Light, 3=Barrier, 4=Self
+    pub oculocyte_sense_type: u32, // Bitmask: bit0=Cell, bit1=Food, bit2=Light, bit3=Barrier, bit4=Self, bit5=Mossrock
     pub oculocyte_signal_channel: i32, // Which channel to send on (0-7, oculocyte-only range)
     pub oculocyte_signal_value: f32, // Signal value to send when target detected (-50.0 to 50.0)
     pub oculocyte_signal_hops: i32, // How many adhesion hops the signal propagates (1-20)
@@ -286,7 +286,7 @@ impl Default for ModeSettings {
             cilia_threshold: 1.0, // Default: threshold of 1.0
             cilia_attract_force: 0.0, // Default: no attraction (off)
             buoyancy_force: 0.5, // Default buoyancy force for buoyocytes
-            oculocyte_sense_type: 0, // Default: sense cells
+            oculocyte_sense_type: 1, // Default: sense cells (bit 0)
             oculocyte_signal_channel: 0, // Default: channel 0
             oculocyte_signal_value: 10.0, // Default: +10 signal
             oculocyte_signal_hops: 3, // Default: 3 hops
@@ -1264,7 +1264,7 @@ impl Genome {
             m.enable_parent_angle_snapping     = false;
             m.membrane_stiffness               = membrane;
             // Sense food for phagocytes/photocytes, cells for devorocytes
-            m.oculocyte_sense_type             = if feed_cell_type == 11 { 0 } else { 1 };
+            m.oculocyte_sense_type             = if feed_cell_type == 11 { 1 << 1 } else { 1 << 0 }; // Food=bit1, Cell=bit0
             m.oculocyte_signal_channel         = ch_sense;
             m.oculocyte_signal_value           = rng.f32(5.0, 20.0);
             m.oculocyte_signal_hops            = rng.i32_range(3, 12);

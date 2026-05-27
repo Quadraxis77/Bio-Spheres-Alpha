@@ -5984,6 +5984,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 6: oculocyte_signal_values (per-mode f32 signal value emitted on detection)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -6231,7 +6242,7 @@ impl GpuPhysicsPipelines {
     }
 
     /// Create signal sense cell data bind group (Group 1) for a given buffer index
-    /// binding 0: positions, binding 1: rotations, binding 2: mode_indices, binding 3: mode_cell_types, binding 4: oculocyte_params, binding 5: regulation_params
+    /// binding 0: positions, binding 1: rotations, binding 2: mode_indices, binding 3: mode_cell_types, binding 4: oculocyte_params, binding 5: regulation_params, binding 6: oculocyte_signal_values
     fn create_signal_sense_cell_data_bind_group(
         &self,
         device: &wgpu::Device,
@@ -6265,6 +6276,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: triple_buffers.regulation_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: triple_buffers.oculocyte_signal_values.as_entire_binding(),
                 },
             ],
         })

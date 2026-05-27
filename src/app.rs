@@ -116,6 +116,10 @@ pub struct App {
     test_signals_changed: bool,
     /// Deferred post-present action (save/load sphere — runs after frame is on screen)
     deferred_action: Option<DeferredAction>,
+    /// Timestamp of the last left-click for double-click detection
+    last_left_click_time: Option<std::time::Instant>,
+    /// Screen position of the last left-click for double-click proximity check
+    last_left_click_pos: (f32, f32),
     // IMPORTANT: surface must be declared before device so it drops first.
     // Rust drops fields in declaration order; wgpu/Vulkan requires the surface
     // to be destroyed before the device, otherwise the Vulkan validation layer
@@ -165,6 +169,8 @@ impl App {
             test_signal_emissions: Vec::new(),
             test_signals_changed: false,
             deferred_action: None,
+            last_left_click_time: None,
+            last_left_click_pos: (0.0, 0.0),
             device,
             surface,
             app_phase: AppPhase::MainMenu,
@@ -402,6 +408,46 @@ impl App {
                     // Read menu state before mutable borrow
                     let menu_visible = self.editor_state.radial_menu.visible;
                     let active_tool = self.editor_state.radial_menu.active_tool;
+
+                    // Double-click detection: when no tool is active and the menu is closed,
+                    // a double-click locks the camera to the organism under the cursor.
+                    // A subsequent double-click on empty space releases the follow.
+                    if *button == MouseButton::Left
+                        && *state == ElementState::Pressed
+                        && !menu_visible
+                        && active_tool == crate::ui::radial_menu::RadialTool::None
+                        && !self.ui.wants_pointer_input()
+                    {
+                        let now = std::time::Instant::now();
+                        let (lx, ly) = self.last_left_click_pos;
+                        let (mx, my) = self.mouse_position;
+                        let dx = mx - lx;
+                        let dy = my - ly;
+                        let close_enough = dx * dx + dy * dy < 20.0 * 20.0; // within 20px
+                        let fast_enough = self.last_left_click_time
+                            .map(|t| now.duration_since(t).as_millis() < 400)
+                            .unwrap_or(false);
+
+                        if fast_enough && close_enough {
+                            // Double-click detected.
+                            if self.scene_manager.is_following_organism() {
+                                // Second double-click releases the follow.
+                                self.scene_manager.clear_organism_follow();
+                                log::info!("Organism follow released by double-click");
+                            } else {
+                                // First double-click: start following the organism under cursor.
+                                self.scene_manager.start_organism_follow_query(mx, my);
+                                log::info!("Organism follow query started at ({}, {})", mx, my);
+                            }
+                            // Reset so a third click doesn't immediately re-trigger.
+                            self.last_left_click_time = None;
+                            self.window.request_redraw();
+                        } else {
+                            // Record this click as the potential first of a double-click.
+                            self.last_left_click_time = Some(now);
+                            self.last_left_click_pos = (mx, my);
+                        }
+                    }
                     
                     if menu_visible && *button == MouseButton::Left && *state == ElementState::Pressed {
                         // Click while menu is open selects the hovered tool
@@ -1130,6 +1176,9 @@ impl App {
         if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
             // Poll for tool operation results and update radial menu state
             self.scene_manager.poll_tool_operation_results(&mut self.editor_state.radial_menu, &mut self.editor_state.drag_distance, &self.queue);
+
+            // Poll organism follow readback and update camera center
+            self.scene_manager.poll_organism_follow(&self.device, dt);
             
             // Apply cave parameters from UI if they changed
             if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {

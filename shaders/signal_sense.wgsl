@@ -6,12 +6,8 @@
 // 16 channels per cell: signal_flags[cell_idx * 16 + channel]
 // Each channel is a packed u32: bits 16+ = direction flag, bits 11-15 = hops, bits 0-10 = value
 //
-// sense_type 0 = Cell (ray-vs-sphere test against each cell)
-// sense_type 1 = Food (DDA ray march through nutrient voxels)
-// sense_type 2 = Light (DDA ray march through light voxels)
-// sense_type 3 = Barrier (ray-sphere vs world boundary + DDA for solid voxels + water surface isosurface)
-// sense_type 4 = Self (always detects)
-// sense_type 5 = Mossrock (ray-vs-sphere test against all live mossrocks)
+// sense_type is now a bitmask: bit0=Cell, bit1=Food, bit2=Light, bit3=Barrier, bit4=Self, bit5=Mossrock
+// Multiple bits can be set; the oculocyte fires if ANY enabled sense type detects a target.
 
 const OCULOCYTE_TYPE: u32 = 7u;
 const LIGHT_THRESHOLD: f32 = 0.1;
@@ -42,6 +38,11 @@ var<storage, read> oculocyte_params: array<vec4<u32>>;
 // Regulation params: [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding(u32)]
 @group(1) @binding(5)
 var<storage, read> regulation_params: array<vec4<u32>>;
+
+// Oculocyte signal values: one f32 per mode — the value emitted when target is detected.
+// Kept separate from oculocyte_params to preserve the mutation system's vec4<u32> stride.
+@group(1) @binding(6)
+var<storage, read> oculocyte_signal_values: array<f32>;
 
 // World data for barrier, food, and light sensing
 struct SignalSenseWorldParams {
@@ -309,30 +310,27 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (cell_type == OCULOCYTE_TYPE) {
         // Read oculocyte parameters for this mode
         let params = oculocyte_params[mode_idx];
-        let sense_type = params.x;
+        let sense_mask = params.x; // bitmask: bit0=Cell, bit1=Food, bit2=Light, bit3=Barrier, bit4=Self, bit5=Mossrock
         let ray_length = bitcast<f32>(params.y);
         let signal_hops = params.z;
         let signal_channel = min(params.w, 7u); // Clamp oculocyte to channels 0-7
 
-        // Skip if ray_length is effectively zero
-        if (ray_length >= 0.01) {
+        // Skip if ray_length is effectively zero and no always-fire bits are set
+        if (ray_length >= 0.01 || (sense_mask & 16u) != 0u) {
             let my_pos = positions[idx].xyz;
 
             // Forward direction from cell's orientation quaternion
             let rot = rotations[idx];
             let forward = quat_rotate(rot, vec3<f32>(0.0, 0.0, 1.0));
 
+            // Check each enabled sense type independently; fire if any detects a target.
             var detected = false;
-
-            switch (sense_type) {
-                case 0u: { detected = sense_cells(idx, my_pos, forward, ray_length, cell_count); }
-                case 1u: { detected = dda_march_food(my_pos, forward, ray_length); }
-                case 2u: { detected = dda_march_light(my_pos, forward, ray_length); }
-                case 3u: { detected = sense_barrier(my_pos, forward, ray_length); }
-                case 4u: { detected = true; } // Self-sense: always fires
-                case 5u: { detected = sense_boulders(my_pos, forward, ray_length); }
-                default: {}
-            }
+            if (!detected && (sense_mask & 1u) != 0u)  { detected = sense_cells(idx, my_pos, forward, ray_length, cell_count); }
+            if (!detected && (sense_mask & 2u) != 0u)  { detected = dda_march_food(my_pos, forward, ray_length); }
+            if (!detected && (sense_mask & 4u) != 0u)  { detected = dda_march_light(my_pos, forward, ray_length); }
+            if (!detected && (sense_mask & 8u) != 0u)  { detected = sense_barrier(my_pos, forward, ray_length); }
+            if (!detected && (sense_mask & 16u) != 0u) { detected = true; } // Self: always fires
+            if (!detected && (sense_mask & 32u) != 0u) { detected = sense_boulders(my_pos, forward, ray_length); }
 
             if (detected) {
                 // Write signal to the correct channel slot.
@@ -341,7 +339,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // oculocyte thread owns each (cell, channel) pair, so there is no contention.
                 // atomicAdd on a packed bitfield would corrupt hops/value/source-flag if two
                 // threads ever wrote the same slot concurrently.
-                let signal_value = (1u << 16u) | (signal_hops << 11u) | 20u; // Source flag + hops + base value
+                let raw_value = oculocyte_signal_values[mode_idx];
+                let clamped_value = min(u32(max(raw_value, 0.0)), 2047u);
+                let emit_value = select(1u, clamped_value, clamped_value > 0u); // Ensure at least 1 so propagation fires
+                let signal_value = (1u << 16u) | (signal_hops << 11u) | emit_value;
                 atomicStore(&signal_flags[idx * SIGNAL_CHANNELS + signal_channel], signal_value);
             }
         }

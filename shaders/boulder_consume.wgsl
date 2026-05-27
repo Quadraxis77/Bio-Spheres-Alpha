@@ -141,8 +141,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let diff = cell_pos - b.position;
                     let dist = length(diff);
 
-                    // Must be within boulder radius to consume
-                    if (dist > b.radius) { continue; }
+                    // Must be in close surface contact — cell centre within 2.5 units of the boulder surface.
+                    // This means the cell must be nearly touching the boulder, not just inside it.
+                    let surface_dist = abs(dist - b.radius);
+                    if (surface_dist > 2.5) { continue; }
 
                     // Nutrient cap check on receiving cell
                     let current_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));

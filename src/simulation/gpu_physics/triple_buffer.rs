@@ -451,6 +451,10 @@ pub struct GpuTripleBufferSystem {
     /// Per-mode oculocyte parameters: [sense_type(u32), ray_length(f32), signal_hops(u32), signal_channel(u32)] = 16 bytes per mode
     pub oculocyte_params: wgpu::Buffer,
 
+    /// Per-mode oculocyte signal values: one f32 per mode (the value emitted when target detected)
+    /// Stored separately from oculocyte_params to avoid breaking the mutation system's vec4<u32> stride.
+    pub oculocyte_signal_values: wgpu::Buffer,
+
     /// Per-mode regulation emission parameters: [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding(u32)] = 16 bytes per mode
     /// emit_channel: 0xFFFFFFFF = disabled, 8-15 = regulation channel
     pub regulation_params: wgpu::Buffer,
@@ -718,6 +722,9 @@ impl GpuTripleBufferSystem {
         // Per-mode oculocyte parameters: vec4<u32> per mode (sense_type, sense_range_bits, signal_hops, signal_channel)
         let oculocyte_params = Self::create_storage_buffer(device, max_modes * 16, "Oculocyte Params");
 
+        // Per-mode oculocyte signal values: one f32 per mode (value emitted when target detected)
+        let oculocyte_signal_values = Self::create_storage_buffer(device, max_modes * 4, "Oculocyte Signal Values");
+
         // Per-mode regulation emission parameters: vec4<u32> per mode (emit_channel, emit_value_bits, emit_hops, padding)
         let regulation_params = Self::create_storage_buffer(device, max_modes * 16, "Regulation Params");
 
@@ -809,6 +816,7 @@ impl GpuTripleBufferSystem {
             glueocyte_boulder_adhesion_flags,
             glueocyte_cell_adhesion_flags,
             oculocyte_params,
+            oculocyte_signal_values,
             regulation_params,
             signal_settings_v0,
             signal_settings_v1,
@@ -1255,6 +1263,7 @@ impl GpuTripleBufferSystem {
         self.glueocyte_boulder_adhesion_flags = Self::create_storage_buffer(device, m4, "Glueocyte Boulder Adhesion Flags");
         self.glueocyte_cell_adhesion_flags = Self::create_storage_buffer(device, m16, "Glueocyte Cell Adhesion Flags");
         self.oculocyte_params             = Self::create_storage_buffer(device, m16, "Oculocyte Params");
+        self.oculocyte_signal_values      = Self::create_storage_buffer(device, m4,  "Oculocyte Signal Values");
         self.regulation_params            = Self::create_storage_buffer(device, m16, "Regulation Params");
 
         self.signal_settings_v0 = Self::create_storage_buffer(device, m16, "Signal Settings V0");
@@ -1706,7 +1715,7 @@ impl GpuTripleBufferSystem {
             .flat_map(|genome| {
                 genome.modes.iter().map(|mode| {
                     [
-                        mode.oculocyte_sense_type as u32,
+                        mode.oculocyte_sense_type, // already u32 bitmask
                         mode.oculocyte_ray_length.to_bits(),
                         mode.oculocyte_signal_hops as u32,
                         mode.oculocyte_signal_channel.clamp(0, 7) as u32, // Oculocyte channels 0-7 only
@@ -1716,6 +1725,19 @@ impl GpuTripleBufferSystem {
             .collect();
         if !params.is_empty() {
             queue.write_buffer(&self.oculocyte_params, 0, bytemuck::cast_slice(&params));
+        }
+
+        // Sync signal values separately (kept out of oculocyte_params to preserve mutation system's vec4<u32> stride)
+        let signal_values: Vec<f32> = genomes
+            .iter()
+            .flat_map(|genome| {
+                genome.modes.iter().map(|mode| {
+                    mode.oculocyte_signal_value.clamp(0.0, 2047.0)
+                })
+            })
+            .collect();
+        if !signal_values.is_empty() {
+            queue.write_buffer(&self.oculocyte_signal_values, 0, bytemuck::cast_slice(&signal_values));
         }
     }
 

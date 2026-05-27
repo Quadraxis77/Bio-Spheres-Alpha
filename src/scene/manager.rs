@@ -465,6 +465,40 @@ impl SceneManager {
         }
     }
 
+    /// Start a spatial query to find the organism under the cursor for camera following (GPU scene only).
+    /// Called on double-click when no tool is active.
+    pub fn start_organism_follow_query(&mut self, screen_x: f32, screen_y: f32) {
+        if self.current_mode == crate::ui::SimulationMode::Gpu {
+            if let Some(gpu_scene) = self.gpu_scene.as_mut() {
+                gpu_scene.start_organism_follow_query(screen_x, screen_y);
+            }
+        }
+    }
+
+    /// Stop following any organism and return to free camera (GPU scene only).
+    pub fn clear_organism_follow(&mut self) {
+        if self.current_mode == crate::ui::SimulationMode::Gpu {
+            if let Some(gpu_scene) = self.gpu_scene.as_mut() {
+                gpu_scene.clear_organism_follow();
+            }
+        }
+    }
+
+    /// Returns true if the GPU scene camera is currently locked to an organism.
+    pub fn is_following_organism(&self) -> bool {
+        if self.current_mode == crate::ui::SimulationMode::Gpu {
+            self.gpu_scene.as_ref().map(|s| s.is_following_organism()).unwrap_or(false)
+        } else {
+            false
+        }
+    }
+
+    /// Poll the organism follow readback and update the camera center (GPU scene only).
+    /// No-op — follow camera is updated inside GpuScene::render() which has device+queue.
+    pub fn poll_organism_follow(&mut self, _device: &wgpu::Device, _dt: f32) {
+        // Follow camera update happens inside GpuScene::render() via update_follow_camera().
+    }
+
     /// Poll for tool operation results (GPU scene only).
     /// 
     /// This method checks for completed spatial query results and updates tool states.

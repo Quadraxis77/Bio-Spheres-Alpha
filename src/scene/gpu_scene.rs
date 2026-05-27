@@ -47,6 +47,8 @@ pub enum ToolQueryType {
     Drag,
     Remove,
     Boost,
+    /// Double-click: find the clicked cell then follow its organism
+    Follow,
 }
 
 /// GPU simulation scene for large-scale simulations.
@@ -383,6 +385,21 @@ pub struct GpuScene {
     /// Dummy density field buffer (used when surface nets is not yet initialized)
     #[allow(dead_code)]
     signal_sense_dummy_density_buffer: wgpu::Buffer,
+
+    // ── Organism follow camera ────────────────────────────────────────────────
+    /// Root label (min cell index) of the organism the camera is following.
+    pub follow_organism_id: Option<u32>,
+    /// Smoothed orbit pivot — lerps toward the GPU-read center of mass each frame.
+    follow_center: glam::Vec3,
+    /// Persistent staging buffer for position readback (reused every frame).
+    follow_pos_staging: Option<wgpu::Buffer>,
+    /// Persistent staging buffer for label readback (reused every frame).
+    follow_lbl_staging: Option<wgpu::Buffer>,
+    /// True when a GPU→staging copy has been submitted and not yet consumed.
+    follow_copy_submitted: bool,
+    /// Counts map_async completions (0 = none, 1 = one buffer ready, 2 = both ready).
+    /// Written by map_async callbacks; polled each frame.
+    follow_map_ready_flag: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl GpuScene {
@@ -698,6 +715,12 @@ impl GpuScene {
             signal_sense_dummy_light_buffer,
             signal_sense_dummy_solid_buffer,
             signal_sense_dummy_density_buffer,
+            follow_organism_id: None,
+            follow_center: glam::Vec3::ZERO,
+            follow_pos_staging: None,
+            follow_lbl_staging: None,
+            follow_copy_submitted: false,
+            follow_map_ready_flag: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
     }
 
@@ -1053,7 +1076,7 @@ impl GpuScene {
                 flagellocyte_speed_b: props[12],
                 flagellocyte_threshold_c: props[13],
                 buoyancy_force: 0.0,
-                oculocyte_sense_type: oculocyte_params[i][0] as i32,
+                oculocyte_sense_type: oculocyte_params[i][0], // u32 bitmask
                 oculocyte_signal_channel: 0,
                 oculocyte_signal_value: 0.0,
                 oculocyte_signal_hops: oculocyte_params[i][2] as i32,
@@ -1905,59 +1928,7 @@ impl GpuScene {
     
     /// Check if two mode lists are identical (for genome deduplication)
     fn modes_are_identical(a: &[crate::genome::ModeSettings], b: &[crate::genome::ModeSettings]) -> bool {
-        if a.len() != b.len() {
-            return false;
-        }
-        for (ma, mb) in a.iter().zip(b.iter()) {
-            // Compare key mode properties that affect cell behavior AND visuals
-            if ma.cell_type != mb.cell_type
-                || ma.split_interval != mb.split_interval
-                || ma.split_mass != mb.split_mass
-                || ma.max_splits != mb.max_splits
-                || ma.membrane_stiffness != mb.membrane_stiffness
-                || ma.nutrient_gain_rate != mb.nutrient_gain_rate
-                || ma.max_cell_size != mb.max_cell_size
-                || ma.swim_force != mb.swim_force
-                || ma.color != mb.color
-                || ma.emissive != mb.emissive
-                || ma.opacity != mb.opacity
-                || ma.parent_make_adhesion != mb.parent_make_adhesion
-                || ma.child_a.keep_adhesion != mb.child_a.keep_adhesion
-                || ma.child_b.keep_adhesion != mb.child_b.keep_adhesion
-                || ma.child_a_after_split_keep_adhesion != mb.child_a_after_split_keep_adhesion
-                || ma.child_b_after_split_keep_adhesion != mb.child_b_after_split_keep_adhesion
-                || ma.child_a.orientation != mb.child_a.orientation
-                || ma.child_b.orientation != mb.child_b.orientation
-                || ma.child_a.mode_number != mb.child_a.mode_number
-                || ma.child_b.mode_number != mb.child_b.mode_number
-                || ma.parent_split_direction != mb.parent_split_direction
-                || ma.split_ratio != mb.split_ratio
-                || ma.nutrient_priority != mb.nutrient_priority
-                || ma.prioritize_when_low != mb.prioritize_when_low
-                || ma.adhesion_settings.can_break != mb.adhesion_settings.can_break
-                || ma.adhesion_settings.break_force != mb.adhesion_settings.break_force
-                || ma.adhesion_settings.rest_length != mb.adhesion_settings.rest_length
-                || ma.adhesion_settings.linear_spring_stiffness != mb.adhesion_settings.linear_spring_stiffness
-                || ma.adhesion_settings.linear_spring_damping != mb.adhesion_settings.linear_spring_damping
-                || ma.adhesion_settings.orientation_spring_stiffness != mb.adhesion_settings.orientation_spring_stiffness
-                || ma.adhesion_settings.orientation_spring_damping != mb.adhesion_settings.orientation_spring_damping
-                || ma.adhesion_settings.max_angular_deviation != mb.adhesion_settings.max_angular_deviation
-                || ma.adhesion_settings.twist_constraint_stiffness != mb.adhesion_settings.twist_constraint_stiffness
-                || ma.adhesion_settings.twist_constraint_damping != mb.adhesion_settings.twist_constraint_damping
-                || ma.adhesion_settings.enable_twist_constraint != mb.adhesion_settings.enable_twist_constraint
-                || ma.cilia_speed != mb.cilia_speed
-                || ma.cilia_push_bonded != mb.cilia_push_bonded
-                || ma.cilia_use_signal != mb.cilia_use_signal
-                || ma.cilia_signal_channel != mb.cilia_signal_channel
-                || ma.cilia_speed_below != mb.cilia_speed_below
-                || ma.cilia_speed_above != mb.cilia_speed_above
-                || ma.cilia_threshold != mb.cilia_threshold
-                || ma.cilia_attract_force != mb.cilia_attract_force
-            {
-                return false;
-            }
-        }
-        true
+        a == b
     }
     
     /// Update has_oculocytes flag based on current genomes.
@@ -2107,7 +2078,7 @@ impl GpuScene {
         // Oculocyte params: [sense_type(u32), ray_length_bits(u32), hops(u32), channel(u32)]
         let oculo_params: Vec<[u32; 4]> = genome_ref.modes.iter().map(|mode| {
             [
-                mode.oculocyte_sense_type.clamp(0, 4) as u32,
+                mode.oculocyte_sense_type, // u32 bitmask, no clamping needed
                 mode.oculocyte_ray_length.to_bits(),
                 mode.oculocyte_signal_hops.clamp(1, 20) as u32,
                 mode.oculocyte_signal_channel.clamp(0, 7) as u32,
@@ -2116,6 +2087,15 @@ impl GpuScene {
         if !oculo_params.is_empty() {
             let offset = (global_start_index * 16) as u64;
             queue.write_buffer(&self.gpu_triple_buffers.oculocyte_params, offset, bytemuck::cast_slice(&oculo_params));
+        }
+
+        // Oculocyte signal values: one f32 per mode
+        let oculo_signal_values: Vec<f32> = genome_ref.modes.iter().map(|mode| {
+            mode.oculocyte_signal_value.clamp(0.0, 2047.0)
+        }).collect();
+        if !oculo_signal_values.is_empty() {
+            let offset = (global_start_index * 4) as u64;
+            queue.write_buffer(&self.gpu_triple_buffers.oculocyte_signal_values, offset, bytemuck::cast_slice(&oculo_signal_values));
         }
 
         // Refresh has_oculocytes / max_signal_hops in case oculocyte or regulation settings changed
@@ -2607,6 +2587,190 @@ impl GpuScene {
             log::info!("Started dragging cell {} at distance {}", cell_idx, distance);
         }
     }
+
+    // ── Organism follow camera ────────────────────────────────────────────────
+
+    /// Start a spatial query to find the cell under the cursor for organism following.
+    /// Called on double-click when no tool is active.
+    pub fn start_organism_follow_query(&mut self, screen_x: f32, screen_y: f32) {
+        self.pending_query_position = Some((screen_x, screen_y, ToolQueryType::Follow));
+    }
+
+    /// Stop following any organism and return to free camera.
+    pub fn clear_organism_follow(&mut self) {
+        self.follow_organism_id = None;
+        self.follow_pos_staging = None;
+        self.follow_lbl_staging = None;
+        self.follow_copy_submitted = false;
+        self.follow_map_ready_flag.store(0, std::sync::atomic::Ordering::Release);
+        self.switch_to_freefly();
+    }
+
+    /// Switch the camera to FreeFly mode, positioning it at its current world position.
+    fn switch_to_freefly(&mut self) {
+        use crate::ui::camera::CameraMode;
+        if self.camera.mode != CameraMode::FreeFly {
+            // Place the freefly origin at the camera's current world position so
+            // there is no jump when the mode switches.
+            self.camera.center = self.camera.position();
+            self.camera.distance = 0.0;
+            self.camera.target_distance = 0.0;
+            self.camera.mode = CameraMode::FreeFly;
+        }
+    }
+
+    /// Returns true if the camera is currently locked to an organism.
+    pub fn is_following_organism(&self) -> bool {
+        self.follow_organism_id.is_some()
+    }
+
+    /// Called every frame from inside `render()`.
+    ///
+    /// Uses a double-buffered GPU→CPU readback to track the organism's center of mass
+    /// without stalling the GPU. map_async is called exactly once per copy submission
+    /// and the result is consumed exactly once.
+    pub fn tick_follow_camera(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        _dt: f32,
+    ) {
+        let target_id = match self.follow_organism_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        let cell_count = self.total_cell_slots as usize;
+        if cell_count == 0 {
+            self.camera.center = self.follow_center;
+            return;
+        }
+
+        // ── Step 1: poll for the previous frame's copy result ─────────────────
+        // map_async was already called when the copy was submitted; here we only
+        // check whether the GPU has finished — no new map_async call.
+        if self.follow_copy_submitted {
+            // Non-blocking poll — flushes already-completed GPU work.
+            let _ = device.poll(wgpu::PollType::Poll);
+
+            // Check if both buffers signalled ready via their map_async callbacks.
+            // The flag counts up to 2 (one per buffer); 2 means both are mapped.
+            let ready_count = self.follow_map_ready_flag
+                .load(std::sync::atomic::Ordering::Acquire);
+            if ready_count >= 2 {
+                // Reset flag for next submission.
+                self.follow_map_ready_flag
+                    .store(0, std::sync::atomic::Ordering::Release);
+                self.follow_copy_submitted = false;
+
+                if let (Some(ref pos_buf), Some(ref lbl_buf)) =
+                    (&self.follow_pos_staging, &self.follow_lbl_staging)
+                {
+                    let pos_view = pos_buf.slice(..).get_mapped_range();
+                    let lbl_view = lbl_buf.slice(..).get_mapped_range();
+
+                    let positions: &[[f32; 4]] = bytemuck::cast_slice(&pos_view);
+                    let labels: &[u32] = bytemuck::cast_slice(&lbl_view);
+
+                    let n = positions.len().min(labels.len()).min(cell_count);
+                    let mut sum = glam::Vec3::ZERO;
+                    let mut count = 0u32;
+                    for i in 0..n {
+                        if labels[i] == target_id {
+                            sum += glam::Vec3::new(
+                                positions[i][0],
+                                positions[i][1],
+                                positions[i][2],
+                            );
+                            count += 1;
+                        }
+                    }
+
+                    drop(pos_view);
+                    drop(lbl_view);
+                    pos_buf.unmap();
+                    lbl_buf.unmap();
+
+                    if count == 0 {
+                        self.follow_organism_id = None;
+                        self.follow_pos_staging = None;
+                        self.follow_lbl_staging = None;
+                        self.switch_to_freefly();
+                        return;
+                    }
+
+                    // Snap directly to the GPU center of mass. The readback already has
+                    // 1-2 frame latency; adding a lerp on top just adds more lag and
+                    // makes the jitter worse when the organism moves quickly.
+                    self.follow_center = sum / count as f32;
+                }
+            }
+            // Not ready yet: keep using the previous follow_center this frame.
+        }
+
+        // ── Step 2: submit a fresh copy + map_async for next frame ────────────
+        if !self.follow_copy_submitted && cell_count > 0 {
+            let output_idx = self.gpu_triple_buffers.output_buffer_index();
+            let pos_src = &self.gpu_triple_buffers.position_and_mass[output_idx];
+            let pos_size = cell_count as u64 * 16;
+            let lbl_size = cell_count as u64 * 4;
+
+            let needs_alloc = self.follow_pos_staging
+                .as_ref()
+                .map(|b| b.size() < pos_size)
+                .unwrap_or(true);
+            if needs_alloc {
+                self.follow_pos_staging = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Follow Pos Staging"),
+                    size: pos_size,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+                self.follow_lbl_staging = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Follow Lbl Staging"),
+                    size: lbl_size,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+
+            if let (Some(ref pos_dst), Some(ref lbl_dst)) =
+                (&self.follow_pos_staging, &self.follow_lbl_staging)
+            {
+                encoder.copy_buffer_to_buffer(pos_src, 0, pos_dst, 0, pos_size);
+                if let Some(ref label_system) = self.organism_label_system {
+                    encoder.copy_buffer_to_buffer(
+                        &label_system.label_buffer,
+                        0,
+                        lbl_dst,
+                        0,
+                        lbl_size,
+                    );
+                }
+
+                // Call map_async exactly once per copy submission.
+                // Each callback increments the shared counter; when it reaches 2
+                // both buffers are mapped and safe to read.
+                let flag = self.follow_map_ready_flag.clone();
+                let flag2 = flag.clone();
+                pos_dst.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                    if r.is_ok() {
+                        flag.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                    }
+                });
+                lbl_dst.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                    if r.is_ok() {
+                        flag2.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                    }
+                });
+
+                self.follow_copy_submitted = true;
+            }
+        }
+
+        // ── Step 3: set orbit pivot to the current follow center ─────────────
+        self.camera.center = self.follow_center;
+    }
     
     /// Execute pending tool queries using GPU spatial query system
     /// 
@@ -2715,6 +2879,21 @@ impl GpuScene {
                         }
                         ToolQueryType::Boost => {
                             self.pending_boost_result = Some(cell_idx);
+                        }
+                        ToolQueryType::Follow => {
+                            // The clicked cell index becomes the initial follow target.
+                            // The actual organism root label is resolved each frame via
+                            // the label buffer readback in update_follow_camera().
+                            // We store the cell index as the organism ID for now; it will
+                            // be replaced by the true root label on the first readback.
+                            self.follow_organism_id = Some(cell_idx as u32);
+                            self.follow_center = self.camera.center;
+                            // Ensure we are in Orbit mode so center is the pivot point.
+                            if self.camera.mode != crate::ui::camera::CameraMode::Orbit {
+                                self.camera.mode = crate::ui::camera::CameraMode::Orbit;
+                                self.camera.distance = (self.camera.position() - self.camera.center).length().max(10.0);
+                                self.camera.target_distance = self.camera.distance;
+                            }
                         }
                     }
                     
@@ -5593,6 +5772,13 @@ impl Scene for GpuScene {
         // IMPORTANT: also copy when cell_inserted is true — total_cell_slots lags 1-3 frames
         // behind the async readback, so the first cell would be invisible without this override.
         let has_cells = self.total_cell_slots > 0 || cell_inserted;
+
+        // Tick follow camera BEFORE copy_buffers_to_instance_builder so the orbit
+        // pivot and the rendered cell positions are derived from the same GPU buffer.
+        if self.follow_organism_id.is_some() {
+            self.tick_follow_camera(device, &mut encoder, 1.0 / 60.0);
+        }
+
         if has_cells && (!self.paused || position_updated || cell_removed || cell_boosted || cell_inserted) {
             self.copy_buffers_to_instance_builder(&mut encoder);
         }
