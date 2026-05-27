@@ -244,6 +244,12 @@ pub struct GpuTripleBufferSystem {
     
     /// Birth times for each cell
     pub birth_times: wgpu::Buffer,
+
+    /// Last mode-switch time for each cell (f32, seconds).
+    /// Written by mode_switch.wgsl whenever a cell changes mode.
+    /// Read by adhesion_physics.wgsl to extend the bond-break grace period
+    /// so that maturation-triggered mode switches don't cause transient bond breaks.
+    pub mode_switch_time: wgpu::Buffer,
     
     /// Split intervals (time between divisions)
     pub split_intervals: wgpu::Buffer,
@@ -567,6 +573,24 @@ impl GpuTripleBufferSystem {
         
         // Cell state buffers
         let birth_times = Self::create_storage_buffer(device, f32_per_cell, "Birth Times");
+        // Initialize mode_switch_time to -1000.0 so the grace period never fires on first frame.
+        // Uses mapped_at_creation to avoid needing DeviceExt.
+        let mode_switch_time = {
+            let size = (capacity as u64 * 4 + 15) & !15;
+            let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label:              Some("Mode Switch Time"),
+                size,
+                usage:              wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: true,
+            });
+            {
+                let mut view = buf.slice(..).get_mapped_range_mut();
+                let floats: &mut [f32] = bytemuck::cast_slice_mut(&mut view);
+                for v in floats.iter_mut() { *v = -1000.0_f32; }
+            }
+            buf.unmap();
+            buf
+        };
         let split_intervals = Self::create_storage_buffer(device, f32_per_cell, "Split Intervals");
         let split_nutrient_thresholds = Self::create_storage_buffer(device, f32_per_cell, "Split Nutrient Thresholds");
         let split_counts = Self::create_storage_buffer(device, u32_per_cell, "Split Counts");
@@ -735,6 +759,7 @@ impl GpuTripleBufferSystem {
             free_slot_ring,
             ring_state,
             birth_times,
+            mode_switch_time,
             split_intervals,
             split_nutrient_thresholds,
             split_counts,

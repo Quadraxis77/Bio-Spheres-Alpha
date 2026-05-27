@@ -2,14 +2,24 @@
 // Signal-conditional mode switching: changes a cell's mode_index without division.
 // Runs once per frame after the signal system has written signal_flags.
 //
-// Condition: if mode has mode_switch_signal_channel >= 8, read that channel's signal.
-//   - If signal >= threshold (or inverted: signal < threshold), switch to mode_switch_target.
-//   - mode_switch_target is an absolute GPU mode index (already remapped by sync_signal_settings).
-//
-// signal_settings_v3: [child_b_mode_above, child_b_mode_below, mode_switch_channel, mode_switch_threshold]
-// signal_settings_v4: [mode_switch_target, mode_switch_invert, 0, 0]
+// Also writes current_time into mode_switch_time[cell_idx] whenever a switch occurs.
+// adhesion_physics.wgsl reads this to extend the bond-break grace period, preventing
+// transient force spikes from breaking bonds during maturation.
 
 const SIGNAL_CHANNELS: u32 = 16u;
+
+// current_time is at byte offset 4 in PhysicsParams.
+// We bind the full physics_params uniform and read only what we need.
+// Declared as array<f32> in storage to avoid uniform alignment issues —
+// physics_params has STORAGE | COPY_DST usage so this is valid.
+// Actually we bind it as uniform — use a minimal struct with only the fields we need.
+// delta_time(f32) + current_time(f32) + current_frame(i32) + cell_count(u32) = 16 bytes, naturally aligned.
+struct PhysicsParamsMin {
+    delta_time:    f32,
+    current_time:  f32,
+    current_frame: i32,
+    cell_count:    u32,
+}
 
 @group(0) @binding(0)
 var<storage, read_write> cell_count_buffer: array<u32>;
@@ -22,6 +32,12 @@ var<storage, read_write> mode_indices: array<u32>;
 
 @group(0) @binding(3)
 var<storage, read> mode_cell_types: array<u32>;
+
+@group(0) @binding(4)
+var<storage, read_write> mode_switch_time: array<f32>;
+
+@group(0) @binding(5)
+var<uniform> params: PhysicsParamsMin;
 
 // Per-cell signal flags (packed u32: bits 0-10 = value, bits 11-15 = hops, bit 16 = source flag)
 @group(1) @binding(0)
@@ -77,5 +93,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     if (should_switch) {
         mode_indices[cell_idx] = target_mode_idx;
+        // Record the time of this switch so adhesion_physics can extend the grace period
+        mode_switch_time[cell_idx] = params.current_time;
     }
 }

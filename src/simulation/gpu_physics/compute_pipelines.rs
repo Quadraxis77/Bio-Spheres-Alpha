@@ -941,6 +941,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true  }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true  }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // binding 4: mode_switch_time (read_write — shader writes current_time on switch)
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // binding 5: physics_params uniform (for current_time)
+                wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
             ],
         });
         let mode_switch_layout1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1631,7 +1635,7 @@ impl GpuPhysicsPipelines {
         ];
         
         // Adhesion bind group (same for all frames)
-        let adhesion = self.create_adhesion_bind_group(device, adhesion_buffers);
+        let adhesion = self.create_adhesion_bind_group(device, adhesion_buffers, buffers);
         
         // Force accumulation bind group (same for all frames)
         let force_accum = self.create_force_accum_bind_group(device, adhesion_buffers);
@@ -1768,6 +1772,8 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry { binding: 1, resource: buffers.death_flags.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: buffers.mode_indices.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: buffers.mode_cell_types.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: buffers.mode_switch_time.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: buffers.physics_params.as_entire_binding() },
             ],
         });
         let mode_switch_group1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -3088,6 +3094,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 6: mode_switch_time (read-only) — used to extend grace period after mode switch
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -3324,6 +3341,7 @@ impl GpuPhysicsPipelines {
         &self,
         device: &wgpu::Device,
         adhesion_buffers: &super::AdhesionBuffers,
+        triple_buffers: &super::GpuTripleBufferSystem,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Adhesion Bind Group"),
@@ -3352,6 +3370,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: adhesion_buffers.cell_adhesion_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: triple_buffers.mode_switch_time.as_entire_binding(),
                 },
             ],
         })

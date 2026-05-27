@@ -268,36 +268,56 @@ pub struct OrganismSkinSettings {
     /// Whether organism skin rendering is enabled
     #[serde(default = "default_true")]
     pub enabled: bool,
-    
-    /// Grid resolution for density field (128, 256, etc.)
+
+    /// Grid resolution (kept for serialization compat, unused by shrink-wrap)
     #[serde(default = "default_organism_grid_resolution")]
     pub grid_resolution: u32,
-    
-    /// Skin radius scale factor (how far the skin extends from cells)
+
+    /// Skin offset — gap between the mesh surface and cell surfaces (world units)
     #[serde(default = "default_skin_radius_scale")]
     pub radius_scale: f32,
-    
-    /// Surface extraction iso level (0.0-1.0)
+
+    /// Iso level (kept for serialization compat, unused by shrink-wrap)
     #[serde(default = "default_iso_level")]
     pub iso_level: f32,
-    
+
+    /// Shrink speed — fraction of remaining gap closed per iteration (0.05–0.5)
+    #[serde(default = "default_shrink_speed")]
+    pub shrink_speed: f32,
+
+    /// Smooth factor — Laplacian blend weight per smooth iteration (0.0–0.6)
+    #[serde(default = "default_smooth_factor")]
+    pub smooth_factor: f32,
+
+    /// Number of shrink iterations per frame (1–8)
+    #[serde(default = "default_shrink_iters")]
+    pub shrink_iters: u32,
+
+    /// Number of smooth iterations per frame (0–4)
+    #[serde(default = "default_smooth_iters")]
+    pub smooth_iters: u32,
+
+    /// Minimum cells for an organism to get a skin (1–20)
+    #[serde(default = "default_min_cells_for_skin")]
+    pub min_cells: u32,
+
     /// Base color RGB values
     #[serde(default = "default_skin_base_color")]
     pub base_color: [f32; 3],
-    
+
     /// Material properties
     #[serde(default = "default_skin_ambient")]
     pub ambient: f32,
-    
+
     #[serde(default = "default_skin_diffuse")]
     pub diffuse: f32,
-    
+
     #[serde(default = "default_skin_specular")]
     pub specular: f32,
-    
+
     #[serde(default = "default_skin_shininess")]
     pub shininess: f32,
-    
+
     #[serde(default = "default_skin_alpha")]
     pub alpha: f32,
 
@@ -313,8 +333,13 @@ impl Default for OrganismSkinSettings {
         Self {
             enabled: false,
             grid_resolution: 128,
-            radius_scale: 5.0,
-            iso_level: 0.3,
+            radius_scale: 1.2,
+            iso_level: 0.5,
+            shrink_speed: 0.25,
+            smooth_factor: 0.3,
+            shrink_iters: 8,
+            smooth_iters: 3,
+            min_cells: 4,
             base_color: [0.85, 0.55, 0.35],
             ambient: 0.12,
             diffuse: 0.6,
@@ -397,8 +422,14 @@ fn default_organism_grid_resolution() -> u32 {
 }
 
 fn default_skin_radius_scale() -> f32 {
-    5.0
+    1.2
 }
+
+fn default_shrink_speed() -> f32 { 0.25 }
+fn default_smooth_factor() -> f32 { 0.3 }
+fn default_shrink_iters() -> u32 { 8 }
+fn default_smooth_iters() -> u32 { 3 }
+fn default_min_cells_for_skin() -> u32 { 4 }
 
 fn default_skin_sss_strength() -> f32 {
     0.5
@@ -409,7 +440,7 @@ fn default_skin_rim_strength() -> f32 {
 }
 
 fn default_iso_level() -> f32 {
-    0.6
+    0.5
 }
 
 fn default_skin_base_color() -> [f32; 3] {

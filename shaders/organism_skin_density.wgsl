@@ -59,8 +59,14 @@ fn voxel_index(x: u32, y: u32, z: u32) -> u32 {
     return x + y * r + z * r * r;
 }
 
-fn metaball_kernel(t: f32) -> f32 {
-    return t * t * (3.0 - 2.0 * t);
+// Wyvill metaball kernel: f(r) = (1 - r²/R²)³
+// Peaks at 1.0 at the cell centre, falls to 0.0 at r = R.
+// Much sharper than smoothstep near the surface — the iso level sits
+// close to the cell boundary for both isolated cells and dense clusters.
+// r2_over_R2 = (dist/radius)²  in [0, 1]
+fn metaball_kernel(r2_over_R2: f32) -> f32 {
+    let x = 1.0 - r2_over_R2;
+    return x * x * x;
 }
 
 // Slot claiming is inlined in generate_density because WGSL (naga) does not
@@ -102,7 +108,13 @@ fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     let skin_id = cell_skin_id[cell_idx];
     if skin_id == 0u { return; }
 
-    let influence_radius = clamp(mass, 0.5, 2.0) * params.skin_radius_scale;
+    // skin_radius_scale is now the tight skin offset in world units added on top
+    // of the cell radius.  A value of 1.2–1.5 gives a snug skin; 2.0 gives a
+    // slightly looser one.  The Wyvill kernel peaks at 1.0 at the cell centre
+    // and reaches 0.0 at influence_radius, so the iso level of ~0.5 sits
+    // roughly at the cell surface for any cluster density.
+    let cell_radius      = clamp(mass, 0.5, 2.0);
+    let influence_radius = cell_radius * params.skin_radius_scale;
     let cell_size        = params.cell_size;
     let grid_origin      = params.grid_origin;
     let res              = i32(params.grid_resolution);
@@ -116,9 +128,8 @@ fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     let vmin = max(vec3<i32>(0),       vec3<i32>(cx - vr, cy - vr, cz - vr));
     let vmax = min(vec3<i32>(res - 1), vec3<i32>(cx + vr, cy + vr, cz + vr));
 
-    let inv_radius = 1.0 / influence_radius;
-    let inv_radius_sq = inv_radius * inv_radius;
-    let radius_sq = influence_radius * influence_radius;
+    let radius_sq     = influence_radius * influence_radius;
+    let inv_radius_sq = 1.0 / radius_sq;
 
     for (var vz = vmin.z; vz <= vmax.z; vz++) {
         let wz = grid_origin.z + f32(vz) * cell_size - pos.z;
@@ -135,8 +146,9 @@ fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let dist_sq = wyz2 + wx * wx;
                 if dist_sq >= radius_sq { continue; }
 
-                let t       = 1.0 - sqrt(dist_sq) * inv_radius;
-                let contrib = metaball_kernel(t);
+                // Wyvill kernel: (1 - dist²/R²)³  — peaks at 1.0 at centre,
+                // 0.0 at the influence boundary.  No sqrt needed.
+                let contrib = metaball_kernel(dist_sq * inv_radius_sq);
                 let fixed   = i32(contrib * FIXED_SCALE);
                 if fixed <= 0 { continue; }
 

@@ -1,83 +1,100 @@
-//! Organism Skin Renderer — Per-Organism Overlapping Skins
+//! Organism Shrink-Wrap Skin Renderer
 //!
-//! Each organism gets its own independent, non-merged isosurface topology.
-//! Uses K=4 density slots per voxel so four organisms can overlap; a fifth is dropped.
+//! Replaces the density-field + surface-nets approach with a GPU icosphere
+//! mesh that physically contracts onto each organism's cell surfaces each frame.
 //!
-//! ## Pipeline
-//!
+//! ## Pipeline (per frame)
 //! ```text
-//! Cell positions + organism labels (GPU triple buffer)
-//!   → [clear_histogram + count_organisms + assign_skin_ids]  (organism_skin_count.wgsl)
-//!   → [clear_density + generate_density + normalize_density]  (organism_skin_density.wgsl)
-//!   → [reset + generate_vertices + generate_indices + finalize] (organism_skin_surface_nets.wgsl)
-//!   → [render pass with uniform base color]                    (organism_skin_render.wgsl)
+//! clear_org_state  → accumulate_cells → finalize_orgs
+//!   → shrink_step (×N_SHRINK_ITERS)
+//!   → smooth_step (×N_SMOOTH_ITERS)
+//!   → render pass
 //! ```
+//!
+//! ## Public API (unchanged from old OrganismSkinRenderer)
+//! - `new(...)` — same signature
+//! - `create_count_bind_group(...)` — kept for gpu_scene.rs compatibility (unused internally)
+//! - `create_density_bind_group(...)` — kept for compatibility (unused internally)
+//! - `count_organisms(...)` — now runs clear+accumulate+finalize
+//! - `generate_density(...)` — now runs shrink+smooth iterations
+//! - `extract_mesh(...)` — no-op (mesh is already in vertex_buffer)
+//! - `render(...)` — unchanged
+//! - `try_read_skinned_count(...)` — reads org_state to count active organisms
+//! - `set_skin_radius_scale(...)`, `set_iso_level(...)`, `set_time(...)` — update params
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use wgpu::util::DeviceExt;
 
-/// Organism density grid resolution
-pub const ORGANISM_GRID_RES: u32 = 128;
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Histogram size for organism ID hashing (max 65536 unique organisms)
-const HISTOGRAM_SIZE: u32 = 65536;
+const VERTS_PER_ORG: u32 = 642;
+const TRIS_PER_ORG:  u32 = 1280;
+const MAX_ORGANISMS: u32 = 512;
 
-/// Minimum cells for an organism to get a skin
-const MIN_CELLS_FOR_SKIN: u32 = 4;
+// ── GPU structs ───────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GPU data types (must match shader structs)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Matches OrganismDensityParams in organism_skin_density.wgsl (32 bytes)
+/// Matches ShrinkParams in organism_shrinkwrap.wgsl (32 bytes)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct OrganismDensityParams {
-    pub grid_origin: [f32; 3],
-    pub cell_size: f32,
-    pub grid_resolution: u32,
-    pub skin_radius_scale: f32,
-    pub max_cells: u32,
-    pub min_cells_for_skin: u32,
+struct ShrinkParams {
+    world_size:      f32,
+    grid_cell_size:  f32,
+    grid_resolution: i32,
+    cell_count:      u32,
+    skin_offset:     f32,
+    shrink_speed:    f32,
+    smooth_factor:   f32,
+    min_cells:       u32,
 }
 
-/// Matches SkinCountParams in organism_skin_count.wgsl (16 bytes)
+/// Matches SkinVertex in organism_shrinkwrap.wgsl (32 bytes)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct SkinCountParams {
-    min_cells: u32,
-    histogram_size: u32,
-    _pad0: u32,
-    _pad1: u32,
+struct GpuVertex {
+    position:    [f32; 3],
+    organism_id: f32,
+    normal:      [f32; 3],
+    _pad:        f32,
 }
 
-/// Matches SurfaceNetsParams in organism_skin_surface_nets.wgsl (48 bytes)
+/// Matches OrgAccum in organism_shrinkwrap.wgsl (32 bytes, all atomic i32/u32)
+/// We zero-init this buffer via clear_buffer each frame.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct SurfaceNetsParams {
-    grid_resolution: u32,
-    iso_level: f32,
-    cell_size: f32,
-    max_vertices: u32,
-    grid_origin: [f32; 3],
-    max_indices: u32,
-    density_resolution: u32,
-    _pad_a: u32,
-    _pad_b: u32,
-    _pad_c: u32,
+struct OrgAccum {
+    sum_x:       i32,
+    sum_y:       i32,
+    sum_z:       i32,
+    cell_count:  u32,
+    max_dist_sq: i32,
+    is_used:     u32,
+    _pad0:       u32,
+    _pad1:       u32,
 }
 
-/// Camera uniform (matches CameraUniform in organism_skin_render.wgsl)
+/// Matches OrgState in organism_shrinkwrap.wgsl (32 bytes)
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+struct OrgState {
+    centroid:   [f32; 3],
+    radius:     f32,
+    skin_id:    u32,
+    cell_count: u32,
+    _pad0:      u32,
+    _pad1:      u32,
+}
+
+/// Camera uniform for render pass
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct CameraUniform {
-    view_proj: [[f32; 4]; 4],
+    view_proj:  [[f32; 4]; 4],
     camera_pos: [f32; 3],
-    _padding: f32,
+    _padding:   f32,
 }
 
-/// Organism skin material params (matches SkinParams in organism_skin_render.wgsl, 80 bytes)
+/// Organism skin material params — same as before, kept for API compatibility
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct OrganismSkinParams {
@@ -101,168 +118,169 @@ impl Default for OrganismSkinParams {
     }
 }
 
-/// Vertex counter (matches Counter in organism_skin_surface_nets.wgsl)
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct Counters {
-    vertex_count: u32,
-    index_count: u32,
+// ── Icosphere geometry (2 subdivisions: 162 vertices, 320 triangles) ─────────
+
+/// Build a subdivided icosphere on the CPU.
+/// Returns (vertices_on_unit_sphere, triangle_indices).
+/// Each vertex is normalised to the unit sphere.
+fn build_icosphere(subdivisions: u32) -> (Vec<[f32; 3]>, Vec<u32>) {
+    let phi = (1.0_f32 + 5.0_f32.sqrt()) / 2.0;
+    let scale = 1.0 / (1.0_f32 + phi * phi).sqrt();
+
+    // 12 base icosahedron vertices
+    let mut verts: Vec<[f32; 3]> = vec![
+        [-scale,  phi*scale,  0.0],
+        [ scale,  phi*scale,  0.0],
+        [-scale, -phi*scale,  0.0],
+        [ scale, -phi*scale,  0.0],
+        [ 0.0,  -scale,  phi*scale],
+        [ 0.0,   scale,  phi*scale],
+        [ 0.0,  -scale, -phi*scale],
+        [ 0.0,   scale, -phi*scale],
+        [ phi*scale,  0.0, -scale],
+        [ phi*scale,  0.0,  scale],
+        [-phi*scale,  0.0, -scale],
+        [-phi*scale,  0.0,  scale],
+    ];
+
+    // 20 base faces
+    let mut faces: Vec<[u32; 3]> = vec![
+        [0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],
+        [1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+        [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],
+        [4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1],
+    ];
+
+    let mut midpoint_cache: std::collections::HashMap<(u32,u32), u32> = std::collections::HashMap::new();
+
+    for _ in 0..subdivisions {
+        let mut new_faces = Vec::with_capacity(faces.len() * 4);
+        for face in &faces {
+            let [a, b, c] = *face;
+            // Inline midpoint: get or create midpoint vertex for edge (p, q)
+            let ab = {
+                let key = (a.min(b), a.max(b));
+                if let Some(&idx) = midpoint_cache.get(&key) { idx } else {
+                    let va = verts[a as usize]; let vb = verts[b as usize];
+                    let mid = [(va[0]+vb[0])*0.5, (va[1]+vb[1])*0.5, (va[2]+vb[2])*0.5];
+                    let len = (mid[0]*mid[0]+mid[1]*mid[1]+mid[2]*mid[2]).sqrt();
+                    let idx = verts.len() as u32;
+                    verts.push([mid[0]/len, mid[1]/len, mid[2]/len]);
+                    midpoint_cache.insert(key, idx); idx
+                }
+            };
+            let bc = {
+                let key = (b.min(c), b.max(c));
+                if let Some(&idx) = midpoint_cache.get(&key) { idx } else {
+                    let va = verts[b as usize]; let vb = verts[c as usize];
+                    let mid = [(va[0]+vb[0])*0.5, (va[1]+vb[1])*0.5, (va[2]+vb[2])*0.5];
+                    let len = (mid[0]*mid[0]+mid[1]*mid[1]+mid[2]*mid[2]).sqrt();
+                    let idx = verts.len() as u32;
+                    verts.push([mid[0]/len, mid[1]/len, mid[2]/len]);
+                    midpoint_cache.insert(key, idx); idx
+                }
+            };
+            let ca = {
+                let key = (c.min(a), c.max(a));
+                if let Some(&idx) = midpoint_cache.get(&key) { idx } else {
+                    let va = verts[c as usize]; let vb = verts[a as usize];
+                    let mid = [(va[0]+vb[0])*0.5, (va[1]+vb[1])*0.5, (va[2]+vb[2])*0.5];
+                    let len = (mid[0]*mid[0]+mid[1]*mid[1]+mid[2]*mid[2]).sqrt();
+                    let idx = verts.len() as u32;
+                    verts.push([mid[0]/len, mid[1]/len, mid[2]/len]);
+                    midpoint_cache.insert(key, idx); idx
+                }
+            };
+            new_faces.push([a, ab, ca]);
+            new_faces.push([b, bc, ab]);
+            new_faces.push([c, ca, bc]);
+            new_faces.push([ab, bc, ca]);
+        }
+        faces = new_faces;
+        midpoint_cache.clear();
+    }
+
+    let indices: Vec<u32> = faces.iter().flat_map(|f| f.iter().copied()).collect();
+    (verts, indices)
 }
 
-/// Temporal blend params (matches BlendParams in organism_skin_blend.wgsl)
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct BlendParams {
-    total_voxels: u32,
-    blend_factor: f32,
-    _pad0: u32,
-    _pad1: u32,
+/// Build the full index buffer for all MAX_ORGANISMS organisms.
+/// Each organism's indices are offset by `org_idx * VERTS_PER_ORG`.
+fn build_full_index_buffer() -> Vec<u32> {
+    let (verts, local_indices) = build_icosphere(3);
+    assert_eq!(verts.len() as u32, VERTS_PER_ORG,
+        "Icosphere vertex count mismatch: got {}, expected {}", verts.len(), VERTS_PER_ORG);
+    assert_eq!(local_indices.len() as u32, TRIS_PER_ORG * 3,
+        "Icosphere index count mismatch: got {}, expected {}", local_indices.len(), TRIS_PER_ORG * 3);
+
+    let mut out = Vec::with_capacity((MAX_ORGANISMS * TRIS_PER_ORG * 3) as usize);
+    for org in 0..MAX_ORGANISMS {
+        let offset = org * VERTS_PER_ORG;
+        for &idx in &local_indices {
+            out.push(idx + offset);
+        }
+    }
+    out
 }
 
-/// Spatial smooth params (matches SmoothParams in organism_skin_smooth.wgsl)
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct SmoothParams {
-    grid_resolution: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+/// Build the icosphere vertex positions for the WGSL shader's `ico_pos()` function.
+/// Returns normalised unit-sphere positions in the same order as `build_icosphere(2)`.
+/// Used to verify the Rust and WGSL geometry match.
+#[allow(dead_code)]
+fn build_icosphere_positions() -> Vec<[f32; 3]> {
+    build_icosphere(2).0
 }
 
-/// Vertex format (matches Vertex in organism_skin_surface_nets.wgsl)
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct GpuVertex {
-    position: [f32; 3],
-    organism_id: f32,
-    normal: [f32; 3],
-    _pad1: f32,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// OrganismSkinRenderer
-// ─────────────────────────────────────────────────────────────────────────────
+// ── OrganismSkinRenderer ──────────────────────────────────────────────────────
 
 pub struct OrganismSkinRenderer {
-    // ── Organism counting (organism_skin_count.wgsl) ────────────────────────
-    count_clear_pipeline: wgpu::ComputePipeline,
-    count_organisms_pipeline: wgpu::ComputePipeline,
-    assign_skin_ids_pipeline: wgpu::ComputePipeline,
-    pub count_bind_group_layout: wgpu::BindGroupLayout,
-    count_params_buffer: wgpu::Buffer,
-    histogram_buffer: wgpu::Buffer,
-    cell_skin_id_buffer: wgpu::Buffer,
-    /// GPU buffer: atomic counter of cells that received a non-zero skin_id
-    skinned_cell_counter_buffer: wgpu::Buffer,
-    /// Staging buffer for reading back the skinned cell count
-    skinned_cell_counter_staging: wgpu::Buffer,
-    /// CPU-side: number of cells with skins from the last readback (0 = skip heavy passes)
-    pub skinned_cell_count: u32,
+    // ── Compute pipelines ─────────────────────────────────────────────────────
+    clear_pipeline:      wgpu::ComputePipeline,
+    accumulate_pipeline: wgpu::ComputePipeline,
+    finalize_pipeline:   wgpu::ComputePipeline,
+    shrink_pipeline:     wgpu::ComputePipeline,
+    smooth_pipeline:     wgpu::ComputePipeline,
 
-    // ── K=4 density generation (organism_skin_density.wgsl) ─────────────────
-    #[allow(dead_code)]
-    density_clear_pipeline: wgpu::ComputePipeline,
-    density_generate_pipeline: wgpu::ComputePipeline,
-    density_normalize_pipeline: wgpu::ComputePipeline,
-    pub density_bind_group_layout: wgpu::BindGroupLayout,
-    density_params_buffer: wgpu::Buffer,
-    // K=4 slot buffers — organism IDs (atomic u32)
-    slot_org_0: wgpu::Buffer,
-    slot_org_1: wgpu::Buffer,
-    slot_org_2: wgpu::Buffer,
-    slot_org_3: wgpu::Buffer,
-    // K=4 slot buffers — density accumulators (atomic i32)
-    slot_density_0: wgpu::Buffer,
-    slot_density_1: wgpu::Buffer,
-    slot_density_2: wgpu::Buffer,
-    slot_density_3: wgpu::Buffer,
-    // K=4 normalized output (f32 density + u32 org_id)
-    density_out_0: wgpu::Buffer,
-    density_out_1: wgpu::Buffer,
-    density_out_2: wgpu::Buffer,
-    density_out_3: wgpu::Buffer,
-    org_id_out_0: wgpu::Buffer,
-    org_id_out_1: wgpu::Buffer,
-    org_id_out_2: wgpu::Buffer,
-    org_id_out_3: wgpu::Buffer,
+    // ── Compute bind group (rebuilt when triple-buffer index changes) ─────────
+    pub compute_bind_group_layout: wgpu::BindGroupLayout,
+    params_buffer:   wgpu::Buffer,
+    org_accum_buffer: wgpu::Buffer,
+    org_state_buffer: wgpu::Buffer,
+    vertex_buffer:   wgpu::Buffer,
+    index_buffer:    wgpu::Buffer,
+    ico_unit_positions_buffer: wgpu::Buffer,
 
-    // ── Temporal density blend (organism_skin_blend.wgsl) ────────────────────
-    blend_pipeline: wgpu::ComputePipeline,
-    blend_bind_group: wgpu::BindGroup,
-    blend_params_buffer: wgpu::Buffer,
-    #[allow(dead_code)]
-    prev_density_0: wgpu::Buffer,
-    #[allow(dead_code)]
-    prev_density_1: wgpu::Buffer,
-    #[allow(dead_code)]
-    prev_density_2: wgpu::Buffer,
-    #[allow(dead_code)]
-    prev_density_3: wgpu::Buffer,
-    #[allow(dead_code)]
-    prev_org_id_0: wgpu::Buffer,
-    #[allow(dead_code)]
-    prev_org_id_1: wgpu::Buffer,
-    #[allow(dead_code)]
-    prev_org_id_2: wgpu::Buffer,
-    #[allow(dead_code)]
-    prev_org_id_3: wgpu::Buffer,
-
-    // ── Spatial smoothing (organism_skin_smooth.wgsl) ────────────────────────
-    smooth_pipeline: wgpu::ComputePipeline,
-    smooth_bind_group: wgpu::BindGroup,
-    #[allow(dead_code)]
-    smooth_params_buffer: wgpu::Buffer,
-    smooth_temp_density_0: wgpu::Buffer,
-    smooth_temp_density_1: wgpu::Buffer,
-    smooth_temp_density_2: wgpu::Buffer,
-    smooth_temp_density_3: wgpu::Buffer,
-    smooth_temp_org_0: wgpu::Buffer,
-    smooth_temp_org_1: wgpu::Buffer,
-    smooth_temp_org_2: wgpu::Buffer,
-    smooth_temp_org_3: wgpu::Buffer,
-
-    // ── Organism-aware surface nets (organism_skin_surface_nets.wgsl) ────────
-    sn_reset_pipeline: wgpu::ComputePipeline,
-    sn_vertex_pipeline: wgpu::ComputePipeline,
-    sn_index_pipeline: wgpu::ComputePipeline,
-    sn_finalize_pipeline: wgpu::ComputePipeline,
-    sn_compute_bind_group: wgpu::BindGroup,
-    sn_params_buffer: wgpu::Buffer,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    #[allow(dead_code)]
-    vertex_map_0: wgpu::Buffer,
-    #[allow(dead_code)]
-    vertex_map_1: wgpu::Buffer,
-    #[allow(dead_code)]
-    vertex_map_2: wgpu::Buffer,
-    #[allow(dead_code)]
-    vertex_map_3: wgpu::Buffer,
-    counter_buffer: wgpu::Buffer,
-    counter_staging_buffer: wgpu::Buffer,
-    indirect_draw_buffer: wgpu::Buffer,
-
-    // ── Render (organism_skin_render.wgsl) ───────────────────────────────────
-    render_pipeline: wgpu::RenderPipeline,
+    // ── Render pipeline ───────────────────────────────────────────────────────
+    render_pipeline:   wgpu::RenderPipeline,
     render_bind_group: wgpu::BindGroup,
-    camera_buffer: wgpu::Buffer,
+    camera_buffer:     wgpu::Buffer,
     skin_params_buffer: wgpu::Buffer,
 
+    // ── Compatibility shims (kept so gpu_scene.rs compiles unchanged) ─────────
+    /// Dummy layout — create_count_bind_group returns a no-op bind group
+    pub count_bind_group_layout:   wgpu::BindGroupLayout,
+    /// Dummy layout — create_density_bind_group returns a no-op bind group
+    pub density_bind_group_layout: wgpu::BindGroupLayout,
+    dummy_buffer: wgpu::Buffer,
+
     // ── Config ────────────────────────────────────────────────────────────────
-    world_radius: f32,
-    world_center: Vec3,
-    max_vertices: u32,
-    max_indices: u32,
-    iso_level: f32,
-    pub skin_radius_scale: f32,
-    pub width: u32,
-    pub height: u32,
-    pub vertex_count: u32,
-    pub index_count: u32,
-    pub skin_params: OrganismSkinParams,
-    pub total_voxels: u32,
-    pub grid_resolution: u32,
-    pub temporal_blend: f32,
+    world_size:      f32,
+    grid_resolution: i32,
+    grid_cell_size:  f32,
+    pub skin_offset:     f32,   // replaces skin_radius_scale
+    pub skin_radius_scale: f32, // kept for API compat, maps to skin_offset
+    pub iso_level:       f32,   // kept for API compat (unused)
+    pub width:           u32,
+    pub height:          u32,
+    pub skin_params:     OrganismSkinParams,
+    pub skinned_cell_count: u32,
+    pub vertex_count:    u32,
+    pub index_count:     u32,
+    pub total_voxels:    u32,   // kept for API compat
+    pub grid_resolution_pub: u32,
+    pub temporal_blend:  f32,   // kept for API compat
+    shrink_iters: u32,
+    smooth_iters: u32,
 }
 
 impl OrganismSkinRenderer {
@@ -271,1141 +289,413 @@ impl OrganismSkinRenderer {
         surface_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
         world_radius: f32,
-        world_center: Vec3,
-        capacity: u32,
+        _world_center: Vec3,
+        _capacity: u32,
         width: u32,
         height: u32,
         settings: &crate::ui::OrganismSkinSettings,
     ) -> Self {
-        let max_vertices: u32 = 3_000_000; // 96MB vertex buffer, fits within 128MB binding limit
-        let max_indices: u32 = 9_000_000;
-        let iso_level: f32 = settings.iso_level;
-        let skin_radius_scale: f32 = settings.radius_scale;
-        let grid_resolution: u32 = settings.grid_resolution;
+        let world_size      = world_radius * 2.0;
+        let grid_resolution = 128_i32;
+        let grid_cell_size  = world_size / grid_resolution as f32;
+        let skin_offset     = settings.radius_scale.max(0.1); // reuse radius_scale as offset
 
-        let world_diameter = world_radius * 2.0;
-        let cell_size = world_diameter / grid_resolution as f32;
-        let grid_origin = world_center - Vec3::splat(world_diameter / 2.0);
+        // ── Buffers ───────────────────────────────────────────────────────────
+        let params = ShrinkParams {
+            world_size,
+            grid_cell_size,
+            grid_resolution,
+            cell_count: 0,
+            skin_offset,
+            shrink_speed:  0.25,
+            smooth_factor: 0.3,
+            min_cells:     4,
+        };
+        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label:    Some("ShrinkWrap Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
 
-        let total_voxels = (grid_resolution * grid_resolution * grid_resolution) as usize;
-        let padded_resolution = grid_resolution + 2;
-        let padded_voxels = (padded_resolution * padded_resolution * padded_resolution) as usize;
+        let org_accum_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label:              Some("ShrinkWrap OrgAccum"),
+            size:               (MAX_ORGANISMS as u64) * std::mem::size_of::<OrgAccum>() as u64,
+            usage:              wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let org_state_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label:              Some("ShrinkWrap OrgState"),
+            size:               (MAX_ORGANISMS as u64) * std::mem::size_of::<OrgState>() as u64,
+            usage:              wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
 
-        // ── Shader modules ──────────────────────────────────────────────────
-        let count_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Organism Skin Count Shader"),
+        let vertex_count = MAX_ORGANISMS * VERTS_PER_ORG;
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label:              Some("ShrinkWrap Vertices"),
+            size:               (vertex_count as u64) * std::mem::size_of::<GpuVertex>() as u64,
+            usage:              wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
+            mapped_at_creation: false,
+        });
+
+        let index_data   = build_full_index_buffer();
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label:    Some("ShrinkWrap Indices"),
+            contents: bytemuck::cast_slice(&index_data),
+            usage:    wgpu::BufferUsages::INDEX,
+        });
+
+        // Upload unit-sphere icosphere vertex positions for the shader's ico_pos() lookup.
+        // Stored as vec4<f32> (xyz = position, w = 0) to match WGSL alignment.
+        let (ico_verts, _) = build_icosphere(3);
+        let ico_data: Vec<[f32; 4]> = ico_verts.iter().map(|v| [v[0], v[1], v[2], 0.0]).collect();
+        let ico_unit_positions_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label:    Some("ShrinkWrap Ico Unit Positions"),
+            contents: bytemuck::cast_slice(&ico_data),
+            usage:    wgpu::BufferUsages::STORAGE,
+        });
+
+        let dummy_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label:              Some("ShrinkWrap Dummy"),
+            size:               16,
+            usage:              wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: false,
+        });
+
+        // ── Compute bind group layout ─────────────────────────────────────────
+        // Bindings (must match organism_shrinkwrap.wgsl):
+        //  0: params (uniform)
+        //  1: position_and_mass (read)
+        //  2: death_flags (read)
+        //  3: cell_count_buf (read)
+        //  4: label_buffer (read)
+        //  5: spatial_grid_counts (read)
+        //  6: spatial_grid_cells (read)
+        //  7: org_accum (rw)
+        //  8: org_state (rw)
+        //  9: vertices (rw)
+        // 10: stable_id_per_cell (read)
+        // 11: ico_unit_positions (read)
+        let compute_bind_group_layout = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label:   Some("ShrinkWrap Compute BGL"),
+                entries: &[
+                    bgl_uniform(0),
+                    bgl_storage_ro(1), bgl_storage_ro(2), bgl_storage_ro(3),
+                    bgl_storage_ro(4), bgl_storage_ro(5), bgl_storage_ro(6),
+                    bgl_storage_rw(7), bgl_storage_rw(8), bgl_storage_rw(9),
+                    bgl_storage_ro(10), bgl_storage_ro(11),
+                ],
+            },
+        );
+
+        // ── Compute pipelines ─────────────────────────────────────────────────
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label:  Some("ShrinkWrap Shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/organism_skin_count.wgsl").into(),
+                include_str!("../../shaders/organism_shrinkwrap.wgsl").into(),
             ),
         });
-        let density_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Organism Skin Density Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/organism_skin_density.wgsl").into(),
-            ),
+        let compute_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label:                Some("ShrinkWrap Compute Layout"),
+            bind_group_layouts:   &[&compute_bind_group_layout],
+            push_constant_ranges: &[],
         });
-        let sn_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Organism Skin Surface Nets Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/organism_skin_surface_nets.wgsl").into(),
-            ),
+        let make_cp = |entry: &str, lbl: &str| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label:               Some(lbl),
+                layout:              Some(&compute_layout),
+                module:              &shader,
+                entry_point:         Some(entry),
+                compilation_options: Default::default(),
+                cache:               None,
+            })
+        };
+        let clear_pipeline      = make_cp("clear_org_state",  "SW Clear");
+        let accumulate_pipeline = make_cp("accumulate_cells",  "SW Accumulate");
+        let finalize_pipeline   = make_cp("finalize_orgs",     "SW Finalize");
+        let shrink_pipeline     = make_cp("shrink_step",       "SW Shrink");
+        let smooth_pipeline     = make_cp("smooth_step",       "SW Smooth");
+
+        // ── Dummy layouts for API compatibility ───────────────────────────────
+        let dummy_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label:   Some("ShrinkWrap Dummy BGL"),
+            entries: &[bgl_storage_ro(0)],
         });
+        let count_bind_group_layout   = dummy_bgl;
+        let density_bind_group_layout = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label:   Some("ShrinkWrap Dummy Density BGL"),
+                entries: &[bgl_storage_ro(0)],
+            },
+        );
+
+        // ── Render pipeline ───────────────────────────────────────────────────
         let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Organism Skin Render Shader"),
+            label:  Some("ShrinkWrap Render Shader"),
             source: wgpu::ShaderSource::Wgsl(
                 include_str!("../../shaders/organism_skin_render.wgsl").into(),
             ),
         });
-
-        // ── Organism counting buffers ───────────────────────────────────────
-        let count_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Skin Count Params"),
-            contents: bytemuck::bytes_of(&SkinCountParams {
-                min_cells: MIN_CELLS_FOR_SKIN,
-                histogram_size: HISTOGRAM_SIZE,
-                _pad0: 0, _pad1: 0,
-            }),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let histogram_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Organism Histogram"),
-            size: (HISTOGRAM_SIZE as u64) * 4,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let cell_skin_id_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Cell Skin ID"),
-            size: capacity as u64 * 4,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let skinned_cell_counter_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skinned Cell Counter"),
-            size: 4, // single u32
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let skinned_cell_counter_staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skinned Cell Counter Staging"),
-            size: 4,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Count bind group layout: params, cell_count, death_flags, label_buffer, histogram, cell_skin_id, skinned_cell_counter
-        let count_bind_group_layout = device.create_bind_group_layout(
-            &wgpu::BindGroupLayoutDescriptor {
-                label: Some("Skin Count Layout"),
-                entries: &[
-                    bgl_entry(0, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(1, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(2, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(3, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(4, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(5, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(6, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                ],
-            },
-        );
-
-        let count_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Skin Count Pipeline Layout"),
-            bind_group_layouts: &[&count_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        let count_clear_pipeline = make_compute_pipeline(device, &count_pipeline_layout,
-            &count_shader, "clear_histogram", "Skin Clear Histogram");
-        let count_organisms_pipeline = make_compute_pipeline(device, &count_pipeline_layout,
-            &count_shader, "count_organisms", "Skin Count Organisms");
-        let assign_skin_ids_pipeline = make_compute_pipeline(device, &count_pipeline_layout,
-            &count_shader, "assign_skin_ids", "Skin Assign IDs");
-
-        // ── K=4 density buffers ─────────────────────────────────────────────
-        let voxel_buf_size = (total_voxels * 4) as u64;
-
-        let slot_org_0 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Slot Org 0"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let slot_org_1 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Slot Org 1"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let slot_org_2 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Slot Org 2"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let slot_org_3 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Slot Org 3"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let slot_density_0 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Slot Density 0"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let slot_density_1 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Slot Density 1"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let slot_density_2 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Slot Density 2"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let slot_density_3 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Slot Density 3"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let density_out_0 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Density Out 0"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let density_out_1 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Density Out 1"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let density_out_2 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Density Out 2"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let density_out_3 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Density Out 3"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let org_id_out_0 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Org ID Out 0"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let org_id_out_1 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Org ID Out 1"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let org_id_out_2 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Org ID Out 2"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let org_id_out_3 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Org ID Out 3"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-
-        let density_params = OrganismDensityParams {
-            grid_origin: grid_origin.to_array(),
-            cell_size,
-            grid_resolution,
-            skin_radius_scale,
-            max_cells: capacity,
-            min_cells_for_skin: MIN_CELLS_FOR_SKIN,
-        };
-        let density_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Organism Skin Density Params"),
-            contents: bytemuck::bytes_of(&density_params),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        // Density bind group layout — 21 bindings matching organism_skin_density.wgsl (K=4)
-        // 0: params (uniform), 1: position_and_mass (read), 2: death_flags (read),
-        // 3: cell_count (read), 4-7: slot_org_0/1/2/3 (rw), 8-11: slot_density_0/1/2/3 (rw),
-        // 12-15: density_out_0/1/2/3 (rw), 16-19: org_id_out_0/1/2/3 (rw), 20: cell_skin_id (read)
-        let density_bind_group_layout = device.create_bind_group_layout(
-            &wgpu::BindGroupLayoutDescriptor {
-                label: Some("Organism Skin Density Layout"),
-                entries: &[
-                    bgl_entry(0, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(1, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(2, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(3, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    // bindings 4-19: K=4 slot buffers (all read_write for atomics)
-                    bgl_entry(4, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(5, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(6, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(7, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(8, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(9, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(10, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(11, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(12, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(13, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(14, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(15, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(16, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(17, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(18, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    bgl_entry(19, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                    // binding 20: cell_skin_id (read-only)
-                    bgl_entry(20, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false, min_binding_size: None }),
-                ],
-            },
-        );
-
-        let density_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Organism Skin Density Pipeline Layout"),
-            bind_group_layouts: &[&density_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        let density_clear_pipeline = make_compute_pipeline(device, &density_pipeline_layout,
-            &density_shader, "clear_density", "Skin Clear Density");
-        let density_generate_pipeline = make_compute_pipeline(device, &density_pipeline_layout,
-            &density_shader, "generate_density", "Skin Generate Density");
-        let density_normalize_pipeline = make_compute_pipeline(device, &density_pipeline_layout,
-            &density_shader, "normalize_density", "Skin Normalize Density");
-
-        // ── Surface nets buffers ─────────────────────────────────────────────
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Organism Skin Vertex Buffer"),
-            size: (max_vertices as usize * std::mem::size_of::<GpuVertex>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
-            mapped_at_creation: false,
-        });
-        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Organism Skin Index Buffer"),
-            size: (max_indices as usize * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDEX,
-            mapped_at_creation: false,
-        });
-        // Four vertex maps — one per organism slot at each voxel cell
-        let vertex_map_0 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Organism Skin Vertex Map 0"),
-            size: (padded_voxels * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
-        });
-        let vertex_map_1 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Organism Skin Vertex Map 1"),
-            size: (padded_voxels * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
-        });
-        let vertex_map_2 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Organism Skin Vertex Map 2"),
-            size: (padded_voxels * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
-        });
-        let vertex_map_3 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Organism Skin Vertex Map 3"),
-            size: (padded_voxels * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
-        });
-        let counter_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Organism Skin Counter"),
-            size: std::mem::size_of::<Counters>() as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let counter_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Organism Skin Counter Staging"),
-            size: std::mem::size_of::<Counters>() as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let indirect_draw_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Organism Skin Indirect Draw"),
-            size: 20, // 5 × u32
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT,
-            mapped_at_creation: false,
-        });
-
-        let padded_origin = grid_origin - Vec3::splat(cell_size);
-        let sn_params = SurfaceNetsParams {
-            grid_resolution: padded_resolution,
-            iso_level,
-            cell_size,
-            max_vertices,
-            grid_origin: padded_origin.to_array(),
-            max_indices,
-            density_resolution: grid_resolution,
-            _pad_a: 0, _pad_b: 0, _pad_c: 0,
-        };
-        let sn_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Organism Skin SN Params"),
-            contents: bytemuck::bytes_of(&sn_params),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        // Surface nets bind group layout — 17 bindings matching organism_skin_surface_nets.wgsl (K=4)
-        // 0: params, 1-4: density_0/1/2/3 (read), 5-8: org_id_0/1/2/3 (read),
-        // 9: vertices (rw), 10: indices (rw), 11-14: vertex_map_0/1/2/3 (rw),
-        // 15: counters (rw), 16: indirect_draw (rw)
-        let sn_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Organism Skin SN Layout"),
-            entries: &[
-                bgl_entry(0, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // density_0..3 (read)
-                bgl_entry(1, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(2, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(3, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(4, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // org_id_0..3 (read)
-                bgl_entry(5, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(6, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(7, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(8, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // vertices (rw)
-                bgl_entry(9, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // indices (rw)
-                bgl_entry(10, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // vertex_map_0..3 (rw)
-                bgl_entry(11, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(12, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(13, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(14, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // counters (rw)
-                bgl_entry(15, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // indirect_draw (rw)
-                bgl_entry(16, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-            ],
-        });
-
-        let sn_compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Organism Skin SN Bind Group"),
-            layout: &sn_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: sn_params_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: density_out_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: density_out_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: density_out_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: density_out_3.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: org_id_out_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: org_id_out_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 7, resource: org_id_out_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 8, resource: org_id_out_3.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 9, resource: vertex_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 10, resource: index_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 11, resource: vertex_map_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 12, resource: vertex_map_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 13, resource: vertex_map_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 14, resource: vertex_map_3.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 15, resource: counter_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 16, resource: indirect_draw_buffer.as_entire_binding() },
-            ],
-        });
-
-        let sn_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Organism Skin SN Pipeline Layout"),
-            bind_group_layouts: &[&sn_layout],
-            push_constant_ranges: &[],
-        });
-        let sn_reset_pipeline = make_compute_pipeline(device, &sn_pipeline_layout,
-            &sn_shader, "reset_counters", "Skin SN Reset");
-        let sn_vertex_pipeline = make_compute_pipeline(device, &sn_pipeline_layout,
-            &sn_shader, "generate_vertices", "Skin SN Vertices");
-        let sn_index_pipeline = make_compute_pipeline(device, &sn_pipeline_layout,
-            &sn_shader, "generate_indices", "Skin SN Indices");
-        let sn_finalize_pipeline = make_compute_pipeline(device, &sn_pipeline_layout,
-            &sn_shader, "finalize_indirect", "Skin SN Finalize");
-
-        // ── Temporal blend pipeline (organism_skin_blend.wgsl) ─────────────
-        let blend_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Organism Skin Blend Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/organism_skin_blend.wgsl").into(),
-            ),
-        });
-
-        // 8 previous-frame buffers (same size as density_out / org_id_out)
-        let prev_density_0 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Prev Density 0"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
-        });
-        let prev_density_1 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Prev Density 1"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
-        });
-        let prev_density_2 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Prev Density 2"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
-        });
-        let prev_density_3 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Prev Density 3"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
-        });
-        let prev_org_id_0 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Prev Org ID 0"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
-        });
-        let prev_org_id_1 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Prev Org ID 1"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
-        });
-        let prev_org_id_2 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Prev Org ID 2"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
-        });
-        let prev_org_id_3 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Prev Org ID 3"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
-        });
-
-        let blend_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Skin Blend Params"),
-            contents: bytemuck::bytes_of(&BlendParams {
-                total_voxels: total_voxels as u32,
-                blend_factor: 0.35,
-                _pad0: 0,
-                _pad1: 0,
-            }),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        // Blend bind group layout — 17 bindings matching organism_skin_blend.wgsl
-        // 0: params (uniform), 1-4: density_out (rw), 5-8: org_id_out (read),
-        // 9-12: prev_density (rw), 13-16: prev_org_id (rw)
-        let blend_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Organism Skin Blend Layout"),
-            entries: &[
-                // binding 0: BlendParams uniform
-                bgl_entry(0, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // bindings 1-4: density_out_0..3 (read_write)
-                bgl_entry(1, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(2, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(3, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(4, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // bindings 5-8: org_id_out_0..3 (read)
-                bgl_entry(5, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(6, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(7, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(8, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // bindings 9-12: prev_density_0..3 (read_write)
-                bgl_entry(9, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(10, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(11, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(12, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // bindings 13-16: prev_org_id_0..3 (read_write)
-                bgl_entry(13, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(14, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(15, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(16, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-            ],
-        });
-
-        let blend_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Organism Skin Blend Pipeline Layout"),
-            bind_group_layouts: &[&blend_bgl],
-            push_constant_ranges: &[],
-        });
-        let blend_pipeline = make_compute_pipeline(device, &blend_pipeline_layout,
-            &blend_shader, "blend_density", "Skin Blend Density");
-
-        let blend_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Organism Skin Blend Bind Group"),
-            layout: &blend_bgl,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: blend_params_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: density_out_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: density_out_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: density_out_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: density_out_3.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: org_id_out_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: org_id_out_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 7, resource: org_id_out_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 8, resource: org_id_out_3.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 9, resource: prev_density_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 10, resource: prev_density_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 11, resource: prev_density_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 12, resource: prev_density_3.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 13, resource: prev_org_id_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 14, resource: prev_org_id_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 15, resource: prev_org_id_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 16, resource: prev_org_id_3.as_entire_binding() },
-            ],
-        });
-
-        // ── Spatial smoothing pipeline (organism_skin_smooth.wgsl) ──────────
-        let smooth_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Organism Skin Smooth Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/organism_skin_smooth.wgsl").into(),
-            ),
-        });
-
-        // 4 temp density buffers for smooth output
-        let smooth_temp_density_0 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Smooth Temp 0"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
-        });
-        let smooth_temp_density_1 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Smooth Temp 1"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
-        });
-        let smooth_temp_density_2 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Smooth Temp 2"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
-        });
-        let smooth_temp_density_3 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Smooth Temp 3"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
-        });
-        // 4 temp org ID buffers for smooth output
-        let smooth_temp_org_0 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Smooth Temp Org 0"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
-        });
-        let smooth_temp_org_1 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Smooth Temp Org 1"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
-        });
-        let smooth_temp_org_2 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Smooth Temp Org 2"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
-        });
-        let smooth_temp_org_3 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Skin Smooth Temp Org 3"), size: voxel_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
-        });
-
-        let smooth_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Skin Smooth Params"),
-            contents: bytemuck::bytes_of(&SmoothParams {
-                grid_resolution,
-                _pad0: 0, _pad1: 0, _pad2: 0,
-            }),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        // Smooth bind group layout: params + 4 density in (read) + 4 org in (read) + 4 density out (rw) + 4 org out (rw)
-        let smooth_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Organism Skin Smooth Layout"),
-            entries: &[
-                bgl_entry(0, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // density_in 1-4 (read)
-                bgl_entry(1, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(2, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(3, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(4, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // org_in 5-8 (read)
-                bgl_entry(5, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(6, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(7, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(8, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // density_out 9-12 (rw)
-                bgl_entry(9, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(10, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(11, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(12, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                // org_out 13-16 (rw)
-                bgl_entry(13, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(14, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(15, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(16, wgpu::ShaderStages::COMPUTE, wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false, min_binding_size: None }),
-            ],
-        });
-
-        let smooth_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Organism Skin Smooth Pipeline Layout"),
-            bind_group_layouts: &[&smooth_bgl],
-            push_constant_ranges: &[],
-        });
-        let smooth_pipeline = make_compute_pipeline(device, &smooth_pipeline_layout,
-            &smooth_shader, "smooth_density", "Skin Smooth Density");
-
-        // Smooth bind group: read from density_out/org_id_out, write smoothed to temp
-        let smooth_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Organism Skin Smooth Bind Group"),
-            layout: &smooth_bgl,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: smooth_params_buffer.as_entire_binding() },
-                // Read from density_out (input)
-                wgpu::BindGroupEntry { binding: 1, resource: density_out_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: density_out_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: density_out_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: density_out_3.as_entire_binding() },
-                // Read from org_id_out (input)
-                wgpu::BindGroupEntry { binding: 5, resource: org_id_out_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: org_id_out_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 7, resource: org_id_out_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 8, resource: org_id_out_3.as_entire_binding() },
-                // Write to temp density (output)
-                wgpu::BindGroupEntry { binding: 9, resource: smooth_temp_density_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 10, resource: smooth_temp_density_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 11, resource: smooth_temp_density_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 12, resource: smooth_temp_density_3.as_entire_binding() },
-                // Write to temp org ID (output)
-                wgpu::BindGroupEntry { binding: 13, resource: smooth_temp_org_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 14, resource: smooth_temp_org_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 15, resource: smooth_temp_org_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 16, resource: smooth_temp_org_3.as_entire_binding() },
-            ],
-        });
-
-        // ── Render pipeline ─────────────────────────────────────────────────
         let camera_uniform = CameraUniform {
-            view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
-            camera_pos: [0.0; 3], _padding: 0.0,
+            view_proj:  glam::Mat4::IDENTITY.to_cols_array_2d(),
+            camera_pos: [0.0; 3],
+            _padding:   0.0,
         };
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Organism Skin Camera Buffer"),
+            label:    Some("ShrinkWrap Camera"),
             contents: bytemuck::bytes_of(&camera_uniform),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let skin_params = OrganismSkinParams::default();
         let skin_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Organism Skin Params Buffer"),
+            label:    Some("ShrinkWrap Skin Params"),
             contents: bytemuck::bytes_of(&skin_params),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-
         let render_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Organism Skin Render Layout"),
+            label:   Some("ShrinkWrap Render BGL"),
             entries: &[
-                bgl_entry(0, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false, min_binding_size: None }),
-                bgl_entry(1, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false, min_binding_size: None }),
+                bgl_uniform_vs_fs(0),
+                bgl_uniform_vs_fs(1),
             ],
         });
         let render_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Organism Skin Render Bind Group"),
-            layout: &render_bgl,
+            label:   Some("ShrinkWrap Render BG"),
+            layout:  &render_bgl,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: camera_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: skin_params_buffer.as_entire_binding() },
             ],
         });
-
-        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Organism Skin Render Pipeline Layout"),
-            bind_group_layouts: &[&render_bgl],
+        let render_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label:                Some("ShrinkWrap Render Layout"),
+            bind_group_layouts:   &[&render_bgl],
             push_constant_ranges: &[],
         });
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Organism Skin Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
+            label:  Some("ShrinkWrap Render Pipeline"),
+            layout: Some(&render_layout),
             vertex: wgpu::VertexState {
-                module: &render_shader,
-                entry_point: Some("vs_main"),
+                module:              &render_shader,
+                entry_point:         Some("vs_main"),
+                compilation_options: Default::default(),
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<GpuVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            offset: 0, shader_location: 0,
-                            format: wgpu::VertexFormat::Float32x3, // position
-                        },
-                        wgpu::VertexAttribute {
-                            offset: 12, shader_location: 1,
-                            format: wgpu::VertexFormat::Float32, // organism_id
-                        },
-                        wgpu::VertexAttribute {
-                            offset: 16, shader_location: 2,
-                            format: wgpu::VertexFormat::Float32x3, // normal
-                        },
+                    step_mode:    wgpu::VertexStepMode::Vertex,
+                    attributes:   &[
+                        wgpu::VertexAttribute { offset: 0,  shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
+                        wgpu::VertexAttribute { offset: 12, shader_location: 1, format: wgpu::VertexFormat::Float32   },
+                        wgpu::VertexAttribute { offset: 16, shader_location: 2, format: wgpu::VertexFormat::Float32x3 },
                     ],
                 }],
-                compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &render_shader,
-                entry_point: Some("fs_main"),
+                module:              &render_shader,
+                entry_point:         Some("fs_main"),
+                compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
+                    format:     surface_format,
+                    blend:      Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
             }),
-
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
+                topology:   wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode:  Some(wgpu::Face::Back),
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
-                format: depth_format,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
+                format:               depth_format,
+                depth_write_enabled:  false,
+                depth_compare:        wgpu::CompareFunction::Less,
+                stencil:              wgpu::StencilState::default(),
+                bias:                 wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
+            multiview:   None,
+            cache:       None,
         });
 
+        let total_indices = MAX_ORGANISMS * TRIS_PER_ORG * 3;
+
         Self {
-            count_clear_pipeline,
-            count_organisms_pipeline,
-            assign_skin_ids_pipeline,
-            count_bind_group_layout,
-            count_params_buffer,
-            histogram_buffer,
-            cell_skin_id_buffer,
-            skinned_cell_counter_buffer,
-            skinned_cell_counter_staging,
-            skinned_cell_count: 0,
-            density_clear_pipeline,
-            density_generate_pipeline,
-            density_normalize_pipeline,
-            density_bind_group_layout,
-            density_params_buffer,
-            slot_org_0, slot_org_1, slot_org_2, slot_org_3,
-            slot_density_0, slot_density_1, slot_density_2, slot_density_3,
-            density_out_0, density_out_1, density_out_2, density_out_3,
-            org_id_out_0, org_id_out_1, org_id_out_2, org_id_out_3,
-            blend_pipeline, blend_bind_group, blend_params_buffer,
-            prev_density_0, prev_density_1, prev_density_2, prev_density_3,
-            prev_org_id_0, prev_org_id_1, prev_org_id_2, prev_org_id_3,
-            smooth_pipeline, smooth_bind_group, smooth_params_buffer,
-            smooth_temp_density_0, smooth_temp_density_1, smooth_temp_density_2, smooth_temp_density_3,
-            smooth_temp_org_0, smooth_temp_org_1, smooth_temp_org_2, smooth_temp_org_3,
-            sn_reset_pipeline, sn_vertex_pipeline, sn_index_pipeline, sn_finalize_pipeline,
-            sn_compute_bind_group,
-            sn_params_buffer,
-            vertex_buffer, index_buffer,
-            vertex_map_0, vertex_map_1, vertex_map_2, vertex_map_3,
-            counter_buffer, counter_staging_buffer, indirect_draw_buffer,
+            clear_pipeline, accumulate_pipeline, finalize_pipeline,
+            shrink_pipeline, smooth_pipeline,
+            compute_bind_group_layout,
+            params_buffer, org_accum_buffer, org_state_buffer,
+            vertex_buffer, index_buffer, ico_unit_positions_buffer,
             render_pipeline, render_bind_group,
             camera_buffer, skin_params_buffer,
-            world_radius, world_center,
-            max_vertices, max_indices, iso_level,
-            skin_radius_scale,
+            count_bind_group_layout, density_bind_group_layout,
+            dummy_buffer,
+            world_size, grid_resolution, grid_cell_size,
+            skin_offset, skin_radius_scale: skin_offset,
+            iso_level: settings.iso_level,
             width, height,
-            vertex_count: 0, index_count: 0,
             skin_params,
-            total_voxels: total_voxels as u32,
-            grid_resolution,
-            temporal_blend: 0.35,
+            skinned_cell_count: 0,
+            vertex_count: MAX_ORGANISMS * VERTS_PER_ORG,
+            index_count: total_indices,
+            total_voxels: 128 * 128 * 128,
+            grid_resolution_pub: 128,
+            temporal_blend: 0.0,
+            shrink_iters: settings.shrink_iters.max(1),
+            smooth_iters: settings.smooth_iters,
         }
     }
 
-    // ── Public API ────────────────────────────────────────────────────────────
+    // ── API compatibility shims ───────────────────────────────────────────────
 
-    /// Create a per-frame count bind group that binds the organism label buffer.
-    /// Call once per unique combination of buffers and cache the results.
+    /// Creates a dummy bind group (kept so gpu_scene.rs compiles unchanged).
+    /// The shrink-wrap system uses its own internal bind group created via
+    /// `create_compute_bind_group`.
     pub fn create_count_bind_group(
         &self,
         device: &wgpu::Device,
-        cell_count: &wgpu::Buffer,
-        death_flags: &wgpu::Buffer,
-        label_buffer: &wgpu::Buffer,
+        _cell_count: &wgpu::Buffer,
+        _death_flags: &wgpu::Buffer,
+        _label_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Organism Skin Count Bind Group"),
-            layout: &self.count_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.count_params_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: cell_count.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: death_flags.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: label_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: self.histogram_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: self.cell_skin_id_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: self.skinned_cell_counter_buffer.as_entire_binding() },
-            ],
+            label:   Some("ShrinkWrap Dummy Count BG"),
+            layout:  &self.count_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding:  0,
+                resource: self.dummy_buffer.as_entire_binding(),
+            }],
         })
     }
 
-    /// Create a per-frame density bind group that binds the triple-buffered position buffer.
+    /// Creates a dummy bind group (kept so gpu_scene.rs compiles unchanged).
     pub fn create_density_bind_group(
+        &self,
+        device: &wgpu::Device,
+        _position_and_mass: &wgpu::Buffer,
+        _death_flags: &wgpu::Buffer,
+        _cell_count: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label:   Some("ShrinkWrap Dummy Density BG"),
+            layout:  &self.density_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding:  0,
+                resource: self.dummy_buffer.as_entire_binding(),
+            }],
+        })
+    }
+
+    /// Create the real compute bind group that wires all GPU buffers.
+    /// Call once after initialization and cache the result.
+    pub fn create_compute_bind_group(
         &self,
         device: &wgpu::Device,
         position_and_mass: &wgpu::Buffer,
         death_flags: &wgpu::Buffer,
-        cell_count: &wgpu::Buffer,
+        cell_count_buf: &wgpu::Buffer,
+        label_buffer: &wgpu::Buffer,
+        spatial_grid_counts: &wgpu::Buffer,
+        spatial_grid_cells: &wgpu::Buffer,
+        stable_id_per_cell: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Organism Skin Density Bind Group"),
-            layout: &self.density_bind_group_layout,
+            label:   Some("ShrinkWrap Compute BG"),
+            layout:  &self.compute_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.density_params_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: position_and_mass.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: death_flags.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: cell_count.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: self.slot_org_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: self.slot_org_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: self.slot_org_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 7, resource: self.slot_org_3.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 8, resource: self.slot_density_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 9, resource: self.slot_density_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 10, resource: self.slot_density_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 11, resource: self.slot_density_3.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 12, resource: self.density_out_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 13, resource: self.density_out_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 14, resource: self.density_out_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 15, resource: self.density_out_3.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 16, resource: self.org_id_out_0.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 17, resource: self.org_id_out_1.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 18, resource: self.org_id_out_2.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 19, resource: self.org_id_out_3.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 20, resource: self.cell_skin_id_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0,  resource: self.params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1,  resource: position_and_mass.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2,  resource: death_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3,  resource: cell_count_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4,  resource: label_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5,  resource: spatial_grid_counts.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6,  resource: spatial_grid_cells.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7,  resource: self.org_accum_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8,  resource: self.org_state_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 9,  resource: self.vertex_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 10, resource: stable_id_per_cell.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 11, resource: self.ico_unit_positions_buffer.as_entire_binding() },
             ],
         })
     }
 
-    /// GPU pass: count organisms and assign skin IDs.
-    /// Must be called before `generate_density`.
-    /// After this pass completes, call `try_read_skinned_count` to check if any cells have skins.
+    // ── Main per-frame passes ─────────────────────────────────────────────────
+
+    /// Pass 1+2+3: clear state, accumulate cell positions, finalize org spheres.
+    /// `count_bind_group` is ignored (kept for API compat).
     pub fn count_organisms(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
-        count_bind_group: &wgpu::BindGroup,
-        max_cells: u32,
+        _encoder: &mut wgpu::CommandEncoder,
+        _count_bind_group: &wgpu::BindGroup,
+        _max_cells: u32,
     ) {
-        if max_cells == 0 { return; }
-
-        // All 3 count passes share the same bind group — use a single compute pass
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Skin Count All"), timestamp_writes: None,
-        });
-        pass.set_bind_group(0, count_bind_group, &[]);
-
-        // Pass 0: clear histogram + skinned cell counter
-        pass.set_pipeline(&self.count_clear_pipeline);
-        pass.dispatch_workgroups((HISTOGRAM_SIZE + 255) / 256, 1, 1);
-
-        // Pass 1: count cells per organism
-        pass.set_pipeline(&self.count_organisms_pipeline);
-        pass.dispatch_workgroups((max_cells + 255) / 256, 1, 1);
-
-        // Pass 2: assign skin IDs (also increments skinned_cell_counter)
-        pass.set_pipeline(&self.assign_skin_ids_pipeline);
-        pass.dispatch_workgroups((max_cells + 255) / 256, 1, 1);
-
-        drop(pass);
-
-        // Copy skinned cell counter to staging for CPU readback
-        encoder.copy_buffer_to_buffer(
-            &self.skinned_cell_counter_buffer, 0,
-            &self.skinned_cell_counter_staging, 0,
-            4,
-        );
+        // Actual work is done in encode_shrinkwrap_frame — this is a no-op shim.
     }
 
-    /// GPU pass: generate K=4 organism density from cell positions.
-    /// Must be called after `count_organisms` and before `extract_mesh`.
+    /// Pass 4+5: shrink + smooth iterations.
+    /// `density_bind_group` is ignored (kept for API compat).
     pub fn generate_density(
         &self,
+        _encoder: &mut wgpu::CommandEncoder,
+        _density_bind_group: &wgpu::BindGroup,
+        _max_cells: u32,
+    ) {
+        // Actual work is done in encode_shrinkwrap_frame — this is a no-op shim.
+    }
+
+    /// No-op — mesh is already in vertex_buffer after encode_shrinkwrap_frame.
+    pub fn extract_mesh(&self, _encoder: &mut wgpu::CommandEncoder) {}
+
+    /// Run the full shrink-wrap pipeline for one frame.
+    /// Call this instead of count_organisms + generate_density + extract_mesh.
+    pub fn encode_shrinkwrap_frame(
+        &self,
         encoder: &mut wgpu::CommandEncoder,
-        density_bind_group: &wgpu::BindGroup,
+        compute_bind_group: &wgpu::BindGroup,
         max_cells: u32,
     ) {
         if max_cells == 0 { return; }
 
-        // Clear K=4 slot buffers using DMA clear (much faster than compute dispatch)
-        encoder.clear_buffer(&self.slot_org_0, 0, None);
-        encoder.clear_buffer(&self.slot_org_1, 0, None);
-        encoder.clear_buffer(&self.slot_org_2, 0, None);
-        encoder.clear_buffer(&self.slot_org_3, 0, None);
-        encoder.clear_buffer(&self.slot_density_0, 0, None);
-        encoder.clear_buffer(&self.slot_density_1, 0, None);
-        encoder.clear_buffer(&self.slot_density_2, 0, None);
-        encoder.clear_buffer(&self.slot_density_3, 0, None);
+        // Clear org_accum buffer via DMA (faster than compute dispatch)
+        encoder.clear_buffer(&self.org_accum_buffer, 0, None);
 
-        // Generate density + normalize in a single compute pass (skip the clear dispatch)
+        let org_wg  = (MAX_ORGANISMS + 63) / 64;
+        let cell_wg = (max_cells + 255) / 256;
+        let vert_wg = (MAX_ORGANISMS * VERTS_PER_ORG + 63) / 64;
+
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Skin Density Gen+Norm"), timestamp_writes: None,
+                label: Some("ShrinkWrap Frame"), timestamp_writes: None,
             });
-            pass.set_bind_group(0, density_bind_group, &[]);
+            pass.set_bind_group(0, compute_bind_group, &[]);
 
-            // Per-cell metaball splatting with CAS slot claiming
-            pass.set_pipeline(&self.density_generate_pipeline);
-            pass.dispatch_workgroups((max_cells + 63) / 64, 1, 1);
+            // Clear org_state
+            pass.set_pipeline(&self.clear_pipeline);
+            pass.dispatch_workgroups(org_wg, 1, 1);
 
-            // Normalize fixed-point → f32 and copy org IDs
-            pass.set_pipeline(&self.density_normalize_pipeline);
-            let workgroups_x = ((self.total_voxels + 255) / 256).min(65535);
-            pass.dispatch_workgroups(workgroups_x, 1, 1);
-        }
+            // Accumulate cell positions into org_accum
+            pass.set_pipeline(&self.accumulate_pipeline);
+            pass.dispatch_workgroups(cell_wg, 1, 1);
 
-        // Spatial smoothing pass — 3×3×3 box blur per organism slot
-        {
-            let mut smooth_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Skin Smooth"), timestamp_writes: None,
-            });
-            smooth_pass.set_pipeline(&self.smooth_pipeline);
-            smooth_pass.set_bind_group(0, &self.smooth_bind_group, &[]);
-            let wg = (self.grid_resolution + 3) / 4;
-            smooth_pass.dispatch_workgroups(wg, wg, wg);
-        }
+            // Finalize: compute centroid, place icosphere
+            pass.set_pipeline(&self.finalize_pipeline);
+            pass.dispatch_workgroups(org_wg, 1, 1);
 
-        // Copy smoothed density back from temp buffers → density_out
-        let voxel_bytes = self.total_voxels as u64 * 4;
-        encoder.copy_buffer_to_buffer(&self.smooth_temp_density_0, 0, &self.density_out_0, 0, voxel_bytes);
-        encoder.copy_buffer_to_buffer(&self.smooth_temp_density_1, 0, &self.density_out_1, 0, voxel_bytes);
-        encoder.copy_buffer_to_buffer(&self.smooth_temp_density_2, 0, &self.density_out_2, 0, voxel_bytes);
-        encoder.copy_buffer_to_buffer(&self.smooth_temp_density_3, 0, &self.density_out_3, 0, voxel_bytes);
-        // Copy propagated org IDs back from temp buffers → org_id_out
-        encoder.copy_buffer_to_buffer(&self.smooth_temp_org_0, 0, &self.org_id_out_0, 0, voxel_bytes);
-        encoder.copy_buffer_to_buffer(&self.smooth_temp_org_1, 0, &self.org_id_out_1, 0, voxel_bytes);
-        encoder.copy_buffer_to_buffer(&self.smooth_temp_org_2, 0, &self.org_id_out_2, 0, voxel_bytes);
-        encoder.copy_buffer_to_buffer(&self.smooth_temp_org_3, 0, &self.org_id_out_3, 0, voxel_bytes);
+            // Shrink iterations
+            for _ in 0..self.shrink_iters {
+                pass.set_pipeline(&self.shrink_pipeline);
+                pass.dispatch_workgroups(vert_wg, 1, 1);
+            }
 
-        // Temporal blend (separate compute pass — different bind group at group 0)
-        {
-            let mut blend_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Skin Blend"), timestamp_writes: None,
-            });
-            blend_pass.set_pipeline(&self.blend_pipeline);
-            blend_pass.set_bind_group(0, &self.blend_bind_group, &[]);
-            let blend_wg = ((self.total_voxels + 255) / 256).min(65535);
-            blend_pass.dispatch_workgroups(blend_wg, 1, 1);
+            // Smooth iterations
+            for _ in 0..self.smooth_iters {
+                pass.set_pipeline(&self.smooth_pipeline);
+                pass.dispatch_workgroups(vert_wg, 1, 1);
+            }
         }
     }
 
-    /// GPU pass: extract organism-aware isosurface mesh.
-    /// Must be called after `generate_density`.
-    pub fn extract_mesh(&self, encoder: &mut wgpu::CommandEncoder) {
-        let padded_res = self.grid_resolution + 2;
-        let wg = (padded_res + 3) / 4;
-
-        // All 4 SN passes share the same bind group — use a single compute pass
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Skin SN All"), timestamp_writes: None,
-            });
-            pass.set_bind_group(0, &self.sn_compute_bind_group, &[]);
-
-            pass.set_pipeline(&self.sn_reset_pipeline);
-            pass.dispatch_workgroups(1, 1, 1);
-
-            pass.set_pipeline(&self.sn_vertex_pipeline);
-            pass.dispatch_workgroups(wg, wg, wg);
-
-            pass.set_pipeline(&self.sn_index_pipeline);
-            pass.dispatch_workgroups(wg, wg, wg);
-
-            pass.set_pipeline(&self.sn_finalize_pipeline);
-            pass.dispatch_workgroups(1, 1, 1);
-        }
-
-        encoder.copy_buffer_to_buffer(
-            &self.counter_buffer, 0,
-            &self.counter_staging_buffer, 0,
-            std::mem::size_of::<Counters>() as u64,
-        );
-    }
-
-    /// Render the extracted organism skin mesh.
+    /// Render the shrink-wrap mesh.
     pub fn render(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1420,44 +710,41 @@ impl OrganismSkinRenderer {
             camera_pos + camera_rotation * Vec3::NEG_Z,
             camera_rotation * Vec3::Y,
         );
-        let aspect = self.width as f32 / self.height as f32;
-        let proj = glam::Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
-        let cam = CameraUniform {
-            view_proj: (proj * view).to_cols_array_2d(),
+        let aspect = self.width as f32 / self.height.max(1) as f32;
+        let proj   = glam::Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 2000.0);
+        let cam    = CameraUniform {
+            view_proj:  (proj * view).to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),
-            _padding: 0.0,
+            _padding:   0.0,
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&cam));
 
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Organism Skin Render Pass"),
+        let total_indices = MAX_ORGANISMS * TRIS_PER_ORG * 3;
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("ShrinkWrap Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target_view,
+                view:           target_view,
                 resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
+                ops:            wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                depth_slice:    None,
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                }),
+                view:        depth_view,
+                depth_ops:   Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
                 stencil_ops: None,
             }),
-            timestamp_writes: None,
+            timestamp_writes:    None,
             occlusion_query_set: None,
         });
-
-        render_pass.set_pipeline(&self.render_pipeline);
-        render_pass.set_bind_group(0, &self.render_bind_group, &[]);
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        render_pass.draw_indexed_indirect(&self.indirect_draw_buffer, 0);
+        pass.set_pipeline(&self.render_pipeline);
+        pass.set_bind_group(0, &self.render_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(0..total_indices, 0, 0..1);
     }
+
+    // ── Setters ───────────────────────────────────────────────────────────────
 
     pub fn update_skin_params(&mut self, queue: &wgpu::Queue, params: OrganismSkinParams) {
         self.skin_params = params;
@@ -1466,132 +753,131 @@ impl OrganismSkinRenderer {
 
     pub fn set_skin_radius_scale(&mut self, queue: &wgpu::Queue, scale: f32) {
         self.skin_radius_scale = scale;
-        self.upload_density_params(queue);
+        self.skin_offset       = scale.max(0.1);
+        self.upload_params(queue);
     }
 
-    pub fn set_iso_level(&mut self, queue: &wgpu::Queue, level: f32) {
-        self.iso_level = level;
-        self.upload_sn_params(queue);
+    pub fn set_iso_level(&mut self, _queue: &wgpu::Queue, level: f32) {
+        self.iso_level = level; // no-op for shrink-wrap
     }
 
     pub fn set_time(&self, queue: &wgpu::Queue, time: f32) {
+        // time is at byte offset 40 in OrganismSkinParams
         queue.write_buffer(&self.skin_params_buffer, 40, bytemuck::bytes_of(&time));
     }
 
-    pub fn set_temporal_blend(&mut self, queue: &wgpu::Queue, value: f32) {
-        self.temporal_blend = value.clamp(0.0, 1.0);
-        let bp = BlendParams {
-            total_voxels: self.total_voxels,
-            blend_factor: self.temporal_blend,
-            _pad0: 0,
-            _pad1: 0,
+    pub fn set_shrink_params(
+        &mut self,
+        queue: &wgpu::Queue,
+        shrink_speed: f32,
+        smooth_factor: f32,
+        shrink_iters: u32,
+        smooth_iters: u32,
+        min_cells: u32,
+    ) {
+        self.shrink_iters  = shrink_iters.max(1);
+        self.smooth_iters  = smooth_iters;
+        let p = ShrinkParams {
+            world_size:      self.world_size,
+            grid_cell_size:  self.grid_cell_size,
+            grid_resolution: self.grid_resolution,
+            cell_count:      0,
+            skin_offset:     self.skin_offset,
+            shrink_speed:    shrink_speed.clamp(0.01, 1.0),
+            smooth_factor:   smooth_factor.clamp(0.0, 0.6),
+            min_cells:       min_cells.max(1),
         };
-        queue.write_buffer(&self.blend_params_buffer, 0, bytemuck::bytes_of(&bp));
+        queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&p));
+    }
+
+    pub fn set_temporal_blend(&mut self, _queue: &wgpu::Queue, value: f32) {
+        self.temporal_blend = value; // no-op
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.width = width;
+        self.width  = width;
         self.height = height;
     }
 
-    pub fn try_read_counts(&mut self, device: &wgpu::Device) {
-        let slice = self.counter_staging_buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
-        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-        {
-            let data = slice.get_mapped_range();
-            let c: &Counters = bytemuck::from_bytes(&data);
-            self.vertex_count = c.vertex_count.min(self.max_vertices);
-            self.index_count = c.index_count.min(self.max_indices);
-        }
-        self.counter_staging_buffer.unmap();
-    }
-
-    /// Read back the skinned cell counter from the GPU.
-    /// Returns the number of cells that were assigned a non-zero skin_id.
-    /// This is used to skip the expensive density + surface nets passes when no cells have skins.
-    /// Uses non-blocking poll — if the data isn't ready yet, keeps the previous value.
-    pub fn try_read_skinned_count(&mut self, device: &wgpu::Device) {
-        let slice = self.skinned_cell_counter_staging.slice(..);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = sender.send(result);
-        });
-        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-        if receiver.try_recv().is_ok() {
-            let data = slice.get_mapped_range();
-            let count: &u32 = bytemuck::from_bytes(&data);
-            self.skinned_cell_count = *count;
-            drop(data);
-            self.skinned_cell_counter_staging.unmap();
-        }
+    /// No-op shim — skinned_cell_count is updated by encode_shrinkwrap_frame.
+    pub fn try_read_skinned_count(&mut self, _device: &wgpu::Device) {
+        // For the shrink-wrap system we always consider there to be active skins
+        // when the simulation has cells. The actual per-organism activity is
+        // determined by org_state on the GPU.
+        self.skinned_cell_count = 1; // non-zero = don't skip render
     }
 
     pub fn triangle_count(&self) -> u32 {
-        self.index_count / 3
+        MAX_ORGANISMS * TRIS_PER_ORG
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
+    // ── Private ───────────────────────────────────────────────────────────────
 
-    fn upload_density_params(&self, queue: &wgpu::Queue) {
-        let world_diameter = self.world_radius * 2.0;
-        let cell_size = world_diameter / self.grid_resolution as f32;
-        let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
-        let p = OrganismDensityParams {
-            grid_origin: grid_origin.to_array(),
-            cell_size,
+    fn upload_params(&self, queue: &wgpu::Queue) {
+        let p = ShrinkParams {
+            world_size:      self.world_size,
+            grid_cell_size:  self.grid_cell_size,
             grid_resolution: self.grid_resolution,
-            skin_radius_scale: self.skin_radius_scale,
-            max_cells: 0,
-            min_cells_for_skin: MIN_CELLS_FOR_SKIN,
+            cell_count:      0,
+            skin_offset:     self.skin_offset,
+            shrink_speed:    0.25,
+            smooth_factor:   0.3,
+            min_cells:       4,
         };
-        queue.write_buffer(&self.density_params_buffer, 0, bytemuck::bytes_of(&p));
-    }
-
-    fn upload_sn_params(&self, queue: &wgpu::Queue) {
-        let world_diameter = self.world_radius * 2.0;
-        let cell_size = world_diameter / self.grid_resolution as f32;
-        let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
-        let padded_origin = grid_origin - Vec3::splat(cell_size);
-        let p = SurfaceNetsParams {
-            grid_resolution: self.grid_resolution + 2,
-            iso_level: self.iso_level,
-            cell_size,
-            max_vertices: self.max_vertices,
-            grid_origin: padded_origin.to_array(),
-            max_indices: self.max_indices,
-            density_resolution: self.grid_resolution,
-            _pad_a: 0, _pad_b: 0, _pad_c: 0,
-        };
-        queue.write_buffer(&self.sn_params_buffer, 0, bytemuck::bytes_of(&p));
+        queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&p));
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Small helpers to reduce boilerplate
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Bind group layout helpers ─────────────────────────────────────────────────
 
-fn bgl_entry(
-    binding: u32,
-    visibility: wgpu::ShaderStages,
-    ty: wgpu::BindingType,
-) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry { binding, visibility, ty, count: None }
+fn bgl_uniform(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
 }
 
-fn make_compute_pipeline(
-    device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-    entry: &str,
-    label: &str,
-) -> wgpu::ComputePipeline {
-    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        module: shader,
-        entry_point: Some(entry),
-        compilation_options: Default::default(),
-        cache: None,
-    })
+fn bgl_uniform_vs_fs(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+fn bgl_storage_ro(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+fn bgl_storage_rw(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: false },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
 }

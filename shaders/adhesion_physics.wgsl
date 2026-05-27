@@ -98,6 +98,12 @@ var<storage, read> adhesion_counts: array<u32>;
 @group(1) @binding(5)
 var<storage, read> cell_adhesion_indices: array<i32>;
 
+// Per-cell last mode-switch time (group 1 continued)
+// Written by mode_switch.wgsl; used to extend the bond-break grace period
+// so maturation-triggered mode switches don't cause transient bond breaks.
+@group(1) @binding(6)
+var<storage, read> mode_switch_time: array<f32>;
+
 // Rotations bind group (group 2)
 @group(2) @binding(0)
 var<storage, read> rotations_in: array<vec4<f32>>;
@@ -534,7 +540,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Break bond if force exceeds threshold - only cell_a thread writes to avoid races
         // Skip break check during grace period after bond creation (0.5s)
-        let in_grace = (params.current_time - connection.birth_time) < 0.5;
+        // Also skip if either cell recently mode-switched (1.5s grace) — prevents transient
+        // force spikes from maturation-triggered mode switches breaking ring bonds.
+        let bond_grace    = (params.current_time - connection.birth_time) < 0.5;
+        let switch_grace_a = (params.current_time - mode_switch_time[connection.cell_a_index]) < 1.5;
+        let switch_grace_b = (params.current_time - mode_switch_time[connection.cell_b_index]) < 1.5;
+        let in_grace = bond_grace || switch_grace_a || switch_grace_b;
         if (settings.can_break != 0 && !in_grace && spring_force_mag > settings.break_force && is_cell_a) {
             adhesion_connections[adhesion_idx].is_active = 0u;
             continue;

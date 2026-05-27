@@ -212,10 +212,12 @@ pub struct GpuScene {
     pub organism_skin_renderer: Option<OrganismSkinRenderer>,
     /// Whether to show organism skins
     pub show_organism_skins: bool,
-    /// Cached density bind groups for organism skin (one per triple-buffer index)
+    /// Cached density bind groups for organism skin (one per triple-buffer index, kept for API compat)
     organism_skin_density_bind_groups: Option<[wgpu::BindGroup; 3]>,
-    /// Cached count bind group for organism skin (shared across frames)
+    /// Cached count bind group for organism skin (kept for API compat)
     organism_skin_count_bind_group: Option<wgpu::BindGroup>,
+    /// Shrink-wrap compute bind groups (one per triple-buffer index — position_and_mass changes)
+    organism_skin_compute_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// GPU fluid simulator for falling/stacking water
     pub fluid_simulator: Option<GpuFluidSimulator>,
     /// Solid mask generator for fluid system
@@ -625,6 +627,7 @@ impl GpuScene {
             show_organism_skins: false,
             organism_skin_density_bind_groups: None,
             organism_skin_count_bind_group: None,
+            organism_skin_compute_bind_groups: None,
             fluid_simulator: None,
             solid_mask_generator: None,
             steam_particle_renderer: None,
@@ -2972,6 +2975,8 @@ impl GpuScene {
             let cave_renderer = CaveSystemRenderer::new(device, surface_format, width, height, world_radius);
             
             self.cave_renderer = Some(cave_renderer);
+            // Reset shadow bind group flag so it gets recreated with the new cave renderer
+            self.cave_shadow_bind_group_set = false;
             
             // Create cave-specific physics bind groups
             self.create_cave_physics_bind_groups(device);
@@ -3653,6 +3658,8 @@ impl GpuScene {
         
         self.gpu_surface_nets = Some(gpu_surface_nets);
         self.show_gpu_density_mesh = true;
+        // Reset shadow bind group flag so it gets recreated with the new renderer
+        self.water_shadow_bind_group_set = false;
 
         log::info!("GPU surface nets renderer initialized");
     }
@@ -3689,6 +3696,7 @@ impl GpuScene {
         // Invalidate cached bind groups so they are recreated with the new renderer
         self.organism_skin_density_bind_groups = None;
         self.organism_skin_count_bind_group = None;
+        self.organism_skin_compute_bind_groups = None;
 
         log::info!("Organism skin renderer initialized (grid {}³)", settings.grid_resolution);
     }
@@ -3700,7 +3708,7 @@ impl GpuScene {
             None => return,
         };
 
-        // Create count bind group (needs label buffer from organism label system)
+        // Dummy count bind group (kept for API compat — not used by shrink-wrap)
         if self.organism_skin_count_bind_group.is_none() {
             if let Some(ref label_system) = self.organism_label_system {
                 self.organism_skin_count_bind_group = Some(renderer.create_count_bind_group(
@@ -3712,7 +3720,7 @@ impl GpuScene {
             }
         }
 
-        // Create density bind groups (one per triple-buffer index)
+        // Dummy density bind groups (kept for API compat — not used by shrink-wrap)
         if self.organism_skin_density_bind_groups.is_none() {
             let bgs = std::array::from_fn(|i| {
                 renderer.create_density_bind_group(
@@ -3723,6 +3731,25 @@ impl GpuScene {
                 )
             });
             self.organism_skin_density_bind_groups = Some(bgs);
+        }
+
+        // Real shrink-wrap compute bind groups (one per triple-buffer index)
+        if self.organism_skin_compute_bind_groups.is_none() {
+            if let Some(ref label_system) = self.organism_label_system {
+                let bgs = std::array::from_fn(|i| {
+                    renderer.create_compute_bind_group(
+                        device,
+                        &self.gpu_triple_buffers.position_and_mass[i],
+                        &self.gpu_triple_buffers.death_flags,
+                        &self.gpu_triple_buffers.cell_count_buffer,
+                        &label_system.label_buffer,
+                        &self.gpu_triple_buffers.spatial_grid_counts,
+                        &self.gpu_triple_buffers.spatial_grid_cells,
+                        &label_system.stable_id_per_cell_buffer,
+                    )
+                });
+                self.organism_skin_compute_bind_groups = Some(bgs);
+            }
         }
     }
 
@@ -5791,6 +5818,65 @@ impl Scene for GpuScene {
                 self.camera.rotation,
             );
         }
+
+        // Render organism skins after all opaque geometry (cave, cells, world sphere)
+        // so they are correctly occluded, but before transparent particles.
+        // Adhesion lines render BEFORE the skin so the skin's alpha blending dims them.
+        if self.show_adhesion_lines {
+            self.ensure_cached_adhesion_bind_groups(device);
+            let output_idx = self.gpu_triple_buffers.output_buffer_index();
+
+            if let Some(ref cached_bgs) = self.cached_adhesion_data_bind_groups {
+                let adhesion_data_bind_group = &cached_bgs[output_idx];
+
+                let mut adhesion_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("GPU Adhesion Lines Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: scene_target,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.renderer.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+                self.adhesion_renderer.render_in_pass(
+                    &mut adhesion_pass,
+                    queue,
+                    adhesion_data_bind_group,
+                    self.camera.position(),
+                    self.camera.rotation,
+                );
+            }
+        }
+
+        if self.show_organism_skins {
+            if let Some(ref renderer) = self.organism_skin_renderer {
+                if renderer.skinned_cell_count > 0 || renderer.index_count > 0 {
+                    renderer.set_time(queue, self.current_time);
+                    renderer.render(
+                        &mut encoder,
+                        queue,
+                        scene_target,
+                        &self.renderer.depth_view,
+                        self.camera.position(),
+                        self.camera.rotation,
+                    );
+                }
+            }
+        }
         
         // Render fluid voxels if enabled (uses cached camera bind group)
         if self.show_fluid_voxels {
@@ -5829,31 +5915,17 @@ impl Scene for GpuScene {
         if self.show_organism_skins {
             self.ensure_organism_skin_bind_groups(device);
             let output_idx = self.gpu_triple_buffers.output_buffer_index();
-            let max_cells = self.current_cell_count;
+            let max_cells  = self.current_cell_count;
 
-            if let (Some(ref mut renderer), Some(ref density_bgs), Some(ref count_bg)) =
-                (&mut self.organism_skin_renderer, &self.organism_skin_density_bind_groups, &self.organism_skin_count_bind_group)
+            // Run shrink-wrap compute pipeline (compute only — render happens before cells below)
+            if let (Some(ref renderer), Some(ref compute_bgs)) =
+                (&self.organism_skin_renderer, &self.organism_skin_compute_bind_groups)
             {
                 if max_cells > 0 {
-                    renderer.count_organisms(&mut encoder, count_bg, max_cells);
-
-                    if renderer.skinned_cell_count > 0 || renderer.index_count == 0 {
-                        renderer.generate_density(&mut encoder, &density_bgs[output_idx], max_cells);
-                        renderer.extract_mesh(&mut encoder);
-                    }
-                }
-            }
-            // Render pass runs every frame (draws the last computed mesh) — but only if there are triangles
-            if let Some(ref renderer) = self.organism_skin_renderer {
-                if renderer.skinned_cell_count > 0 || renderer.index_count > 0 {
-                    renderer.set_time(queue, self.current_time);
-                    renderer.render(
+                    renderer.encode_shrinkwrap_frame(
                         &mut encoder,
-                        queue,
-                        scene_target,
-                        &self.renderer.depth_view,
-                        self.camera.position(),
-                        self.camera.rotation,
+                        &compute_bgs[output_idx],
+                        max_cells,
                     );
                 }
             }
@@ -5989,47 +6061,6 @@ impl Scene for GpuScene {
             }
         }
 
-
-        // Render adhesion lines if enabled (uses cached bind groups per triple buffer index)
-        if self.show_adhesion_lines {
-            self.ensure_cached_adhesion_bind_groups(device);
-            let output_idx = self.gpu_triple_buffers.output_buffer_index();
-            
-            if let Some(ref cached_bgs) = self.cached_adhesion_data_bind_groups {
-                let adhesion_data_bind_group = &cached_bgs[output_idx];
-                
-                let mut adhesion_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("GPU Adhesion Lines Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: scene_target,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load, // Preserve cell rendering
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.renderer.depth_view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Load, // Use existing depth for occlusion
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-
-                self.adhesion_renderer.render_in_pass(
-                    &mut adhesion_pass,
-                    queue,
-                    adhesion_data_bind_group,
-                    self.camera.position(),
-                    self.camera.rotation,
-                );
-            }
-        }
 
         // Render volumetric fog if enabled (post-process over scene, half-res + composite)
         if self.show_volumetric_fog {

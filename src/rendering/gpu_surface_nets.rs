@@ -1468,6 +1468,8 @@ impl GpuSurfaceNets {
             oit_pass.set_bind_group(0, &self.render_bind_group, &[]);
             if let Some(ref shadow_bg) = self.shadow_bind_group {
                 oit_pass.set_bind_group(1, shadow_bg, &[]);
+            } else {
+                return; // Shadow bind group not yet ready — skip draw to avoid validation error
             }
             oit_pass.set_bind_group(2, &self.cubemap_bind_group, &[]);
             oit_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));

@@ -595,6 +595,8 @@ impl CaveSystemRenderer {
         render_pass.set_bind_group(1, &self.params_bind_group, &[]);
         if let Some(ref shadow_bg) = self.shadow_bind_group {
             render_pass.set_bind_group(2, shadow_bg, &[]);
+        } else {
+            return; // Shadow bind group not yet ready — skip draw to avoid validation error
         }
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -647,6 +649,8 @@ impl CaveSystemRenderer {
         render_pass.set_bind_group(1, &self.params_bind_group, &[]);
         if let Some(ref shadow_bg) = self.shadow_bind_group {
             render_pass.set_bind_group(2, shadow_bg, &[]);
+        } else {
+            return; // Shadow bind group not yet ready — skip draw to avoid validation error
         }
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);

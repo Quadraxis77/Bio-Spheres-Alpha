@@ -1638,14 +1638,37 @@ fn render_organism_skin_settings(ui: &mut Ui, context: &mut PanelContext, organi
     ui.add_space(6.0);
 
     // ── Geometry ──────────────────────────────────────────────────────────────
-    ui.label("Skin Thickness (radius scale):");
-    ui.add(egui::Slider::new(&mut organism_skin.radius_scale, 0.5..=12.0)
-        .step_by(0.1).fixed_decimals(1));
+    ui.label("Skin Offset (gap from cell surface, world units):");
+    ui.add(egui::Slider::new(&mut organism_skin.radius_scale, 0.0..=5.0)
+        .step_by(0.05).fixed_decimals(2));
 
     ui.add_space(4.0);
-    ui.label("Iso Level (surface threshold):");
-    ui.add(egui::Slider::new(&mut organism_skin.iso_level, 0.1..=2.0)
-        .step_by(0.05).fixed_decimals(2));
+    ui.label("Shrink Speed (fraction of gap closed per iteration):");
+    ui.add(egui::Slider::new(&mut organism_skin.shrink_speed, 0.01..=1.0)
+        .step_by(0.01).fixed_decimals(2));
+
+    ui.add_space(4.0);
+    ui.label("Smooth Factor (Laplacian blend per iteration):");
+    ui.add(egui::Slider::new(&mut organism_skin.smooth_factor, 0.0..=0.8)
+        .step_by(0.01).fixed_decimals(2));
+
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label("Shrink Iterations:");
+        ui.add(egui::Slider::new(&mut organism_skin.shrink_iters, 1u32..=20u32));
+    });
+
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        ui.label("Smooth Iterations:");
+        ui.add(egui::Slider::new(&mut organism_skin.smooth_iters, 0u32..=8u32));
+    });
+
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        ui.label("Min Cells for Skin:");
+        ui.add(egui::Slider::new(&mut organism_skin.min_cells, 1u32..=50u32));
+    });
 
     // ── Material ──────────────────────────────────────────────────────────────
     ui.add_space(6.0);
@@ -1666,18 +1689,18 @@ fn render_organism_skin_settings(ui: &mut Ui, context: &mut PanelContext, organi
     });
 
     ui.add_space(4.0);
-    ui.label("Translucency (alpha):");
+    ui.label("Opacity:");
     ui.add(egui::Slider::new(&mut organism_skin.alpha, 0.0..=1.0)
-        .step_by(0.02).fixed_decimals(2));
+        .step_by(0.01).fixed_decimals(2));
 
     ui.add_space(4.0);
     ui.label("Subsurface Scattering:");
-    ui.add(egui::Slider::new(&mut organism_skin.sss_strength, 0.0..=2.0)
+    ui.add(egui::Slider::new(&mut organism_skin.sss_strength, 0.0..=3.0)
         .step_by(0.05).fixed_decimals(2));
 
     ui.add_space(4.0);
-    ui.label("Rim Light Strength:");
-    ui.add(egui::Slider::new(&mut organism_skin.rim_strength, 0.0..=2.0)
+    ui.label("Rim Light:");
+    ui.add(egui::Slider::new(&mut organism_skin.rim_strength, 0.0..=3.0)
         .step_by(0.05).fixed_decimals(2));
 
     ui.add_space(8.0);

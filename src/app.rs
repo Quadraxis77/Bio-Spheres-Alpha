@@ -1201,6 +1201,7 @@ impl App {
                 if let Some(ref mut skin) = gpu_scene.organism_skin_renderer {
                     skin.set_skin_radius_scale(&self.queue, os.radius_scale);
                     skin.set_iso_level(&self.queue, os.iso_level);
+                    skin.set_shrink_params(&self.queue, os.shrink_speed, os.smooth_factor, os.shrink_iters, os.smooth_iters, os.min_cells);
                     let mut params = skin.skin_params;
                     params.base_r = os.base_color[0];
                     params.base_g = os.base_color[1];
@@ -1402,10 +1403,10 @@ impl App {
                 }
             }
             
-            // In GPU mode, sync working_genome FROM GPU scene if it has genomes
-            // This ensures the UI shows the current genome state
-            // Note: We only do this once when switching to GPU mode, not every frame
-            // to allow UI edits to persist
+            // In GPU mode, sync working_genome FROM GPU scene if it has genomes.
+            // This ensures the UI always shows the GPU scene's genome, not a stale
+            // preview genome. Without this, switching genomes in preview then switching
+            // to GPU mode would push the preview genome into the GPU scene via update_genome.
             if current_mode == crate::ui::types::SimulationMode::Gpu {
                 if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
                     if !gpu_scene.genomes.is_empty() && self.working_genome.modes.is_empty() {
@@ -1817,13 +1818,6 @@ impl App {
             // immediately. update_genome only rewrites the per-mode settings arrays — it does
             // not touch cell positions, velocities, mode_indices, or adhesion connections, so
             // existing cells are unaffected structurally. New cells spawned after the edit
-            // will also use the updated settings via the same genome slot.
-            if current_mode == crate::ui::types::SimulationMode::Gpu {
-                if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
-                    gpu_scene.update_genome(&self.device, &self.queue, &self.working_genome);
-                }
-            }
-            
             output
         };
         
