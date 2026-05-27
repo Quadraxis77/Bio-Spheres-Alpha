@@ -373,16 +373,11 @@ impl Default for Genome {
 }
 
 impl Genome {
-    /// Returns the path to the genomes folder, creating it if it doesn't exist.
+    /// Returns the path to the genomes folder in the user's Documents directory,
+    /// creating it if it doesn't exist.
     /// This is the canonical location for saving and loading `.genome` files.
     pub fn genomes_dir() -> std::path::PathBuf {
-        let dir = std::path::PathBuf::from("genomes");
-        if !dir.exists() {
-            if let Err(e) = std::fs::create_dir_all(&dir) {
-                log::warn!("Could not create genomes directory: {}", e);
-            }
-        }
-        dir
+        crate::app_dirs::genomes_dir()
     }
 
     /// Collect all `.genome` files from the genomes folder, sorted for determinism.

@@ -691,7 +691,7 @@ impl GlobalUiState {
 
     /// Save UI state to disk.
     pub fn save(&self) -> Result<(), UiStateSaveError> {
-        let path = std::path::PathBuf::from("ui_state.ron");
+        let path = crate::app_dirs::config_file("ui_state.ron");
         let contents = ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())?;
         std::fs::write(path, contents)?;
         Ok(())
@@ -699,7 +699,7 @@ impl GlobalUiState {
 
     /// Load UI state from disk, or create default if file doesn't exist.
     pub fn load() -> Self {
-        let path = std::path::PathBuf::from("ui_state.ron");
+        let path = crate::app_dirs::config_file("ui_state.ron");
         
         if path.exists() {
             match Self::load_from_file(&path) {

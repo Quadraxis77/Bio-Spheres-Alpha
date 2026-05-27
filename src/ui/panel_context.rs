@@ -9,7 +9,6 @@ use crate::scene::SceneManager;
 use crate::ui::camera::CameraController;
 use crate::ui::performance::PerformanceMetrics;
 use crate::ui::types::SimulationMode;
-use std::path::PathBuf;
 
 /// Request for scene mode changes.
 ///
@@ -922,7 +921,7 @@ impl GenomeEditorState {
             boulder_moss_max,
         };
         
-        let path = PathBuf::from("cave_settings.ron");
+        let path = crate::app_dirs::config_file("cave_settings.ron");
         let contents = ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default())?;
         std::fs::write(path, contents)?;
         Ok(())
@@ -973,7 +972,7 @@ impl GenomeEditorState {
             nutrient_density,
         };
         
-        let path = PathBuf::from("fluid_settings.ron");
+        let path = crate::app_dirs::config_file("fluid_settings.ron");
         let contents = ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default())?;
         std::fs::write(path, contents)?;
         Ok(())
@@ -1090,7 +1089,7 @@ impl GenomeEditorState {
         fn default_boulder_moss_min() -> f32 { 2_000.0 }
         fn default_boulder_moss_max() -> f32 { 20_000.0 }
         
-        let path = PathBuf::from("cave_settings.ron");
+        let path = crate::app_dirs::config_file("cave_settings.ron");
         
         if path.exists() {
             match std::fs::read_to_string(&path) {
@@ -1300,7 +1299,7 @@ impl GenomeEditorState {
             photocyte_min_light_threshold,
         };
         
-        let path = PathBuf::from("light_settings.ron");
+        let path = crate::app_dirs::config_file("light_settings.ron");
         let contents = ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default())?;
         std::fs::write(path, contents)?;
         Ok(())
@@ -1362,7 +1361,7 @@ impl GenomeEditorState {
         fn default_photocyte_mass() -> f32 { 0.012 }
         fn default_photocyte_threshold() -> f32 { 0.05 }
         
-        let path = PathBuf::from("light_settings.ron");
+        let path = crate::app_dirs::config_file("light_settings.ron");
         
         if path.exists() {
             match std::fs::read_to_string(&path) {
@@ -1470,7 +1469,7 @@ impl GenomeEditorState {
             nutrient_density: f32,
         }
         
-        let path = PathBuf::from("fluid_settings.ron");
+        let path = crate::app_dirs::config_file("fluid_settings.ron");
         
         if path.exists() {
             match std::fs::read_to_string(&path) {
@@ -1524,7 +1523,7 @@ impl GenomeEditorState {
             sun_intensity: self.sun_intensity,
         };
         
-        let path = PathBuf::from("sun_settings.ron");
+        let path = crate::app_dirs::config_file("sun_settings.ron");
         match ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default()) {
             Ok(contents) => {
                 if let Err(e) = std::fs::write(path, contents) {
@@ -1578,7 +1577,7 @@ impl GenomeEditorState {
             noise_persistence: self.fluid_noise_persistence,
         };
         
-        let path = PathBuf::from("fluid_render_settings.ron");
+        let path = crate::app_dirs::config_file("fluid_render_settings.ron");
         match ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default()) {
             Ok(contents) => {
                 if let Err(e) = std::fs::write(path, contents) {
@@ -1636,7 +1635,7 @@ impl GenomeEditorState {
             }
         }
         
-        let path = PathBuf::from("fluid_render_settings.ron");
+        let path = crate::app_dirs::config_file("fluid_render_settings.ron");
         
         if path.exists() {
             match std::fs::read_to_string(&path) {
@@ -1689,7 +1688,7 @@ impl GenomeEditorState {
             }
         }
         
-        let path = PathBuf::from("sun_settings.ron");
+        let path = crate::app_dirs::config_file("sun_settings.ron");
         if !path.exists() {
             return; // Use defaults already set in new()
         }

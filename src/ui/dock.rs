@@ -156,7 +156,7 @@ impl DockManager {
 
     /// Get the dock file path for a specific mode.
     fn dock_file_path(mode: SimulationMode) -> PathBuf {
-        PathBuf::from(format!("dock_state_{}.ron", mode.dock_file_suffix()))
+        crate::app_dirs::config_file(&format!("dock_state_{}.ron", mode.dock_file_suffix()))
     }
 
     /// Save current layout as the new default for new players.
@@ -175,7 +175,7 @@ impl DockManager {
 
     /// Get the path for the default layout file for a mode.
     fn default_layout_file_path(mode: SimulationMode) -> PathBuf {
-        PathBuf::from(format!("default_dock_state_{}.ron", mode.dock_file_suffix()))
+        crate::app_dirs::config_file(&format!("default_dock_state_{}.ron", mode.dock_file_suffix()))
     }
 
     /// Load default layout from embedded resources or create hardcoded default if not available.

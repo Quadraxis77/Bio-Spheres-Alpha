@@ -107,6 +107,7 @@
 //! - **Serialization**: `serde` + `ron` (human-readable config files)
 
 pub mod app;
+pub mod app_dirs;
 pub mod cell;
 pub mod genome;
 pub mod input;

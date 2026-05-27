@@ -2403,12 +2403,9 @@ impl ApplicationHandler for AppState {
 
 pub fn run() {
     // ── Logging setup ────────────────────────────────────────────────────────
-    // Write logs to bio_spheres.log next to the executable so testers can
-    // easily find and copy the file after a crash.
-    let log_path = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("bio_spheres.log")))
-        .unwrap_or_else(|| std::path::PathBuf::from("bio_spheres.log"));
+    // Write logs to the AppData config directory so they're always findable
+    // regardless of where the exe is launched from.
+    let log_path = crate::app_dirs::log_file();
 
     // Open (or create) the log file, truncating it each run so it stays small.
     let log_file = std::fs::OpenOptions::new()
@@ -2492,7 +2489,7 @@ pub fn run() {
     event_loop.run_app(&mut state).unwrap();
 }
 
-/// Writes embedded .ron files to disk if they don't already exist.
+/// Writes embedded .ron files to the AppData config directory if they don't already exist.
 fn extract_default_settings() {
     const EMBEDDED_DEFAULTS: &[(&str, &str)] = &[
         ("cave_settings.ron",          include_str!("../cave_settings.ron")),
@@ -2504,12 +2501,12 @@ fn extract_default_settings() {
     ];
 
     for (filename, content) in EMBEDDED_DEFAULTS {
-        let path = std::path::Path::new(filename);
+        let path = crate::app_dirs::config_file(filename);
         if !path.exists() {
-            if let Err(e) = std::fs::write(path, content) {
+            if let Err(e) = std::fs::write(&path, content) {
                 log::warn!("Failed to write default {}: {}", filename, e);
             } else {
-                log::info!("Extracted default {}", filename);
+                log::info!("Extracted default {} to {:?}", filename, path);
             }
         }
     }

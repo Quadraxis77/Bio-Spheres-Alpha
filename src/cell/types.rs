@@ -248,7 +248,7 @@ impl Default for CellTypeVisualsStore {
 }
 
 impl CellTypeVisualsStore {
-    const FILE_PATH: &'static str = "cell_visuals.ron";
+    const FILE_NAME: &'static str = "cell_visuals.ron";
 
     /// Save cell type visuals to disk.
     pub fn save(visuals: &[CellTypeVisuals], cell_outline_width: f32) -> Result<(), CellVisualsError> {
@@ -256,16 +256,16 @@ impl CellTypeVisualsStore {
             visuals: visuals.to_vec(),
             cell_outline_width,
         };
-        let path = PathBuf::from(Self::FILE_PATH);
+        let path = crate::app_dirs::config_file(Self::FILE_NAME);
         let contents = ron::ser::to_string_pretty(&store, ron::ser::PrettyConfig::default())?;
-        std::fs::write(path, contents)?;
-        log::info!("Saved cell type visuals to {}", Self::FILE_PATH);
+        std::fs::write(&path, contents)?;
+        log::info!("Saved cell type visuals to {:?}", path);
         Ok(())
     }
 
     /// Load cell type visuals from disk, or return defaults if file doesn't exist.
     pub fn load() -> (Vec<CellTypeVisuals>, f32) {
-        let path = PathBuf::from(Self::FILE_PATH);
+        let path = crate::app_dirs::config_file(Self::FILE_NAME);
         
         if path.exists() {
             match Self::load_from_file(&path) {
