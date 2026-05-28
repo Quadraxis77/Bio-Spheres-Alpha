@@ -8,6 +8,74 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ui::tutorial::TutorialState;
 
+/// Available UI themes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum UiTheme {
+    /// Dark navy + teal accents — the original Bio-Spheres look.
+    #[default]
+    BiotechDark,
+    /// Clean white panels with deep blue accents — clinical / lab notebook.
+    Arctic,
+    /// Warm cream paper with ink-brown text and rust accents — parchment.
+    Parchment,
+    /// Soft lavender panels with rose-gold accents — pastel studio.
+    Blossom,
+    /// Rich dark burgundy panels with gold accents — deep wine.
+    Crimson,
+    /// Hot pink + electric cyan on deep purple-black — synthwave.
+    NeonSynthwave,
+    /// Acid green + electric yellow on pure black — toxic matrix.
+    NeonToxic,
+    /// Electric purple + hot magenta on near-black — ultraviolet.
+    NeonUltraviolet,
+    /// Near-black with bright white text — maximum contrast.
+    HighContrast,
+}
+
+impl UiTheme {
+    pub fn all() -> &'static [UiTheme] {
+        &[
+            UiTheme::BiotechDark,
+            UiTheme::Arctic,
+            UiTheme::Parchment,
+            UiTheme::Blossom,
+            UiTheme::Crimson,
+            UiTheme::NeonSynthwave,
+            UiTheme::NeonToxic,
+            UiTheme::NeonUltraviolet,
+            UiTheme::HighContrast,
+        ]
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            UiTheme::BiotechDark     => "Biotech Dark",
+            UiTheme::Arctic          => "Arctic",
+            UiTheme::Parchment       => "Parchment",
+            UiTheme::Blossom         => "Blossom",
+            UiTheme::Crimson         => "Crimson",
+            UiTheme::NeonSynthwave   => "Neon Synthwave",
+            UiTheme::NeonToxic       => "Neon Toxic",
+            UiTheme::NeonUltraviolet => "Neon Ultraviolet",
+            UiTheme::HighContrast    => "High Contrast",
+        }
+    }
+
+    pub fn accent_color(self) -> egui::Color32 {
+        match self {
+            UiTheme::BiotechDark     => egui::Color32::from_rgb(0,   200, 160),
+            UiTheme::Arctic          => egui::Color32::from_rgb(30,  120, 220),
+            UiTheme::Parchment       => egui::Color32::from_rgb(180,  80,  30),
+            UiTheme::Blossom         => egui::Color32::from_rgb(210,  90, 150),
+            UiTheme::Crimson         => egui::Color32::from_rgb(210, 165,  40),
+            UiTheme::NeonSynthwave   => egui::Color32::from_rgb(255,  30, 180),
+            UiTheme::NeonToxic       => egui::Color32::from_rgb( 50, 255,  50),
+            UiTheme::NeonUltraviolet => egui::Color32::from_rgb(180,  30, 255),
+            UiTheme::HighContrast    => egui::Color32::from_rgb(255, 255, 255),
+        }
+    }
+}
+
 /// Available simulation modes/scenes.
 ///
 /// - Preview: Single-threaded CPU simulation + GPU rendering (genome editor)
@@ -556,6 +624,10 @@ pub struct GlobalUiState {
     #[serde(default)]
     pub fluid_settings: FluidSettings,
 
+    /// Active UI theme.
+    #[serde(default)]
+    pub selected_theme: UiTheme,
+
     /// Tutorial system state (step index, active flag, ever-shown flag).
     #[serde(default)]
     pub tutorial: TutorialState,
@@ -625,6 +697,7 @@ impl Default for GlobalUiState {
             lod_debug_colors: false,
             world_settings: WorldSettings::default(),
             fluid_settings: FluidSettings::default(),
+            selected_theme: UiTheme::default(),
             tutorial: TutorialState::default(),
             show_low_fps_dialog: false,
             suppress_low_fps_dialog: false,

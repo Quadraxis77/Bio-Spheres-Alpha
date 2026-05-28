@@ -12,6 +12,7 @@ use crate::ui::types::SimulationMode;
 use crate::ui::panel_context::PanelContext;
 use crate::ui::types::GlobalUiState;
 use crate::ui::widgets::{quaternion_ball, modes_buttons, modes_list_items};
+use crate::ui::ui_system::palette;
 
 /// TabViewer implementation for Bio-Spheres panels.
 ///
@@ -234,7 +235,6 @@ fn render_viewport(ui: &mut Ui, viewport_rect: &mut Option<egui::Rect>, _draw_br
 
 /// Render the SceneManager panel.
 fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
-    use crate::ui::ui_system::theme;
     // Record panel rect for the tutorial pointer.
     context.editor_state.panel_rects.insert("SceneManager".to_string(), ui.max_rect());
 
@@ -245,7 +245,7 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
         ui.label(
             egui::RichText::new("Use ▶ LIVE SIMULATION in the top bar to start the live world.")
                 .size(11.0)
-                .color(theme::TEXT_SECONDARY),
+                .color(palette().text_secondary),
         );
         return;
     }
@@ -256,16 +256,16 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
     ui.horizontal(|ui| {
         let is_paused = context.is_paused();
         let (play_icon, play_tip, play_color) = if is_paused {
-            ("▶", "Play", theme::ACCENT_TEAL)
+            ("▶", "Play", palette().accent_primary)
         } else {
-            ("⏸", "Pause", theme::ACCENT_TEAL)
+            ("⏸", "Pause", palette().accent_primary)
         };
 
         if ui.add_sized(
             [32.0, 32.0],
             egui::Button::new(egui::RichText::new(play_icon).size(15.0).color(play_color))
-                .fill(theme::BG_WIDGET)
-                .stroke(egui::Stroke::new(1.0, theme::BORDER_NORMAL))
+                .fill(palette().bg_widget)
+                .stroke(egui::Stroke::new(1.0, palette().border_normal))
                 .corner_radius(egui::CornerRadius::same(3)),
         ).on_hover_text(play_tip).clicked() {
             context.request_toggle_pause();
@@ -273,9 +273,9 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
 
         if ui.add_sized(
             [32.0, 32.0],
-            egui::Button::new(egui::RichText::new("⟲").size(15.0).color(theme::TEXT_SECONDARY))
-                .fill(theme::BG_WIDGET)
-                .stroke(egui::Stroke::new(1.0, theme::BORDER_NORMAL))
+            egui::Button::new(egui::RichText::new("⟲").size(15.0).color(palette().text_secondary))
+                .fill(palette().bg_widget)
+                .stroke(egui::Stroke::new(1.0, palette().border_normal))
                 .corner_radius(egui::CornerRadius::same(3)),
         ).on_hover_text("Reset").clicked() {
             state.show_reset_dialog = true;
@@ -291,7 +291,7 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
         ui.label(
             egui::RichText::new(format!("{:02}:{:02}:{:02}", hours, minutes, seconds))
                 .size(13.0)
-                .color(theme::TEXT_PRIMARY)
+                .color(palette().text_primary)
                 .monospace(),
         );
     });
@@ -303,7 +303,7 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
         ui.label(
             egui::RichText::new("SPEED")
                 .size(9.0)
-                .color(theme::TEXT_DIM),
+                .color(palette().text_dim),
         );
         let speed = context.simulation_speed();
         let display_speed = (speed * 2.0).round() / 2.0;
@@ -312,7 +312,7 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
             egui::Slider::new(&mut slider_speed, 0.5..=10.0)
                 .step_by(0.5)
                 .suffix("x")
-                .text_color(theme::TEXT_PRIMARY),
+                .text_color(palette().text_primary),
         ).changed() {
             context.set_simulation_speed(slider_speed);
         }
@@ -323,7 +323,6 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
 
 /// Render the CellInspector panel.
 fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
-    use crate::ui::ui_system::theme;
 
     // ── Header row ──────────────────────────────────────────────────────────
     ui.horizontal(|ui| {
@@ -331,7 +330,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             egui::RichText::new("CELL INSPECTOR")
                 .strong()
                 .size(11.5)
-                .color(theme::ACCENT_TEAL),
+                .color(palette().accent_primary),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let count_str = if let Some(n) = context.gpu_cell_count() {
@@ -339,7 +338,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             } else {
                 format!("{} cells", context.cell_count())
             };
-            ui.label(egui::RichText::new(count_str).size(10.0).color(theme::TEXT_DIM));
+            ui.label(egui::RichText::new(count_str).size(10.0).color(palette().text_dim));
         });
     });
     ui.add_space(2.0);
@@ -382,16 +381,16 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label(
                             egui::RichText::new("⚠ Cell no longer exists")
                                 .size(12.0)
-                                .color(theme::STATUS_RED),
+                                .color(palette().status_err),
                         );
                     });
                     ui.add_space(6.0);
                     if ui.add(
                         egui::Button::new(
-                            egui::RichText::new("Clear Selection").size(11.0).color(theme::TEXT_PRIMARY),
+                            egui::RichText::new("Clear Selection").size(11.0).color(palette().text_primary),
                         )
-                        .fill(theme::BG_WIDGET)
-                        .stroke(egui::Stroke::new(1.0, theme::BORDER_NORMAL)),
+                        .fill(palette().bg_widget)
+                        .stroke(egui::Stroke::new(1.0, palette().border_normal)),
                     ).clicked() {
                         context.editor_state.radial_menu.inspected_cell = None;
                     }
@@ -409,7 +408,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
 
                 // Title row: type name + cell index
                 ui.horizontal(|ui| {
-                    let title_color = if data.is_dead != 0 { theme::STATUS_RED } else { theme::TEXT_PRIMARY };
+                    let title_color = if data.is_dead != 0 { palette().status_err } else { palette().text_primary };
                     let dead_suffix = if data.is_dead != 0 { " — DEAD" } else { "" };
                     ui.label(
                         egui::RichText::new(format!("{}{}", type_name, dead_suffix))
@@ -421,7 +420,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label(
                             egui::RichText::new(format!("#{}", cell_idx))
                                 .size(11.0)
-                                .color(theme::TEXT_DIM),
+                                .color(palette().text_dim),
                         );
                     });
                 });
@@ -438,7 +437,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                         data.mode_index, data.genome_id, data.cell_slot_index, org_str
                     ))
                     .size(10.0)
-                    .color(theme::TEXT_DIM),
+                    .color(palette().text_dim),
                 );
 
                 ui.add_space(6.0);
@@ -447,10 +446,10 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                 ui.horizontal(|ui| {
                     if ui.add(
                         egui::Button::new(
-                            egui::RichText::new("📋 Load Genome").size(11.0).color(theme::TEXT_PRIMARY),
+                            egui::RichText::new("📋 Load Genome").size(11.0).color(palette().text_primary),
                         )
-                        .fill(theme::BG_WIDGET)
-                        .stroke(egui::Stroke::new(1.0, theme::BORDER_NORMAL)),
+                        .fill(palette().bg_widget)
+                        .stroke(egui::Stroke::new(1.0, palette().border_normal)),
                     ).clicked() {
                         *context.scene_request =
                             crate::ui::panel_context::SceneModeRequest::LoadGenomeFromGpu(data.genome_id);
@@ -458,10 +457,10 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     }
                     if ui.add(
                         egui::Button::new(
-                            egui::RichText::new("✕ Deselect").size(11.0).color(theme::TEXT_SECONDARY),
+                            egui::RichText::new("✕ Deselect").size(11.0).color(palette().text_secondary),
                         )
-                        .fill(theme::BG_WIDGET)
-                        .stroke(egui::Stroke::new(1.0, theme::BORDER_SUBTLE)),
+                        .fill(palette().bg_widget)
+                        .stroke(egui::Stroke::new(1.0, palette().border_subtle)),
                     ).clicked() {
                         context.editor_state.radial_menu.inspected_cell = None;
                     }
@@ -486,13 +485,13 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     egui::vec2(bar_width, bar_height),
                     egui::Sense::hover(),
                 );
-                ui.painter().rect_filled(bar_rect, 3.0, theme::BG_DARKEST);
+                ui.painter().rect_filled(bar_rect, 3.0, palette().bg_darkest);
                 let fill_color = if nutrient_frac > 0.5 {
-                    theme::STATUS_GREEN
+                    palette().status_ok
                 } else if nutrient_frac > 0.2 {
-                    theme::STATUS_YELLOW
+                    palette().status_warn
                 } else {
-                    theme::STATUS_RED
+                    palette().status_err
                 };
                 let fill_rect = egui::Rect::from_min_size(
                     bar_rect.min,
@@ -505,13 +504,13 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     let marker_x = bar_rect.min.x + bar_rect.width() * split_frac;
                     ui.painter().line_segment(
                         [egui::pos2(marker_x, bar_rect.min.y), egui::pos2(marker_x, bar_rect.max.y)],
-                        egui::Stroke::new(1.5, theme::TEXT_PRIMARY),
+                        egui::Stroke::new(1.5, palette().text_primary),
                     );
                 }
                 ui.label(
                     egui::RichText::new(format!("{:.0} / {:.0}", data.nutrients, nutrient_max))
                         .size(10.0)
-                        .color(theme::TEXT_DIM),
+                        .color(palette().text_dim),
                 );
 
                 ui.add_space(4.0);
@@ -520,36 +519,36 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     .num_columns(2)
                     .spacing([8.0, 2.0])
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new("Gain rate").size(11.0).color(theme::TEXT_SECONDARY));
-                        let gain_color = if data.nutrient_gain_rate > 0.0 { theme::STATUS_GREEN } else { theme::TEXT_DIM };
+                        ui.label(egui::RichText::new("Gain rate").size(11.0).color(palette().text_secondary));
+                        let gain_color = if data.nutrient_gain_rate > 0.0 { palette().status_ok } else { palette().text_dim };
                         ui.label(egui::RichText::new(format!("{:.2}/s", data.nutrient_gain_rate)).size(11.0).color(gain_color));
                         ui.end_row();
 
                         if data.reserve > 0 {
-                            ui.label(egui::RichText::new("Reserve").size(11.0).color(theme::TEXT_SECONDARY));
-                            ui.label(egui::RichText::new(format!("{}", data.reserve / 1000)).size(11.0).color(theme::ACCENT_CYAN));
+                            ui.label(egui::RichText::new("Reserve").size(11.0).color(palette().text_secondary));
+                            ui.label(egui::RichText::new(format!("{}", data.reserve / 1000)).size(11.0).color(palette().accent_secondary));
                             ui.end_row();
                         }
 
-                        ui.label(egui::RichText::new("Split at").size(11.0).color(theme::TEXT_SECONDARY));
+                        ui.label(egui::RichText::new("Split at").size(11.0).color(palette().text_secondary));
                         if split_never || data.nutrient_threshold <= 0.0 {
-                            ui.label(egui::RichText::new("Never").size(11.0).color(theme::TEXT_DIM));
+                            ui.label(egui::RichText::new("Never").size(11.0).color(palette().text_dim));
                         } else {
-                            ui.label(egui::RichText::new(format!("{:.0}", data.nutrient_threshold)).size(11.0).color(theme::TEXT_PRIMARY));
+                            ui.label(egui::RichText::new(format!("{:.0}", data.nutrient_threshold)).size(11.0).color(palette().text_primary));
                         }
                         ui.end_row();
 
                         let max_splits_str = if data.max_splits == 0 { "∞".to_string() } else { format!("{}", data.max_splits) };
-                        ui.label(egui::RichText::new("Splits").size(11.0).color(theme::TEXT_SECONDARY));
-                        ui.label(egui::RichText::new(format!("{} / {}", data.split_count, max_splits_str)).size(11.0).color(theme::TEXT_PRIMARY));
+                        ui.label(egui::RichText::new("Splits").size(11.0).color(palette().text_secondary));
+                        ui.label(egui::RichText::new(format!("{} / {}", data.split_count, max_splits_str)).size(11.0).color(palette().text_primary));
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Interval").size(11.0).color(theme::TEXT_SECONDARY));
-                        ui.label(egui::RichText::new(format!("{:.1}s", data.split_interval)).size(11.0).color(theme::TEXT_PRIMARY));
+                        ui.label(egui::RichText::new("Interval").size(11.0).color(palette().text_secondary));
+                        ui.label(egui::RichText::new(format!("{:.1}s", data.split_interval)).size(11.0).color(palette().text_primary));
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Age").size(11.0).color(theme::TEXT_SECONDARY));
-                        ui.label(egui::RichText::new(format!("{:.1}s", data.age)).size(11.0).color(theme::TEXT_PRIMARY));
+                        ui.label(egui::RichText::new("Age").size(11.0).color(palette().text_secondary));
+                        ui.label(egui::RichText::new(format!("{:.1}s", data.age)).size(11.0).color(palette().text_primary));
                         ui.end_row();
                     });
 
@@ -566,33 +565,33 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     .num_columns(2)
                     .spacing([8.0, 2.0])
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new("Position").size(11.0).color(theme::TEXT_SECONDARY));
-                        ui.label(egui::RichText::new(format!("{:.1}, {:.1}, {:.1}", pos.x, pos.y, pos.z)).size(11.0).color(theme::TEXT_PRIMARY).monospace());
+                        ui.label(egui::RichText::new("Position").size(11.0).color(palette().text_secondary));
+                        ui.label(egui::RichText::new(format!("{:.1}, {:.1}, {:.1}", pos.x, pos.y, pos.z)).size(11.0).color(palette().text_primary).monospace());
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Velocity").size(11.0).color(theme::TEXT_SECONDARY));
-                        ui.label(egui::RichText::new(format!("{:.2}, {:.2}, {:.2}", vel.x, vel.y, vel.z)).size(11.0).color(theme::TEXT_PRIMARY).monospace());
+                        ui.label(egui::RichText::new("Velocity").size(11.0).color(palette().text_secondary));
+                        ui.label(egui::RichText::new(format!("{:.2}, {:.2}, {:.2}", vel.x, vel.y, vel.z)).size(11.0).color(palette().text_primary).monospace());
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Speed").size(11.0).color(theme::TEXT_SECONDARY));
-                        let speed_color = if speed > 5.0 { theme::STATUS_YELLOW } else { theme::TEXT_PRIMARY };
+                        ui.label(egui::RichText::new("Speed").size(11.0).color(palette().text_secondary));
+                        let speed_color = if speed > 5.0 { palette().status_warn } else { palette().text_primary };
                         ui.label(egui::RichText::new(format!("{:.3}", speed)).size(11.0).color(speed_color));
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Mass").size(11.0).color(theme::TEXT_SECONDARY));
-                        ui.label(egui::RichText::new(format!("{:.2}", data.mass)).size(11.0).color(theme::TEXT_PRIMARY));
+                        ui.label(egui::RichText::new("Mass").size(11.0).color(palette().text_secondary));
+                        ui.label(egui::RichText::new(format!("{:.2}", data.mass)).size(11.0).color(palette().text_primary));
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Radius").size(11.0).color(theme::TEXT_SECONDARY));
-                        ui.label(egui::RichText::new(format!("{:.2}", data.radius)).size(11.0).color(theme::TEXT_PRIMARY));
+                        ui.label(egui::RichText::new("Radius").size(11.0).color(palette().text_secondary));
+                        ui.label(egui::RichText::new(format!("{:.2}", data.radius)).size(11.0).color(palette().text_primary));
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Max size").size(11.0).color(theme::TEXT_SECONDARY));
-                        ui.label(egui::RichText::new(format!("{:.2}", data.max_cell_size)).size(11.0).color(theme::TEXT_PRIMARY));
+                        ui.label(egui::RichText::new("Max size").size(11.0).color(palette().text_secondary));
+                        ui.label(egui::RichText::new(format!("{:.2}", data.max_cell_size)).size(11.0).color(palette().text_primary));
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Stiffness").size(11.0).color(theme::TEXT_SECONDARY));
-                        ui.label(egui::RichText::new(format!("{:.2}", data.stiffness)).size(11.0).color(theme::TEXT_PRIMARY));
+                        ui.label(egui::RichText::new("Stiffness").size(11.0).color(palette().text_secondary));
+                        ui.label(egui::RichText::new(format!("{:.2}", data.stiffness)).size(11.0).color(palette().text_primary));
                         ui.end_row();
                     });
 
@@ -602,9 +601,9 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                 section_header(ui, "ADHESIONS");
 
                 let adhesion_color = if data.adhesion_count == 0 {
-                    theme::TEXT_DIM
+                    palette().text_dim
                 } else {
-                    theme::ACCENT_CYAN
+                    palette().accent_secondary
                 };
                 ui.label(
                     egui::RichText::new(format!("{} active bond{}", data.adhesion_count, if data.adhesion_count == 1 { "" } else { "s" }))
@@ -621,7 +620,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label(
                         egui::RichText::new(format!("Reading cell #{}…", cell_idx))
                             .size(11.0)
-                            .color(theme::TEXT_SECONDARY),
+                            .color(palette().text_secondary),
                     );
                 });
                 return;
@@ -636,13 +635,13 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             ui.label(
                 egui::RichText::new("No cell selected")
                     .size(13.0)
-                    .color(theme::TEXT_SECONDARY),
+                    .color(palette().text_secondary),
             );
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new("Hold Alt → select Inspect → click a cell")
                     .size(10.0)
-                    .color(theme::TEXT_DIM),
+                    .color(palette().text_dim),
             );
         });
     }
@@ -661,7 +660,6 @@ fn render_genome_editor(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the PerformanceMonitor panel.
 fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
-    use crate::ui::ui_system::theme;
     let perf = context.performance;
     
     // GPU Readbacks toggle at the top
@@ -680,22 +678,22 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             .num_columns(2)
             .spacing([8.0, 2.0])
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Total Cells").size(11.0).color(theme::TEXT_SECONDARY));
-                ui.label(egui::RichText::new(format!("{}", total)).size(11.0).color(theme::TEXT_PRIMARY));
+                ui.label(egui::RichText::new("Total Cells").size(11.0).color(palette().text_secondary));
+                ui.label(egui::RichText::new(format!("{}", total)).size(11.0).color(palette().text_primary));
                 ui.end_row();
-                ui.label(egui::RichText::new("Visible").size(11.0).color(theme::TEXT_SECONDARY));
-                ui.label(egui::RichText::new(format!("{}", visible)).size(11.0).color(theme::STATUS_GREEN));
+                ui.label(egui::RichText::new("Visible").size(11.0).color(palette().text_secondary));
+                ui.label(egui::RichText::new(format!("{}", visible)).size(11.0).color(palette().status_ok));
                 ui.end_row();
-                ui.label(egui::RichText::new("Frustum Culled").size(11.0).color(theme::TEXT_SECONDARY));
-                ui.label(egui::RichText::new(format!("{}", frustum_culled)).size(11.0).color(theme::TEXT_DIM));
+                ui.label(egui::RichText::new("Frustum Culled").size(11.0).color(palette().text_secondary));
+                ui.label(egui::RichText::new(format!("{}", frustum_culled)).size(11.0).color(palette().text_dim));
                 ui.end_row();
-                ui.label(egui::RichText::new("Occluded").size(11.0).color(theme::TEXT_SECONDARY));
-                ui.label(egui::RichText::new(format!("{}", occluded)).size(11.0).color(theme::TEXT_DIM));
+                ui.label(egui::RichText::new("Occluded").size(11.0).color(palette().text_secondary));
+                ui.label(egui::RichText::new(format!("{}", occluded)).size(11.0).color(palette().text_dim));
                 ui.end_row();
                 if total > 0 {
                     let cull_percent = ((total - visible) as f32 / total as f32) * 100.0;
-                    ui.label(egui::RichText::new("Cull Rate").size(11.0).color(theme::TEXT_SECONDARY));
-                    ui.label(egui::RichText::new(format!("{:.1}%", cull_percent)).size(11.0).color(theme::ACCENT_CYAN));
+                    ui.label(egui::RichText::new("Cull Rate").size(11.0).color(palette().text_secondary));
+                    ui.label(egui::RichText::new(format!("{:.1}%", cull_percent)).size(11.0).color(palette().accent_secondary));
                     ui.end_row();
                 }
             });
@@ -707,20 +705,20 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
     section_header(ui, "FRAME RATE");
     
     let fps = perf.fps();
-    let fps_color = if fps >= 50.0 { theme::STATUS_GREEN } else if fps >= 30.0 { theme::STATUS_YELLOW } else { theme::STATUS_RED };
+    let fps_color = if fps >= 50.0 { palette().status_ok } else if fps >= 30.0 { palette().status_warn } else { palette().status_err };
     
     egui::Grid::new("fps_grid")
         .num_columns(2)
         .spacing([8.0, 2.0])
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("FPS").size(11.0).color(theme::TEXT_SECONDARY));
+            ui.label(egui::RichText::new("FPS").size(11.0).color(palette().text_secondary));
             ui.label(egui::RichText::new(format!("{:.1}", fps)).size(13.0).strong().color(fps_color));
             ui.end_row();
-            ui.label(egui::RichText::new("Frame Time").size(11.0).color(theme::TEXT_SECONDARY));
-            ui.label(egui::RichText::new(format!("{:.2} ms", perf.average_frame_time_ms())).size(11.0).color(theme::TEXT_PRIMARY));
+            ui.label(egui::RichText::new("Frame Time").size(11.0).color(palette().text_secondary));
+            ui.label(egui::RichText::new(format!("{:.2} ms", perf.average_frame_time_ms())).size(11.0).color(palette().text_primary));
             ui.end_row();
-            ui.label(egui::RichText::new("Min / Max").size(11.0).color(theme::TEXT_SECONDARY));
-            ui.label(egui::RichText::new(format!("{:.2} / {:.2} ms", perf.min_frame_time_ms(), perf.max_frame_time_ms())).size(11.0).color(theme::TEXT_DIM));
+            ui.label(egui::RichText::new("Min / Max").size(11.0).color(palette().text_secondary));
+            ui.label(egui::RichText::new(format!("{:.2} / {:.2} ms", perf.min_frame_time_ms(), perf.max_frame_time_ms())).size(11.0).color(palette().text_dim));
             ui.end_row();
         });
     
@@ -737,8 +735,8 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
         );
         let rect = response.rect;
         
-        painter.rect_filled(rect, 2.0, theme::BG_DARKEST);
-        painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, theme::BORDER_SUBTLE), egui::StrokeKind::Outside);
+        painter.rect_filled(rect, 2.0, palette().bg_darkest);
+        painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, palette().border_subtle), egui::StrokeKind::Outside);
         
         let bar_width = rect.width() / frame_times.len() as f32;
         for (i, &time) in frame_times.iter().enumerate() {
@@ -747,7 +745,7 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             let x = rect.left() + i as f32 * bar_width;
             let height = (fps_clamped / max_fps) * rect.height();
             let y = rect.bottom() - height;
-            let color = if fps_val < 20.0 { theme::STATUS_RED } else if fps_val < 40.0 { theme::STATUS_YELLOW } else { theme::STATUS_GREEN };
+            let color = if fps_val < 20.0 { palette().status_err } else if fps_val < 40.0 { palette().status_warn } else { palette().status_ok };
             painter.rect_filled(
                 egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(bar_width.max(1.0), height)),
                 0.0, color,
@@ -764,11 +762,11 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
         .num_columns(2)
         .spacing([8.0, 2.0])
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("Cores").size(11.0).color(theme::TEXT_SECONDARY));
-            ui.label(egui::RichText::new(format!("{}", perf.cpu_core_count())).size(11.0).color(theme::TEXT_PRIMARY));
+            ui.label(egui::RichText::new("Cores").size(11.0).color(palette().text_secondary));
+            ui.label(egui::RichText::new(format!("{}", perf.cpu_core_count())).size(11.0).color(palette().text_primary));
             ui.end_row();
-            ui.label(egui::RichText::new("Usage").size(11.0).color(theme::TEXT_SECONDARY));
-            ui.label(egui::RichText::new(format!("{:.1}%", perf.cpu_usage_total())).size(11.0).color(theme::TEXT_PRIMARY));
+            ui.label(egui::RichText::new("Usage").size(11.0).color(palette().text_secondary));
+            ui.label(egui::RichText::new(format!("{:.1}%", perf.cpu_usage_total())).size(11.0).color(palette().text_primary));
             ui.end_row();
         });
     
@@ -789,10 +787,10 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
         for (i, &usage) in core_usage.iter().enumerate() {
             let y = rect.top() + i as f32 * (bar_height + spacing);
             let bar_rect = egui::Rect::from_min_size(egui::pos2(rect.left(), y), egui::vec2(rect.width(), bar_height));
-            painter.rect_filled(bar_rect, 1.0, theme::BG_DARKEST);
+            painter.rect_filled(bar_rect, 1.0, palette().bg_darkest);
             let usage_width = (usage / 100.0) * rect.width();
             let usage_rect = egui::Rect::from_min_size(egui::pos2(rect.left(), y), egui::vec2(usage_width, bar_height));
-            let color = if usage > 80.0 { theme::STATUS_RED } else if usage > 50.0 { theme::STATUS_YELLOW } else { theme::ACCENT_TEAL };
+            let color = if usage > 80.0 { palette().status_err } else if usage > 50.0 { palette().status_warn } else { palette().accent_primary };
             painter.rect_filled(usage_rect, 1.0, color);
         }
     }
@@ -812,12 +810,12 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
         .num_columns(2)
         .spacing([8.0, 2.0])
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("Used").size(11.0).color(theme::TEXT_SECONDARY));
+            ui.label(egui::RichText::new("Used").size(11.0).color(palette().text_secondary));
             let used_str = if mem_used_gb >= 1.0 { format!("{:.2} GB", mem_used_gb) } else { format!("{:.0} MB", mem_used_mb) };
-            ui.label(egui::RichText::new(used_str).size(11.0).color(theme::TEXT_PRIMARY));
+            ui.label(egui::RichText::new(used_str).size(11.0).color(palette().text_primary));
             ui.end_row();
-            ui.label(egui::RichText::new("Total").size(11.0).color(theme::TEXT_SECONDARY));
-            ui.label(egui::RichText::new(format!("{:.1} GB", mem_total_gb)).size(11.0).color(theme::TEXT_DIM));
+            ui.label(egui::RichText::new("Total").size(11.0).color(palette().text_secondary));
+            ui.label(egui::RichText::new(format!("{:.1} GB", mem_total_gb)).size(11.0).color(palette().text_dim));
             ui.end_row();
         });
     
@@ -826,11 +824,11 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
     let bar_height = 10.0;
     let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), bar_height), egui::Sense::hover());
     let rect = response.rect;
-    painter.rect_filled(rect, 2.0, theme::BG_DARKEST);
-    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, theme::BORDER_SUBTLE), egui::StrokeKind::Outside);
+    painter.rect_filled(rect, 2.0, palette().bg_darkest);
+    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, palette().border_subtle), egui::StrokeKind::Outside);
     let usage_width = (usage_percent / 100.0) * rect.width();
     let usage_rect = egui::Rect::from_min_size(rect.min, egui::vec2(usage_width, bar_height));
-    let mem_color = if usage_percent > 90.0 { theme::STATUS_RED } else if usage_percent > 70.0 { theme::STATUS_YELLOW } else { theme::STATUS_BLUE };
+    let mem_color = if usage_percent > 90.0 { palette().status_err } else if usage_percent > 70.0 { palette().status_warn } else { palette().status_info };
     painter.rect_filled(usage_rect, 2.0, mem_color);
     painter.text(rect.center(), egui::Align2::CENTER_CENTER, format!("{:.1}%", usage_percent), egui::FontId::proportional(9.0), egui::Color32::WHITE);
 }
@@ -2109,7 +2107,6 @@ fn render_lighting_settings(ui: &mut Ui) {
 
 /// Render the Modes panel with full functionality.
 fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
-    use crate::ui::ui_system::theme;
 
     // Record panel rect for the tutorial pointer.
     context.editor_state.panel_rects.insert("Modes".to_string(), ui.max_rect());
@@ -2132,7 +2129,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             .selected_text(
                 egui::RichText::new(cell_types[context.genome.modes[selected_index].cell_type as usize].name())
                     .size(11.5)
-                    .color(theme::TEXT_PRIMARY),
+                    .color(palette().text_primary),
             )
             .width(ui.available_width())
             .show_ui(ui, |ui| {
@@ -2151,9 +2148,10 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         // Make Adhesion toggle — full width, teal when active
         let on = context.genome.modes[selected_index].parent_make_adhesion;
         let (fill, text_col, stroke_col) = if on {
-            (theme::ACCENT_TEAL, egui::Color32::BLACK, theme::ACCENT_TEAL)
+            let accent = palette().accent_primary;
+            (accent, crate::ui::widgets::color_utils::text_color_for_background(accent), accent)
         } else {
-            (theme::BG_WIDGET, theme::TEXT_SECONDARY, theme::BORDER_NORMAL)
+            (palette().bg_widget, palette().text_secondary, palette().border_normal)
         };
         let label = if on { "Make Adhesion  ON" } else { "Make Adhesion  OFF" };
         let adh_resp = ui.add_sized(
@@ -2387,7 +2385,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
 
     // Show copy into mode indicator — pinned above the scrollable list
     if context.editor_state.copy_into_dialog_open {
-        ui.colored_label(egui::Color32::YELLOW, "Select target mode to copy into:");
+        ui.colored_label(palette().status_warn, "Select target mode to copy into:");
         if ui.small_button("Cancel").clicked() {
             context.editor_state.copy_into_dialog_open = false;
             log::info!("Cancelled copy into mode");
@@ -2697,6 +2695,26 @@ fn draw_marquee_text(
 
 /// Helper function to create a color-coded group container
 fn group_container(ui: &mut Ui, title: &str, color: egui::Color32, content: impl FnOnce(&mut Ui)) {
+    // On light themes the passed accent color is too bright/saturated to read
+    // as text. Detect light vs dark by checking the panel background luminance
+    // and darken the color when the background is light.
+    let p = palette();
+    let bg = p.bg_panel;
+    let luminance = bg.r() as f32 * 0.299 + bg.g() as f32 * 0.587 + bg.b() as f32 * 0.114;
+    let is_light_theme = luminance > 140.0;
+
+    // For light themes: darken the color to ~40% brightness for text,
+    // keep a subtle tint for the fill/stroke.
+    let text_color = if is_light_theme {
+        egui::Color32::from_rgb(
+            (color.r() as f32 * 0.45) as u8,
+            (color.g() as f32 * 0.45) as u8,
+            (color.b() as f32 * 0.45) as u8,
+        )
+    } else {
+        color
+    };
+
     let frame = egui::Frame::default()
         .fill(egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 18u8))
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 80u8)))
@@ -2705,11 +2723,9 @@ fn group_container(ui: &mut Ui, title: &str, color: egui::Color32, content: impl
 
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
-        // Section header with colored left-border accent
         let header_rect = ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(title).strong().size(11.5).color(color));
+            ui.label(egui::RichText::new(title).strong().size(11.5).color(text_color));
         }).response.rect;
-        // Draw left-border accent line
         let painter = ui.painter();
         let left_x = header_rect.left() - 6.0;
         painter.line_segment(
@@ -2717,7 +2733,7 @@ fn group_container(ui: &mut Ui, title: &str, color: egui::Color32, content: impl
                 egui::pos2(left_x, header_rect.top() + 1.0),
                 egui::pos2(left_x, header_rect.bottom() - 1.0),
             ],
-            egui::Stroke::new(2.0, color),
+            egui::Stroke::new(2.0, text_color),
         );
         ui.add_space(3.0);
         content(ui);
@@ -2727,14 +2743,13 @@ fn group_container(ui: &mut Ui, title: &str, color: egui::Color32, content: impl
 
 /// Render a section header with a teal left-border accent (for top-level sections).
 fn section_header(ui: &mut Ui, title: &str) {
-    use crate::ui::ui_system::theme;
     ui.add_space(4.0);
     let resp = ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(title)
                 .strong()
                 .size(11.5)
-                .color(theme::ACCENT_TEAL),
+                .color(palette().accent_primary),
         );
     }).response;
     // Draw left-border accent
@@ -2745,14 +2760,14 @@ fn section_header(ui: &mut Ui, title: &str) {
             egui::pos2(left_x, resp.rect.top() + 1.0),
             egui::pos2(left_x, resp.rect.bottom() - 1.0),
         ],
-        egui::Stroke::new(2.5, theme::ACCENT_TEAL),
+        egui::Stroke::new(2.5, palette().accent_primary),
     );
     // Thin separator line
     let sep_rect = egui::Rect::from_min_size(
         egui::pos2(resp.rect.left(), resp.rect.bottom() + 1.0),
         egui::vec2(ui.available_width(), 1.0),
     );
-    painter.rect_filled(sep_rect, 0.0, theme::BORDER_SUBTLE);
+    painter.rect_filled(sep_rect, 0.0, palette().border_subtle);
     ui.add_space(3.0);
 }
 
@@ -3533,7 +3548,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     // Show info when no triggers are enabled
                     if !mode.embryocyte_use_timer && !mode.embryocyte_use_threshold && !mode.embryocyte_use_signal {
                         ui.separator();
-                        ui.colored_label(egui::Color32::YELLOW, "⚠ No triggers enabled — cell will never release.");
+                        ui.colored_label(palette().status_warn, "⚠ No triggers enabled — cell will never release.");
                     }
                 });
             } else if mode.cell_type == 12 { // Vasculocyte (cell_type == 12)
@@ -5373,7 +5388,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     if (world.world_radius - current_world_radius).abs() > 0.5 {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("⚠ Scene reset required").color(egui::Color32::YELLOW));
+            ui.label(egui::RichText::new("⚠ Scene reset required").color(palette().status_warn));
         });
     }
 
@@ -5390,7 +5405,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     // Show reset required message if capacity changed
     if world.cell_capacity != current_capacity {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("⚠ Scene reset required").color(egui::Color32::YELLOW));
+            ui.label(egui::RichText::new("⚠ Scene reset required").color(palette().status_warn));
         });
     }
     

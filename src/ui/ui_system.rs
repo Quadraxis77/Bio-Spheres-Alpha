@@ -58,6 +58,77 @@ pub mod theme {
     pub const BTN_EDITOR_HOVER: Color32 = Color32::from_rgb(40, 150, 100);
 }
 
+// ── Active theme palette ──────────────────────────────────────────────────────
+// Stores the full resolved color palette for the currently active theme.
+// Updated by `apply_theme` every time the theme changes. All rendering code
+// reads from here instead of the static `theme::*` constants so that every
+// part of the UI — panels, dock, status bar, side rail — responds to theme
+// switches without needing to re-derive colors from the enum each frame.
+#[derive(Clone, Copy)]
+pub struct ActivePalette {
+    pub bg_darkest:      egui::Color32,
+    pub bg_panel:        egui::Color32,
+    pub bg_widget:       egui::Color32,
+    pub bg_hover:        egui::Color32,
+    pub bg_active:       egui::Color32,
+    pub bg_selected:     egui::Color32,
+    pub accent_primary:  egui::Color32,
+    pub accent_secondary:egui::Color32,
+    pub text_primary:    egui::Color32,
+    pub text_secondary:  egui::Color32,
+    pub text_dim:        egui::Color32,
+    pub border_subtle:   egui::Color32,
+    pub border_normal:   egui::Color32,
+    pub border_bright:   egui::Color32,
+    pub topbar_bg:       egui::Color32,
+    pub topbar_border:   egui::Color32,
+    // Status indicator colors — adjusted per theme so they're readable
+    // on both light and dark backgrounds.
+    pub status_ok:       egui::Color32, // green — running / good
+    pub status_warn:     egui::Color32, // yellow/amber — warning / paused
+    pub status_err:      egui::Color32, // red — error / critical
+    pub status_info:     egui::Color32, // blue — info / memory
+}
+
+impl Default for ActivePalette {
+    fn default() -> Self {
+        // Biotech Dark defaults
+        Self {
+            bg_darkest:       egui::Color32::from_rgb(8,   12,  22),
+            bg_panel:         egui::Color32::from_rgb(12,  17,  30),
+            bg_widget:        egui::Color32::from_rgb(18,  25,  42),
+            bg_hover:         egui::Color32::from_rgb(24,  34,  58),
+            bg_active:        egui::Color32::from_rgb(30,  44,  74),
+            bg_selected:      egui::Color32::from_rgb(20,  50,  80),
+            accent_primary:   egui::Color32::from_rgb(0,   200, 160),
+            accent_secondary: egui::Color32::from_rgb(40,  180, 220),
+            text_primary:     egui::Color32::from_rgb(210, 220, 235),
+            text_secondary:   egui::Color32::from_rgb(130, 150, 175),
+            text_dim:         egui::Color32::from_rgb(70,  90,  120),
+            border_subtle:    egui::Color32::from_rgb(30,  45,  70),
+            border_normal:    egui::Color32::from_rgb(45,  65,  100),
+            border_bright:    egui::Color32::from_rgb(0,   140, 110),
+            topbar_bg:        egui::Color32::from_rgb(6,   9,   18),
+            topbar_border:    egui::Color32::from_rgb(0,   120, 95),
+            status_ok:        egui::Color32::from_rgb(60,  200, 100),
+            status_warn:      egui::Color32::from_rgb(220, 180,  50),
+            status_err:       egui::Color32::from_rgb(220,  70,  70),
+            status_info:      egui::Color32::from_rgb(60,  140, 220),
+        }
+    }
+}
+
+std::thread_local! {
+    static ACTIVE_PALETTE: std::cell::RefCell<ActivePalette> =
+        std::cell::RefCell::new(ActivePalette::default());
+}
+
+/// Read the current active palette. Call this at the top of any rendering
+/// function that needs theme-aware colors.
+pub fn palette() -> ActivePalette {
+    ACTIVE_PALETTE.with(|cell| *cell.borrow())
+}
+
 pub struct UiSystem {
     /// egui context for immediate mode UI
     pub ctx: egui::Context,
@@ -80,6 +151,8 @@ pub struct UiSystem {
     ui_state_dirty: bool,
     /// Whether the biotech theme has been applied
     theme_applied: bool,
+    /// Last applied theme for change detection
+    last_theme: crate::ui::types::UiTheme,
     /// App icon texture used as the brand glyph in the top bar.
     app_icon: Option<egui::TextureHandle>,
 }
@@ -136,6 +209,7 @@ impl UiSystem {
             save_timer: std::time::Instant::now(),
             ui_state_dirty: false,
             theme_applied: false,
+            last_theme: crate::ui::types::UiTheme::default(),
             app_icon,
         }
     }
@@ -236,92 +310,317 @@ impl UiSystem {
         log::debug!("Applied UI scale: {:.2}x", scale);
     }
 
-    /// Apply the Bio-Spheres biotech dark theme to the egui context.
+    /// Apply the selected UI theme to the egui context.
     ///
-    /// Sets the dark navy color palette, teal accents, and compact spacing
-    /// to match the "Biotech Observatory" aesthetic shown in the reference images.
-    /// Called once at startup and whenever the theme needs to be reapplied.
-    fn apply_biotech_theme(&self) {
-        use theme::*;
+    /// Dispatches to per-theme color sets. Called once at startup and whenever
+    /// `state.selected_theme` changes.
+    fn apply_theme(&self, theme_choice: crate::ui::types::UiTheme) {
+        use crate::ui::types::UiTheme;
+
+        // ── Per-theme color palette ───────────────────────────────────────────
+        // Each tuple: (bg_darkest, bg_panel, bg_widget, bg_hover, bg_active,
+        //              bg_selected, accent_primary, accent_secondary,
+        //              text_primary, text_secondary, text_dim,
+        //              border_subtle, border_normal, border_bright,
+        //              topbar_bg, topbar_border,
+        //              status_ok, status_warn, status_err, status_info)
+        #[allow(clippy::type_complexity)]
+        let (
+            bg_darkest, bg_panel, bg_widget, bg_hover, bg_active, bg_selected,
+            accent_primary, accent_secondary,
+            text_primary, text_secondary, text_dim,
+            border_subtle, border_normal, border_bright,
+            topbar_bg, topbar_border,
+            status_ok, status_warn, status_err, status_info,
+        ): (
+            egui::Color32, egui::Color32, egui::Color32, egui::Color32, egui::Color32, egui::Color32,
+            egui::Color32, egui::Color32,
+            egui::Color32, egui::Color32, egui::Color32,
+            egui::Color32, egui::Color32, egui::Color32,
+            egui::Color32, egui::Color32,
+            egui::Color32, egui::Color32, egui::Color32, egui::Color32,
+        ) = match theme_choice {
+            // ── BIOTECH DARK ─────────────────────────────────────────────────
+            // Original. Navy backgrounds, bright teal accent, high-contrast white text.
+            UiTheme::BiotechDark => (
+                egui::Color32::from_rgb(  6,   9,  18), // bg_darkest
+                egui::Color32::from_rgb( 12,  17,  32), // bg_panel
+                egui::Color32::from_rgb( 22,  30,  52), // bg_widget
+                egui::Color32::from_rgb( 32,  44,  72), // bg_hover
+                egui::Color32::from_rgb( 42,  58,  95), // bg_active
+                egui::Color32::from_rgb( 18,  55,  85), // bg_selected
+                egui::Color32::from_rgb(  0, 220, 175), // accent_primary  — bright teal
+                egui::Color32::from_rgb( 60, 195, 240), // accent_secondary — cyan
+                egui::Color32::from_rgb(225, 235, 255), // text_primary    — bright white-blue
+                egui::Color32::from_rgb(155, 175, 210), // text_secondary
+                egui::Color32::from_rgb( 80, 100, 145), // text_dim
+                egui::Color32::from_rgb( 28,  42,  72), // border_subtle
+                egui::Color32::from_rgb( 50,  72, 115), // border_normal
+                egui::Color32::from_rgb(  0, 180, 140), // border_bright
+                egui::Color32::from_rgb(  4,   6,  14), // topbar_bg
+                egui::Color32::from_rgb(  0, 160, 125), // topbar_border
+                egui::Color32::from_rgb( 60, 210, 100), // status_ok
+                egui::Color32::from_rgb(220, 185,  50), // status_warn
+                egui::Color32::from_rgb(225,  70,  70), // status_err
+                egui::Color32::from_rgb( 60, 150, 230), // status_info
+            ),
+            // ── ARCTIC — light, dark status colors for readability on white ──
+            UiTheme::Arctic => (
+                egui::Color32::from_rgb(255, 255, 255),
+                egui::Color32::from_rgb(240, 245, 255),
+                egui::Color32::from_rgb(218, 228, 245),
+                egui::Color32::from_rgb(195, 210, 238),
+                egui::Color32::from_rgb(170, 192, 230),
+                egui::Color32::from_rgb(185, 215, 255),
+                egui::Color32::from_rgb( 10,  90, 200),
+                egui::Color32::from_rgb(  0, 155, 185),
+                egui::Color32::from_rgb(  8,  15,  35),
+                egui::Color32::from_rgb( 45,  70, 120),
+                egui::Color32::from_rgb(110, 135, 175),
+                egui::Color32::from_rgb(185, 200, 225),
+                egui::Color32::from_rgb(140, 165, 205),
+                egui::Color32::from_rgb( 10,  90, 200),
+                egui::Color32::from_rgb(220, 230, 248),
+                egui::Color32::from_rgb( 10,  90, 200),
+                egui::Color32::from_rgb( 20, 140,  55), // status_ok   — dark green
+                egui::Color32::from_rgb(155,  95,   0), // status_warn — dark amber (no yellow)
+                egui::Color32::from_rgb(185,  30,  30), // status_err  — dark red
+                egui::Color32::from_rgb( 15,  90, 175), // status_info — dark blue
+            ),
+            // ── PARCHMENT — light, earthy dark status colors ─────────────────
+            UiTheme::Parchment => (
+                egui::Color32::from_rgb(255, 252, 238),
+                egui::Color32::from_rgb(245, 235, 210),
+                egui::Color32::from_rgb(228, 212, 178),
+                egui::Color32::from_rgb(208, 188, 148),
+                egui::Color32::from_rgb(188, 165, 118),
+                egui::Color32::from_rgb(215, 185, 130),
+                egui::Color32::from_rgb(165,  55,  15),
+                egui::Color32::from_rgb(120,  75,  20),
+                egui::Color32::from_rgb( 28,  14,   4),
+                egui::Color32::from_rgb( 85,  50,  18),
+                egui::Color32::from_rgb(148, 112,  65),
+                egui::Color32::from_rgb(205, 185, 148),
+                egui::Color32::from_rgb(172, 145, 100),
+                egui::Color32::from_rgb(165,  55,  15),
+                egui::Color32::from_rgb(235, 222, 192),
+                egui::Color32::from_rgb(145,  48,  12),
+                egui::Color32::from_rgb( 25, 120,  45), // status_ok   — forest green
+                egui::Color32::from_rgb(145,  80,   0), // status_warn — dark amber
+                egui::Color32::from_rgb(170,  30,  20), // status_err  — dark red
+                egui::Color32::from_rgb( 20,  80, 160), // status_info — dark blue
+            ),
+            // ── BLOSSOM — light, deep jewel-tone status colors ───────────────
+            UiTheme::Blossom => (
+                egui::Color32::from_rgb(255, 235, 248), // bg_darkest  — hot pink tint
+                egui::Color32::from_rgb(252, 215, 238), // bg_panel    — vivid pink-white
+                egui::Color32::from_rgb(242, 185, 222), // bg_widget   — medium pink
+                egui::Color32::from_rgb(228, 155, 205), // bg_hover    — deeper pink
+                egui::Color32::from_rgb(212, 120, 185), // bg_active   — strong pink
+                egui::Color32::from_rgb(245, 160, 215), // bg_selected — bright pink highlight
+                egui::Color32::from_rgb(185,  10, 105), // accent_primary  — deep magenta-rose
+                egui::Color32::from_rgb(110,  15, 165), // accent_secondary — deep violet
+                egui::Color32::from_rgb( 55,   5,  35), // text_primary    — near-black plum
+                egui::Color32::from_rgb(120,  20,  80), // text_secondary  — dark rose
+                egui::Color32::from_rgb(175,  80, 140), // text_dim        — medium rose
+                egui::Color32::from_rgb(225, 160, 205), // border_subtle
+                egui::Color32::from_rgb(195, 110, 168), // border_normal
+                egui::Color32::from_rgb(185,  10, 105), // border_bright   — deep rose
+                egui::Color32::from_rgb(248, 200, 232), // topbar_bg
+                egui::Color32::from_rgb(165,   8,  92), // topbar_border
+                egui::Color32::from_rgb( 15, 115,  45), // status_ok   — deep green
+                egui::Color32::from_rgb(130,  65,   0), // status_warn — dark amber
+                egui::Color32::from_rgb(160,  15,  40), // status_err  — deep crimson
+                egui::Color32::from_rgb( 45,  20, 155), // status_info — deep indigo
+            ),
+            // ── CRIMSON — dark, bright status colors ─────────────────────────
+            UiTheme::Crimson => (
+                egui::Color32::from_rgb( 10,   2,   5),
+                egui::Color32::from_rgb( 28,   8,  15),
+                egui::Color32::from_rgb( 50,  15,  25),
+                egui::Color32::from_rgb( 72,  22,  35),
+                egui::Color32::from_rgb( 98,  30,  48),
+                egui::Color32::from_rgb( 88,  18,  12),
+                egui::Color32::from_rgb(225, 178,  35),
+                egui::Color32::from_rgb(255, 215,  80),
+                egui::Color32::from_rgb(252, 238, 215),
+                egui::Color32::from_rgb(205, 165, 130),
+                egui::Color32::from_rgb(130,  85,  72),
+                egui::Color32::from_rgb( 55,  18,  28),
+                egui::Color32::from_rgb( 95,  32,  48),
+                egui::Color32::from_rgb(225, 178,  35),
+                egui::Color32::from_rgb(  8,   2,   4),
+                egui::Color32::from_rgb(195, 152,  28),
+                egui::Color32::from_rgb( 80, 210, 110), // status_ok
+                egui::Color32::from_rgb(225, 185,  45), // status_warn
+                egui::Color32::from_rgb(230,  75,  75), // status_err
+                egui::Color32::from_rgb( 80, 160, 235), // status_info
+            ),
+            // ── NEON SYNTHWAVE ───────────────────────────────────────────────
+            UiTheme::NeonSynthwave => (
+                egui::Color32::from_rgb(  5,   2,  12),
+                egui::Color32::from_rgb( 12,   6,  24),
+                egui::Color32::from_rgb( 22,  10,  42),
+                egui::Color32::from_rgb( 35,  15,  62),
+                egui::Color32::from_rgb( 50,  20,  85),
+                egui::Color32::from_rgb( 55,   8,  55),
+                egui::Color32::from_rgb(255,  20, 175),
+                egui::Color32::from_rgb(  0, 245, 255),
+                egui::Color32::from_rgb(248, 228, 255),
+                egui::Color32::from_rgb(188, 148, 228),
+                egui::Color32::from_rgb(105,  68, 148),
+                egui::Color32::from_rgb( 28,  12,  55),
+                egui::Color32::from_rgb( 75,  18,  98),
+                egui::Color32::from_rgb(255,  20, 175),
+                egui::Color32::from_rgb(  3,   1,   8),
+                egui::Color32::from_rgb(210,  15, 148),
+                egui::Color32::from_rgb( 50, 255, 120), // status_ok
+                egui::Color32::from_rgb(255, 210,  30), // status_warn — amber not yellow
+                egui::Color32::from_rgb(255,  50,  80), // status_err
+                egui::Color32::from_rgb(  0, 245, 255), // status_info
+            ),
+            // ── NEON TOXIC ───────────────────────────────────────────────────
+            UiTheme::NeonToxic => (
+                egui::Color32::from_rgb(  1,   5,   1),
+                egui::Color32::from_rgb(  3,  12,   3),
+                egui::Color32::from_rgb(  5,  22,   5),
+                egui::Color32::from_rgb(  8,  35,   8),
+                egui::Color32::from_rgb( 12,  50,  12),
+                egui::Color32::from_rgb(  8,  48,   4),
+                egui::Color32::from_rgb( 40, 255,  40),
+                egui::Color32::from_rgb(215, 255,   0),
+                egui::Color32::from_rgb(210, 255, 210),
+                egui::Color32::from_rgb(105, 195, 105),
+                egui::Color32::from_rgb( 42, 105,  42),
+                egui::Color32::from_rgb(  6,  28,   6),
+                egui::Color32::from_rgb( 18,  75,  18),
+                egui::Color32::from_rgb( 40, 255,  40),
+                egui::Color32::from_rgb(  1,   4,   1),
+                egui::Color32::from_rgb( 28, 210,  28),
+                egui::Color32::from_rgb( 40, 255,  40), // status_ok
+                egui::Color32::from_rgb(215, 255,   0), // status_warn — electric yellow (fine on black)
+                egui::Color32::from_rgb(255,  60,  60), // status_err
+                egui::Color32::from_rgb( 60, 200, 255), // status_info
+            ),
+            // ── NEON ULTRAVIOLET ─────────────────────────────────────────────
+            UiTheme::NeonUltraviolet => (
+                egui::Color32::from_rgb(  4,   1,  10),
+                egui::Color32::from_rgb(  8,   3,  20),
+                egui::Color32::from_rgb( 16,   5,  38),
+                egui::Color32::from_rgb( 26,   8,  58),
+                egui::Color32::from_rgb( 38,  10,  80),
+                egui::Color32::from_rgb( 42,   4,  62),
+                egui::Color32::from_rgb(175,  25, 255),
+                egui::Color32::from_rgb(255,  25, 195),
+                egui::Color32::from_rgb(242, 222, 255),
+                egui::Color32::from_rgb(172, 128, 222),
+                egui::Color32::from_rgb( 88,  48, 135),
+                egui::Color32::from_rgb( 20,   6,  48),
+                egui::Color32::from_rgb( 62,  12, 108),
+                egui::Color32::from_rgb(175,  25, 255),
+                egui::Color32::from_rgb(  2,   0,   7),
+                egui::Color32::from_rgb(145,  18, 215),
+                egui::Color32::from_rgb( 60, 255, 140), // status_ok
+                egui::Color32::from_rgb(255, 200,  30), // status_warn — amber not yellow
+                egui::Color32::from_rgb(255,  40, 100), // status_err
+                egui::Color32::from_rgb(255,  25, 195), // status_info
+            ),
+            // ── HIGH CONTRAST ────────────────────────────────────────────────
+            UiTheme::HighContrast => (
+                egui::Color32::from_rgb(  0,   0,   0),
+                egui::Color32::from_rgb( 10,  10,  10),
+                egui::Color32::from_rgb( 25,  25,  25),
+                egui::Color32::from_rgb( 45,  45,  45),
+                egui::Color32::from_rgb( 65,  65,  65),
+                egui::Color32::from_rgb( 50,  45,   0),
+                egui::Color32::from_rgb(255, 230,   0),
+                egui::Color32::from_rgb(  0, 200, 255),
+                egui::Color32::from_rgb(255, 255, 255),
+                egui::Color32::from_rgb(195, 195, 195),
+                egui::Color32::from_rgb(115, 115, 115),
+                egui::Color32::from_rgb( 45,  45,  45),
+                egui::Color32::from_rgb( 95,  95,  95),
+                egui::Color32::from_rgb(255, 230,   0),
+                egui::Color32::from_rgb(  0,   0,   0),
+                egui::Color32::from_rgb(200, 180,   0),
+                egui::Color32::from_rgb( 50, 255,  50), // status_ok
+                egui::Color32::from_rgb(255, 230,   0), // status_warn — yellow fine on black
+                egui::Color32::from_rgb(255,  60,  60), // status_err
+                egui::Color32::from_rgb(  0, 200, 255), // status_info
+            ),
+        };
 
         self.ctx.global_style_mut(|style| {
-            // ── Visuals ───────────────────────────────────────────────────────
             let v = &mut style.visuals;
-            v.dark_mode = true;
+            // Light themes need dark_mode = false so egui renders
+            // things like tooltips and popups with light backgrounds.
+            v.dark_mode = matches!(
+                theme_choice,
+                UiTheme::BiotechDark
+                | UiTheme::Crimson
+                | UiTheme::NeonSynthwave
+                | UiTheme::NeonToxic
+                | UiTheme::NeonUltraviolet
+                | UiTheme::HighContrast
+            );
 
-            // Window / panel backgrounds
-            v.window_fill        = BG_PANEL;
-            v.panel_fill         = BG_PANEL;
-            v.faint_bg_color     = BG_WIDGET;
-            v.extreme_bg_color   = BG_DARKEST;
-            v.code_bg_color      = BG_WIDGET;
+            v.window_fill        = bg_panel;
+            v.panel_fill         = bg_panel;
+            v.faint_bg_color     = bg_widget;
+            v.extreme_bg_color   = bg_darkest;
+            v.code_bg_color      = bg_widget;
 
-            // Window stroke (border)
-            v.window_stroke      = egui::Stroke::new(1.0, BORDER_NORMAL);
+            v.window_stroke      = egui::Stroke::new(1.0, border_normal);
 
-            // Selection highlight
-            v.selection.bg_fill  = BG_SELECTED;
-            v.selection.stroke   = egui::Stroke::new(1.0, ACCENT_TEAL);
+            v.selection.bg_fill  = bg_selected;
+            v.selection.stroke   = egui::Stroke::new(1.0, accent_primary);
 
-            // Hyperlink color
-            v.hyperlink_color    = ACCENT_CYAN;
+            v.hyperlink_color    = accent_secondary;
 
-            // Override widget visuals for all states
-            // Noninteractive (labels, separators)
-            v.widgets.noninteractive.bg_fill   = BG_PANEL;
-            v.widgets.noninteractive.weak_bg_fill = BG_WIDGET;
-            v.widgets.noninteractive.bg_stroke  = egui::Stroke::new(1.0, BORDER_SUBTLE);
-            v.widgets.noninteractive.fg_stroke  = egui::Stroke::new(1.0, TEXT_SECONDARY);
+            v.widgets.noninteractive.bg_fill      = bg_panel;
+            v.widgets.noninteractive.weak_bg_fill = bg_widget;
+            v.widgets.noninteractive.bg_stroke    = egui::Stroke::new(1.0, border_subtle);
+            v.widgets.noninteractive.fg_stroke    = egui::Stroke::new(1.0, text_secondary);
             v.widgets.noninteractive.corner_radius = egui::CornerRadius::same(3);
-            v.widgets.noninteractive.expansion  = 0.0;
+            v.widgets.noninteractive.expansion    = 0.0;
 
-            // Inactive (buttons, sliders at rest)
-            v.widgets.inactive.bg_fill          = egui::Color32::from_rgb(35, 48, 75);
-            v.widgets.inactive.weak_bg_fill     = egui::Color32::from_rgb(35, 48, 75);
-            v.widgets.inactive.bg_stroke        = egui::Stroke::new(1.0, BORDER_NORMAL);
-            v.widgets.inactive.fg_stroke        = egui::Stroke::new(1.5, TEXT_SECONDARY);
+            v.widgets.inactive.bg_fill          = bg_widget;
+            v.widgets.inactive.weak_bg_fill     = bg_widget;
+            v.widgets.inactive.bg_stroke        = egui::Stroke::new(1.0, border_normal);
+            v.widgets.inactive.fg_stroke        = egui::Stroke::new(1.5, text_secondary);
             v.widgets.inactive.corner_radius    = egui::CornerRadius::same(3);
             v.widgets.inactive.expansion        = 0.0;
 
-            // Hovered
-            v.widgets.hovered.bg_fill           = BG_HOVER;
-            v.widgets.hovered.weak_bg_fill      = BG_HOVER;
-            v.widgets.hovered.bg_stroke         = egui::Stroke::new(1.0, BORDER_BRIGHT);
-            v.widgets.hovered.fg_stroke         = egui::Stroke::new(1.5, TEXT_PRIMARY);
+            v.widgets.hovered.bg_fill           = bg_hover;
+            v.widgets.hovered.weak_bg_fill      = bg_hover;
+            v.widgets.hovered.bg_stroke         = egui::Stroke::new(1.0, border_bright);
+            v.widgets.hovered.fg_stroke         = egui::Stroke::new(1.5, text_primary);
             v.widgets.hovered.corner_radius     = egui::CornerRadius::same(3);
             v.widgets.hovered.expansion         = 1.0;
 
-            // Active / pressed
-            v.widgets.active.bg_fill            = BG_ACTIVE;
-            v.widgets.active.weak_bg_fill       = BG_ACTIVE;
-            v.widgets.active.bg_stroke          = egui::Stroke::new(1.5, ACCENT_TEAL);
-            v.widgets.active.fg_stroke          = egui::Stroke::new(2.0, ACCENT_TEAL);
+            v.widgets.active.bg_fill            = bg_active;
+            v.widgets.active.weak_bg_fill       = bg_active;
+            v.widgets.active.bg_stroke          = egui::Stroke::new(1.5, accent_primary);
+            v.widgets.active.fg_stroke          = egui::Stroke::new(2.0, accent_primary);
             v.widgets.active.corner_radius      = egui::CornerRadius::same(3);
             v.widgets.active.expansion          = 1.0;
 
-            // Open (combo boxes, menus when open)
-            v.widgets.open.bg_fill              = BG_ACTIVE;
-            v.widgets.open.weak_bg_fill         = BG_ACTIVE;
-            v.widgets.open.bg_stroke            = egui::Stroke::new(1.0, ACCENT_TEAL);
-            v.widgets.open.fg_stroke            = egui::Stroke::new(1.5, ACCENT_TEAL);
+            v.widgets.open.bg_fill              = bg_active;
+            v.widgets.open.weak_bg_fill         = bg_active;
+            v.widgets.open.bg_stroke            = egui::Stroke::new(1.0, accent_primary);
+            v.widgets.open.fg_stroke            = egui::Stroke::new(1.5, accent_primary);
             v.widgets.open.corner_radius        = egui::CornerRadius::same(3);
             v.widgets.open.expansion            = 0.0;
 
-            // Override text color
-            v.override_text_color = Some(TEXT_PRIMARY);
-
-            // Slider trailing fill — fills the track behind the handle in teal
+            v.override_text_color = Some(text_primary);
             v.slider_trailing_fill = true;
 
-            // Separator / grid lines
             v.window_shadow = egui::Shadow {
                 offset: [0, 4],
                 blur: 16,
                 spread: 0,
                 color: egui::Color32::from_black_alpha(120),
             };
-
-            // Popup shadow
             v.popup_shadow = egui::Shadow {
                 offset: [0, 2],
                 blur: 8,
@@ -329,28 +628,45 @@ impl UiSystem {
                 color: egui::Color32::from_black_alpha(100),
             };
 
-            // Slider / progress bar fill
-            v.selection.bg_fill = BG_SELECTED;
-
-            // ── Spacing ───────────────────────────────────────────────────────
-            // Keep egui defaults for widget sizing (slider_width, combo_width,
-            // interact_size, icon_*) — many panels rely on those defaults.
-            // Only tighten the global rhythm.
             style.spacing.item_spacing      = egui::vec2(6.0, 4.0);
             style.spacing.button_padding    = egui::vec2(8.0, 4.0);
             style.spacing.indent            = 14.0;
             style.spacing.menu_margin       = egui::Margin::same(6);
-            // Wider default slider so panels that don't manually set slider_width
-            // still fill a reasonable portion of the panel.
             style.spacing.slider_width      = 200.0;
 
-            // ── Text styles ───────────────────────────────────────────────────
             use egui::{FontId, FontFamily, TextStyle};
-            style.text_styles.insert(TextStyle::Small,   FontId::new(10.0, FontFamily::Proportional));
-            style.text_styles.insert(TextStyle::Body,    FontId::new(12.0, FontFamily::Proportional));
-            style.text_styles.insert(TextStyle::Button,  FontId::new(12.0, FontFamily::Proportional));
-            style.text_styles.insert(TextStyle::Heading, FontId::new(13.0, FontFamily::Proportional));
+            style.text_styles.insert(TextStyle::Small,    FontId::new(10.0, FontFamily::Proportional));
+            style.text_styles.insert(TextStyle::Body,     FontId::new(12.0, FontFamily::Proportional));
+            style.text_styles.insert(TextStyle::Button,   FontId::new(12.0, FontFamily::Proportional));
+            style.text_styles.insert(TextStyle::Heading,  FontId::new(13.0, FontFamily::Proportional));
             style.text_styles.insert(TextStyle::Monospace, FontId::new(11.0, FontFamily::Monospace));
+        });
+
+        // Store the full palette in the thread-local so all rendering code
+        // can read it without re-deriving colors from the theme enum.
+        ACTIVE_PALETTE.with(|cell| {
+            *cell.borrow_mut() = ActivePalette {
+                bg_darkest:       bg_darkest,
+                bg_panel:         bg_panel,
+                bg_widget:        bg_widget,
+                bg_hover:         bg_hover,
+                bg_active:        bg_active,
+                bg_selected:      bg_selected,
+                accent_primary:   accent_primary,
+                accent_secondary: accent_secondary,
+                text_primary:     text_primary,
+                text_secondary:   text_secondary,
+                text_dim:         text_dim,
+                border_subtle:    border_subtle,
+                border_normal:    border_normal,
+                border_bright:    border_bright,
+                topbar_bg:        topbar_bg,
+                topbar_border:    topbar_border,
+                status_ok:        status_ok,
+                status_warn:      status_warn,
+                status_err:       status_err,
+                status_info:      status_info,
+            };
         });
     }
 
@@ -404,10 +720,14 @@ impl UiSystem {
             self.last_scale = self.state.ui_scale;
         }
 
-        // Apply biotech theme once at startup
-        if !self.theme_applied {
-            self.apply_biotech_theme();
+        // Apply biotech theme once at startup, and re-apply when theme changes
+        let theme_changed = self.state.selected_theme != self.last_theme;
+        if !self.theme_applied || theme_changed {
+            self.apply_theme(self.state.selected_theme);
+            self.last_theme = self.state.selected_theme;
             self.theme_applied = true;
+            // Reset scale tracking so spacing is re-applied on top of the new theme
+            self.last_scale = -1.0;
         }
 
         // Auto-save UI state periodically
@@ -416,20 +736,25 @@ impl UiSystem {
         // Show branded top bar
         let mut ui_state_copy = self.state.clone();
 
+        // Read the active theme palette once — used throughout this frame.
+        let p = palette();
+        let (tb_bg, tb_border, tb_accent, tb_text_primary, tb_text_secondary, tb_text_dim, tb_border_normal) =
+            (p.topbar_bg, p.topbar_border, p.accent_primary, p.text_primary, p.text_secondary, p.text_dim, p.border_normal);
+
         #[allow(deprecated)]
         egui::Panel::top("top_bar")
             .frame(
                 egui::Frame::none()
-                    .fill(theme::TOPBAR_BG)
+                    .fill(tb_bg)
                     .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: 6 })
-                    .stroke(egui::Stroke::new(1.0, theme::TOPBAR_BORDER)),
+                    .stroke(egui::Stroke::new(1.0, tb_border)),
             )
             .show(&self.ctx, |ui| {
                 let bar_rect = ui.available_rect_before_wrap();
                 ui.spacing_mut().item_spacing.x = 6.0;
 
                 // Right side: fixed-width slot at the right edge.
-                let right_width = 420.0_f32;
+                let right_width = 490.0_f32;
                 let right_rect = egui::Rect::from_min_size(
                     egui::pos2(bar_rect.right() - right_width, bar_rect.top()),
                     egui::vec2(right_width, bar_rect.height()),
@@ -454,11 +779,11 @@ impl UiSystem {
                         ui.add_space(8.0); topbar_divider(ui); ui.add_space(8.0);
 
                         let tut_label = if ui_state_copy.tutorial.active { "🎓 Tutorial ●" } else { "🎓 Tutorial" };
-                        let tut_color = if ui_state_copy.tutorial.active { theme::ACCENT_TEAL } else { theme::TEXT_SECONDARY };
+                        let tut_color = if ui_state_copy.tutorial.active { tb_accent } else { tb_text_secondary };
                         let tut_enabled = ui_state_copy.current_mode == crate::ui::types::SimulationMode::Preview;
                         if ui.add_enabled(
                             tut_enabled,
-                            egui::Button::new(egui::RichText::new(tut_label).size(11.5).color(if tut_enabled { tut_color } else { theme::TEXT_DIM }))
+                            egui::Button::new(egui::RichText::new(tut_label).size(11.5).color(if tut_enabled { tut_color } else { tb_text_dim }))
                                 .frame(false)
                         ).clicked() {
                             if ui_state_copy.tutorial.active { ui_state_copy.tutorial.close(); } else { ui_state_copy.tutorial.start(); }
@@ -466,7 +791,7 @@ impl UiSystem {
 
                         ui.add_space(8.0); topbar_divider(ui); ui.add_space(8.0);
 
-                        if ui.add(egui::Button::new(egui::RichText::new("Help").size(11.5).color(theme::TEXT_SECONDARY)).frame(false)).clicked() {
+                        if ui.add(egui::Button::new(egui::RichText::new("Help").size(11.5).color(tb_text_secondary)).frame(false)).clicked() {
                             let p = crate::ui::panel::Panel::Help;
                             if is_panel_open(dock_manager.current_tree(), &p) { close_panel(dock_manager.current_tree_mut(), &p); }
                             else { open_panel(dock_manager.current_tree_mut(), &p); }
@@ -474,9 +799,23 @@ impl UiSystem {
 
                         ui.add_space(8.0); topbar_divider(ui); ui.add_space(8.0);
 
+                        // Themes button — opens theme picker popup
+                        let themes_resp = ui.add(
+                            egui::Button::new(egui::RichText::new("🎨 Themes").size(11.5).color(tb_text_primary))
+                                .frame(false)
+                        );
+                        egui::Popup::menu(&themes_resp)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .show(|ui| {
+                                ui.set_min_width(180.0);
+                                show_themes_menu(ui, &mut ui_state_copy);
+                            });
+
+                        ui.add_space(8.0); topbar_divider(ui); ui.add_space(8.0);
+
                         // Panels button — frameless, same style as Tutorial/Help
                         let panels_resp = ui.add(
-                            egui::Button::new(egui::RichText::new("Panels").size(11.5).color(theme::TEXT_PRIMARY))
+                            egui::Button::new(egui::RichText::new("Panels").size(11.5).color(tb_text_primary))
                                 .frame(false)
                         );
                         egui::Popup::menu(&panels_resp)
@@ -501,13 +840,13 @@ impl UiSystem {
                             ui.add(egui::Image::new((tex.id(), glyph_size)).fit_to_exact_size(glyph_size));
                         } else {
                             let (r, _) = ui.allocate_exact_size(glyph_size, egui::Sense::hover());
-                            draw_logo_glyph(ui.painter(), r, theme::ACCENT_TEAL);
+                            draw_logo_glyph(ui.painter(), r, tb_accent);
                         }
 
                         // GPU mode: Save/Load sphere on the far left
                         if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu {
                             ui.add_space(6.0); topbar_divider(ui); ui.add_space(6.0);
-                            ui.menu_button(egui::RichText::new("Save / Load").size(11.5).color(theme::TEXT_PRIMARY), |ui| {
+                            ui.menu_button(egui::RichText::new("Save / Load").size(11.5).color(tb_text_primary), |ui| {
                                 show_save_load_menu(ui, &mut ui_state_copy);
                             });
                         }
@@ -515,8 +854,8 @@ impl UiSystem {
                         if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Preview {
                             ui.add_space(6.0); topbar_divider(ui); ui.add_space(6.0);
 
-                            let btn = |label: &str| egui::Button::new(egui::RichText::new(label).size(11.0).color(theme::TEXT_PRIMARY))
-                                .fill(theme::BG_WIDGET).stroke(egui::Stroke::new(1.0, theme::BORDER_NORMAL)).corner_radius(egui::CornerRadius::same(3));
+                            let btn = |label: &str| egui::Button::new(egui::RichText::new(label).size(11.0).color(tb_text_primary))
+                                .fill(theme::BG_WIDGET).stroke(egui::Stroke::new(1.0, tb_border_normal)).corner_radius(egui::CornerRadius::same(3));
                             if ui.add(btn("⬆ Save")).on_hover_text("Save Genome").clicked() {
                                 if let Some(path) = rfd::FileDialog::new().add_filter("Genome", &["genome"])
                                     .set_directory(crate::genome::Genome::genomes_dir())
@@ -541,7 +880,7 @@ impl UiSystem {
 
                             ui.add(egui::TextEdit::singleline(&mut genome.name)
                                 .desired_width(130.0).hint_text("Genome Name")
-                                .font(egui::FontId::proportional(11.5)).text_color(theme::TEXT_PRIMARY));
+                                .font(egui::FontId::proportional(11.5)).text_color(tb_text_primary));
                         }
                     });
                 });
@@ -554,9 +893,9 @@ impl UiSystem {
             .exact_width(40.0)
             .frame(
                 egui::Frame::none()
-                    .fill(theme::TOPBAR_BG)
+                    .fill(p.topbar_bg)
                     .inner_margin(egui::Margin { left: 4, right: 4, top: 8, bottom: 8 })
-                    .stroke(egui::Stroke::new(1.0, theme::BORDER_SUBTLE)),
+                    .stroke(egui::Stroke::new(1.0, p.border_subtle)),
             )
             .show(&self.ctx, |ui| {
                 render_side_rail(ui, &mut ui_state_copy, dock_manager);
@@ -578,9 +917,9 @@ impl UiSystem {
         egui::Panel::bottom("status_bar")
             .frame(
                 egui::Frame::none()
-                    .fill(theme::TOPBAR_BG)
+                    .fill(p.topbar_bg)
                     .inner_margin(egui::Margin { left: 12, right: 12, top: 4, bottom: 4 })
-                    .stroke(egui::Stroke::new(1.0, theme::BORDER_SUBTLE)),
+                    .stroke(egui::Stroke::new(1.0, p.border_subtle)),
             )
             .show(&self.ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -590,17 +929,16 @@ impl UiSystem {
                     let (status_label, status_color) = if ui_state_copy.current_mode
                         == crate::ui::types::SimulationMode::Preview
                     {
-                        ("PREVIEW", theme::ACCENT_CYAN)
+                        ("PREVIEW", p.accent_secondary)
                     } else if is_paused {
-                        ("PAUSED", theme::STATUS_YELLOW)
+                        ("PAUSED", p.status_warn)
                     } else if cell_count > 0 {
-                        ("RUNNING", theme::STATUS_GREEN)
+                        ("RUNNING", p.status_ok)
                     } else {
-                        ("IDLE", theme::TEXT_SECONDARY)
+                        ("IDLE", p.text_secondary)
                     };
 
                     status_field(ui, "SIMULATION STATUS", &|ui| {
-                        // Pulsing dot
                         let (dot_rect, _) = ui.allocate_exact_size(
                             egui::vec2(8.0, 8.0),
                             egui::Sense::hover(),
@@ -640,7 +978,7 @@ impl UiSystem {
                             egui::RichText::new(time_str.clone())
                                 .strong()
                                 .size(11.5)
-                                .color(theme::TEXT_PRIMARY),
+                                .color(p.text_primary),
                         );
                     });
 
@@ -657,7 +995,7 @@ impl UiSystem {
                             egui::RichText::new(cells_str.clone())
                                 .strong()
                                 .size(11.5)
-                                .color(theme::TEXT_PRIMARY),
+                                .color(p.text_primary),
                         );
                     });
 
@@ -665,11 +1003,11 @@ impl UiSystem {
 
                     // System load (CPU usage)
                     let cpu_color = if cpu_usage > 80.0 {
-                        theme::STATUS_RED
+                        p.status_err
                     } else if cpu_usage > 50.0 {
-                        theme::STATUS_YELLOW
+                        p.status_warn
                     } else {
-                        theme::STATUS_GREEN
+                        p.status_ok
                     };
                     status_field(ui, "SYSTEM LOAD", &|ui| {
                         ui.label(
@@ -678,13 +1016,11 @@ impl UiSystem {
                                 .size(11.5)
                                 .color(cpu_color),
                         );
-                        // Mini bar
                         let (bar_rect, _) = ui.allocate_exact_size(
                             egui::vec2(40.0, 6.0),
                             egui::Sense::hover(),
                         );
-                        ui.painter()
-                            .rect_filled(bar_rect, 1.0, theme::BG_DARKEST);
+                        ui.painter().rect_filled(bar_rect, 1.0, p.bg_darkest);
                         let fill_w = (cpu_usage / 100.0).clamp(0.0, 1.0) * bar_rect.width();
                         let fill_rect = egui::Rect::from_min_size(
                             bar_rect.min,
@@ -695,7 +1031,7 @@ impl UiSystem {
 
                     status_separator(ui);
 
-                    // System memory (process resident usage out of total RAM)
+                    // System memory
                     let mem_str = if mem_total_gb >= 1.0 {
                         format!("{:.1} / {:.0} GB", mem_used_gb, mem_total_gb)
                     } else {
@@ -707,25 +1043,24 @@ impl UiSystem {
                         0.0
                     };
                     let mem_color = if mem_pct > 0.9 {
-                        theme::STATUS_RED
+                        p.status_err
                     } else if mem_pct > 0.7 {
-                        theme::STATUS_YELLOW
+                        p.status_warn
                     } else {
-                        theme::STATUS_BLUE
+                        p.status_info
                     };
                     status_field(ui, "MEMORY", &|ui| {
                         ui.label(
                             egui::RichText::new(mem_str.clone())
                                 .strong()
                                 .size(11.5)
-                                .color(theme::TEXT_PRIMARY),
+                                .color(p.text_primary),
                         );
                         let (bar_rect, _) = ui.allocate_exact_size(
                             egui::vec2(40.0, 6.0),
                             egui::Sense::hover(),
                         );
-                        ui.painter()
-                            .rect_filled(bar_rect, 1.0, theme::BG_DARKEST);
+                        ui.painter().rect_filled(bar_rect, 1.0, p.bg_darkest);
                         let fill_w = mem_pct.clamp(0.0, 1.0) * bar_rect.width();
                         let fill_rect = egui::Rect::from_min_size(
                             bar_rect.min,
@@ -737,11 +1072,11 @@ impl UiSystem {
                     // FPS on the far right
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let fps_color = if fps >= 50.0 {
-                            theme::STATUS_GREEN
+                            p.status_ok
                         } else if fps >= 30.0 {
-                            theme::STATUS_YELLOW
+                            p.status_warn
                         } else {
-                            theme::STATUS_RED
+                            p.status_err
                         };
                         status_field(ui, "FPS", &|ui| {
                             ui.label(
@@ -757,135 +1092,125 @@ impl UiSystem {
         
         // Show dock area in remaining space
         let mut style = egui_dock::Style::from_egui(self.ctx.global_style().as_ref());
-        style.separator.extra = 75.0; // Reduce separator minimum constraint
+        style.separator.extra = 75.0;
 
-        // ── Bio-Spheres dock theme ──────────────────────────────────────────
-        // Insert a black gutter around the entire dock area so docked panels
-        // float on the darkest background colour, matching the concept art.
-        // The CentralPanel hosting the dock fills with `BG_DARKEST`, and the
-        // dock itself indents inward by `dock_area_padding`.
-        // GUTTER_WIDTH must match the painted border strips and separator width below.
         const DOCK_GUTTER: i8 = 5;
         style.dock_area_padding = Some(egui::Margin::same(DOCK_GUTTER));
-
-        // Border around the whole dock area
         style.main_surface_border_stroke = egui::Stroke::NONE;
 
-        // Tab bar — slim, dark, with a hairline below
-        style.tab_bar.bg_fill = theme::TOPBAR_BG;
+        // Tab bar
+        style.tab_bar.bg_fill = p.bg_panel;
         style.tab_bar.height = 26.0;
-        style.tab_bar.hline_color = theme::BORDER_SUBTLE;
+        style.tab_bar.hline_color = p.border_subtle;
         style.tab_bar.corner_radius = egui::CornerRadius::ZERO;
         style.tab_bar.fill_tab_bar = false;
         style.tab_bar.inner_margin = egui::Margin::symmetric(2, 0);
 
-        // Active tab is highlighted by a soft teal radial glow ("spotlight")
-        // painted *behind* it — no solid fill, no underline. Inactive tabs
-        // sit flat on the same dark bar and are dimmed by text color alone.
         style.tab.hline_below_active_tab_name = false;
         style.tab.spacing = 4.0;
 
-        let tab_fill = theme::BG_PANEL;
-        // Bright cyan-white core that fades to the panel background. The
-        // mesh fan paints a smooth radial alpha falloff from the centre
-        // (this colour) to fully transparent at the perimeter.
-        let active_glow = egui::Color32::from_rgba_unmultiplied(60, 230, 200, 110);
-        // Squash the ellipse heavily — vertical radius is ~30% of horizontal
-        // so the spotlight reads as a wide horizontal lozenge centred on
-        // the tab text, exactly matching the concept art.
+        let tab_fill = p.bg_panel;
+        // Glow color derived from the active accent — same alpha as original
+        let active_glow = egui::Color32::from_rgba_unmultiplied(
+            p.accent_primary.r(),
+            p.accent_primary.g(),
+            p.accent_primary.b(),
+            110,
+        );
+        let hover_glow = egui::Color32::from_rgba_unmultiplied(
+            p.accent_primary.r(),
+            p.accent_primary.g(),
+            p.accent_primary.b(),
+            35,
+        );
         const GLOW_ASPECT: f32 = 0.30;
 
-        // Active — primary text + bright teal spotlight ellipse
-        style.tab.active.bg_fill   = tab_fill;
-        style.tab.active.text_color = theme::TEXT_PRIMARY;
-        style.tab.active.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.active.corner_radius = egui::CornerRadius::same(3);
-        style.tab.active.glow_color = active_glow;
-        // 0.85 keeps the ellipse slightly inset from the tab edges so the
-        // spotlight reads as a contained shape with a clear margin around it.
+        // Active
+        style.tab.active.bg_fill        = tab_fill;
+        style.tab.active.text_color     = p.text_primary;
+        style.tab.active.outline_color  = egui::Color32::TRANSPARENT;
+        style.tab.active.corner_radius  = egui::CornerRadius::same(3);
+        style.tab.active.glow_color     = active_glow;
         style.tab.active.glow_radius_factor = 0.85;
-        style.tab.active.glow_aspect = GLOW_ASPECT;
+        style.tab.active.glow_aspect    = GLOW_ASPECT;
 
-        // Focused — same as active
-        style.tab.focused.bg_fill   = tab_fill;
-        style.tab.focused.text_color = theme::TEXT_PRIMARY;
+        // Focused
+        style.tab.focused.bg_fill       = tab_fill;
+        style.tab.focused.text_color    = p.text_primary;
         style.tab.focused.outline_color = egui::Color32::TRANSPARENT;
         style.tab.focused.corner_radius = egui::CornerRadius::same(3);
-        style.tab.focused.glow_color = active_glow;
+        style.tab.focused.glow_color    = active_glow;
         style.tab.focused.glow_radius_factor = 0.85;
-        style.tab.focused.glow_aspect = GLOW_ASPECT;
+        style.tab.focused.glow_aspect   = GLOW_ASPECT;
 
-        // Inactive — dim text, no glow
-        style.tab.inactive.bg_fill   = tab_fill;
-        style.tab.inactive.text_color = theme::TEXT_DIM;
+        // Inactive
+        style.tab.inactive.bg_fill      = tab_fill;
+        style.tab.inactive.text_color   = p.text_dim;
         style.tab.inactive.outline_color = egui::Color32::TRANSPARENT;
         style.tab.inactive.corner_radius = egui::CornerRadius::same(3);
-        style.tab.inactive.glow_color = egui::Color32::TRANSPARENT;
+        style.tab.inactive.glow_color   = egui::Color32::TRANSPARENT;
 
-        // Hovered — primary text + a subtle teal spotlight at lower intensity
-        style.tab.hovered.bg_fill   = tab_fill;
-        style.tab.hovered.text_color = theme::TEXT_PRIMARY;
+        // Hovered
+        style.tab.hovered.bg_fill       = tab_fill;
+        style.tab.hovered.text_color    = p.text_primary;
         style.tab.hovered.outline_color = egui::Color32::TRANSPARENT;
         style.tab.hovered.corner_radius = egui::CornerRadius::same(3);
-        style.tab.hovered.glow_color = egui::Color32::from_rgba_unmultiplied(60, 230, 200, 35);
+        style.tab.hovered.glow_color    = hover_glow;
         style.tab.hovered.glow_radius_factor = 0.85;
-        style.tab.hovered.glow_aspect = GLOW_ASPECT;
+        style.tab.hovered.glow_aspect   = GLOW_ASPECT;
 
-        // KB-focus variants mirror their non-KB counterparts
-        style.tab.active_with_kb_focus.bg_fill = tab_fill;
-        style.tab.active_with_kb_focus.text_color = theme::TEXT_PRIMARY;
+        // KB-focus variants
+        style.tab.active_with_kb_focus.bg_fill       = tab_fill;
+        style.tab.active_with_kb_focus.text_color    = p.text_primary;
         style.tab.active_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
         style.tab.active_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
-        style.tab.active_with_kb_focus.glow_color = active_glow;
+        style.tab.active_with_kb_focus.glow_color    = active_glow;
         style.tab.active_with_kb_focus.glow_radius_factor = 0.85;
-        style.tab.active_with_kb_focus.glow_aspect = GLOW_ASPECT;
+        style.tab.active_with_kb_focus.glow_aspect   = GLOW_ASPECT;
 
-        style.tab.inactive_with_kb_focus.bg_fill = tab_fill;
-        style.tab.inactive_with_kb_focus.text_color = theme::TEXT_SECONDARY;
+        style.tab.inactive_with_kb_focus.bg_fill       = tab_fill;
+        style.tab.inactive_with_kb_focus.text_color    = p.text_secondary;
         style.tab.inactive_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
         style.tab.inactive_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
-        style.tab.inactive_with_kb_focus.glow_color = egui::Color32::TRANSPARENT;
+        style.tab.inactive_with_kb_focus.glow_color    = egui::Color32::TRANSPARENT;
 
-        style.tab.focused_with_kb_focus.bg_fill = tab_fill;
-        style.tab.focused_with_kb_focus.text_color = theme::TEXT_PRIMARY;
+        style.tab.focused_with_kb_focus.bg_fill       = tab_fill;
+        style.tab.focused_with_kb_focus.text_color    = p.text_primary;
         style.tab.focused_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
         style.tab.focused_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
-        style.tab.focused_with_kb_focus.glow_color = active_glow;
+        style.tab.focused_with_kb_focus.glow_color    = active_glow;
         style.tab.focused_with_kb_focus.glow_radius_factor = 0.85;
-        style.tab.focused_with_kb_focus.glow_aspect = GLOW_ASPECT;
+        style.tab.focused_with_kb_focus.glow_aspect   = GLOW_ASPECT;
 
-        // Tab bar background must match the tab fill so the strip reads as
-        // a single uniform surface.
-        style.tab_bar.bg_fill = tab_fill;
-        style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
+        // Tab bar background matches tab fill
+        style.tab_bar.bg_fill      = tab_fill;
+        style.tab_bar.hline_color  = egui::Color32::TRANSPARENT;
 
-        // Tab body — same fill as the tabs above it. No stroke, no contrast.
-        style.tab.tab_body.bg_fill = tab_fill;
-        style.tab.tab_body.stroke = egui::Stroke::NONE;
+        // Tab body
+        style.tab.tab_body.bg_fill      = tab_fill;
+        style.tab.tab_body.stroke       = egui::Stroke::NONE;
         style.tab.tab_body.corner_radius = egui::CornerRadius::ZERO;
         style.tab.tab_body.inner_margin = egui::Margin { left: 6, right: 4, top: 4, bottom: 4 };
 
-        // Buttons (close, add, etc.)
-        style.buttons.close_tab_color = theme::TEXT_DIM;
-        style.buttons.close_tab_active_color = theme::STATUS_RED;
-        style.buttons.close_tab_bg_fill = egui::Color32::TRANSPARENT;
-        style.buttons.add_tab_color = theme::TEXT_SECONDARY;
-        style.buttons.add_tab_active_color = theme::ACCENT_TEAL;
-        style.buttons.add_tab_bg_fill = egui::Color32::TRANSPARENT;
-        style.buttons.add_tab_border_color = theme::BORDER_SUBTLE;
+        // Buttons
+        style.buttons.close_tab_color        = p.text_dim;
+        style.buttons.close_tab_active_color = p.status_err;
+        style.buttons.close_tab_bg_fill      = egui::Color32::TRANSPARENT;
+        style.buttons.add_tab_color          = p.text_secondary;
+        style.buttons.add_tab_active_color   = p.accent_primary;
+        style.buttons.add_tab_bg_fill        = egui::Color32::TRANSPARENT;
+        style.buttons.add_tab_border_color   = p.border_subtle;
 
-        // Separator between docked panels — wider so it reads as a black
-        // gutter between panels (matching the concept art) and lights up
-        // teal on hover/drag for clear feedback.
-        style.separator.color_idle    = egui::Color32::BLACK;
-        style.separator.color_hovered = theme::ACCENT_TEAL;
-        style.separator.color_dragged = theme::ACCENT_TEAL;
+        // Separator
+        style.separator.color_idle    = p.bg_darkest;
+        style.separator.color_hovered = p.accent_primary;
+        style.separator.color_dragged = p.accent_primary;
         style.separator.width         = DOCK_GUTTER as f32;
 
-        // Drop overlay during tab drag
-        style.overlay.selection_color = theme::ACCENT_TEAL.linear_multiply(0.35);
-        style.overlay.button_color    = theme::BG_WIDGET;
-        style.overlay.button_border_stroke = egui::Stroke::new(1.0, theme::ACCENT_TEAL);
+        // Drop overlay
+        style.overlay.selection_color      = p.accent_primary.linear_multiply(0.35);
+        style.overlay.button_color         = p.bg_widget;
+        style.overlay.button_border_stroke = egui::Stroke::new(1.0, p.accent_primary);
 
         // Apply lock settings to hide tab bar height if locked
         if ui_state_copy.lock_tab_bar {
@@ -949,7 +1274,7 @@ impl UiSystem {
                 )
                 .show(&self.ctx, |ui| {
                     let area = ui.max_rect();
-                    let black = egui::Color32::BLACK;
+                    let gutter_color = p.bg_darkest;
 
                     // Render the dock first so its panel/tab body fills paint
                     // their backgrounds, then overlay the black gutter strips
@@ -970,7 +1295,7 @@ impl UiSystem {
                             egui::pos2(area.right(), area.top() + GUTTER),
                         ),
                         0.0,
-                        black,
+                        gutter_color,
                     );
                     // Bottom gutter strip
                     painter.rect_filled(
@@ -979,7 +1304,7 @@ impl UiSystem {
                             area.right_bottom(),
                         ),
                         0.0,
-                        black,
+                        gutter_color,
                     );
                     // Left gutter strip
                     painter.rect_filled(
@@ -988,7 +1313,7 @@ impl UiSystem {
                             egui::pos2(area.left() + GUTTER, area.bottom()),
                         ),
                         0.0,
-                        black,
+                        gutter_color,
                     );
                     // Right gutter strip
                     painter.rect_filled(
@@ -997,7 +1322,7 @@ impl UiSystem {
                             area.right_bottom(),
                         ),
                         0.0,
-                        black,
+                        gutter_color,
                     );
 
                     // Paint the corner brackets on the GPU viewport AFTER the
@@ -1026,10 +1351,8 @@ impl UiSystem {
                     // appear to have rounded corners against the black gutter.
                     if current_mode == crate::ui::types::SimulationMode::Preview {
                         if let Some(viewport_rect) = vp_rect {
-                            // vp_rect is the inner content area after tab_body.inner_margin.
-                            // Expand back out to the actual panel boundary before painting corners.
                             let panel_rect = viewport_rect.expand2(egui::vec2(6.0, 4.0));
-                            paint_viewport_rounded_corners(ui.painter(), panel_rect, 40.0, black);
+                            paint_viewport_rounded_corners(ui.painter(), panel_rect, 40.0, gutter_color);
                         }
                     }
                 });
@@ -1322,6 +1645,31 @@ impl UiSystem {
     /// Get the current viewport rectangle.
     pub fn get_viewport_rect(&self) -> Option<egui::Rect> {
         self.viewport_rect
+    }
+}
+
+/// Show the Themes menu for selecting the active UI color theme.
+fn show_themes_menu(ui: &mut egui::Ui, state: &mut GlobalUiState) {
+    use crate::ui::types::UiTheme;
+
+    ui.label("Color Theme:");
+    ui.add_space(4.0);
+
+    for &theme_choice in UiTheme::all() {
+        let is_selected = state.selected_theme == theme_choice;
+        let accent = theme_choice.accent_color();
+
+        ui.horizontal(|ui| {
+            // Colored swatch dot
+            let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+            ui.painter().circle_filled(dot_rect.center(), 4.5, accent);
+
+            // Selectable label — clicking sets the theme
+            if ui.selectable_label(is_selected, theme_choice.display_name()).clicked() {
+                state.selected_theme = theme_choice;
+                ui.close_kind(egui::UiKind::Menu);
+            }
+        });
     }
 }
 
@@ -1766,9 +2114,9 @@ fn render_side_rail(
     state: &mut GlobalUiState,
     dock_manager: &mut crate::ui::dock::DockManager,
 ) {
+    let p = palette();
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
 
-    // Mode-specific button list (icons only — no actions)
     let buttons: &[(&str, &str)] = match state.current_mode {
         crate::ui::types::SimulationMode::Preview => &[
             ("⛁",  "Placeholder"),
@@ -1793,45 +2141,38 @@ fn render_side_rail(
     };
 
     for (icon, tooltip) in buttons {
-        let _ = rail_button(ui, icon, tooltip);
+        let _ = rail_button(ui, icon, tooltip, &p);
     }
 
-    // Reset-layout button centered and pinned to the bottom
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
         ui.add_space(4.0);
-        if rail_button(ui, "⟲", "Reset Layout") {
+        if rail_button(ui, "⟲", "Reset Layout", &p) {
             dock_manager.reset_current_to_default();
         }
     });
 }
 
-/// Render a single non-functional icon button on the side rail.
-/// Returns `true` when clicked (used by the reset layout button).
-fn rail_button(ui: &mut egui::Ui, icon: &str, tooltip: &str) -> bool {
+/// Render a single icon button on the side rail.
+fn rail_button(ui: &mut egui::Ui, icon: &str, tooltip: &str, p: &ActivePalette) -> bool {
     let size = egui::vec2(32.0, 32.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     let resp = resp.on_hover_text(tooltip);
 
-    let icon_color = theme::TEXT_SECONDARY;
-    let bg_color = theme::BG_WIDGET;
-    let border_color = theme::BORDER_SUBTLE;
-
     let painter = ui.painter();
-    painter.rect_filled(rect, egui::CornerRadius::same(3), bg_color);
+    painter.rect_filled(rect, egui::CornerRadius::same(3), p.bg_widget);
     painter.rect_stroke(
         rect,
         egui::CornerRadius::same(3),
-        egui::Stroke::new(1.0, border_color),
+        egui::Stroke::new(1.0, p.border_subtle),
         egui::StrokeKind::Inside,
     );
-
     painter.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         icon,
         egui::FontId::proportional(15.0),
-        icon_color,
+        p.text_secondary,
     );
 
     resp.clicked()
