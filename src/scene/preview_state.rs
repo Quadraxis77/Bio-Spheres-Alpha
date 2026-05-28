@@ -394,6 +394,9 @@ impl PreviewState {
         if !self.is_resimulating {
             self.is_resimulating = true;
             
+            // Preserve transient flags that must survive state restores.
+            let adhesion_expansion = self.work_state.adhesion_expansion_active;
+
             // For forward seeks where display is already caught up, continue from display
             if target_time > self.display_time {
                 self.work_state = self.display_state.clone();
@@ -409,6 +412,9 @@ impl PreviewState {
                 self.work_state = checkpoint_state;
                 self.work_time = start_time;
             }
+
+            // Re-apply transient flags after restore so every physics step sees them.
+            self.work_state.adhesion_expansion_active = adhesion_expansion;
         }
         
         // Calculate step range from work_time → target_time

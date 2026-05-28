@@ -418,6 +418,16 @@ pub struct CanonicalState {
     /// Glueocyte bond formation skips pairs that appear here until expiry.
     pub adhesion_break_cooldowns: Vec<(u32, u32, f32)>,
 
+    // === Adhesion Expansion Tool ===
+    // When active, all adhesion rest_lengths are overridden to the maximum
+    // allowed value (5.0) so bonds appear fully stretched.
+    // Does NOT affect the genome — purely a visual/editing aid.
+
+    /// Whether the adhesion expansion tool is active.
+    /// When true, all adhesion rest_lengths are overridden to 5.0 (the genome max)
+    /// so bonds appear fully stretched. Never serialised.
+    pub adhesion_expansion_active: bool,
+
     // === Sister Cell Immunity ===
     // Prevents Glueocyte cells from immediately bonding to their sister cell
     // after division, unless the parent had parent_make_adhesion enabled.
@@ -590,6 +600,9 @@ impl CanonicalState {
 
             // Adhesion break cooldown — no cooldowns initially
             adhesion_break_cooldowns: Vec::new(),
+
+            // Adhesion expansion tool — off by default
+            adhesion_expansion_active: false,
 
             // Environment adhesion — no anchors by default
             env_anchor_pos: vec![Vec3::ZERO; capacity],

@@ -172,6 +172,41 @@ impl UiSystem {
         // Create egui context
         let ctx = egui::Context::default();
 
+        // Install fallback fonts so every Unicode symbol, arrow, and emoji renders.
+        //
+        // Priority order (egui tries each font in order until a glyph is found):
+        //   1. Hack (egui built-in) — ASCII + common programming glyphs
+        //   2. NotoSans-Regular    — broad Unicode: arrows, math, box-drawing, etc.
+        //   3. Segoe UI Symbol     — Windows symbol font: geometric shapes, misc symbols
+        //   4. Segoe UI Emoji      — full colour emoji fallback
+        {
+            let mut fonts = egui::FontDefinitions::default();
+
+            fonts.font_data.insert(
+                "NotoSans".to_owned(),
+                egui::FontData::from_static(include_bytes!("../../assets/fonts/NotoSans-Regular.ttf")).into(),
+            );
+            fonts.font_data.insert(
+                "SegoeSymbol".to_owned(),
+                egui::FontData::from_static(include_bytes!("../../assets/fonts/seguisym.ttf")).into(),
+            );
+            fonts.font_data.insert(
+                "SegoeEmoji".to_owned(),
+                egui::FontData::from_static(include_bytes!("../../assets/fonts/seguiemj.ttf")).into(),
+            );
+
+            // Append fallbacks to both Proportional and Monospace families so
+            // every text style benefits from the extended coverage.
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                let list = fonts.families.entry(family).or_default();
+                list.push("NotoSans".to_owned());
+                list.push("SegoeSymbol".to_owned());
+                list.push("SegoeEmoji".to_owned());
+            }
+
+            ctx.set_fonts(fonts);
+        }
+
         // Create egui-winit state for input handling
         let viewport_id = egui::ViewportId::ROOT;
         let winit_state = egui_winit::State::new(
@@ -855,7 +890,7 @@ impl UiSystem {
                             ui.add_space(6.0); topbar_divider(ui); ui.add_space(6.0);
 
                             let btn = |label: &str| egui::Button::new(egui::RichText::new(label).size(11.0).color(tb_text_primary))
-                                .fill(theme::BG_WIDGET).stroke(egui::Stroke::new(1.0, tb_border_normal)).corner_radius(egui::CornerRadius::same(3));
+                                .fill(p.bg_widget).stroke(egui::Stroke::new(1.0, tb_border_normal)).corner_radius(egui::CornerRadius::same(3));
                             if ui.add(btn("⬆ Save")).on_hover_text("Save Genome").clicked() {
                                 if let Some(path) = rfd::FileDialog::new().add_filter("Genome", &["genome"])
                                     .set_directory(crate::genome::Genome::genomes_dir())
@@ -2117,31 +2152,38 @@ fn render_side_rail(
     let p = palette();
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
 
-    let buttons: &[(&str, &str)] = match state.current_mode {
-        crate::ui::types::SimulationMode::Preview => &[
-            ("⛁",  "Placeholder"),
-            ("⚙",  "Placeholder"),
-            ("🔗", "Placeholder"),
-            ("◉",  "Placeholder"),
-            ("⊜",  "Placeholder"),
-            ("🎨", "Placeholder"),
-            ("⚛",  "Placeholder"),
-            ("⏱",  "Placeholder"),
-        ],
-        crate::ui::types::SimulationMode::Gpu => &[
-            ("🌐", "Placeholder"),
-            ("☀",  "Placeholder"),
-            ("🌊", "Placeholder"),
-            ("⛰",  "Placeholder"),
-            ("🔬", "Placeholder"),
-            ("📊", "Placeholder"),
-            ("🎬", "Placeholder"),
-            ("🎨", "Placeholder"),
-        ],
-    };
+    match state.current_mode {
+        crate::ui::types::SimulationMode::Preview => {
+            // Adhesion expansion toggle: stretches all bonds to maximum length
+            // temporarily so you can inspect creature structure. Genome is unchanged.
+            let expand_active = state.adhesion_expansion_active;
+            if rail_button_toggle(ui, "⤢", "Expand Adhesions (toggle)", expand_active, &p) {
+                state.adhesion_expansion_active = !expand_active;
+            }
 
-    for (icon, tooltip) in buttons {
-        let _ = rail_button(ui, icon, tooltip, &p);
+            let _ = rail_button(ui, "⛁",  "Placeholder", &p);
+            let _ = rail_button(ui, "⚙",  "Placeholder", &p);
+            let _ = rail_button(ui, "◉",  "Placeholder", &p);
+            let _ = rail_button(ui, "⊜",  "Placeholder", &p);
+            let _ = rail_button(ui, "🎨", "Placeholder", &p);
+            let _ = rail_button(ui, "⚛",  "Placeholder", &p);
+            let _ = rail_button(ui, "⏱",  "Placeholder", &p);
+        }
+        crate::ui::types::SimulationMode::Gpu => {
+            let buttons: &[(&str, &str)] = &[
+                ("🌐", "Placeholder"),
+                ("☀",  "Placeholder"),
+                ("🌊", "Placeholder"),
+                ("⛰",  "Placeholder"),
+                ("🔬", "Placeholder"),
+                ("📊", "Placeholder"),
+                ("🎬", "Placeholder"),
+                ("🎨", "Placeholder"),
+            ];
+            for (icon, tooltip) in buttons {
+                let _ = rail_button(ui, icon, tooltip, &p);
+            }
+        }
     }
 
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
@@ -2173,6 +2215,36 @@ fn rail_button(ui: &mut egui::Ui, icon: &str, tooltip: &str, p: &ActivePalette) 
         icon,
         egui::FontId::proportional(15.0),
         p.text_secondary,
+    );
+
+    resp.clicked()
+}
+
+/// Render a toggleable icon button on the side rail.
+/// When `active` is true the button is highlighted with the accent colour.
+fn rail_button_toggle(ui: &mut egui::Ui, icon: &str, tooltip: &str, active: bool, p: &ActivePalette) -> bool {
+    let size = egui::vec2(32.0, 32.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let resp = resp.on_hover_text(tooltip);
+
+    let painter = ui.painter();
+    let bg_color = if active { p.accent_primary } else { p.bg_widget };
+    let border_color = if active { p.accent_primary } else { p.border_subtle };
+    let text_color = if active { egui::Color32::WHITE } else { p.text_secondary };
+
+    painter.rect_filled(rect, egui::CornerRadius::same(3), bg_color);
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(3),
+        egui::Stroke::new(1.0, border_color),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(15.0),
+        text_color,
     );
 
     resp.clicked()

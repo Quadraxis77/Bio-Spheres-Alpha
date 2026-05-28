@@ -1010,6 +1010,21 @@ pub fn physics_step_with_genome(
     apply_myocyte_contraction(state, genome, current_time);
 
     if state.adhesion_connections.active_count > 0 && !state.cached_adhesion_settings.is_empty() {
+        // Apply adhesion expansion: override rest_length to the genome maximum (5.0)
+        // when the tool is active, so all bonds appear fully stretched.
+        let expanded_settings: Vec<crate::genome::AdhesionSettings>;
+        let effective_settings: &[crate::genome::AdhesionSettings] = if state.adhesion_expansion_active {
+            const ADHESION_MAX_REST_LENGTH: f32 = 5.0;
+            expanded_settings = state.cached_adhesion_settings.iter().map(|s| {
+                let mut s2 = s.clone();
+                s2.rest_length = ADHESION_MAX_REST_LENGTH;
+                s2
+            }).collect();
+            &expanded_settings
+        } else {
+            &state.cached_adhesion_settings
+        };
+
         let bonds_to_break = crate::cell::compute_adhesion_forces_parallel(
             &state.adhesion_connections,
             &state.positions[..state.cell_count],
@@ -1018,7 +1033,7 @@ pub fn physics_step_with_genome(
             &state.angular_velocities[..state.cell_count],
             &state.masses[..state.cell_count],
             &state.genome_orientations[..state.cell_count],
-            &state.cached_adhesion_settings,
+            effective_settings,
             &mut state.forces[..state.cell_count],
             &mut state.torques[..state.cell_count],
             current_time,
@@ -1064,6 +1079,19 @@ pub fn physics_step_with_genome(
         && !state.cached_adhesion_settings.is_empty()
     {
         let cell_count = state.cell_count;
+        // Reuse the same expansion logic for substep iterations
+        let expanded_settings_sub: Vec<crate::genome::AdhesionSettings>;
+        let effective_settings_sub: &[crate::genome::AdhesionSettings] = if state.adhesion_expansion_active {
+            const ADHESION_MAX_REST_LENGTH: f32 = 5.0;
+            expanded_settings_sub = state.cached_adhesion_settings.iter().map(|s| {
+                let mut s2 = s.clone();
+                s2.rest_length = ADHESION_MAX_REST_LENGTH;
+                s2
+            }).collect();
+            &expanded_settings_sub
+        } else {
+            &state.cached_adhesion_settings
+        };
         for _ in 0..config.constraint_iterations {
             crate::cell::compute_adhesion_substep(
                 &state.adhesion_connections,
@@ -1073,7 +1101,7 @@ pub fn physics_step_with_genome(
                 &mut state.angular_velocities[..cell_count],
                 &state.masses[..cell_count],
                 &state.genome_orientations[..cell_count],
-                &state.cached_adhesion_settings,
+                effective_settings_sub,
                 cell_count,
                 dt,
                 &state.muscle_contractions[..cell_count],

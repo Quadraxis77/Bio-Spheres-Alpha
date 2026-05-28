@@ -1859,6 +1859,18 @@ impl App {
                         preview_scene.state.seek_to_time(current_time);
                         self.test_signals_changed = false;
                     }
+
+                    // Sync adhesion expansion tool. Mirror exactly what update_genome does:
+                    // clear checkpoints and seek to display_time so step_to replays from
+                    // initial state with the new flag active on every physics step.
+                    let now_active = self.ui.state.adhesion_expansion_active;
+                    if preview_scene.state.work_state.adhesion_expansion_active != now_active {
+                        preview_scene.state.work_state.adhesion_expansion_active = now_active;
+                        preview_scene.state.display_state.adhesion_expansion_active = now_active;
+                        preview_scene.state.clear_checkpoints();
+                        let target = preview_scene.state.display_time;
+                        preview_scene.state.seek_to_time(target);
+                    }
                 }
             }
             

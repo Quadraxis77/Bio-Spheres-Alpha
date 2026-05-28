@@ -644,6 +644,13 @@ pub struct GlobalUiState {
     #[serde(skip)]
     pub show_reset_dialog: bool,
 
+    /// Whether the adhesion expansion tool is active.
+    /// When true, all adhesion rest_lengths are temporarily set to the genome
+    /// maximum (5.0) so bonds appear fully stretched — useful for inspecting
+    /// creature structure. Does not affect the genome; purely a visual editing aid.
+    #[serde(skip)]
+    pub adhesion_expansion_active: bool,
+
     /// Whether the "Saving…" progress popup is shown
     #[serde(skip)]
     pub show_saving_popup: bool,
@@ -702,6 +709,7 @@ impl Default for GlobalUiState {
             show_low_fps_dialog: false,
             suppress_low_fps_dialog: false,
             show_reset_dialog: false,
+            adhesion_expansion_active: false,
             show_saving_popup: false,
             show_loading_popup: false,
             pending_load_path: None,
