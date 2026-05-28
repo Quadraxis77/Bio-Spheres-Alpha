@@ -1760,87 +1760,62 @@ fn topbar_divider(ui: &mut egui::Ui) {
 // Left side rail — quick access to mode-specific panels
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Render the left side rail with stacked icon buttons that toggle key panels.
+/// Render the left side rail with stacked icon buttons (currently non-functional placeholders).
 fn render_side_rail(
     ui: &mut egui::Ui,
     state: &mut GlobalUiState,
     dock_manager: &mut crate::ui::dock::DockManager,
 ) {
-    use crate::ui::panel::Panel;
-
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
 
-    // Mode-specific button list
-    let buttons: &[(&str, Panel, &str)] = match state.current_mode {
+    // Mode-specific button list (icons only — no actions)
+    let buttons: &[(&str, &str)] = match state.current_mode {
         crate::ui::types::SimulationMode::Preview => &[
-            ("⛁",  Panel::Modes,            "Modes"),
-            ("⚙",  Panel::ParentSettings,   "Parent Settings"),
-            ("🔗", Panel::AdhesionSettings, "Adhesion Settings"),
-            ("◉",  Panel::QuaternionBall,   "Child Rotation"),
-            ("⊜",  Panel::CircleSliders,    "Circle Sliders"),
-            ("🎨", Panel::CellTypeVisuals,  "Cell Visuals"),
-            ("⚛",  Panel::ModeGraph,        "Mode Graph"),
-            ("⏱",  Panel::TimeSlider,       "Time Slider"),
+            ("⛁",  "Placeholder"),
+            ("⚙",  "Placeholder"),
+            ("🔗", "Placeholder"),
+            ("◉",  "Placeholder"),
+            ("⊜",  "Placeholder"),
+            ("🎨", "Placeholder"),
+            ("⚛",  "Placeholder"),
+            ("⏱",  "Placeholder"),
         ],
         crate::ui::types::SimulationMode::Gpu => &[
-            ("🌐", Panel::WorldSettings,       "World Settings"),
-            ("☀",  Panel::LightSettings,       "Light & Fog"),
-            ("🌊", Panel::FluidSettings,       "Fluid System"),
-            ("⛰",  Panel::CaveSystem,          "Cave System"),
-            ("🔬", Panel::CellInspector,       "Cell Inspector"),
-            ("📊", Panel::PerformanceMonitor,  "Performance"),
-            ("🎬", Panel::SceneManager,        "Scene Manager"),
-            ("🎨", Panel::RenderingControls,   "Rendering"),
+            ("🌐", "Placeholder"),
+            ("☀",  "Placeholder"),
+            ("🌊", "Placeholder"),
+            ("⛰",  "Placeholder"),
+            ("🔬", "Placeholder"),
+            ("📊", "Placeholder"),
+            ("🎬", "Placeholder"),
+            ("🎨", "Placeholder"),
         ],
     };
 
-    for (icon, panel, tooltip) in buttons {
-        let is_open = is_panel_open(dock_manager.current_tree(), panel);
-        if rail_button(ui, icon, tooltip, is_open) {
-            if is_open {
-                close_panel(dock_manager.current_tree_mut(), panel);
-            } else {
-                open_panel(dock_manager.current_tree_mut(), panel);
-            }
-        }
+    for (icon, tooltip) in buttons {
+        let _ = rail_button(ui, icon, tooltip);
     }
 
-    // Reset-layout button pinned to the bottom
+    // Reset-layout button centered and pinned to the bottom
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
-        if rail_button(ui, "⟲", "Reset Layout", false) {
+        ui.add_space(4.0);
+        if rail_button(ui, "⟲", "Reset Layout") {
             dock_manager.reset_current_to_default();
         }
     });
 }
 
-/// Render a single icon button on the side rail.
-/// Returns `true` when clicked.
-fn rail_button(ui: &mut egui::Ui, icon: &str, tooltip: &str, active: bool) -> bool {
+/// Render a single non-functional icon button on the side rail.
+/// Returns `true` when clicked (used by the reset layout button).
+fn rail_button(ui: &mut egui::Ui, icon: &str, tooltip: &str) -> bool {
     let size = egui::vec2(32.0, 32.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     let resp = resp.on_hover_text(tooltip);
 
-    // Background
-    let (bg_color, border_color, icon_color) = if active {
-        (
-            theme::BG_ACTIVE,
-            theme::ACCENT_TEAL,
-            theme::ACCENT_TEAL,
-        )
-    } else if resp.hovered() {
-        (
-            theme::BG_HOVER,
-            theme::BORDER_NORMAL,
-            theme::TEXT_PRIMARY,
-        )
-    } else {
-        (
-            theme::BG_WIDGET,
-            theme::BORDER_SUBTLE,
-            theme::TEXT_SECONDARY,
-        )
-    };
+    let icon_color = theme::TEXT_SECONDARY;
+    let bg_color = theme::BG_WIDGET;
+    let border_color = theme::BORDER_SUBTLE;
 
     let painter = ui.painter();
     painter.rect_filled(rect, egui::CornerRadius::same(3), bg_color);
@@ -1851,16 +1826,6 @@ fn rail_button(ui: &mut egui::Ui, icon: &str, tooltip: &str, active: bool) -> bo
         egui::StrokeKind::Inside,
     );
 
-    // Active accent bar on the left edge
-    if active {
-        let bar_rect = egui::Rect::from_min_size(
-            rect.left_top() + egui::vec2(0.0, 4.0),
-            egui::vec2(2.0, rect.height() - 8.0),
-        );
-        painter.rect_filled(bar_rect, 1.0, theme::ACCENT_TEAL);
-    }
-
-    // Icon
     painter.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -1871,7 +1836,6 @@ fn rail_button(ui: &mut egui::Ui, icon: &str, tooltip: &str, active: bool) -> bo
 
     resp.clicked()
 }
-
 
 /// Load the embedded app icon PNG into an egui texture handle.
 ///

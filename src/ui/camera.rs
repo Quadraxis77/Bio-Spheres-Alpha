@@ -247,7 +247,7 @@ impl CameraController {
     /// Handle mouse button input
     pub fn handle_mouse_button(&mut self, button: MouseButton, state: ElementState) {
         let control_button = match self.mode {
-            CameraMode::Orbit => MouseButton::Middle,
+            CameraMode::Orbit => MouseButton::Right,
             CameraMode::FreeFly => MouseButton::Right,
         };
         

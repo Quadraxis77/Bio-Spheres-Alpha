@@ -2589,12 +2589,22 @@ impl GpuScene {
     /// Uses the GPU spatial query system for cell selection.
     /// Also queues cell data extraction to be executed during the next render phase.
     pub fn poll_inspect_tool_results(&mut self, radial_menu: &mut crate::ui::radial_menu::RadialMenuState) {
-        // Check for pending result from GPU spatial query
+        // Check for pending result from GPU spatial query (new cell selected)
         if let Some(cell_idx) = self.pending_inspect_result.take() {
             radial_menu.inspected_cell = Some(cell_idx);
-            // Queue cell data extraction to be executed during render phase
             self.pending_cell_extraction = Some(cell_idx as u32);
             log::info!("Inspecting cell {}", cell_idx);
+        }
+
+        // Re-queue extraction every frame while a cell is selected and no extraction
+        // is already in flight — this gives live-updating data in the inspector panel.
+        if let Some(cell_idx) = radial_menu.inspected_cell {
+            let inspector_idle = self.cell_inspector
+                .as_ref()
+                .map_or(true, |i| !i.is_extracting());
+            if inspector_idle && self.pending_cell_extraction.is_none() {
+                self.pending_cell_extraction = Some(cell_idx as u32);
+            }
         }
     }
     

@@ -323,161 +323,328 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
 
 /// Render the CellInspector panel.
 fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
-    ui.heading("Cell Inspector");
-    ui.separator();
-    
-    // Show GPU cell count (from canonical state, no async readback)
-    if let Some(gpu_count) = context.gpu_cell_count() {
-        ui.label(format!("Total Cells: {} (GPU)", gpu_count));
-    } else {
-        ui.label(format!("Total Cells: {}", context.cell_count()));
-    }
-    
+    use crate::ui::ui_system::theme;
+
+    // ── Header row ──────────────────────────────────────────────────────────
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("CELL INSPECTOR")
+                .strong()
+                .size(11.5)
+                .color(theme::ACCENT_TEAL),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let count_str = if let Some(n) = context.gpu_cell_count() {
+                format!("{} cells", n)
+            } else {
+                format!("{} cells", context.cell_count())
+            };
+            ui.label(egui::RichText::new(count_str).size(10.0).color(theme::TEXT_DIM));
+        });
+    });
+    ui.add_space(2.0);
+    ui.add(egui::Separator::default().spacing(4.0));
+
     // Get the inspected cell index from radial menu state
     let inspected_cell = context.editor_state.radial_menu.inspected_cell;
     
     if let Some(cell_idx) = inspected_cell {
-        // First, extract all data we need from GPU scene
+        // Extract data from GPU scene
         let gpu_extraction_data = if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
-            // Check if cell extraction is in progress
-            if gpu_scene.is_extracting_cell_data() {
-                Some((true, None, None)) // is_extracting flag
-            } else if let Some(extraction_result) = gpu_scene.get_latest_cell_extraction() {
+            let is_extracting = gpu_scene.is_extracting_cell_data();
+            if let Some(extraction_result) = gpu_scene.get_latest_cell_extraction() {
                 if extraction_result.cell_index == cell_idx as u32 {
                     let data_valid = extraction_result.data.is_valid();
-                    
-                    Some((false, Some(extraction_result), Some(data_valid)))
+                    Some((is_extracting, Some(extraction_result), Some(data_valid)))
                 } else {
-                    None
+                    // Have a result but for a different cell — show spinner until ours arrives
+                    Some((true, None, None))
                 }
             } else {
-                None
+                // No result yet at all — show spinner
+                Some((true, None, None))
             }
         } else {
             None
         };
         
         // Now use the extracted data without borrowing context
-        if let Some((is_extracting, extraction_result, data_valid)) = gpu_extraction_data {
-            if is_extracting {
-                ui.add_space(8.0);
-                ui.label(format!("Cell #{}", cell_idx));
-                ui.separator();
-                
-                // Show "Extracting..." message while async readback is in progress
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Extracting cell data from GPU...");
-                });
-                
-                ui.add_space(8.0);
-                ui.label("Please wait while cell data is being extracted from GPU buffers.");
-                
-                return;
-            }
-            
-            if let (Some(extraction_result), Some(data_valid)) = (extraction_result, data_valid) {
-                let data = &extraction_result.data;
-                
-                // Validate that the extracted data is valid
+        if let Some((_is_extracting, extraction_result, data_valid)) = gpu_extraction_data {
+            // While a new extraction is in flight we still show the last known data —
+            // no spinner needed since updates are continuous and near-instant.
+
+            if let (Some(extraction_result), Some(data_valid)) = (extraction_result, data_valid) {                let data = &extraction_result.data;
+
+                // ── Invalid / dead cell ──────────────────────────────────────
                 if !data_valid {
-                    ui.colored_label(egui::Color32::RED, "Cell no longer exists");
-                    if ui.button("Clear Selection").clicked() {
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("⚠ Cell no longer exists")
+                                .size(12.0)
+                                .color(theme::STATUS_RED),
+                        );
+                    });
+                    ui.add_space(6.0);
+                    if ui.add(
+                        egui::Button::new(
+                            egui::RichText::new("Clear Selection").size(11.0).color(theme::TEXT_PRIMARY),
+                        )
+                        .fill(theme::BG_WIDGET)
+                        .stroke(egui::Stroke::new(1.0, theme::BORDER_NORMAL)),
+                    ).clicked() {
                         context.editor_state.radial_menu.inspected_cell = None;
                     }
                     return;
                 }
-                
-                ui.add_space(8.0);
-                ui.label(format!("Cell #{}", cell_idx));
-                ui.separator();
-                
-                // Action buttons at the top
+
+                // ── Cell type & identity ─────────────────────────────────────
+                let cell_type_names = crate::cell::types::CellType::names();
+                let type_name = cell_type_names
+                    .get(data.cell_type as usize)
+                    .copied()
+                    .unwrap_or("Unknown");
+
+                ui.add_space(6.0);
+
+                // Title row: type name + cell index
                 ui.horizontal(|ui| {
-                    // Load Genome button — reads back genome from GPU (works for both CPU and mutated genomes)
-                    if ui.button("📋 Load Genome").clicked() {
-                        *context.scene_request = crate::ui::panel_context::SceneModeRequest::LoadGenomeFromGpu(data.genome_id);
+                    let title_color = if data.is_dead != 0 { theme::STATUS_RED } else { theme::TEXT_PRIMARY };
+                    let dead_suffix = if data.is_dead != 0 { " — DEAD" } else { "" };
+                    ui.label(
+                        egui::RichText::new(format!("{}{}", type_name, dead_suffix))
+                            .strong()
+                            .size(14.0)
+                            .color(title_color),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("#{}", cell_idx))
+                                .size(11.0)
+                                .color(theme::TEXT_DIM),
+                        );
+                    });
+                });
+
+                // Identity sub-row
+                let org_str = if data.organism_id == u32::MAX {
+                    "isolated".to_string()
+                } else {
+                    format!("org {}", data.organism_id)
+                };
+                ui.label(
+                    egui::RichText::new(format!(
+                        "M{}  ·  genome {}  ·  slot {}  ·  {}",
+                        data.mode_index, data.genome_id, data.cell_slot_index, org_str
+                    ))
+                    .size(10.0)
+                    .color(theme::TEXT_DIM),
+                );
+
+                ui.add_space(6.0);
+
+                // ── Action buttons ───────────────────────────────────────────
+                ui.horizontal(|ui| {
+                    if ui.add(
+                        egui::Button::new(
+                            egui::RichText::new("📋 Load Genome").size(11.0).color(theme::TEXT_PRIMARY),
+                        )
+                        .fill(theme::BG_WIDGET)
+                        .stroke(egui::Stroke::new(1.0, theme::BORDER_NORMAL)),
+                    ).clicked() {
+                        *context.scene_request =
+                            crate::ui::panel_context::SceneModeRequest::LoadGenomeFromGpu(data.genome_id);
                         log::info!("Requested genome readback for genome_id={}", data.genome_id);
                     }
-                    
-                    if ui.button("🗑 Clear Selection").clicked() {
+                    if ui.add(
+                        egui::Button::new(
+                            egui::RichText::new("✕ Deselect").size(11.0).color(theme::TEXT_SECONDARY),
+                        )
+                        .fill(theme::BG_WIDGET)
+                        .stroke(egui::Stroke::new(1.0, theme::BORDER_SUBTLE)),
+                    ).clicked() {
                         context.editor_state.radial_menu.inspected_cell = None;
                     }
                 });
-            
-            ui.add_space(8.0);
-            ui.separator();
-            
-            // Cell type name
-            let cell_type_names = crate::cell::types::CellType::names();
-            let type_name = cell_type_names
-                .get(data.cell_type as usize)
-                .copied()
-                .unwrap_or("Unknown");
-            
-            // Status line
-            if data.is_dead != 0 {
-                ui.colored_label(egui::Color32::RED, format!("{} (DEAD)", type_name));
+
+                ui.add_space(8.0);
+
+                // ── NUTRIENTS section ────────────────────────────────────────
+                section_header(ui, "NUTRIENTS");
+
+                // Nutrient bar — same style as preview context menu
+                let split_never = data.max_splits == 0 && data.nutrient_threshold <= 0.0;
+                let nutrient_max = if split_never || data.nutrient_threshold <= 0.0 {
+                    100.0_f32
+                } else {
+                    data.nutrient_threshold * 2.0
+                };
+                let nutrient_frac = (data.nutrients / nutrient_max).clamp(0.0, 1.0);
+                let bar_width = ui.available_width() - 4.0;
+                let bar_height = 8.0;
+                let (bar_rect, _) = ui.allocate_exact_size(
+                    egui::vec2(bar_width, bar_height),
+                    egui::Sense::hover(),
+                );
+                ui.painter().rect_filled(bar_rect, 3.0, theme::BG_DARKEST);
+                let fill_color = if nutrient_frac > 0.5 {
+                    theme::STATUS_GREEN
+                } else if nutrient_frac > 0.2 {
+                    theme::STATUS_YELLOW
+                } else {
+                    theme::STATUS_RED
+                };
+                let fill_rect = egui::Rect::from_min_size(
+                    bar_rect.min,
+                    egui::vec2(bar_rect.width() * nutrient_frac, bar_height),
+                );
+                ui.painter().rect_filled(fill_rect, 3.0, fill_color);
+                // Split threshold marker
+                if !split_never && data.nutrient_threshold > 0.0 {
+                    let split_frac = (data.nutrient_threshold / nutrient_max).clamp(0.0, 1.0);
+                    let marker_x = bar_rect.min.x + bar_rect.width() * split_frac;
+                    ui.painter().line_segment(
+                        [egui::pos2(marker_x, bar_rect.min.y), egui::pos2(marker_x, bar_rect.max.y)],
+                        egui::Stroke::new(1.5, theme::TEXT_PRIMARY),
+                    );
+                }
+                ui.label(
+                    egui::RichText::new(format!("{:.0} / {:.0}", data.nutrients, nutrient_max))
+                        .size(10.0)
+                        .color(theme::TEXT_DIM),
+                );
+
+                ui.add_space(4.0);
+
+                egui::Grid::new("inspector_nutrients_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 2.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Gain rate").size(11.0).color(theme::TEXT_SECONDARY));
+                        let gain_color = if data.nutrient_gain_rate > 0.0 { theme::STATUS_GREEN } else { theme::TEXT_DIM };
+                        ui.label(egui::RichText::new(format!("{:.2}/s", data.nutrient_gain_rate)).size(11.0).color(gain_color));
+                        ui.end_row();
+
+                        if data.reserve > 0 {
+                            ui.label(egui::RichText::new("Reserve").size(11.0).color(theme::TEXT_SECONDARY));
+                            ui.label(egui::RichText::new(format!("{}", data.reserve / 1000)).size(11.0).color(theme::ACCENT_CYAN));
+                            ui.end_row();
+                        }
+
+                        ui.label(egui::RichText::new("Split at").size(11.0).color(theme::TEXT_SECONDARY));
+                        if split_never || data.nutrient_threshold <= 0.0 {
+                            ui.label(egui::RichText::new("Never").size(11.0).color(theme::TEXT_DIM));
+                        } else {
+                            ui.label(egui::RichText::new(format!("{:.0}", data.nutrient_threshold)).size(11.0).color(theme::TEXT_PRIMARY));
+                        }
+                        ui.end_row();
+
+                        let max_splits_str = if data.max_splits == 0 { "∞".to_string() } else { format!("{}", data.max_splits) };
+                        ui.label(egui::RichText::new("Splits").size(11.0).color(theme::TEXT_SECONDARY));
+                        ui.label(egui::RichText::new(format!("{} / {}", data.split_count, max_splits_str)).size(11.0).color(theme::TEXT_PRIMARY));
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Interval").size(11.0).color(theme::TEXT_SECONDARY));
+                        ui.label(egui::RichText::new(format!("{:.1}s", data.split_interval)).size(11.0).color(theme::TEXT_PRIMARY));
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Age").size(11.0).color(theme::TEXT_SECONDARY));
+                        ui.label(egui::RichText::new(format!("{:.1}s", data.age)).size(11.0).color(theme::TEXT_PRIMARY));
+                        ui.end_row();
+                    });
+
+                ui.add_space(4.0);
+
+                // ── PHYSICS section ──────────────────────────────────────────
+                section_header(ui, "PHYSICS");
+
+                let pos = data.position_vec3();
+                let vel = data.velocity_vec3();
+                let speed = vel.length();
+
+                egui::Grid::new("inspector_physics_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 2.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Position").size(11.0).color(theme::TEXT_SECONDARY));
+                        ui.label(egui::RichText::new(format!("{:.1}, {:.1}, {:.1}", pos.x, pos.y, pos.z)).size(11.0).color(theme::TEXT_PRIMARY).monospace());
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Velocity").size(11.0).color(theme::TEXT_SECONDARY));
+                        ui.label(egui::RichText::new(format!("{:.2}, {:.2}, {:.2}", vel.x, vel.y, vel.z)).size(11.0).color(theme::TEXT_PRIMARY).monospace());
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Speed").size(11.0).color(theme::TEXT_SECONDARY));
+                        let speed_color = if speed > 5.0 { theme::STATUS_YELLOW } else { theme::TEXT_PRIMARY };
+                        ui.label(egui::RichText::new(format!("{:.3}", speed)).size(11.0).color(speed_color));
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Mass").size(11.0).color(theme::TEXT_SECONDARY));
+                        ui.label(egui::RichText::new(format!("{:.2}", data.mass)).size(11.0).color(theme::TEXT_PRIMARY));
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Radius").size(11.0).color(theme::TEXT_SECONDARY));
+                        ui.label(egui::RichText::new(format!("{:.2}", data.radius)).size(11.0).color(theme::TEXT_PRIMARY));
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Max size").size(11.0).color(theme::TEXT_SECONDARY));
+                        ui.label(egui::RichText::new(format!("{:.2}", data.max_cell_size)).size(11.0).color(theme::TEXT_PRIMARY));
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Stiffness").size(11.0).color(theme::TEXT_SECONDARY));
+                        ui.label(egui::RichText::new(format!("{:.2}", data.stiffness)).size(11.0).color(theme::TEXT_PRIMARY));
+                        ui.end_row();
+                    });
+
+                ui.add_space(4.0);
+
+                // ── ADHESIONS section ────────────────────────────────────────
+                section_header(ui, "ADHESIONS");
+
+                let adhesion_color = if data.adhesion_count == 0 {
+                    theme::TEXT_DIM
+                } else {
+                    theme::ACCENT_CYAN
+                };
+                ui.label(
+                    egui::RichText::new(format!("{} active bond{}", data.adhesion_count, if data.adhesion_count == 1 { "" } else { "s" }))
+                        .size(12.0)
+                        .color(adhesion_color),
+                );
+
+                return;
             } else {
-                ui.label(format!("Type: {}", type_name));
-            }
-            
-            // Identity
-            ui.label(format!("Cell ID: {}  Slot: {}  Mode: {}  Genome: {}",
-                data.cell_id, data.cell_slot_index, data.mode_index, data.genome_id));
-            let org_str = if data.organism_id == u32::MAX {
-                "None (dead/isolated)".to_string()
-            } else {
-                format!("{}", data.organism_id)
-            };
-            ui.label(format!("Organism ID: {}", org_str));
-            
-            ui.add_space(4.0);
-            ui.separator();
-            
-            // Nutrients & Division
-            ui.label("Nutrients & Division:");
-            ui.label(format!("  Nutrients: {:.1}", data.nutrients));
-            if data.reserve > 0 {
-                ui.label(format!("  Reserve: {}", data.reserve / 1000));
-            }
-            let div_progress = if data.nutrient_threshold > 0.0 {
-                (data.nutrients / data.nutrient_threshold * 100.0).min(100.0)
-            } else {
-                0.0
-            };
-            ui.label(format!("  Split threshold: {:.1}  ({:.0}%)", data.nutrient_threshold, div_progress));
-            ui.label(format!("  Interval: {:.1}s  Age: {:.1}s", data.split_interval, data.age));
-            let max_splits_str = if data.max_splits == 0 { "∞".to_string() } else { format!("{}", data.max_splits) };
-            ui.label(format!("  Splits: {} / {}", data.split_count, max_splits_str));
-            ui.label(format!("  Gain rate: {:.3}", data.nutrient_gain_rate));
-            
-            ui.add_space(4.0);
-            ui.separator();
-            
-            // Physics
-            ui.label("Physics:");
-            let pos = data.position_vec3();
-            ui.label(format!("  Pos: ({:.1}, {:.1}, {:.1})", pos.x, pos.y, pos.z));
-            let vel = data.velocity_vec3();
-            let speed = vel.length();
-            ui.label(format!("  Vel: ({:.2}, {:.2}, {:.2})  |{:.2}|", vel.x, vel.y, vel.z, speed));
-            ui.label(format!("  Mass: {:.2}  Radius: {:.2}", data.mass, data.radius));
-            ui.label(format!("  Stiffness: {:.2}  Max size: {:.2}", data.stiffness, data.max_cell_size));
-            
-            ui.add_space(4.0);
-            ui.separator();
-            
-            // Adhesions
-            ui.label(format!("Adhesions: {}", data.adhesion_count));
-            
-            return;
+                // First frame — extraction not yet complete, show a brief spinner
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(
+                        egui::RichText::new(format!("Reading cell #{}…", cell_idx))
+                            .size(11.0)
+                            .color(theme::TEXT_SECONDARY),
+                    );
+                });
+                return;
             }
         }
     } else {
-        ui.add_space(8.0);
-        ui.label("Use the Inspect tool (🔍) to select a cell.");
-        ui.label("Hold Alt to open the radial menu.");
+        // ── Empty state ──────────────────────────────────────────────────────
+        ui.add_space(24.0);
+        ui.vertical_centered(|ui| {
+            ui.label(egui::RichText::new("🔍").size(28.0));
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new("No cell selected")
+                    .size(13.0)
+                    .color(theme::TEXT_SECONDARY),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("Hold Alt → select Inspect → click a cell")
+                    .size(10.0)
+                    .color(theme::TEXT_DIM),
+            );
+        });
     }
 }
 
@@ -5397,7 +5564,7 @@ fn render_preview_help(ui: &mut Ui, _context: &mut PanelContext) {
         .show(ui, |ui| {
             help_section(ui, &[
                 ("Tab", "Toggle between Orbit and FreeFly camera modes"),
-                ("Middle Mouse + Drag", "Rotate camera (Orbit mode)"),
+                ("Right Mouse + Drag", "Rotate camera (Orbit mode)"),
                 ("Right Mouse + Drag", "Rotate camera (FreeFly mode)"),
                 ("Mouse Wheel", "Zoom in/out (Orbit mode only)"),
                 ("WASD", "Move camera (FreeFly mode only)"),
@@ -5478,7 +5645,7 @@ fn render_gpu_help(ui: &mut Ui, _context: &mut PanelContext) {
         .show(ui, |ui| {
             help_section(ui, &[
                 ("Tab", "Toggle between Orbit and FreeFly camera modes"),
-                ("Middle Mouse + Drag", "Rotate camera (Orbit mode)"),
+                ("Right Mouse + Drag", "Rotate camera (Orbit mode)"),
                 ("Right Mouse + Drag", "Rotate camera (FreeFly mode)"),
                 ("Mouse Wheel", "Zoom in/out (Orbit mode only)"),
                 ("WASD", "Move camera (FreeFly mode only)"),
