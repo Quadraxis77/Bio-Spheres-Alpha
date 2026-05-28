@@ -20,11 +20,11 @@ pub const SIGNAL_CHANNELS: usize = 16;
 pub const SIGNAL_ATTENUATION_PER_HOP: f32 = 0.5; // 50% signal strength retained per hop
 
 /// Oculocyte sense type bitmask bits
-pub const SENSE_CELL: u32    = 1 << 0; // bit 0
-pub const SENSE_FOOD: u32    = 1 << 1; // bit 1
-pub const SENSE_LIGHT: u32   = 1 << 2; // bit 2
-pub const SENSE_BARRIER: u32 = 1 << 3; // bit 3
-pub const SENSE_SELF: u32    = 1 << 4; // bit 4
+pub const SENSE_CELL: u32     = 1 << 0; // bit 0
+pub const SENSE_FOOD: u32     = 1 << 1; // bit 1
+pub const SENSE_LIGHT: u32    = 1 << 2; // bit 2
+pub const SENSE_WALL: u32     = 1 << 3; // bit 3 — world boundary sphere + cave solid voxels + water surface
+pub const SENSE_SELF: u32     = 1 << 4; // bit 4
 pub const SENSE_MOSSROCK: u32 = 1 << 5; // bit 5
 
 /// Oculocyte cell type index
@@ -90,7 +90,7 @@ pub fn sense_oculocytes(
         let detected =
             ((sense_mask & SENSE_SELF) != 0)  // Self always fires
             || ((sense_mask & SENSE_CELL) != 0 && sense_cells_ray(state, cell_idx, pos, forward, ray_length))
-            || ((sense_mask & SENSE_BARRIER) != 0 && sense_barrier_ray(pos, forward, ray_length, boundary_radius))
+            || ((sense_mask & SENSE_WALL) != 0 && sense_barrier_ray(pos, forward, ray_length, boundary_radius))
             // Food and Light require fluid/light systems — not available in preview
             || (sense_mask & SENSE_FOOD) != 0 && false
             || (sense_mask & SENSE_LIGHT) != 0 && false;

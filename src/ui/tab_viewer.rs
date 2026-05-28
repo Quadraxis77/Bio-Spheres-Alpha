@@ -3057,12 +3057,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     // Sense Type checkboxes (bitmask: multiple types can be active simultaneously)
                     ui.label("Sense Type:");
                     let sense_bits: &[(&str, u32)] = &[
-                        ("Cell",     1 << 0),
-                        ("Food",     1 << 1),
-                        ("Light",    1 << 2),
-                        ("Barrier",  1 << 3),
-                        ("Self",     1 << 4),
-                        ("Mossrock", 1 << 5),
+                        ("Cell",      1 << 0),
+                        ("Food",      1 << 1),
+                        ("Light",     1 << 2),
+                        ("Wall/Cave", 1 << 3),
+                        ("Self",      1 << 4),
+                        ("Mossrock",  1 << 5),
                     ];
                     ui.horizontal_wrapped(|ui| {
                         for (label, bit) in sense_bits {

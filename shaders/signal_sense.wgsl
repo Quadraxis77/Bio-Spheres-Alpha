@@ -6,8 +6,9 @@
 // 16 channels per cell: signal_flags[cell_idx * 16 + channel]
 // Each channel is a packed u32: bits 16+ = direction flag, bits 11-15 = hops, bits 0-10 = value
 //
-// sense_type is now a bitmask: bit0=Cell, bit1=Food, bit2=Light, bit3=Barrier, bit4=Self, bit5=Mossrock
+// sense_type is now a bitmask: bit0=Cell, bit1=Food, bit2=Light, bit3=Wall/Cave, bit4=Self, bit5=Mossrock
 // Multiple bits can be set; the oculocyte fires if ANY enabled sense type detects a target.
+// bit3 (Wall/Cave) detects: world boundary sphere + solid cave voxels + water surface isosurface.
 
 const OCULOCYTE_TYPE: u32 = 7u;
 const LIGHT_THRESHOLD: f32 = 0.1;

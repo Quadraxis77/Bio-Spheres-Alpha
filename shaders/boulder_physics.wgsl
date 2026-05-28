@@ -372,19 +372,26 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // ── Gravity ───────────────────────────────────────────────────────────────
-    // Reduce gravity when submerged — boulders are dense rock but still displace water.
-    // Check the boulder center; for large boulders this is an approximation but
-    // good enough given the 128³ grid resolution.
+    // Smooth buoyancy: sample 5 points (center + 4 cardinal offsets at radius/2)
+    // to estimate what fraction of the boulder is submerged. This prevents the
+    // instant gravity flip that caused boulders to oscillate at the water surface.
     let in_water = is_in_water(b.position);
-    // Use buoyancy_params.gravity_multiplier — controlled by the UI slider.
-    // 0.0 = full buoyancy (floats), 1.0 = no buoyancy (sinks at full gravity).
-    let gravity_multiplier = select(1.0, buoyancy_params.gravity_multiplier, in_water);
+    var submerged_count = select(0u, 1u, in_water);
+    let r2 = b.radius * 0.5;
+    submerged_count += select(0u, 1u, is_in_water(b.position + vec3<f32>( r2, 0.0, 0.0)));
+    submerged_count += select(0u, 1u, is_in_water(b.position + vec3<f32>(-r2, 0.0, 0.0)));
+    submerged_count += select(0u, 1u, is_in_water(b.position + vec3<f32>(0.0,  r2, 0.0)));
+    submerged_count += select(0u, 1u, is_in_water(b.position + vec3<f32>(0.0, -r2, 0.0)));
+    // immersion_frac: 0.0 = fully in air, 1.0 = fully submerged
+    let immersion_frac = f32(submerged_count) / 5.0;
+    // Lerp gravity multiplier: 1.0 in air → buoyancy_params.gravity_multiplier fully submerged
+    let gravity_multiplier = mix(1.0, buoyancy_params.gravity_multiplier, immersion_frac);
     let grav = gravity_vector(b.position) * gravity_multiplier;
     b.velocity += grav * dt;
 
-    // Viscous drag when submerged — scales with drag_coeff from buoyancy_params
-    if (in_water && water_params.water_viscosity > 0.0) {
-        let drag = water_params.water_viscosity * buoyancy_params.drag_coeff * b.radius;
+    // Viscous drag when submerged — scales with immersion fraction
+    if (immersion_frac > 0.0 && water_params.water_viscosity > 0.0) {
+        let drag = water_params.water_viscosity * buoyancy_params.drag_coeff * b.radius * immersion_frac;
         b.velocity -= b.velocity * drag * dt;
     }
 

@@ -212,6 +212,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         fixed_to_float(force_accum_z[cell_idx])
     );
 
+    // Guard against near-zero mass for all force calculations below
+    let safe_mass = max(mass, 0.001);
+
     // Check if cell is in water - if so, reduce gravity by 95%
     let in_water = is_in_water(pos);
     var gravity_multiplier = 1.0;
@@ -225,8 +228,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // to orient their thrust correctly — swimming aligned is cheap, drifting sideways
         // bleeds speed fast.
         //
-        // Axial drag coefficient  ~20x viscosity (streamlined direction)
-        // Lateral drag coefficient ~120x viscosity (broadside resistance, 6:1 ratio)
+        // Implemented as exponential velocity damping (not a force) so it is
+        // frame-rate-independent and numerically stable at any viscosity value.
+        //
+        // Axial damping   ~8x viscosity  (streamlined direction)
+        // Lateral damping ~40x viscosity (broadside resistance, 5:1 ratio)
         if (water_params.water_viscosity > 0.0) {
             // Get the cell's forward axis from its rotation quaternion (+Z in local space)
             let rotation = rotations_in[cell_idx];
@@ -241,12 +247,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let vel_axial   = forward * vel_axial_mag;
             let vel_lateral = vel - vel_axial;
 
-            // Apply separate drag coefficients to each component
-            let axial_drag_coeff   = water_params.water_viscosity * 20.0 * mass;
-            let lateral_drag_coeff = water_params.water_viscosity * 120.0 * mass;
+            // Exponential damping per second — stable at any viscosity value.
+            // axial_retain   = e^(-viscosity * 8  * dt)
+            // lateral_retain = e^(-viscosity * 40 * dt)
+            let axial_retain   = exp(-water_params.water_viscosity * 8.0  * params.delta_time);
+            let lateral_retain = exp(-water_params.water_viscosity * 40.0 * params.delta_time);
 
-            force -= axial_drag_coeff   * vel_axial;
-            force -= lateral_drag_coeff * vel_lateral;
+            // Reconstruct velocity with per-component damping applied
+            let new_vel_axial   = vel_axial   * axial_retain;
+            let new_vel_lateral = vel_lateral * lateral_retain;
+            // Patch the velocity so the Verlet step below sees the damped value.
+            // We do this by adjusting the force to produce the same result:
+            //   desired_vel = new_vel_axial + new_vel_lateral
+            //   current_vel = vel_axial + vel_lateral = vel
+            //   delta = desired - current
+            // Add delta / dt as an extra force (F = m * a = m * delta/dt).
+            let vel_delta = (new_vel_axial + new_vel_lateral) - vel;
+            force += vel_delta * (safe_mass / params.delta_time);
         }
     }
 
@@ -270,8 +287,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Read previous acceleration for Verlet integration
     let old_acceleration = prev_accelerations[cell_idx].xyz;
 
-    // Calculate new acceleration from accumulated forces (guard against near-zero mass)
-    let safe_mass = max(mass, 0.001);
+    // Calculate new acceleration from accumulated forces
     let new_acceleration = force / safe_mass;
     
     // Verlet integration (matching CPU exactly):

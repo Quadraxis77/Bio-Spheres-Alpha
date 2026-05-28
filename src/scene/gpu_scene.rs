@@ -389,7 +389,9 @@ pub struct GpuScene {
     // ── Organism follow camera ────────────────────────────────────────────────
     /// Root label (min cell index) of the organism the camera is following.
     pub follow_organism_id: Option<u32>,
-    /// Smoothed orbit pivot — lerps toward the GPU-read center of mass each frame.
+    /// Raw GPU center-of-mass — snapped to the latest readback value each time one arrives.
+    follow_target: glam::Vec3,
+    /// Smoothed orbit pivot — lerps toward follow_target every frame.
     follow_center: glam::Vec3,
     /// Persistent staging buffer for position readback (reused every frame).
     follow_pos_staging: Option<wgpu::Buffer>,
@@ -397,6 +399,9 @@ pub struct GpuScene {
     follow_lbl_staging: Option<wgpu::Buffer>,
     /// True when a GPU→staging copy has been submitted and not yet consumed.
     follow_copy_submitted: bool,
+    /// True when copy_buffer_to_buffer was encoded this frame and map_async
+    /// needs to be called after queue.submit (via tick_follow_camera_post_submit).
+    follow_needs_map: bool,
     /// Counts map_async completions (0 = none, 1 = one buffer ready, 2 = both ready).
     /// Written by map_async callbacks; polled each frame.
     follow_map_ready_flag: std::sync::Arc<std::sync::atomic::AtomicU32>,
@@ -474,6 +479,18 @@ impl GpuScene {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // Initialize with the correct boundary_radius immediately so the sphere check
+        // in sense_barrier works from the very first frame, before run_physics is called.
+        {
+            let initial_params: [f32; 12] = [
+                world_radius,   // boundary_radius
+                -0.5, 0.7, 0.5, // light_dir (default)
+                0.0, 1.0,       // grid_resolution (0 = no grid), cell_size
+                0.0, 0.0, 0.0,  // grid_origin
+                0.0, 0.0, 0.0,  // padding
+            ];
+            queue.write_buffer(&signal_sense_world_params_buffer, 0, bytemuck::cast_slice(&initial_params));
+        }
         // Dummy storage buffers (4 bytes each) - used until real systems are initialized
         let signal_sense_dummy_nutrient_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Signal Sense Dummy Nutrient Buffer"),
@@ -716,10 +733,12 @@ impl GpuScene {
             signal_sense_dummy_solid_buffer,
             signal_sense_dummy_density_buffer,
             follow_organism_id: None,
+            follow_target: glam::Vec3::ZERO,
             follow_center: glam::Vec3::ZERO,
             follow_pos_staging: None,
             follow_lbl_staging: None,
             follow_copy_submitted: false,
+            follow_needs_map: false,
             follow_map_ready_flag: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
     }
@@ -2602,7 +2621,9 @@ impl GpuScene {
         self.follow_pos_staging = None;
         self.follow_lbl_staging = None;
         self.follow_copy_submitted = false;
+        self.follow_needs_map = false;
         self.follow_map_ready_flag.store(0, std::sync::atomic::Ordering::Release);
+        self.follow_target = glam::Vec3::ZERO;
         self.switch_to_freefly();
     }
 
@@ -2624,96 +2645,87 @@ impl GpuScene {
         self.follow_organism_id.is_some()
     }
 
-    /// Called every frame from inside `render()`.
+    /// Called every frame from inside `render()`, while the encoder is still open.
+    /// Encodes the GPU→staging copy and polls the previous frame's result.
+    /// Does NOT call map_async — that must happen after queue.submit via
+    /// tick_follow_camera_post_submit().
     ///
-    /// Uses a double-buffered GPU→CPU readback to track the organism's center of mass
-    /// without stalling the GPU. map_async is called exactly once per copy submission
-    /// and the result is consumed exactly once.
+    /// Tracks a single cell index (the one the user clicked) rather than computing
+    /// an organism-wide CoM via label matching. This avoids label instability jitter
+    /// caused by the label buffer being out of sync with the position buffer.
     pub fn tick_follow_camera(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        _dt: f32,
+        dt: f32,
     ) {
-        let target_id = match self.follow_organism_id {
-            Some(id) => id,
+        let cell_idx = match self.follow_organism_id {
+            Some(id) => id as usize,
             None => return,
         };
 
         let cell_count = self.total_cell_slots as usize;
-        if cell_count == 0 {
+        if cell_count == 0 || cell_idx >= cell_count {
             self.camera.center = self.follow_center;
             return;
         }
 
         // ── Step 1: poll for the previous frame's copy result ─────────────────
-        // map_async was already called when the copy was submitted; here we only
-        // check whether the GPU has finished — no new map_async call.
         if self.follow_copy_submitted {
-            // Non-blocking poll — flushes already-completed GPU work.
             let _ = device.poll(wgpu::PollType::Poll);
 
-            // Check if both buffers signalled ready via their map_async callbacks.
-            // The flag counts up to 2 (one per buffer); 2 means both are mapped.
             let ready_count = self.follow_map_ready_flag
                 .load(std::sync::atomic::Ordering::Acquire);
-            if ready_count >= 2 {
-                // Reset flag for next submission.
+            if ready_count >= 1 {
                 self.follow_map_ready_flag
                     .store(0, std::sync::atomic::Ordering::Release);
                 self.follow_copy_submitted = false;
 
-                if let (Some(ref pos_buf), Some(ref lbl_buf)) =
-                    (&self.follow_pos_staging, &self.follow_lbl_staging)
-                {
+                if let Some(ref pos_buf) = self.follow_pos_staging {
                     let pos_view = pos_buf.slice(..).get_mapped_range();
-                    let lbl_view = lbl_buf.slice(..).get_mapped_range();
-
                     let positions: &[[f32; 4]] = bytemuck::cast_slice(&pos_view);
-                    let labels: &[u32] = bytemuck::cast_slice(&lbl_view);
 
-                    let n = positions.len().min(labels.len()).min(cell_count);
-                    let mut sum = glam::Vec3::ZERO;
-                    let mut count = 0u32;
-                    for i in 0..n {
-                        if labels[i] == target_id {
-                            sum += glam::Vec3::new(
-                                positions[i][0],
-                                positions[i][1],
-                                positions[i][2],
-                            );
-                            count += 1;
+                    if let Some(p) = positions.get(cell_idx) {
+                        let mass = p[3];
+                        if mass > 0.0 {
+                            // Cell is alive — snap target to its position.
+                            self.follow_target = glam::Vec3::new(p[0], p[1], p[2]);
+                        } else {
+                            // Cell is dead (mass == 0) — stop following.
+                            drop(pos_view);
+                            pos_buf.unmap();
+                            self.follow_pos_staging = None;
+                            self.follow_lbl_staging = None;
+                            self.follow_organism_id = None;
+                            self.follow_needs_map = false;
+                            self.switch_to_freefly();
+                            return;
                         }
                     }
 
                     drop(pos_view);
-                    drop(lbl_view);
                     pos_buf.unmap();
+                }
+                // lbl_staging is unused now but kept for API compatibility; unmap if present.
+                if let Some(ref lbl_buf) = self.follow_lbl_staging {
                     lbl_buf.unmap();
-
-                    if count == 0 {
-                        self.follow_organism_id = None;
-                        self.follow_pos_staging = None;
-                        self.follow_lbl_staging = None;
-                        self.switch_to_freefly();
-                        return;
-                    }
-
-                    // Snap directly to the GPU center of mass. The readback already has
-                    // 1-2 frame latency; adding a lerp on top just adds more lag and
-                    // makes the jitter worse when the organism moves quickly.
-                    self.follow_center = sum / count as f32;
                 }
             }
-            // Not ready yet: keep using the previous follow_center this frame.
         }
 
-        // ── Step 2: submit a fresh copy + map_async for next frame ────────────
+        // ── Step 1.5: lerp follow_center toward follow_target every frame ─────
+        // Spring constant 12 → ~95% convergence in 0.25s at 60fps.
+        let alpha = 1.0 - (-12.0_f32 * dt).exp();
+        self.follow_center = self.follow_center.lerp(self.follow_target, alpha);
+
+        // ── Step 2: encode a fresh position copy for next frame ───────────────
+        // Only copy the single cell's vec4 (16 bytes at offset cell_idx * 16).
+        // No label buffer needed — we track by cell index directly.
         if !self.follow_copy_submitted && cell_count > 0 {
             let output_idx = self.gpu_triple_buffers.output_buffer_index();
             let pos_src = &self.gpu_triple_buffers.position_and_mass[output_idx];
+            // Copy the full used range so cell_idx is always within bounds.
             let pos_size = cell_count as u64 * 16;
-            let lbl_size = cell_count as u64 * 4;
 
             let needs_alloc = self.follow_pos_staging
                 .as_ref()
@@ -2726,50 +2738,38 @@ impl GpuScene {
                     usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }));
-                self.follow_lbl_staging = Some(device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Follow Lbl Staging"),
-                    size: lbl_size,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
+                // lbl_staging no longer used; drop any old allocation.
+                self.follow_lbl_staging = None;
             }
 
-            if let (Some(ref pos_dst), Some(ref lbl_dst)) =
-                (&self.follow_pos_staging, &self.follow_lbl_staging)
-            {
+            if let Some(ref pos_dst) = self.follow_pos_staging {
                 encoder.copy_buffer_to_buffer(pos_src, 0, pos_dst, 0, pos_size);
-                if let Some(ref label_system) = self.organism_label_system {
-                    encoder.copy_buffer_to_buffer(
-                        &label_system.label_buffer,
-                        0,
-                        lbl_dst,
-                        0,
-                        lbl_size,
-                    );
-                }
-
-                // Call map_async exactly once per copy submission.
-                // Each callback increments the shared counter; when it reaches 2
-                // both buffers are mapped and safe to read.
-                let flag = self.follow_map_ready_flag.clone();
-                let flag2 = flag.clone();
-                pos_dst.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-                    if r.is_ok() {
-                        flag.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                    }
-                });
-                lbl_dst.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-                    if r.is_ok() {
-                        flag2.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                    }
-                });
-
-                self.follow_copy_submitted = true;
+                self.follow_needs_map = true;
             }
         }
 
-        // ── Step 3: set orbit pivot to the current follow center ─────────────
+        // ── Step 3: set orbit pivot to the smoothed follow center ────────────
         self.camera.center = self.follow_center;
+    }
+
+    /// Called after queue.submit() to call map_async on the staging buffers.
+    /// map_async must not be called while the buffer is referenced by a pending
+    /// command encoder — doing so causes a wgpu validation error.
+    pub fn tick_follow_camera_post_submit(&mut self) {
+        if !self.follow_needs_map {
+            return;
+        }
+        self.follow_needs_map = false;
+
+        if let Some(ref pos_dst) = self.follow_pos_staging {
+            let flag = self.follow_map_ready_flag.clone();
+            pos_dst.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                if r.is_ok() {
+                    flag.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                }
+            });
+            self.follow_copy_submitted = true;
+        }
     }
     
     /// Execute pending tool queries using GPU spatial query system
@@ -2888,6 +2888,7 @@ impl GpuScene {
                             // be replaced by the true root label on the first readback.
                             self.follow_organism_id = Some(cell_idx as u32);
                             self.follow_center = self.camera.center;
+                            self.follow_target = self.camera.center;
                             // Ensure we are in Orbit mode so center is the pivot point.
                             if self.camera.mode != crate::ui::camera::CameraMode::Orbit {
                                 self.camera.mode = crate::ui::camera::CameraMode::Orbit;
@@ -6307,6 +6308,13 @@ impl Scene for GpuScene {
 
         // Single submit for all GPU work
         queue.submit(std::iter::once(encoder.finish()));
+
+        // Call map_async on follow camera staging buffers NOW — after submit.
+        // map_async must not be called while the buffer is referenced by a pending
+        // encoder (wgpu validation error: "buffer is still mapped").
+        if self.follow_organism_id.is_some() {
+            self.tick_follow_camera_post_submit();
+        }
 
         // Moss growth runs in a SEPARATE submit after the main frame.
         // This prevents it from competing with rendering on the GPU timeline —
