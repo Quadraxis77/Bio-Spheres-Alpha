@@ -4,7 +4,7 @@
 //! editing and debugging genomes with small cell counts.
 
 use crate::genome::Genome;
-use crate::rendering::{AdhesionLineRenderer, CellRenderer, OrientationGizmoRenderer, SplitRingRenderer, TailRenderer, TailInstance};
+use crate::rendering::{AdhesionLineRenderer, CellRenderer, OrientationGizmoRenderer, PreviewSkyboxRenderer, SplitRingRenderer, TailRenderer, TailInstance};
 use crate::rendering::fov_cone::FovConeRenderer;
 use crate::scene::{PreviewState, Scene};
 use crate::simulation::PhysicsConfig;
@@ -52,6 +52,8 @@ pub struct PreviewScene {
     pub context_menu_open_time: std::time::Instant,
     /// FOV cone renderer for oculocyte visualization
     pub fov_cone_renderer: FovConeRenderer,
+    /// Procedural background skybox (gradient + grid)
+    pub skybox_renderer: PreviewSkyboxRenderer,
 }
 
 impl PreviewScene {
@@ -75,6 +77,7 @@ impl PreviewScene {
         let split_ring_renderer = SplitRingRenderer::new(device, queue, surface_config);
         let tail_renderer = TailRenderer::new(device, surface_config.format, capacity);
         let fov_cone_renderer = FovConeRenderer::new(device, surface_config);
+        let skybox_renderer = PreviewSkyboxRenderer::new(device, surface_config.format);
 
         Self {
             state,
@@ -84,6 +87,7 @@ impl PreviewScene {
             split_ring_renderer,
             tail_renderer,
             fov_cone_renderer,
+            skybox_renderer,
             genome,
             config,
             paused: false,
@@ -196,9 +200,9 @@ impl Scene for PreviewScene {
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.02,
-                                g: 0.02,
-                                b: 0.05,
+                                r: 0.0,
+                                g: 0.0,
+                                b: 0.0,
                                 a: 1.0,
                             }),
                             store: wgpu::StoreOp::Store,
@@ -219,6 +223,23 @@ impl Scene for PreviewScene {
                 // Pass ends here, just clearing
             }
 
+            queue.submit(std::iter::once(encoder.finish()));
+        }
+
+        // Pass 1.5: Render procedural background skybox
+        {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Preview Scene Skybox Encoder"),
+            });
+            self.skybox_renderer.render(
+                &mut encoder,
+                queue,
+                view,
+                device,
+                view_proj,
+                self.camera.position(),
+                self.state.display_time,
+            );
             queue.submit(std::iter::once(encoder.finish()));
         }
 

@@ -335,6 +335,9 @@ pub enum DockSaveError {
 
 /// Create the default dock layout for Preview mode (Genome Editor).
 ///
+/// The Name/Type controls (Save/Load/Graph, genome name, cell type, make adhesion)
+/// now live in the top bar, so NameTypeEditor is removed from the dock.
+///
 /// Layout:
 /// ```text
 /// +--------+--------------------------------+--------+
@@ -343,31 +346,26 @@ pub enum DockSaveError {
 /// |        |                                |        |
 /// +--------+          Viewport              +--------+
 /// |        |                                |        |
-/// | Name/  |                                | Parent |
-/// | Type   |                                |        |
+/// | Circle |                                | Parent |
+/// | Sliders|                                |        |
 /// +--------+--------------------------------+--------+
-/// |              Time Slider / Scrubber            |
+/// |              Time Slider                        |
 /// +------------------------------------------------+
 /// ```
 pub fn create_default_preview_layout() -> DockState<Panel> {
-    // Start with viewport in the center
     let mut dock_state = DockState::new(vec![Panel::Viewport]);
     let tree = dock_state.main_surface_mut();
 
-    // Split left panel (20% width)
+    // Left: Modes on top, CircleSliders below
     let [_center, left] = tree.split_left(NodeIndex::root(), 0.20, vec![Panel::Modes]);
+    tree.split_below(left, 0.5, vec![Panel::CircleSliders, Panel::QuaternionBall]);
 
-    // Split the left panel vertically for Name/Type below Modes
-    tree.split_below(left, 0.5, vec![Panel::NameTypeEditor]);
-
-    // Split right panel (20% width) from the center
+    // Right: AdhesionSettings on top, ParentSettings below
     let [center, right] = tree.split_right(NodeIndex::root(), 0.80, vec![Panel::AdhesionSettings]);
-
-    // Split the right panel vertically for Parent below Adhesion
     tree.split_below(right, 0.5, vec![Panel::ParentSettings]);
 
-    // Split bottom panel (15% height) for time controls
-    tree.split_below(center, 0.85, vec![Panel::TimeSlider, Panel::TimeScrubber]);
+    // Bottom: TimeSlider
+    tree.split_below(center, 0.85, vec![Panel::TimeSlider]);
 
     dock_state
 }
@@ -461,12 +459,13 @@ mod tests {
 
         assert!(tabs.contains(&Panel::Modes), "Should have Modes panel");
         assert!(
-            tabs.contains(&Panel::NameTypeEditor),
-            "Should have NameTypeEditor panel"
-        );
-        assert!(
             tabs.contains(&Panel::TimeSlider),
             "Should have TimeSlider panel"
+        );
+        // NameTypeEditor is now in the top bar, not the dock
+        assert!(
+            !tabs.contains(&Panel::NameTypeEditor),
+            "NameTypeEditor should not be in dock (moved to top bar)"
         );
     }
 

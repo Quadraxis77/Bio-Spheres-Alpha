@@ -1,6 +1,6 @@
 use egui::{
-    emath::TSTransform, epaint::TextShape, lerp, pos2, vec2, Align, Align2, Button, Color32,
-    CornerRadius, CursorIcon, Frame, Id, Key, LayerId, Layout, NumExt, Order, Popup,
+    emath::TSTransform, epaint, epaint::TextShape, lerp, pos2, vec2, Align, Align2, Button,
+    Color32, CornerRadius, CursorIcon, Frame, Id, Key, LayerId, Layout, NumExt, Order, Popup,
     PopupCloseBehavior, Rect, Response, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextStyle,
     Ui, UiBuilder, Vec2, WidgetText,
 };
@@ -46,6 +46,20 @@ impl<Tab> DockArea<'_, Tab> {
 
         if self.dock_state[surface_index][node_index].tabs_count() == 0 {
             return;
+        }
+
+        // Clamp the active tab index to the valid range. A stale saved layout
+        // file may contain an out-of-bounds active index (e.g. active: (1) for
+        // a single-tab node). Without this clamp the active tab body silently
+        // never renders.
+        {
+            let leaf = self.dock_state[surface_index][node_index]
+                .get_leaf_mut()
+                .expect("This node must be a leaf");
+            let tab_count = leaf.tabs.len();
+            if leaf.active.0 >= tab_count && tab_count > 0 {
+                leaf.active.0 = tab_count - 1;
+            }
         }
         let tabbar_rect = self.tab_bar(
             ui,
@@ -1053,6 +1067,78 @@ impl<Tab> DockArea<'_, Tab> {
         // mixing with the background color.
         ui.painter()
             .rect_filled(tab_rect, tab_style.corner_radius, tab_style.bg_fill);
+
+        // Draw an optional soft radial glow behind the tab — used to give the
+        // active tab a "spotlight" highlight without a solid fill. Painted
+        // *after* the bg_fill so it appears on top of the tab's flat fill but
+        // *before* the outline and text.
+        //
+        // The glow is a true width-wise *ellipse* with a smooth radial alpha
+        // falloff from full intensity at the centre to fully transparent at
+        // the edge. It is built as a triangle fan with per-vertex colours
+        // (centre = glow_color, perimeter = transparent), which the GPU
+        // interpolates linearly to produce the soft spotlight.
+        if tab_style.glow_color != Color32::TRANSPARENT {
+            // Centre the glow on the *text*, not the whole tab — the close
+            // button (when shown) lives on the right side of the tab and
+            // would otherwise pull the glow off-centre relative to the title.
+            let text_rect_for_glow = {
+                let mut r = tab_rect;
+                r.set_width(r.width() - close_button_size);
+                r
+            };
+            let center = text_rect_for_glow.center();
+            // Horizontal radius: half the text region's width × radius factor.
+            let rx = text_rect_for_glow.width() * 0.5 * tab_style.glow_radius_factor;
+            // Vertical radius: clamped by the tab's vertical half-extent and
+            // shaped by `glow_aspect` so the ellipse can be flattened into a
+            // horizontal lozenge regardless of the tab's height.
+            let ry_max = text_rect_for_glow.height() * 0.5 * tab_style.glow_radius_factor;
+            let ry     = (rx * tab_style.glow_aspect).min(ry_max);
+
+            // Skip if the resulting ellipse has no area.
+            if rx > 0.5 && ry > 0.5 {
+
+            // 32-segment fan is plenty for a smooth ellipse at typical tab sizes.
+            const SEGMENTS: usize = 32;
+            let mut mesh = epaint::Mesh::default();
+
+            // Centre vertex — full glow colour.
+            mesh.vertices.push(epaint::Vertex {
+                pos: center,
+                uv: epaint::WHITE_UV,
+                color: tab_style.glow_color,
+            });
+
+            // Perimeter vertices — fully transparent so colour fades out.
+            let edge_color = Color32::from_rgba_unmultiplied(
+                tab_style.glow_color.r(),
+                tab_style.glow_color.g(),
+                tab_style.glow_color.b(),
+                0,
+            );
+            for i in 0..SEGMENTS {
+                let a = (i as f32) * std::f32::consts::TAU / (SEGMENTS as f32);
+                let p = pos2(center.x + a.cos() * rx, center.y + a.sin() * ry);
+                mesh.vertices.push(epaint::Vertex {
+                    pos: p,
+                    uv: epaint::WHITE_UV,
+                    color: edge_color,
+                });
+            }
+
+            // Triangle fan — connect centre (0) to each pair of consecutive
+            // perimeter vertices. Indices are 1..=SEGMENTS, wrapping at the end.
+            for i in 0..SEGMENTS {
+                let a = 1 + i as u32;
+                let b = 1 + ((i + 1) % SEGMENTS) as u32;
+                mesh.indices.extend_from_slice(&[0, a, b]);
+            }
+
+            ui.painter().add(Shape::mesh(mesh));
+            }
+        }
+
         let stroke_rect = rect_stroke_box(tab_rect, 1.0);
         ui.painter().rect_stroke(
             stroke_rect,
@@ -1243,6 +1329,12 @@ impl<Tab> DockArea<'_, Tab> {
             ..
         } = leaf;
         if !collapsed {
+            // Clamp the active index to the valid tab range so a stale saved
+            // value (e.g. from a layout file written with a different tab count)
+            // never causes the active tab body to silently not render.
+            if active.0 >= tabs.len() && !tabs.is_empty() {
+                active.0 = tabs.len() - 1;
+            }
             if let Some(tab) = tabs.get_mut(active.0) {
                 if *viewport != body_rect {
                     *viewport = body_rect;

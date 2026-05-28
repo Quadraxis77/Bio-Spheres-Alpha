@@ -561,7 +561,15 @@ impl<Tab> DockArea<'_, Tab> {
                     style.separator.color_idle
                 };
 
-                ui.painter().rect_filled(separator, CornerRadius::ZERO, color);
+                // Expand the painted rect by 1px perpendicular to the split
+                // axis so it fully covers any sub-pixel gap between the
+                // separator and the adjacent panel edges caused by rounding.
+                let paint_rect = separator.expand2({
+                    let mut e = egui::Vec2::ZERO;
+                    e.dim_point += 1.0;
+                    e
+                });
+                ui.painter().rect_filled(paint_rect, CornerRadius::ZERO, color);
 
                 // Update 'fraction' interaction after drawing separator,
                 // otherwise it may overlap on other separator / bodies when

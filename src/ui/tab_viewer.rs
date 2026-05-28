@@ -45,13 +45,24 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
     type Tab = Panel;
 
     fn title(&mut self, tab: &mut Self::Tab) -> WidgetText {
-        tab.display_name().into()
+        // Render tab labels in uppercase with extra letter-spacing for the
+        // biotech-console aesthetic. The viewport tab keeps its name hidden by
+        // the dock anyway, so casing there is irrelevant.
+        let raw = tab.display_name();
+        let upper: String = raw.chars().flat_map(|c| {
+            // Insert a hair-space between characters for readability
+            [Some(c.to_ascii_uppercase()), Some('\u{2009}')].into_iter().flatten()
+        }).collect();
+        // Trim the trailing hair-space
+        let upper = upper.trim_end().to_string();
+        egui::RichText::new(upper).size(11.0).into()
     }
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
         match tab {
             Panel::Viewport => {
-                render_viewport(ui, self.viewport_rect);
+                let is_gpu_mode = self.context.current_mode == crate::ui::types::SimulationMode::Gpu;
+                render_viewport(ui, self.viewport_rect, is_gpu_mode);
                 if let Some(r) = *self.viewport_rect {
                     self.context.editor_state.panel_rects.insert("Viewport".to_string(), r);
                 }
@@ -203,139 +214,111 @@ fn render_placeholder_panel(ui: &mut Ui, name: &str) {
 
 /// Render the Viewport panel.
 ///
-/// This panel displays the 3D scene and reports its screen rectangle
-/// for mouse input filtering.
-fn render_viewport(ui: &mut Ui, viewport_rect: &mut Option<egui::Rect>) {
-    // Get the available rect for the viewport
+/// This panel displays the 3D scene and reports its screen rectangle for
+/// mouse input filtering. In GPU (live simulation) mode it draws large
+/// L-shaped teal corner brackets so the viewport reads as a "scope" framing
+/// the live world. The Genome Editor preview keeps a clean, frameless view.
+/// Render the Viewport panel.
+///
+/// Just tracks the panel's screen rectangle so the 3D scene can be rendered
+/// behind egui in the same area, and so input filtering and the GPU-mode
+/// corner brackets (painted by `UiSystem` directly on the central panel)
+/// know where the viewport lives.
+fn render_viewport(ui: &mut Ui, viewport_rect: &mut Option<egui::Rect>, _draw_brackets: bool) {
     let rect = ui.available_rect_before_wrap();
     *viewport_rect = Some(rect);
 
-    // Allocate the full space - the 3D scene will be rendered behind this
+    // Allocate the full space — the 3D scene renders behind this
     let _response = ui.allocate_rect(rect, egui::Sense::hover());
-
-    // Draw a subtle border to indicate the viewport area
-    if ui.is_rect_visible(rect) {
-        let visuals = ui.visuals();
-        ui.painter().rect_stroke(
-            rect,
-            0.0,
-            egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color),
-            egui::StrokeKind::Inside,
-        );
-    }
 }
 
 /// Render the SceneManager panel.
 fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
+    use crate::ui::ui_system::theme;
     // Record panel rect for the tutorial pointer.
     context.editor_state.panel_rects.insert("SceneManager".to_string(), ui.max_rect());
 
-    // Single button that switches between scenes
-    let (button_text, button_color) = if context.is_preview_mode() {
-        ("Live Simulation", egui::Color32::from_rgb(200, 100, 100)) // Red for live simulation
-    } else {
-        ("Genome Editor", egui::Color32::from_rgb(100, 200, 100)) // Green for genome editor
-    };
-    
-    let available_width = ui.available_width();
-    
-    // Create a large, full-width button with custom styling
-    let button_response = ui.allocate_response(
-        egui::Vec2::new(available_width, 40.0), // Full width, 40px height
-        egui::Sense::click()
-    );
-    
-    // Draw button background
-    let button_rect = button_response.rect;
-    let fill_color = if button_response.hovered() {
-        // Slightly brighter when hovered
-        egui::Color32::from_rgb(
-            ((button_color.r() as f32 * 1.1).min(255.0)) as u8,
-            ((button_color.g() as f32 * 1.1).min(255.0)) as u8,
-            ((button_color.b() as f32 * 1.1).min(255.0)) as u8,
-        )
-    } else {
-        button_color
-    };
-    
-    ui.painter().rect_filled(
-        button_rect,
-        4.0,
-        fill_color
-    );
-    
-    // Draw centered text in bold, large font
-    ui.painter().text(
-        button_rect.center(),
-        egui::Align2::CENTER_CENTER,
-        button_text,
-        egui::FontId::proportional(18.0), // Large text
-        egui::Color32::WHITE, // White text for good contrast
-    );
-    
-    // Handle button click
-    if button_response.clicked() {
-        if context.is_preview_mode() {
-            context.request_gpu_mode();
+    // The mode-switch button lives in the top bar — this panel only hosts
+    // playback controls. In Preview mode there's nothing to do here.
+    if !context.is_gpu_mode() {
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("Use ▶ LIVE SIMULATION in the top bar to start the live world.")
+                .size(11.0)
+                .color(theme::TEXT_SECONDARY),
+        );
+        return;
+    }
+
+    // ── GPU mode: simulation playback controls ──────────────────────────────
+    section_header(ui, "SIMULATION CONTROLS");
+
+    ui.horizontal(|ui| {
+        let is_paused = context.is_paused();
+        let (play_icon, play_tip, play_color) = if is_paused {
+            ("▶", "Play", theme::ACCENT_TEAL)
         } else {
-            context.request_preview_mode();
+            ("⏸", "Pause", theme::ACCENT_TEAL)
+        };
+
+        if ui.add_sized(
+            [32.0, 32.0],
+            egui::Button::new(egui::RichText::new(play_icon).size(15.0).color(play_color))
+                .fill(theme::BG_WIDGET)
+                .stroke(egui::Stroke::new(1.0, theme::BORDER_NORMAL))
+                .corner_radius(egui::CornerRadius::same(3)),
+        ).on_hover_text(play_tip).clicked() {
+            context.request_toggle_pause();
         }
-    }
-    
-    // Show play/pause and reset controls only in GPU mode
-    if context.is_gpu_mode() {
-        ui.add_space(10.0);
-        ui.separator();
-        ui.add_space(5.0);
-        
-        ui.horizontal(|ui| {
-            // Play/Pause toggle button with symbol
-            let is_paused = context.is_paused();
-            let play_pause_symbol = if is_paused { "▶" } else { "⏸" };
-            let play_pause_tooltip = if is_paused { "Play" } else { "Pause" };
-            
-            if ui.add_sized(
-                [40.0, 40.0],
-                egui::Button::new(egui::RichText::new(play_pause_symbol).size(20.0))
-            ).on_hover_text(play_pause_tooltip).clicked() {
-                context.request_toggle_pause();
-            }
-            
-            // Reset button with symbol
-            if ui.add_sized(
-                [40.0, 40.0],
-                egui::Button::new(egui::RichText::new("⟲").size(20.0))
-            ).on_hover_text("Reset").clicked() {
-                state.show_reset_dialog = true;
-            }
-            
-            // Add some spacing between buttons and time
-            ui.add_space(20.0);
-            
-            // Show simulation time in HH:MM:SS format
-            let total_seconds = context.current_time() as u64;
-            let hours = total_seconds / 3600;
-            let minutes = (total_seconds % 3600) / 60;
-            let seconds = total_seconds % 60;
-            ui.label(format!("{:02}:{:02}:{:02}", hours, minutes, seconds));
-        });
-        
-        // Simulation speed slider (GPU mode only)
-        if context.current_mode == crate::ui::types::SimulationMode::Gpu {
-            ui.horizontal(|ui| {
-                ui.label("Speed:");
-                let speed = context.simulation_speed();
-                // Round to nearest 0.5 for display
-                let display_speed = (speed * 2.0).round() / 2.0;
-                let mut slider_speed = display_speed;
-                if ui.add(egui::Slider::new(&mut slider_speed, 0.5..=10.0).step_by(0.5).suffix("x")).changed() {
-                    context.set_simulation_speed(slider_speed);
-                }
-            });
+
+        if ui.add_sized(
+            [32.0, 32.0],
+            egui::Button::new(egui::RichText::new("⟲").size(15.0).color(theme::TEXT_SECONDARY))
+                .fill(theme::BG_WIDGET)
+                .stroke(egui::Stroke::new(1.0, theme::BORDER_NORMAL))
+                .corner_radius(egui::CornerRadius::same(3)),
+        ).on_hover_text("Reset").clicked() {
+            state.show_reset_dialog = true;
         }
-        
-        ui.add_space(5.0);
-    }
+
+        ui.add_space(8.0);
+
+        // Simulation time
+        let total_seconds = context.current_time() as u64;
+        let hours = total_seconds / 3600;
+        let minutes = (total_seconds % 3600) / 60;
+        let seconds = total_seconds % 60;
+        ui.label(
+            egui::RichText::new(format!("{:02}:{:02}:{:02}", hours, minutes, seconds))
+                .size(13.0)
+                .color(theme::TEXT_PRIMARY)
+                .monospace(),
+        );
+    });
+
+    ui.add_space(6.0);
+
+    // Speed slider
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("SPEED")
+                .size(9.0)
+                .color(theme::TEXT_DIM),
+        );
+        let speed = context.simulation_speed();
+        let display_speed = (speed * 2.0).round() / 2.0;
+        let mut slider_speed = display_speed;
+        if ui.add(
+            egui::Slider::new(&mut slider_speed, 0.5..=10.0)
+                .step_by(0.5)
+                .suffix("x")
+                .text_color(theme::TEXT_PRIMARY),
+        ).changed() {
+            context.set_simulation_speed(slider_speed);
+        }
+    });
+
+    ui.add_space(4.0);
 }
 
 /// Render the CellInspector panel.
@@ -511,242 +494,178 @@ fn render_genome_editor(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the PerformanceMonitor panel.
 fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
+    use crate::ui::ui_system::theme;
     let perf = context.performance;
     
     // GPU Readbacks toggle at the top
     ui.horizontal(|ui| {
         ui.checkbox(&mut state.gpu_readbacks_enabled, "Enable GPU Readbacks");
-        ui.label("").on_hover_text("Disable to avoid CPU-GPU sync overhead.\nCell count and culling stats won't update.");
     });
-    ui.separator();
+    ui.add_space(4.0);
     
     // Culling section (GPU mode only)
     if context.current_mode == crate::ui::types::SimulationMode::Gpu {
-        ui.add_space(8.0);
-        ui.heading("GPU Rendering");
-        ui.separator();
+        section_header(ui, "GPU RENDERING");
         
         let (total, visible, frustum_culled, occluded) = perf.culling_stats();
         
-        ui.horizontal(|ui| {
-            ui.label("Total Cells:");
-            ui.label(format!("{}", total));
-        });
-        
-        ui.horizontal(|ui| {
-            ui.label("Visible:");
-            ui.label(format!("{}", visible));
-        });
-        
-        ui.horizontal(|ui| {
-            ui.label("Frustum Culled:");
-            ui.label(format!("{}", frustum_culled));
-        });
-        
-        ui.horizontal(|ui| {
-            ui.label("Occluded:");
-            ui.label(format!("{}", occluded));
-        });
-        
-        if total > 0 {
-            let cull_percent = ((total - visible) as f32 / total as f32) * 100.0;
-            ui.horizontal(|ui| {
-                ui.label("Cull Rate:");
-                ui.label(format!("{:.1}%", cull_percent));
+        egui::Grid::new("gpu_stats_grid")
+            .num_columns(2)
+            .spacing([8.0, 2.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Total Cells").size(11.0).color(theme::TEXT_SECONDARY));
+                ui.label(egui::RichText::new(format!("{}", total)).size(11.0).color(theme::TEXT_PRIMARY));
+                ui.end_row();
+                ui.label(egui::RichText::new("Visible").size(11.0).color(theme::TEXT_SECONDARY));
+                ui.label(egui::RichText::new(format!("{}", visible)).size(11.0).color(theme::STATUS_GREEN));
+                ui.end_row();
+                ui.label(egui::RichText::new("Frustum Culled").size(11.0).color(theme::TEXT_SECONDARY));
+                ui.label(egui::RichText::new(format!("{}", frustum_culled)).size(11.0).color(theme::TEXT_DIM));
+                ui.end_row();
+                ui.label(egui::RichText::new("Occluded").size(11.0).color(theme::TEXT_SECONDARY));
+                ui.label(egui::RichText::new(format!("{}", occluded)).size(11.0).color(theme::TEXT_DIM));
+                ui.end_row();
+                if total > 0 {
+                    let cull_percent = ((total - visible) as f32 / total as f32) * 100.0;
+                    ui.label(egui::RichText::new("Cull Rate").size(11.0).color(theme::TEXT_SECONDARY));
+                    ui.label(egui::RichText::new(format!("{:.1}%", cull_percent)).size(11.0).color(theme::ACCENT_CYAN));
+                    ui.end_row();
+                }
             });
-        }
         
-        ui.add_space(8.0);
+        ui.add_space(6.0);
     }
     
     // FPS and Frame Time section
-    ui.heading("Frame Rate");
-    ui.separator();
-        
-        ui.horizontal(|ui| {
-            ui.label("FPS:");
-            ui.label(format!("{:.1}", perf.fps()));
+    section_header(ui, "FRAME RATE");
+    
+    let fps = perf.fps();
+    let fps_color = if fps >= 50.0 { theme::STATUS_GREEN } else if fps >= 30.0 { theme::STATUS_YELLOW } else { theme::STATUS_RED };
+    
+    egui::Grid::new("fps_grid")
+        .num_columns(2)
+        .spacing([8.0, 2.0])
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("FPS").size(11.0).color(theme::TEXT_SECONDARY));
+            ui.label(egui::RichText::new(format!("{:.1}", fps)).size(13.0).strong().color(fps_color));
+            ui.end_row();
+            ui.label(egui::RichText::new("Frame Time").size(11.0).color(theme::TEXT_SECONDARY));
+            ui.label(egui::RichText::new(format!("{:.2} ms", perf.average_frame_time_ms())).size(11.0).color(theme::TEXT_PRIMARY));
+            ui.end_row();
+            ui.label(egui::RichText::new("Min / Max").size(11.0).color(theme::TEXT_SECONDARY));
+            ui.label(egui::RichText::new(format!("{:.2} / {:.2} ms", perf.min_frame_time_ms(), perf.max_frame_time_ms())).size(11.0).color(theme::TEXT_DIM));
+            ui.end_row();
         });
-        
-        ui.horizontal(|ui| {
-            ui.label("Frame Time:");
-            ui.label(format!("{:.2} ms", perf.average_frame_time_ms()));
-        });
-        
-        ui.horizontal(|ui| {
-            ui.label("Min/Max:");
-            ui.label(format!("{:.2} / {:.2} ms", perf.min_frame_time_ms(), perf.max_frame_time_ms()));
-        });
-        
-        // FPS graph (converted from frame times)
-        let frame_times: Vec<f32> = perf.frame_time_history().collect();
-        if !frame_times.is_empty() {
-            // Fixed scale: 0-60 FPS
-            let max_fps = 60.0_f32;
-            ui.add_space(4.0);
-            
-            let plot_height = 40.0;
-            let (response, painter) = ui.allocate_painter(
-                egui::vec2(ui.available_width(), plot_height),
-                egui::Sense::hover(),
-            );
-            let rect = response.rect;
-            
-            // Background
-            painter.rect_filled(rect, 2.0, egui::Color32::from_gray(30));
-            
-            // FPS bars
-            let bar_width = rect.width() / frame_times.len() as f32;
-            for (i, &time) in frame_times.iter().enumerate() {
-                // Convert frame time (ms) to FPS
-                let fps = if time > 0.0 { 1000.0 / time } else { 0.0 };
-                let fps_clamped = fps.min(max_fps);
-                
-                let x = rect.left() + i as f32 * bar_width;
-                let height = (fps_clamped / max_fps) * rect.height();
-                let y = rect.bottom() - height;
-                
-                // Color based on FPS: red < 20, yellow < 40, green >= 40
-                let color = if fps < 20.0 {
-                    egui::Color32::from_rgb(200, 80, 80)   // Red
-                } else if fps < 40.0 {
-                    egui::Color32::from_rgb(200, 180, 80)  // Yellow
-                } else {
-                    egui::Color32::from_rgb(80, 200, 80)   // Green
-                };
-                
-                painter.rect_filled(
-                    egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(bar_width.max(1.0), height)),
-                    0.0,
-                    color,
-                );
-            }
-        }
-        
-        ui.add_space(8.0);
-        
-        // CPU section
-        ui.heading("CPU");
-        ui.separator();
-        
-        ui.horizontal(|ui| {
-            ui.label("Cores:");
-            ui.label(format!("{}", perf.cpu_core_count()));
-        });
-        
-        ui.horizontal(|ui| {
-            ui.label("Usage:");
-            ui.label(format!("{:.1}%", perf.cpu_usage_total()));
-        });
-        
-        // Per-core usage bars
-        let core_usage = perf.cpu_usage_per_core();
-        if !core_usage.is_empty() {
-            ui.add_space(4.0);
-            
-            let bar_height = 8.0;
-            let spacing = 2.0;
-            let total_height = core_usage.len() as f32 * (bar_height + spacing);
-            
-            let (response, painter) = ui.allocate_painter(
-                egui::vec2(ui.available_width(), total_height),
-                egui::Sense::hover(),
-            );
-            let rect = response.rect;
-            
-            for (i, &usage) in core_usage.iter().enumerate() {
-                let y = rect.top() + i as f32 * (bar_height + spacing);
-                let bar_rect = egui::Rect::from_min_size(
-                    egui::pos2(rect.left(), y),
-                    egui::vec2(rect.width(), bar_height),
-                );
-                
-                // Background
-                painter.rect_filled(bar_rect, 2.0, egui::Color32::from_gray(40));
-                
-                // Usage bar
-                let usage_width = (usage / 100.0) * rect.width();
-                let usage_rect = egui::Rect::from_min_size(
-                    egui::pos2(rect.left(), y),
-                    egui::vec2(usage_width, bar_height),
-                );
-                
-                let color = if usage > 80.0 {
-                    egui::Color32::from_rgb(200, 80, 80)
-                } else if usage > 50.0 {
-                    egui::Color32::from_rgb(200, 180, 80)
-                } else {
-                    egui::Color32::from_rgb(80, 180, 80)
-                };
-                
-                painter.rect_filled(usage_rect, 2.0, color);
-            }
-        }
-        
-        ui.add_space(8.0);
-        
-        // Memory section
-        ui.heading("Memory");
-        ui.separator();
-        
-        let mem_used_mb = perf.memory_used() as f64 / (1024.0 * 1024.0);
-        let mem_total_mb = perf.memory_total() as f64 / (1024.0 * 1024.0);
-        let mem_used_gb = mem_used_mb / 1024.0;
-        let mem_total_gb = mem_total_mb / 1024.0;
-        
-        ui.horizontal(|ui| {
-            ui.label("Used:");
-            if mem_used_gb >= 1.0 {
-                ui.label(format!("{:.2} GB", mem_used_gb));
-            } else {
-                ui.label(format!("{:.0} MB", mem_used_mb));
-            }
-        });
-        
-        ui.horizontal(|ui| {
-            ui.label("Total:");
-            ui.label(format!("{:.1} GB", mem_total_gb));
-        });
-        
-        // Memory usage bar
-        let usage_percent = perf.memory_usage_percent();
+    
+    // FPS graph
+    let frame_times: Vec<f32> = perf.frame_time_history().collect();
+    if !frame_times.is_empty() {
+        let max_fps = 60.0_f32;
         ui.add_space(4.0);
         
-        let bar_height = 12.0;
+        let plot_height = 36.0;
         let (response, painter) = ui.allocate_painter(
-            egui::vec2(ui.available_width(), bar_height),
+            egui::vec2(ui.available_width(), plot_height),
             egui::Sense::hover(),
         );
         let rect = response.rect;
         
-        // Background
-        painter.rect_filled(rect, 2.0, egui::Color32::from_gray(40));
+        painter.rect_filled(rect, 2.0, theme::BG_DARKEST);
+        painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, theme::BORDER_SUBTLE), egui::StrokeKind::Outside);
         
-        // Usage bar
-        let usage_width = (usage_percent / 100.0) * rect.width();
-        let usage_rect = egui::Rect::from_min_size(
-            rect.min,
-            egui::vec2(usage_width, bar_height),
+        let bar_width = rect.width() / frame_times.len() as f32;
+        for (i, &time) in frame_times.iter().enumerate() {
+            let fps_val = if time > 0.0 { 1000.0 / time } else { 0.0 };
+            let fps_clamped = fps_val.min(max_fps);
+            let x = rect.left() + i as f32 * bar_width;
+            let height = (fps_clamped / max_fps) * rect.height();
+            let y = rect.bottom() - height;
+            let color = if fps_val < 20.0 { theme::STATUS_RED } else if fps_val < 40.0 { theme::STATUS_YELLOW } else { theme::STATUS_GREEN };
+            painter.rect_filled(
+                egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(bar_width.max(1.0), height)),
+                0.0, color,
+            );
+        }
+    }
+    
+    ui.add_space(6.0);
+    
+    // CPU section
+    section_header(ui, "CPU");
+    
+    egui::Grid::new("cpu_grid")
+        .num_columns(2)
+        .spacing([8.0, 2.0])
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("Cores").size(11.0).color(theme::TEXT_SECONDARY));
+            ui.label(egui::RichText::new(format!("{}", perf.cpu_core_count())).size(11.0).color(theme::TEXT_PRIMARY));
+            ui.end_row();
+            ui.label(egui::RichText::new("Usage").size(11.0).color(theme::TEXT_SECONDARY));
+            ui.label(egui::RichText::new(format!("{:.1}%", perf.cpu_usage_total())).size(11.0).color(theme::TEXT_PRIMARY));
+            ui.end_row();
+        });
+    
+    // Per-core usage bars
+    let core_usage = perf.cpu_usage_per_core();
+    if !core_usage.is_empty() {
+        ui.add_space(3.0);
+        let bar_height = 6.0;
+        let spacing = 2.0;
+        let total_height = core_usage.len() as f32 * (bar_height + spacing);
+        
+        let (response, painter) = ui.allocate_painter(
+            egui::vec2(ui.available_width(), total_height),
+            egui::Sense::hover(),
         );
+        let rect = response.rect;
         
-        let color = if usage_percent > 90.0 {
-            egui::Color32::from_rgb(200, 80, 80)
-        } else if usage_percent > 70.0 {
-            egui::Color32::from_rgb(200, 180, 80)
-        } else {
-            egui::Color32::from_rgb(80, 140, 200)
-        };
-        
-        painter.rect_filled(usage_rect, 2.0, color);
-        
-        // Percentage text
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            format!("{:.1}%", usage_percent),
-            egui::FontId::default(),
-            egui::Color32::WHITE,
-        );
+        for (i, &usage) in core_usage.iter().enumerate() {
+            let y = rect.top() + i as f32 * (bar_height + spacing);
+            let bar_rect = egui::Rect::from_min_size(egui::pos2(rect.left(), y), egui::vec2(rect.width(), bar_height));
+            painter.rect_filled(bar_rect, 1.0, theme::BG_DARKEST);
+            let usage_width = (usage / 100.0) * rect.width();
+            let usage_rect = egui::Rect::from_min_size(egui::pos2(rect.left(), y), egui::vec2(usage_width, bar_height));
+            let color = if usage > 80.0 { theme::STATUS_RED } else if usage > 50.0 { theme::STATUS_YELLOW } else { theme::ACCENT_TEAL };
+            painter.rect_filled(usage_rect, 1.0, color);
+        }
+    }
+    
+    ui.add_space(6.0);
+    
+    // Memory section
+    section_header(ui, "MEMORY");
+    
+    let mem_used_mb = perf.memory_used() as f64 / (1024.0 * 1024.0);
+    let mem_total_mb = perf.memory_total() as f64 / (1024.0 * 1024.0);
+    let mem_used_gb = mem_used_mb / 1024.0;
+    let mem_total_gb = mem_total_mb / 1024.0;
+    let usage_percent = perf.memory_usage_percent();
+    
+    egui::Grid::new("mem_grid")
+        .num_columns(2)
+        .spacing([8.0, 2.0])
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("Used").size(11.0).color(theme::TEXT_SECONDARY));
+            let used_str = if mem_used_gb >= 1.0 { format!("{:.2} GB", mem_used_gb) } else { format!("{:.0} MB", mem_used_mb) };
+            ui.label(egui::RichText::new(used_str).size(11.0).color(theme::TEXT_PRIMARY));
+            ui.end_row();
+            ui.label(egui::RichText::new("Total").size(11.0).color(theme::TEXT_SECONDARY));
+            ui.label(egui::RichText::new(format!("{:.1} GB", mem_total_gb)).size(11.0).color(theme::TEXT_DIM));
+            ui.end_row();
+        });
+    
+    // Memory bar
+    ui.add_space(3.0);
+    let bar_height = 10.0;
+    let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), bar_height), egui::Sense::hover());
+    let rect = response.rect;
+    painter.rect_filled(rect, 2.0, theme::BG_DARKEST);
+    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, theme::BORDER_SUBTLE), egui::StrokeKind::Outside);
+    let usage_width = (usage_percent / 100.0) * rect.width();
+    let usage_rect = egui::Rect::from_min_size(rect.min, egui::vec2(usage_width, bar_height));
+    let mem_color = if usage_percent > 90.0 { theme::STATUS_RED } else if usage_percent > 70.0 { theme::STATUS_YELLOW } else { theme::STATUS_BLUE };
+    painter.rect_filled(usage_rect, 2.0, mem_color);
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, format!("{:.1}%", usage_percent), egui::FontId::proportional(9.0), egui::Color32::WHITE);
 }
 
 /// Render the RenderingControls panel (placeholder).
@@ -759,6 +678,8 @@ fn render_rendering_controls(ui: &mut Ui) {
 
 /// Render the Cave System panel for procedural cave generation and collision.
 fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
+    let sw = (ui.available_width() - 60.0).max(60.0);
+    ui.style_mut().spacing.slider_width = sw;
     ui.separator();
     
     // Check if we're in GPU mode
@@ -911,24 +832,21 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
 
                 ui.label("Growth Rate:");
                 if ui.add(egui::Slider::new(&mut context.editor_state.moss_growth_rate, 0.001..=1.0)
-                    .logarithmic(true)
-                    .text("per sec")).changed() {
+                    .logarithmic(true)).changed() {
                     moss.growth_rate = context.editor_state.moss_growth_rate;
                     moss_changed = true;
                 }
 
                 ui.add_space(2.0);
                 ui.label("Min Light Level:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_min_light, 0.0..=0.5)
-                    .text("threshold")).changed() {
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_min_light, 0.0..=0.5)).changed() {
                     moss.min_light = context.editor_state.moss_min_light;
                     moss_changed = true;
                 }
 
                 ui.add_space(2.0);
                 ui.label("Water Radius (voxels):");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_water_radius, 2.0..=50.0)
-                    .text("voxels")).changed() {
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_water_radius, 2.0..=50.0)).changed() {
                     moss.water_radius = context.editor_state.moss_water_radius;
                     moss_changed = true;
                 }
@@ -936,8 +854,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 ui.add_space(2.0);
                 ui.label("Decay Rate:");
                 if ui.add(egui::Slider::new(&mut context.editor_state.moss_decay_rate, 0.001..=0.5)
-                    .logarithmic(true)
-                    .text("per sec")).changed() {
+                    .logarithmic(true)).changed() {
                     moss.decay_rate = context.editor_state.moss_decay_rate;
                     moss_changed = true;
                 }
@@ -947,8 +864,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 ui.add_space(3.0);
 
                 ui.label("Water Erosion Rate:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_erosion_rate, 0.0..=2.0)
-                    .text("per sec")).changed() {
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_erosion_rate, 0.0..=2.0)).changed() {
                     moss.erosion_rate = context.editor_state.moss_erosion_rate;
                     moss_changed = true;
                 }
@@ -956,8 +872,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 ui.add_space(2.0);
                 ui.label("Wetness Evaporation:");
                 if ui.add(egui::Slider::new(&mut context.editor_state.moss_wetness_evaporation, 0.001..=0.2)
-                    .logarithmic(true)
-                    .text("per sec")).changed() {
+                    .logarithmic(true)).changed() {
                     moss.wetness_evaporation = context.editor_state.moss_wetness_evaporation;
                     moss_changed = true;
                 }
@@ -967,16 +882,14 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 ui.add_space(3.0);
 
                 ui.label("Graze Cooldown:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_consume_rate, 1.0..=30.0)
-                    .text("seconds")).changed() {
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_consume_rate, 1.0..=30.0)).changed() {
                     moss.graze_cooldown = context.editor_state.moss_consume_rate;
                     moss_changed = true;
                 }
 
                 ui.add_space(2.0);
                 ui.label("Nutrients per Moss:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_nutrient_per_moss, 1.0..=200.0)
-                    .text("nutrients")).changed() {
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_nutrient_per_moss, 1.0..=200.0)).changed() {
                     moss.nutrient_per_moss = context.editor_state.moss_nutrient_per_moss;
                     moss_changed = true;
                 }
@@ -986,16 +899,14 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 ui.add_space(3.0);
 
                 ui.label("Texture Scale:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_scale, 0.02..=0.5)
-                    .text("scale")).changed() {
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_scale, 0.02..=0.5)).changed() {
                     context.editor_state.light_params_dirty = true;
                     moss_changed = true;
                 }
 
                 ui.add_space(2.0);
                 ui.label("Parallax Depth:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_parallax_depth, 0.0..=0.3)
-                    .text("depth")).changed() {
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_parallax_depth, 0.0..=0.3)).changed() {
                     context.editor_state.light_params_dirty = true;
                     moss_changed = true;
                 }
@@ -1023,40 +934,35 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 ui.add_space(2.0);
                 ui.label("Noise Frequency:");
                 if ui.add(egui::Slider::new(&mut context.editor_state.moss_noise_frequency, 4.0..=80.0)
-                    .logarithmic(true)
-                    .text("freq")).changed() {
+                    .logarithmic(true)).changed() {
                     context.editor_state.light_params_dirty = true;
                     moss_changed = true;
                 }
 
                 ui.add_space(2.0);
                 ui.label("Noise Lacunarity:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_noise_lacunarity, 1.5..=5.0)
-                    .text("lac")).changed() {
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_noise_lacunarity, 1.5..=5.0)).changed() {
                     context.editor_state.light_params_dirty = true;
                     moss_changed = true;
                 }
 
                 ui.add_space(2.0);
                 ui.label("Height Sharpness (low):");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_height_sharpness_low, 0.0..=0.5)
-                    .text("low")).changed() {
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_height_sharpness_low, 0.0..=0.5)).changed() {
                     context.editor_state.light_params_dirty = true;
                     moss_changed = true;
                 }
 
                 ui.add_space(2.0);
                 ui.label("Height Sharpness (high):");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_height_sharpness_high, 0.3..=1.0)
-                    .text("high")).changed() {
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_height_sharpness_high, 0.3..=1.0)).changed() {
                     context.editor_state.light_params_dirty = true;
                     moss_changed = true;
                 }
 
                 ui.add_space(2.0);
                 ui.label("Bump Strength:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_bump_strength, 0.0..=15.0)
-                    .text("bump")).changed() {
+                if ui.add(egui::Slider::new(&mut context.editor_state.moss_bump_strength, 0.0..=15.0)).changed() {
                     context.editor_state.light_params_dirty = true;
                     moss_changed = true;
                 }
@@ -1131,8 +1037,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             let mut interval = gpu_scene.boulder_spawn_interval;
             ui.label("Approx. Spawn Interval (seconds):");
             if ui.add(egui::Slider::new(&mut interval, 0.5..=60.0)
-                .logarithmic(true)
-                .text("sec")).changed() {
+                .logarithmic(true)).changed() {
                 gpu_scene.boulder_spawn_interval = interval;
                 if let Some(ref mut bs) = gpu_scene.boulder_system {
                     bs.spawn_interval = interval;
@@ -1220,7 +1125,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             ui.label(egui::RichText::new(
                 "Organism size at which consumption reaches 50% of max rate."
             ).small().weak());
-            if ui.add(egui::Slider::new(&mut gate, 1.0..=200.0).text("cells")).changed() {
+            if ui.add(egui::Slider::new(&mut gate, 1.0..=200.0)).changed() {
                 gpu_scene.boulder_size_gate = gate;
                 boulder_changed = true;
             }
@@ -1258,6 +1163,8 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the Fluid Settings panel for fluid simulation controls and visualization.
 fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
+    let sw = (ui.available_width() - 60.0).max(60.0);
+    ui.style_mut().spacing.slider_width = sw;
     // Check if we're in GPU mode
     if !context.is_gpu_mode() {
         return;
@@ -1298,7 +1205,6 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_density, 0.0..=0.5)
         .step_by(0.01)
         .fixed_decimals(2)
-        .text("density")
     ).changed() {
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
             gpu_scene.nutrient_density = context.editor_state.nutrient_density;
@@ -1311,7 +1217,6 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         .step_by(0.5)
         .fixed_decimals(1)
         .suffix("s")
-        .text("cycle length")
     ).changed() {
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
             gpu_scene.nutrient_epoch_duration = context.editor_state.nutrient_epoch_duration;
@@ -1323,7 +1228,6 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         .step_by(0.5)
         .fixed_decimals(1)
         .suffix("s")
-        .text("overlap gap")
     ).changed() {
         // Clamp spacing to not exceed duration
         context.editor_state.nutrient_epoch_spacing = context.editor_state.nutrient_epoch_spacing
@@ -1337,7 +1241,6 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_spawn_end, 0.05..=0.9)
         .step_by(0.05)
         .fixed_decimals(2)
-        .text("spawn end")
     ).changed() {
         // Ensure spawn_end < despawn_start
         if context.editor_state.nutrient_spawn_end >= context.editor_state.nutrient_despawn_start {
@@ -1353,7 +1256,6 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_despawn_start, 0.1..=0.95)
         .step_by(0.05)
         .fixed_decimals(2)
-        .text("despawn start")
     ).changed() {
         // Ensure despawn_start > spawn_end
         if context.editor_state.nutrient_despawn_start <= context.editor_state.nutrient_spawn_end {
@@ -1373,7 +1275,6 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     if state.world_settings.gravity_mode == 3 {
         ui.label("Surface Pressure:");
         if ui.add(egui::Slider::new(&mut state.fluid_settings.surface_pressure, 0.0..=1.0)
-            .text("Surface Pressure")
         ).changed() {
             // Apply to GPU scene
             if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
@@ -1732,6 +1633,8 @@ fn render_organism_skin_settings(ui: &mut Ui, context: &mut PanelContext, organi
 
 /// Render the Light & Fog settings panel for light field, photocyte, and volumetric fog controls.
 fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
+    let sw = (ui.available_width() - 60.0).max(60.0);
+    ui.style_mut().spacing.slider_width = sw;
     if !context.is_gpu_mode() {
         ui.label("Light & Fog settings are only available in GPU mode.");
         return;
@@ -1992,7 +1895,7 @@ fn render_time_scrubber(ui: &mut Ui, context: &mut PanelContext) {
     // Simple time slider placeholder
     let mut time_value = context.editor_state.time_value;
     if ui
-        .add(egui::Slider::new(&mut time_value, 0.0..=10.0).text("Time"))
+        .add(egui::Slider::new(&mut time_value, 0.0..=10.0))
         .changed()
     {
         context.editor_state.time_value = time_value;
@@ -2009,6 +1912,8 @@ fn render_theme_editor(ui: &mut Ui) {
 
 /// Render the CameraSettings panel (placeholder).
 fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext) {
+    let sw = (ui.available_width() - 60.0).max(60.0);
+    ui.style_mut().spacing.slider_width = sw;
     ui.heading("Camera");
     ui.separator();
 
@@ -2018,12 +1923,10 @@ fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext) {
 
     ui.add(
         egui::Slider::new(&mut camera.move_speed, 1.0..=50.0)
-            .text("Move Speed")
             .logarithmic(true),
     );
     ui.add(
         egui::Slider::new(&mut camera.mouse_sensitivity, 0.001..=0.01)
-            .text("Mouse Sensitivity")
             .logarithmic(true),
     );
     ui.checkbox(&mut camera.enable_spring, "Enable Spring");
@@ -2039,6 +1942,8 @@ fn render_lighting_settings(ui: &mut Ui) {
 
 /// Render the Modes panel with full functionality.
 fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
+    use crate::ui::ui_system::theme;
+
     // Record panel rect for the tutorial pointer.
     context.editor_state.panel_rects.insert("Modes".to_string(), ui.max_rect());
 
@@ -2046,17 +1951,71 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         log::warn!("Genome has no modes, this should not happen with default genome");
         return;
     }
-    
-    // Get current selected mode index from editor state
+
+    let selected_index = context.editor_state.selected_mode_index
+        .min(context.genome.modes.len().saturating_sub(1));
+    context.editor_state.selected_mode_index = selected_index;
+
+    // ── Type + Make Adhesion at the very top ─────────────────────────────
+    if selected_index < context.genome.modes.len() {
+        let cell_types = crate::cell::types::CellType::all();
+
+        // Type dropdown — full width
+        let combo_resp = egui::ComboBox::from_id_salt("modes_panel_cell_type")
+            .selected_text(
+                egui::RichText::new(cell_types[context.genome.modes[selected_index].cell_type as usize].name())
+                    .size(11.5)
+                    .color(theme::TEXT_PRIMARY),
+            )
+            .width(ui.available_width())
+            .show_ui(ui, |ui| {
+                for ct in cell_types.iter() {
+                    ui.selectable_value(
+                        &mut context.genome.modes[selected_index].cell_type,
+                        ct.to_index() as i32,
+                        ct.name(),
+                    ).on_hover_text(ct.tooltip());
+                }
+            });
+        context.editor_state.panel_rects.insert(
+            "cell_type_dropdown".to_string(), combo_resp.response.rect,
+        );
+
+        // Make Adhesion toggle — full width, teal when active
+        let on = context.genome.modes[selected_index].parent_make_adhesion;
+        let (fill, text_col, stroke_col) = if on {
+            (theme::ACCENT_TEAL, egui::Color32::BLACK, theme::ACCENT_TEAL)
+        } else {
+            (theme::BG_WIDGET, theme::TEXT_SECONDARY, theme::BORDER_NORMAL)
+        };
+        let label = if on { "Make Adhesion  ON" } else { "Make Adhesion  OFF" };
+        let adh_resp = ui.add_sized(
+            egui::vec2(ui.available_width(), 22.0),
+            egui::Button::new(egui::RichText::new(label).size(11.0).color(text_col))
+                .fill(fill)
+                .stroke(egui::Stroke::new(1.0, stroke_col))
+                .corner_radius(egui::CornerRadius::same(3)),
+        );
+        if adh_resp.clicked() {
+            context.genome.modes[selected_index].parent_make_adhesion = !on;
+        }
+        context.editor_state.panel_rects.insert(
+            "make_adhesion_checkbox".to_string(), adh_resp.rect,
+        );
+
+        ui.add_space(4.0);
+    }
+
+    // ── Mode list controls ────────────────────────────────────────────────
     let mut selected_index = context.editor_state.selected_mode_index;
     let mut initial_mode = context.genome.initial_mode as usize;
-    
+
     // Clamp selected index to valid range
     if selected_index >= context.genome.modes.len() {
         selected_index = 0;
         context.editor_state.selected_mode_index = 0;
     }
-    
+
     // Clamp initial mode to valid range
     if initial_mode >= context.genome.modes.len() {
         initial_mode = 0;
@@ -2572,18 +2531,62 @@ fn draw_marquee_text(
 /// Helper function to create a color-coded group container
 fn group_container(ui: &mut Ui, title: &str, color: egui::Color32, content: impl FnOnce(&mut Ui)) {
     let frame = egui::Frame::default()
-        .fill(egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 30u8))
-        .stroke(egui::Stroke::new(1.5, color))
-        .corner_radius(egui::CornerRadius::same(4u8))
-        .inner_margin(egui::Margin::same(8i8));
+        .fill(egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 18u8))
+        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 80u8)))
+        .corner_radius(egui::CornerRadius::same(3u8))
+        .inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 6 });
 
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(egui::RichText::new(title).strong().color(color));
-        ui.add_space(4.0);
+        // Section header with colored left-border accent
+        let header_rect = ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(title).strong().size(11.5).color(color));
+        }).response.rect;
+        // Draw left-border accent line
+        let painter = ui.painter();
+        let left_x = header_rect.left() - 6.0;
+        painter.line_segment(
+            [
+                egui::pos2(left_x, header_rect.top() + 1.0),
+                egui::pos2(left_x, header_rect.bottom() - 1.0),
+            ],
+            egui::Stroke::new(2.0, color),
+        );
+        ui.add_space(3.0);
         content(ui);
     });
-    ui.add_space(6.0);
+    ui.add_space(4.0);
+}
+
+/// Render a section header with a teal left-border accent (for top-level sections).
+fn section_header(ui: &mut Ui, title: &str) {
+    use crate::ui::ui_system::theme;
+    ui.add_space(4.0);
+    let resp = ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(title)
+                .strong()
+                .size(11.5)
+                .color(theme::ACCENT_TEAL),
+        );
+    }).response;
+    // Draw left-border accent
+    let painter = ui.painter();
+    let left_x = resp.rect.left() - 4.0;
+    painter.line_segment(
+        [
+            egui::pos2(left_x, resp.rect.top() + 1.0),
+            egui::pos2(left_x, resp.rect.bottom() - 1.0),
+        ],
+        egui::Stroke::new(2.5, theme::ACCENT_TEAL),
+    );
+    // Thin separator line
+    let sep_rect = egui::Rect::from_min_size(
+        egui::pos2(resp.rect.left(), resp.rect.bottom() + 1.0),
+        egui::vec2(ui.available_width(), 1.0),
+    );
+    painter.rect_filled(sep_rect, 0.0, theme::BORDER_SUBTLE);
+    ui.add_space(3.0);
 }
 
 /// Render the NameTypeEditor panel.
@@ -2958,7 +2961,6 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                         }
                                     });
                                 ui.add(egui::Slider::new(&mut mode.glueocyte_cell_adhesion_signal_threshold, 0.0..=2047.0)
-                                    .text("Threshold")
                                     .logarithmic(false));
                                 ui.label("Active when signal ≥ threshold.\nReleases all created bonds when inactive.");
                             }
@@ -4738,6 +4740,7 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the gizmo settings panel.
 fn render_gizmo_settings(ui: &mut Ui, context: &mut PanelContext) {
+    section_header(ui, "GIZMO RENDERING");
     ui.checkbox(&mut context.editor_state.gizmo_visible, "Show Orientation Lines");
     ui.checkbox(&mut context.editor_state.split_rings_visible, "Show Split Rings");
 }
@@ -5180,9 +5183,13 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the WorldSettings panel for simulation parameters and physics.
 fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
+    // Set slider width to fill the panel, leaving room for value + suffix labels.
+    // Use a more conservative margin (80px) to account for suffixes like " units", "k", "×".
+    let sw = (ui.available_width() - 80.0).max(60.0);
+    ui.style_mut().spacing.slider_width = sw;
+
     // Only show world settings in GPU mode
-    if context.current_mode != crate::ui::types::SimulationMode::Gpu {
-        ui.label("World settings are only available in GPU mode.");
+    if context.current_mode != crate::ui::types::SimulationMode::Gpu {        ui.label("World settings are only available in GPU mode.");
         return;
     }
     
@@ -5254,21 +5261,21 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     
     // Adhesion constraint solver iterations
     ui.label("Constraint Iterations:");
-    ui.add(egui::Slider::new(&mut world.constraint_iterations, 0..=16).text("iterations"));
+    ui.add(egui::Slider::new(&mut world.constraint_iterations, 0..=16));
     ui.label(egui::RichText::new("Extra adhesion solver passes (higher = stiffer joints, more GPU cost)").small());
     
     ui.add_space(8.0);
     
     // Global velocity damping
     ui.label("Velocity Damping:");
-    ui.add(egui::Slider::new(&mut world.acceleration_damping, 0.8..=1.0).text("damping"));
+    ui.add(egui::Slider::new(&mut world.acceleration_damping, 0.8..=1.0));
     ui.label(egui::RichText::new("Global drag on cell movement (lower = more drag, higher = less damping)").small());
     
     ui.add_space(8.0);
     
     // Water viscosity
     ui.label("Water Viscosity:");
-    ui.add(egui::Slider::new(&mut world.water_viscosity, 0.0..=1.0).text("viscosity"));
+    ui.add(egui::Slider::new(&mut world.water_viscosity, 0.0..=1.0));
     ui.label(egui::RichText::new("Drag applied to cells moving through water (0 = off, higher = thicker fluid)").small());
 
     ui.add_space(12.0);
@@ -5283,7 +5290,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     if world.solo_metabolism_enabled {
         ui.add_space(4.0);
         ui.label("Metabolism Multiplier:");
-        ui.add(egui::Slider::new(&mut world.solo_metabolism_multiplier, 1.5..=10.0).text("×"));
+        ui.add(egui::Slider::new(&mut world.solo_metabolism_multiplier, 1.5..=10.0));
         ui.label(egui::RichText::new("Solo cells (0 connections) drain at this rate. Gradient: 1 conn = partial, 3+ = normal").small());
     }
 
@@ -5335,7 +5342,6 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                     }
                 })
             })
-            .text("chance")
     );
 
     if response.changed() {

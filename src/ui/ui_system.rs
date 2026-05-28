@@ -13,6 +13,51 @@ use crate::ui::types::GlobalUiState;
 ///
 /// This struct coordinates between egui-winit for input handling and
 /// egui-wgpu for GPU rendering.
+// ── Bio-Spheres Biotech Theme Colors ─────────────────────────────────────────
+pub mod theme {
+    use egui::Color32;
+
+    // Background layers
+    pub const BG_DARKEST:   Color32 = Color32::from_rgb(8,  12, 22);   // window bg
+    pub const BG_PANEL:     Color32 = Color32::from_rgb(12, 17, 30);   // panel bg
+    pub const BG_WIDGET:    Color32 = Color32::from_rgb(18, 25, 42);   // widget bg
+    pub const BG_HOVER:     Color32 = Color32::from_rgb(24, 34, 58);   // hovered widget
+    pub const BG_ACTIVE:    Color32 = Color32::from_rgb(30, 44, 74);   // active/pressed
+    pub const BG_SELECTED:  Color32 = Color32::from_rgb(20, 50, 80);   // selected item
+
+    // Accent colors
+    pub const ACCENT_TEAL:  Color32 = Color32::from_rgb(0,  200, 160); // primary accent
+    pub const ACCENT_CYAN:  Color32 = Color32::from_rgb(40, 180, 220); // secondary accent
+    pub const ACCENT_DIM:   Color32 = Color32::from_rgb(0,  80,  64);  // dimmed accent
+
+    // Text
+    pub const TEXT_PRIMARY:   Color32 = Color32::from_rgb(210, 220, 235);
+    pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(130, 150, 175);
+    pub const TEXT_DIM:       Color32 = Color32::from_rgb(70,  90,  120);
+    pub const TEXT_ACCENT:    Color32 = Color32::from_rgb(0,   200, 160);
+
+    // Borders / strokes
+    pub const BORDER_SUBTLE:  Color32 = Color32::from_rgb(30,  45,  70);
+    pub const BORDER_NORMAL:  Color32 = Color32::from_rgb(45,  65,  100);
+    pub const BORDER_BRIGHT:  Color32 = Color32::from_rgb(0,   140, 110);
+
+    // Status colors
+    pub const STATUS_GREEN:   Color32 = Color32::from_rgb(60,  200, 100);
+    pub const STATUS_YELLOW:  Color32 = Color32::from_rgb(220, 180, 50);
+    pub const STATUS_RED:     Color32 = Color32::from_rgb(220, 70,  70);
+    pub const STATUS_BLUE:    Color32 = Color32::from_rgb(60,  140, 220);
+
+    // Top bar
+    pub const TOPBAR_BG:      Color32 = Color32::from_rgb(6,   9,   18);
+    pub const TOPBAR_BORDER:  Color32 = Color32::from_rgb(0,   120, 95);
+
+    // Live Simulation button
+    pub const BTN_LIVE_BG:    Color32 = Color32::from_rgb(180, 40,  40);
+    pub const BTN_LIVE_HOVER: Color32 = Color32::from_rgb(210, 55,  55);
+    pub const BTN_EDITOR_BG:  Color32 = Color32::from_rgb(30,  120, 80);
+    pub const BTN_EDITOR_HOVER: Color32 = Color32::from_rgb(40, 150, 100);
+}
+
 pub struct UiSystem {
     /// egui context for immediate mode UI
     pub ctx: egui::Context,
@@ -33,6 +78,10 @@ pub struct UiSystem {
     save_timer: std::time::Instant,
     /// Whether the UI state has changed since last save
     ui_state_dirty: bool,
+    /// Whether the biotech theme has been applied
+    theme_applied: bool,
+    /// App icon texture used as the brand glyph in the top bar.
+    app_icon: Option<egui::TextureHandle>,
 }
 
 impl UiSystem {
@@ -71,6 +120,10 @@ impl UiSystem {
         // Create default UI state
         let state = GlobalUiState::load();
 
+        // Load the app icon as the top-bar brand glyph. Embedded so it always
+        // ships with the binary regardless of working directory.
+        let app_icon = load_app_icon_texture(&ctx);
+
         Self {
             ctx,
             winit_state,
@@ -82,6 +135,8 @@ impl UiSystem {
             original_text_styles: None,
             save_timer: std::time::Instant::now(),
             ui_state_dirty: false,
+            theme_applied: false,
+            app_icon,
         }
     }
 
@@ -129,10 +184,11 @@ impl UiSystem {
     pub fn begin_frame(&mut self, window: &Window) {
         let raw_input = self.winit_state.take_egui_input(window);
         self.ctx.begin_pass(raw_input);
-        
-        // NOTE: Don't clear viewport_rect here - it needs to persist for event handling
-        // which happens before render(). The viewport rect from the previous frame
-        // is still valid for determining if clicks are in the viewport area.
+
+        // Clear the viewport rect every frame so it only ever holds the
+        // rect from the current frame's Viewport tab render. This prevents
+        // a stale rect from a different scene mode being used for brackets.
+        self.viewport_rect = None;
     }
 
     /// Apply UI scale to the egui context style.
@@ -178,6 +234,124 @@ impl UiSystem {
         });
         
         log::debug!("Applied UI scale: {:.2}x", scale);
+    }
+
+    /// Apply the Bio-Spheres biotech dark theme to the egui context.
+    ///
+    /// Sets the dark navy color palette, teal accents, and compact spacing
+    /// to match the "Biotech Observatory" aesthetic shown in the reference images.
+    /// Called once at startup and whenever the theme needs to be reapplied.
+    fn apply_biotech_theme(&self) {
+        use theme::*;
+
+        self.ctx.global_style_mut(|style| {
+            // ── Visuals ───────────────────────────────────────────────────────
+            let v = &mut style.visuals;
+            v.dark_mode = true;
+
+            // Window / panel backgrounds
+            v.window_fill        = BG_PANEL;
+            v.panel_fill         = BG_PANEL;
+            v.faint_bg_color     = BG_WIDGET;
+            v.extreme_bg_color   = BG_DARKEST;
+            v.code_bg_color      = BG_WIDGET;
+
+            // Window stroke (border)
+            v.window_stroke      = egui::Stroke::new(1.0, BORDER_NORMAL);
+
+            // Selection highlight
+            v.selection.bg_fill  = BG_SELECTED;
+            v.selection.stroke   = egui::Stroke::new(1.0, ACCENT_TEAL);
+
+            // Hyperlink color
+            v.hyperlink_color    = ACCENT_CYAN;
+
+            // Override widget visuals for all states
+            // Noninteractive (labels, separators)
+            v.widgets.noninteractive.bg_fill   = BG_PANEL;
+            v.widgets.noninteractive.weak_bg_fill = BG_WIDGET;
+            v.widgets.noninteractive.bg_stroke  = egui::Stroke::new(1.0, BORDER_SUBTLE);
+            v.widgets.noninteractive.fg_stroke  = egui::Stroke::new(1.0, TEXT_SECONDARY);
+            v.widgets.noninteractive.corner_radius = egui::CornerRadius::same(3);
+            v.widgets.noninteractive.expansion  = 0.0;
+
+            // Inactive (buttons, sliders at rest)
+            v.widgets.inactive.bg_fill          = egui::Color32::from_rgb(35, 48, 75);
+            v.widgets.inactive.weak_bg_fill     = egui::Color32::from_rgb(35, 48, 75);
+            v.widgets.inactive.bg_stroke        = egui::Stroke::new(1.0, BORDER_NORMAL);
+            v.widgets.inactive.fg_stroke        = egui::Stroke::new(1.5, TEXT_SECONDARY);
+            v.widgets.inactive.corner_radius    = egui::CornerRadius::same(3);
+            v.widgets.inactive.expansion        = 0.0;
+
+            // Hovered
+            v.widgets.hovered.bg_fill           = BG_HOVER;
+            v.widgets.hovered.weak_bg_fill      = BG_HOVER;
+            v.widgets.hovered.bg_stroke         = egui::Stroke::new(1.0, BORDER_BRIGHT);
+            v.widgets.hovered.fg_stroke         = egui::Stroke::new(1.5, TEXT_PRIMARY);
+            v.widgets.hovered.corner_radius     = egui::CornerRadius::same(3);
+            v.widgets.hovered.expansion         = 1.0;
+
+            // Active / pressed
+            v.widgets.active.bg_fill            = BG_ACTIVE;
+            v.widgets.active.weak_bg_fill       = BG_ACTIVE;
+            v.widgets.active.bg_stroke          = egui::Stroke::new(1.5, ACCENT_TEAL);
+            v.widgets.active.fg_stroke          = egui::Stroke::new(2.0, ACCENT_TEAL);
+            v.widgets.active.corner_radius      = egui::CornerRadius::same(3);
+            v.widgets.active.expansion          = 1.0;
+
+            // Open (combo boxes, menus when open)
+            v.widgets.open.bg_fill              = BG_ACTIVE;
+            v.widgets.open.weak_bg_fill         = BG_ACTIVE;
+            v.widgets.open.bg_stroke            = egui::Stroke::new(1.0, ACCENT_TEAL);
+            v.widgets.open.fg_stroke            = egui::Stroke::new(1.5, ACCENT_TEAL);
+            v.widgets.open.corner_radius        = egui::CornerRadius::same(3);
+            v.widgets.open.expansion            = 0.0;
+
+            // Override text color
+            v.override_text_color = Some(TEXT_PRIMARY);
+
+            // Slider trailing fill — fills the track behind the handle in teal
+            v.slider_trailing_fill = true;
+
+            // Separator / grid lines
+            v.window_shadow = egui::Shadow {
+                offset: [0, 4],
+                blur: 16,
+                spread: 0,
+                color: egui::Color32::from_black_alpha(120),
+            };
+
+            // Popup shadow
+            v.popup_shadow = egui::Shadow {
+                offset: [0, 2],
+                blur: 8,
+                spread: 0,
+                color: egui::Color32::from_black_alpha(100),
+            };
+
+            // Slider / progress bar fill
+            v.selection.bg_fill = BG_SELECTED;
+
+            // ── Spacing ───────────────────────────────────────────────────────
+            // Keep egui defaults for widget sizing (slider_width, combo_width,
+            // interact_size, icon_*) — many panels rely on those defaults.
+            // Only tighten the global rhythm.
+            style.spacing.item_spacing      = egui::vec2(6.0, 4.0);
+            style.spacing.button_padding    = egui::vec2(8.0, 4.0);
+            style.spacing.indent            = 14.0;
+            style.spacing.menu_margin       = egui::Margin::same(6);
+            // Wider default slider so panels that don't manually set slider_width
+            // still fill a reasonable portion of the panel.
+            style.spacing.slider_width      = 200.0;
+
+            // ── Text styles ───────────────────────────────────────────────────
+            use egui::{FontId, FontFamily, TextStyle};
+            style.text_styles.insert(TextStyle::Small,   FontId::new(10.0, FontFamily::Proportional));
+            style.text_styles.insert(TextStyle::Body,    FontId::new(12.0, FontFamily::Proportional));
+            style.text_styles.insert(TextStyle::Button,  FontId::new(12.0, FontFamily::Proportional));
+            style.text_styles.insert(TextStyle::Heading, FontId::new(13.0, FontFamily::Proportional));
+            style.text_styles.insert(TextStyle::Monospace, FontId::new(11.0, FontFamily::Monospace));
+        });
     }
 
     /// Mark UI state as dirty (needs saving).
@@ -230,70 +404,488 @@ impl UiSystem {
             self.last_scale = self.state.ui_scale;
         }
 
+        // Apply biotech theme once at startup
+        if !self.theme_applied {
+            self.apply_biotech_theme();
+            self.theme_applied = true;
+        }
+
         // Auto-save UI state periodically
         self.auto_save_ui_state();
 
-        // Show menu bar at the top using the deprecated but still functional API
-        // This is the correct pattern for top-level panels with just a Context
+        // Show branded top bar
         let mut ui_state_copy = self.state.clone();
-        
+
         #[allow(deprecated)]
-        egui::Panel::top("menu_bar").show(&self.ctx, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                use egui::containers::menu::{MenuButton, MenuConfig};
-                use egui::PopupCloseBehavior;
-                
-                let config = MenuConfig::new()
-                    .close_behavior(PopupCloseBehavior::CloseOnClickOutside);
-                
-                MenuButton::new("Windows")
-                    .config(config)
-                    .ui(ui, |ui| {
-                        show_windows_menu(ui, &mut ui_state_copy, dock_manager);
+        egui::Panel::top("top_bar")
+            .frame(
+                egui::Frame::none()
+                    .fill(theme::TOPBAR_BG)
+                    .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: 6 })
+                    .stroke(egui::Stroke::new(1.0, theme::TOPBAR_BORDER)),
+            )
+            .show(&self.ctx, |ui| {
+                let bar_rect = ui.available_rect_before_wrap();
+                ui.spacing_mut().item_spacing.x = 6.0;
+
+                // Right side: fixed-width slot at the right edge.
+                let right_width = 420.0_f32;
+                let right_rect = egui::Rect::from_min_size(
+                    egui::pos2(bar_rect.right() - right_width, bar_rect.top()),
+                    egui::vec2(right_width, bar_rect.height()),
+                );
+                ui.allocate_ui_at_rect(right_rect, |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+
+                        // Mode-switch button — far right (first in right-to-left)
+                        let (btn_text, btn_bg) = if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Preview {
+                            ("▶  LIVE SIMULATION", theme::BTN_LIVE_BG)
+                        } else {
+                            ("⬡  GENOME EDITOR", theme::BTN_EDITOR_BG)
+                        };
+                        if ui.add(egui::Button::new(egui::RichText::new(btn_text).strong().size(11.5).color(egui::Color32::WHITE))
+                            .fill(btn_bg).stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(50)))
+                            .corner_radius(egui::CornerRadius::same(3)).min_size(egui::vec2(150.0, 24.0))).clicked() {
+                            ui_state_copy.mode_request = Some(if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Preview {
+                                crate::ui::types::SimulationMode::Gpu } else { crate::ui::types::SimulationMode::Preview });
+                        }
+
+                        ui.add_space(8.0); topbar_divider(ui); ui.add_space(8.0);
+
+                        let tut_label = if ui_state_copy.tutorial.active { "🎓 Tutorial ●" } else { "🎓 Tutorial" };
+                        let tut_color = if ui_state_copy.tutorial.active { theme::ACCENT_TEAL } else { theme::TEXT_SECONDARY };
+                        let tut_enabled = ui_state_copy.current_mode == crate::ui::types::SimulationMode::Preview;
+                        if ui.add_enabled(
+                            tut_enabled,
+                            egui::Button::new(egui::RichText::new(tut_label).size(11.5).color(if tut_enabled { tut_color } else { theme::TEXT_DIM }))
+                                .frame(false)
+                        ).clicked() {
+                            if ui_state_copy.tutorial.active { ui_state_copy.tutorial.close(); } else { ui_state_copy.tutorial.start(); }
+                        }
+
+                        ui.add_space(8.0); topbar_divider(ui); ui.add_space(8.0);
+
+                        if ui.add(egui::Button::new(egui::RichText::new("Help").size(11.5).color(theme::TEXT_SECONDARY)).frame(false)).clicked() {
+                            let p = crate::ui::panel::Panel::Help;
+                            if is_panel_open(dock_manager.current_tree(), &p) { close_panel(dock_manager.current_tree_mut(), &p); }
+                            else { open_panel(dock_manager.current_tree_mut(), &p); }
+                        }
+
+                        ui.add_space(8.0); topbar_divider(ui); ui.add_space(8.0);
+
+                        // Panels button — frameless, same style as Tutorial/Help
+                        let panels_resp = ui.add(
+                            egui::Button::new(egui::RichText::new("Panels").size(11.5).color(theme::TEXT_PRIMARY))
+                                .frame(false)
+                        );
+                        egui::Popup::menu(&panels_resp)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .show(|ui| {
+                                ui.set_min_width(200.0);
+                                show_windows_menu(ui, &mut ui_state_copy, dock_manager);
+                            });                    });
+                });
+
+                // Left side: icon + genome controls.
+                let left_rect = egui::Rect::from_min_max(
+                    bar_rect.left_top(),
+                    egui::pos2(bar_rect.right() - right_width, bar_rect.bottom()),
+                );
+                ui.allocate_ui_at_rect(left_rect, |ui| {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+
+                        let glyph_size = egui::vec2(22.0, 22.0);
+                        if let Some(ref tex) = self.app_icon {
+                            ui.add(egui::Image::new((tex.id(), glyph_size)).fit_to_exact_size(glyph_size));
+                        } else {
+                            let (r, _) = ui.allocate_exact_size(glyph_size, egui::Sense::hover());
+                            draw_logo_glyph(ui.painter(), r, theme::ACCENT_TEAL);
+                        }
+
+                        // GPU mode: Save/Load sphere on the far left
+                        if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu {
+                            ui.add_space(6.0); topbar_divider(ui); ui.add_space(6.0);
+                            ui.menu_button(egui::RichText::new("Save / Load").size(11.5).color(theme::TEXT_PRIMARY), |ui| {
+                                show_save_load_menu(ui, &mut ui_state_copy);
+                            });
+                        }
+
+                        if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Preview {
+                            ui.add_space(6.0); topbar_divider(ui); ui.add_space(6.0);
+
+                            let btn = |label: &str| egui::Button::new(egui::RichText::new(label).size(11.0).color(theme::TEXT_PRIMARY))
+                                .fill(theme::BG_WIDGET).stroke(egui::Stroke::new(1.0, theme::BORDER_NORMAL)).corner_radius(egui::CornerRadius::same(3));
+                            if ui.add(btn("⬆ Save")).on_hover_text("Save Genome").clicked() {
+                                if let Some(path) = rfd::FileDialog::new().add_filter("Genome", &["genome"])
+                                    .set_directory(crate::genome::Genome::genomes_dir())
+                                    .set_file_name(&format!("{}.genome", genome.name)).save_file() {
+                                    match genome.save_to_file(&path) { Ok(()) => {}, Err(e) => log::error!("{}", e) }
+                                }
+                            }
+                            if ui.add(btn("⬇ Load")).on_hover_text("Load Genome").clicked() {
+                                if let Some(path) = rfd::FileDialog::new().add_filter("Genome", &["genome"])
+                                    .set_directory(crate::genome::Genome::genomes_dir()).pick_file() {
+                                    match crate::genome::Genome::load_from_file(&path) {
+                                        Ok(loaded) => { *genome = loaded; editor_state.selected_mode_index = 0; }
+                                        Err(e) => log::error!("{}", e),
+                                    }
+                                }
+                            }
+                            if ui.add(btn("⬡ Graph")).on_hover_text("Genome Graph").clicked() {
+                                editor_state.toggle_mode_graph_panel = true;
+                            }
+
+                            ui.add_space(6.0); topbar_divider(ui); ui.add_space(6.0);
+
+                            ui.add(egui::TextEdit::singleline(&mut genome.name)
+                                .desired_width(130.0).hint_text("Genome Name")
+                                .font(egui::FontId::proportional(11.5)).text_color(theme::TEXT_PRIMARY));
+                        }
+                    });
+                });
+            });
+
+        // Show left side rail (quick panel access bar)
+        #[allow(deprecated)]
+        egui::Panel::left("side_rail")
+            .resizable(false)
+            .exact_width(40.0)
+            .frame(
+                egui::Frame::none()
+                    .fill(theme::TOPBAR_BG)
+                    .inner_margin(egui::Margin { left: 4, right: 4, top: 8, bottom: 8 })
+                    .stroke(egui::Stroke::new(1.0, theme::BORDER_SUBTLE)),
+            )
+            .show(&self.ctx, |ui| {
+                render_side_rail(ui, &mut ui_state_copy, dock_manager);
+            });
+
+        // Show bottom status bar
+        let cell_count = scene_manager.gpu_scene().map(|s| s.current_cell_count).unwrap_or_else(|| {
+            scene_manager.active_scene().cell_count() as u32
+        });
+        let cell_capacity = scene_manager.gpu_scene().map(|s| s.capacity()).unwrap_or(0);
+        let sim_time = scene_manager.active_scene().current_time();
+        let is_paused = scene_manager.active_scene().is_paused();
+        let mem_used_gb = performance.memory_used() as f64 / (1024.0 * 1024.0 * 1024.0);
+        let mem_total_gb = performance.memory_total() as f64 / (1024.0 * 1024.0 * 1024.0);
+        let fps = performance.fps();
+        let cpu_usage = performance.cpu_usage_total();
+
+        #[allow(deprecated)]
+        egui::Panel::bottom("status_bar")
+            .frame(
+                egui::Frame::none()
+                    .fill(theme::TOPBAR_BG)
+                    .inner_margin(egui::Margin { left: 12, right: 12, top: 4, bottom: 4 })
+                    .stroke(egui::Stroke::new(1.0, theme::BORDER_SUBTLE)),
+            )
+            .show(&self.ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+
+                    // Status indicator
+                    let (status_label, status_color) = if ui_state_copy.current_mode
+                        == crate::ui::types::SimulationMode::Preview
+                    {
+                        ("PREVIEW", theme::ACCENT_CYAN)
+                    } else if is_paused {
+                        ("PAUSED", theme::STATUS_YELLOW)
+                    } else if cell_count > 0 {
+                        ("RUNNING", theme::STATUS_GREEN)
+                    } else {
+                        ("IDLE", theme::TEXT_SECONDARY)
+                    };
+
+                    status_field(ui, "SIMULATION STATUS", &|ui| {
+                        // Pulsing dot
+                        let (dot_rect, _) = ui.allocate_exact_size(
+                            egui::vec2(8.0, 8.0),
+                            egui::Sense::hover(),
+                        );
+                        let t = ui.input(|i| i.time) as f32;
+                        let pulse = (t * 2.5).sin() * 0.4 + 0.6;
+                        let dot_color = egui::Color32::from_rgba_premultiplied(
+                            (status_color.r() as f32 * pulse) as u8,
+                            (status_color.g() as f32 * pulse) as u8,
+                            (status_color.b() as f32 * pulse) as u8,
+                            255,
+                        );
+                        ui.painter().circle_filled(dot_rect.center(), 3.5, dot_color);
+                        ui.label(
+                            egui::RichText::new(status_label)
+                                .strong()
+                                .size(11.5)
+                                .color(status_color),
+                        );
+                        ui.ctx().request_repaint();
                     });
 
-                // Save / Load menu — only shown in GPU mode
-                if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu {
-                    let config2 = MenuConfig::new()
-                        .close_behavior(PopupCloseBehavior::CloseOnClickOutside);
-                    MenuButton::new("Save / Load")
-                        .config(config2)
-                        .ui(ui, |ui| {
-                            show_save_load_menu(ui, &mut ui_state_copy);
-                        });
-                }
-                
-                // Help button next to Windows dropdown
-                if ui.button("❓ Help").clicked() {
-                    let help_panel = crate::ui::panel::Panel::Help;
-                    if is_panel_open(dock_manager.current_tree(), &help_panel) {
-                        // If help is already open, close it
-                        close_panel(dock_manager.current_tree_mut(), &help_panel);
-                    } else {
-                        // Open help panel as floating window
-                        open_panel(dock_manager.current_tree_mut(), &help_panel);
-                    }
-                }
+                    status_separator(ui);
 
-                // Tutorial button — starts or resumes the guided walkthrough
-                let tutorial_label = if ui_state_copy.tutorial.active {
-                    "🎓 Tutorial ●"
-                } else {
-                    "🎓 Tutorial"
-                };
-                if ui.button(tutorial_label).clicked() {
-                    if ui_state_copy.tutorial.active {
-                        ui_state_copy.tutorial.close();
+                    // Sim Time
+                    let total_seconds = sim_time as u64;
+                    let h = total_seconds / 3600;
+                    let m = (total_seconds % 3600) / 60;
+                    let s = total_seconds % 60;
+                    let time_str = if h > 0 {
+                        format!("{}h {:02}m {:02}s", h, m, s)
                     } else {
-                        ui_state_copy.tutorial.start();
-                    }
-                }
+                        format!("{:.1}s", sim_time)
+                    };
+                    status_field(ui, "SIM TIME", &|ui| {
+                        ui.label(
+                            egui::RichText::new(time_str.clone())
+                                .strong()
+                                .size(11.5)
+                                .color(theme::TEXT_PRIMARY),
+                        );
+                    });
+
+                    status_separator(ui);
+
+                    // Cells
+                    let cells_str = if cell_capacity > 0 {
+                        format!("{} / {}k", cell_count, cell_capacity / 1000)
+                    } else {
+                        format!("{}", cell_count)
+                    };
+                    status_field(ui, "CELLS", &|ui| {
+                        ui.label(
+                            egui::RichText::new(cells_str.clone())
+                                .strong()
+                                .size(11.5)
+                                .color(theme::TEXT_PRIMARY),
+                        );
+                    });
+
+                    status_separator(ui);
+
+                    // System load (CPU usage)
+                    let cpu_color = if cpu_usage > 80.0 {
+                        theme::STATUS_RED
+                    } else if cpu_usage > 50.0 {
+                        theme::STATUS_YELLOW
+                    } else {
+                        theme::STATUS_GREEN
+                    };
+                    status_field(ui, "SYSTEM LOAD", &|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("{:.0}%", cpu_usage))
+                                .strong()
+                                .size(11.5)
+                                .color(cpu_color),
+                        );
+                        // Mini bar
+                        let (bar_rect, _) = ui.allocate_exact_size(
+                            egui::vec2(40.0, 6.0),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter()
+                            .rect_filled(bar_rect, 1.0, theme::BG_DARKEST);
+                        let fill_w = (cpu_usage / 100.0).clamp(0.0, 1.0) * bar_rect.width();
+                        let fill_rect = egui::Rect::from_min_size(
+                            bar_rect.min,
+                            egui::vec2(fill_w, bar_rect.height()),
+                        );
+                        ui.painter().rect_filled(fill_rect, 1.0, cpu_color);
+                    });
+
+                    status_separator(ui);
+
+                    // System memory (process resident usage out of total RAM)
+                    let mem_str = if mem_total_gb >= 1.0 {
+                        format!("{:.1} / {:.0} GB", mem_used_gb, mem_total_gb)
+                    } else {
+                        format!("{:.0} MB", mem_used_gb * 1024.0)
+                    };
+                    let mem_pct = if mem_total_gb > 0.0 {
+                        (mem_used_gb / mem_total_gb) as f32
+                    } else {
+                        0.0
+                    };
+                    let mem_color = if mem_pct > 0.9 {
+                        theme::STATUS_RED
+                    } else if mem_pct > 0.7 {
+                        theme::STATUS_YELLOW
+                    } else {
+                        theme::STATUS_BLUE
+                    };
+                    status_field(ui, "MEMORY", &|ui| {
+                        ui.label(
+                            egui::RichText::new(mem_str.clone())
+                                .strong()
+                                .size(11.5)
+                                .color(theme::TEXT_PRIMARY),
+                        );
+                        let (bar_rect, _) = ui.allocate_exact_size(
+                            egui::vec2(40.0, 6.0),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter()
+                            .rect_filled(bar_rect, 1.0, theme::BG_DARKEST);
+                        let fill_w = mem_pct.clamp(0.0, 1.0) * bar_rect.width();
+                        let fill_rect = egui::Rect::from_min_size(
+                            bar_rect.min,
+                            egui::vec2(fill_w, bar_rect.height()),
+                        );
+                        ui.painter().rect_filled(fill_rect, 1.0, mem_color);
+                    });
+
+                    // FPS on the far right
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let fps_color = if fps >= 50.0 {
+                            theme::STATUS_GREEN
+                        } else if fps >= 30.0 {
+                            theme::STATUS_YELLOW
+                        } else {
+                            theme::STATUS_RED
+                        };
+                        status_field(ui, "FPS", &|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{:.0}", fps))
+                                    .strong()
+                                    .size(13.0)
+                                    .color(fps_color),
+                            );
+                        });
+                    });
+                });
             });
-        });
         
         // Show dock area in remaining space
         let mut style = egui_dock::Style::from_egui(self.ctx.global_style().as_ref());
         style.separator.extra = 75.0; // Reduce separator minimum constraint
+
+        // ── Bio-Spheres dock theme ──────────────────────────────────────────
+        // Insert a black gutter around the entire dock area so docked panels
+        // float on the darkest background colour, matching the concept art.
+        // The CentralPanel hosting the dock fills with `BG_DARKEST`, and the
+        // dock itself indents inward by `dock_area_padding`.
+        // GUTTER_WIDTH must match the painted border strips and separator width below.
+        const DOCK_GUTTER: i8 = 5;
+        style.dock_area_padding = Some(egui::Margin::same(DOCK_GUTTER));
+
+        // Border around the whole dock area
+        style.main_surface_border_stroke = egui::Stroke::NONE;
+
+        // Tab bar — slim, dark, with a hairline below
+        style.tab_bar.bg_fill = theme::TOPBAR_BG;
+        style.tab_bar.height = 26.0;
+        style.tab_bar.hline_color = theme::BORDER_SUBTLE;
+        style.tab_bar.corner_radius = egui::CornerRadius::ZERO;
+        style.tab_bar.fill_tab_bar = false;
+        style.tab_bar.inner_margin = egui::Margin::symmetric(2, 0);
+
+        // Active tab is highlighted by a soft teal radial glow ("spotlight")
+        // painted *behind* it — no solid fill, no underline. Inactive tabs
+        // sit flat on the same dark bar and are dimmed by text color alone.
+        style.tab.hline_below_active_tab_name = false;
+        style.tab.spacing = 4.0;
+
+        let tab_fill = theme::BG_PANEL;
+        // Bright cyan-white core that fades to the panel background. The
+        // mesh fan paints a smooth radial alpha falloff from the centre
+        // (this colour) to fully transparent at the perimeter.
+        let active_glow = egui::Color32::from_rgba_unmultiplied(60, 230, 200, 110);
+        // Squash the ellipse heavily — vertical radius is ~30% of horizontal
+        // so the spotlight reads as a wide horizontal lozenge centred on
+        // the tab text, exactly matching the concept art.
+        const GLOW_ASPECT: f32 = 0.30;
+
+        // Active — primary text + bright teal spotlight ellipse
+        style.tab.active.bg_fill   = tab_fill;
+        style.tab.active.text_color = theme::TEXT_PRIMARY;
+        style.tab.active.outline_color = egui::Color32::TRANSPARENT;
+        style.tab.active.corner_radius = egui::CornerRadius::same(3);
+        style.tab.active.glow_color = active_glow;
+        // 0.85 keeps the ellipse slightly inset from the tab edges so the
+        // spotlight reads as a contained shape with a clear margin around it.
+        style.tab.active.glow_radius_factor = 0.85;
+        style.tab.active.glow_aspect = GLOW_ASPECT;
+
+        // Focused — same as active
+        style.tab.focused.bg_fill   = tab_fill;
+        style.tab.focused.text_color = theme::TEXT_PRIMARY;
+        style.tab.focused.outline_color = egui::Color32::TRANSPARENT;
+        style.tab.focused.corner_radius = egui::CornerRadius::same(3);
+        style.tab.focused.glow_color = active_glow;
+        style.tab.focused.glow_radius_factor = 0.85;
+        style.tab.focused.glow_aspect = GLOW_ASPECT;
+
+        // Inactive — dim text, no glow
+        style.tab.inactive.bg_fill   = tab_fill;
+        style.tab.inactive.text_color = theme::TEXT_DIM;
+        style.tab.inactive.outline_color = egui::Color32::TRANSPARENT;
+        style.tab.inactive.corner_radius = egui::CornerRadius::same(3);
+        style.tab.inactive.glow_color = egui::Color32::TRANSPARENT;
+
+        // Hovered — primary text + a subtle teal spotlight at lower intensity
+        style.tab.hovered.bg_fill   = tab_fill;
+        style.tab.hovered.text_color = theme::TEXT_PRIMARY;
+        style.tab.hovered.outline_color = egui::Color32::TRANSPARENT;
+        style.tab.hovered.corner_radius = egui::CornerRadius::same(3);
+        style.tab.hovered.glow_color = egui::Color32::from_rgba_unmultiplied(60, 230, 200, 35);
+        style.tab.hovered.glow_radius_factor = 0.85;
+        style.tab.hovered.glow_aspect = GLOW_ASPECT;
+
+        // KB-focus variants mirror their non-KB counterparts
+        style.tab.active_with_kb_focus.bg_fill = tab_fill;
+        style.tab.active_with_kb_focus.text_color = theme::TEXT_PRIMARY;
+        style.tab.active_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
+        style.tab.active_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
+        style.tab.active_with_kb_focus.glow_color = active_glow;
+        style.tab.active_with_kb_focus.glow_radius_factor = 0.85;
+        style.tab.active_with_kb_focus.glow_aspect = GLOW_ASPECT;
+
+        style.tab.inactive_with_kb_focus.bg_fill = tab_fill;
+        style.tab.inactive_with_kb_focus.text_color = theme::TEXT_SECONDARY;
+        style.tab.inactive_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
+        style.tab.inactive_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
+        style.tab.inactive_with_kb_focus.glow_color = egui::Color32::TRANSPARENT;
+
+        style.tab.focused_with_kb_focus.bg_fill = tab_fill;
+        style.tab.focused_with_kb_focus.text_color = theme::TEXT_PRIMARY;
+        style.tab.focused_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
+        style.tab.focused_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
+        style.tab.focused_with_kb_focus.glow_color = active_glow;
+        style.tab.focused_with_kb_focus.glow_radius_factor = 0.85;
+        style.tab.focused_with_kb_focus.glow_aspect = GLOW_ASPECT;
+
+        // Tab bar background must match the tab fill so the strip reads as
+        // a single uniform surface.
+        style.tab_bar.bg_fill = tab_fill;
+        style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
+
+        // Tab body — same fill as the tabs above it. No stroke, no contrast.
+        style.tab.tab_body.bg_fill = tab_fill;
+        style.tab.tab_body.stroke = egui::Stroke::NONE;
+        style.tab.tab_body.corner_radius = egui::CornerRadius::ZERO;
+        style.tab.tab_body.inner_margin = egui::Margin { left: 6, right: 4, top: 4, bottom: 4 };
+
+        // Buttons (close, add, etc.)
+        style.buttons.close_tab_color = theme::TEXT_DIM;
+        style.buttons.close_tab_active_color = theme::STATUS_RED;
+        style.buttons.close_tab_bg_fill = egui::Color32::TRANSPARENT;
+        style.buttons.add_tab_color = theme::TEXT_SECONDARY;
+        style.buttons.add_tab_active_color = theme::ACCENT_TEAL;
+        style.buttons.add_tab_bg_fill = egui::Color32::TRANSPARENT;
+        style.buttons.add_tab_border_color = theme::BORDER_SUBTLE;
+
+        // Separator between docked panels — wider so it reads as a black
+        // gutter between panels (matching the concept art) and lights up
+        // teal on hover/drag for clear feedback.
+        style.separator.color_idle    = egui::Color32::BLACK;
+        style.separator.color_hovered = theme::ACCENT_TEAL;
+        style.separator.color_dragged = theme::ACCENT_TEAL;
+        style.separator.width         = DOCK_GUTTER as f32;
+
+        // Drop overlay during tab drag
+        style.overlay.selection_color = theme::ACCENT_TEAL.linear_multiply(0.35);
+        style.overlay.button_color    = theme::BG_WIDGET;
+        style.overlay.button_border_stroke = egui::Stroke::new(1.0, theme::ACCENT_TEAL);
 
         // Apply lock settings to hide tab bar height if locked
         if ui_state_copy.lock_tab_bar {
@@ -338,7 +930,109 @@ impl UiSystem {
                 &mut panel_context,
                 &mut self.viewport_rect,
             );
-            dock_area.show(&self.ctx, &mut tab_viewer);
+
+            // Host the dock inside a *transparent* CentralPanel so the 3D
+            // scene rendered behind egui shows through any tabs that opt out
+            // of background clearing (the Viewport).
+            //
+            // We then paint a black border around the dock's inset region
+            // (the area defined by `dock_area_padding`) by hand — this gives
+            // us the black gutter from the concept art around the panel
+            // cluster without obscuring the viewport.
+            const GUTTER: f32 = DOCK_GUTTER as f32;
+            #[allow(deprecated)]
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::none()
+                        .fill(egui::Color32::TRANSPARENT)
+                        .inner_margin(egui::Margin::ZERO),
+                )
+                .show(&self.ctx, |ui| {
+                    let area = ui.max_rect();
+                    let black = egui::Color32::BLACK;
+
+                    // Render the dock first so its panel/tab body fills paint
+                    // their backgrounds, then overlay the black gutter strips
+                    // on top. Painting the gutters last guarantees they cover
+                    // every pixel of the outer 8px frame regardless of how
+                    // the dock has clipped or rounded its contents.
+                    dock_area.show_inside(ui, &mut tab_viewer);
+
+                    // Copy the viewport rect out of the tab_viewer before
+                    // the gutter/bracket paint so we have a clean local copy.
+                    let vp_rect = *tab_viewer.viewport_rect;
+
+                    let painter = ui.painter();
+                    // Top gutter strip
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(
+                            area.left_top(),
+                            egui::pos2(area.right(), area.top() + GUTTER),
+                        ),
+                        0.0,
+                        black,
+                    );
+                    // Bottom gutter strip
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(
+                            egui::pos2(area.left(), area.bottom() - GUTTER),
+                            area.right_bottom(),
+                        ),
+                        0.0,
+                        black,
+                    );
+                    // Left gutter strip
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(
+                            area.left_top(),
+                            egui::pos2(area.left() + GUTTER, area.bottom()),
+                        ),
+                        0.0,
+                        black,
+                    );
+                    // Right gutter strip
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(
+                            egui::pos2(area.right() - GUTTER, area.top()),
+                            area.right_bottom(),
+                        ),
+                        0.0,
+                        black,
+                    );
+
+                    // Paint the corner brackets on the GPU viewport AFTER the
+                    // dock has rendered AND the gutters are down so they sit
+                    // on top of everything. Use a foreground layer painter
+                    // so the brackets are never clipped by any panel's clip rect.
+                    // Fall back to the previous frame's rect on the first frame
+                    // after switching to GPU mode (before the Viewport tab renders).
+                    if current_mode == crate::ui::types::SimulationMode::Gpu {
+                        // Only paint brackets when we have a rect from THIS frame's
+                        // Viewport tab render. Never fall back to a stale rect from
+                        // a different scene — one missed frame is fine.
+                        if let Some(viewport_rect) = vp_rect {
+                            let bracket_painter = ui.ctx().layer_painter(
+                                egui::LayerId::new(
+                                    egui::Order::Foreground,
+                                    egui::Id::new("viewport_brackets"),
+                                )
+                            );
+                            paint_viewport_brackets(&bracket_painter, viewport_rect);
+                        }
+                    }
+
+                    // Paint rounded corners on the Preview viewport — black
+                    // quarter-circle fills at each corner make the viewport
+                    // appear to have rounded corners against the black gutter.
+                    if current_mode == crate::ui::types::SimulationMode::Preview {
+                        if let Some(viewport_rect) = vp_rect {
+                            // vp_rect is the inner content area after tab_body.inner_margin.
+                            // Expand back out to the actual panel boundary before painting corners.
+                            let panel_rect = viewport_rect.expand2(egui::vec2(6.0, 4.0));
+                            paint_viewport_rounded_corners(ui.painter(), panel_rect, 40.0, black);
+                        }
+                    }
+                });
         }
         
         // Handle mode graph panel toggle request
@@ -988,5 +1682,368 @@ fn show_save_load_menu(
             ui_state.pending_load_path = Some(path);
             ui_state.show_loading_popup = true;
         }
+    }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Top bar / status bar helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Draw the Bio-Spheres logo glyph — a hexagon with a small inner ring.
+fn draw_logo_glyph(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let center = rect.center();
+    let radius = rect.width() * 0.45;
+
+    // Outer hexagon (pointy-top)
+    let mut points = Vec::with_capacity(6);
+    for i in 0..6 {
+        let angle = (i as f32) * std::f32::consts::TAU / 6.0 - std::f32::consts::FRAC_PI_2;
+        points.push(egui::pos2(
+            center.x + angle.cos() * radius,
+            center.y + angle.sin() * radius,
+        ));
+    }
+    // Hexagon stroke
+    for i in 0..6 {
+        painter.line_segment(
+            [points[i], points[(i + 1) % 6]],
+            egui::Stroke::new(1.5, color),
+        );
+    }
+    // Inner ring
+    painter.circle_stroke(center, radius * 0.45, egui::Stroke::new(1.0, color));
+    // Center dot
+    painter.circle_filled(center, 1.4, color);
+}
+
+/// Render a labelled status field for the bottom status bar.
+///
+/// Layout:  `LABEL` (small, dim, uppercase) above value content.
+/// The closure paints whatever value/widgets the field needs.
+fn status_field(ui: &mut egui::Ui, label: &str, content: &dyn Fn(&mut egui::Ui)) {
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 1.0;
+        ui.label(
+            egui::RichText::new(label)
+                .size(8.5)
+                .color(theme::TEXT_DIM),
+        );
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            content(ui);
+        });
+    });
+}
+
+/// Render a thin vertical separator between status bar fields.
+fn status_separator(ui: &mut egui::Ui) {
+    ui.add_space(10.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 24.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, theme::BORDER_SUBTLE);
+    ui.add_space(10.0);
+}
+
+/// Render a thin vertical divider for the top bar.
+///
+/// Slightly shorter than the status-bar variant and uses the brighter
+/// top-bar border tone so the separation reads cleanly against the
+/// darker top-bar fill.
+fn topbar_divider(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 18.0), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, 0.0, theme::BORDER_NORMAL);
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Left side rail — quick access to mode-specific panels
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Render the left side rail with stacked icon buttons that toggle key panels.
+fn render_side_rail(
+    ui: &mut egui::Ui,
+    state: &mut GlobalUiState,
+    dock_manager: &mut crate::ui::dock::DockManager,
+) {
+    use crate::ui::panel::Panel;
+
+    ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
+
+    // Mode-specific button list
+    let buttons: &[(&str, Panel, &str)] = match state.current_mode {
+        crate::ui::types::SimulationMode::Preview => &[
+            ("⛁",  Panel::Modes,            "Modes"),
+            ("⚙",  Panel::ParentSettings,   "Parent Settings"),
+            ("🔗", Panel::AdhesionSettings, "Adhesion Settings"),
+            ("◉",  Panel::QuaternionBall,   "Child Rotation"),
+            ("⊜",  Panel::CircleSliders,    "Circle Sliders"),
+            ("🎨", Panel::CellTypeVisuals,  "Cell Visuals"),
+            ("⚛",  Panel::ModeGraph,        "Mode Graph"),
+            ("⏱",  Panel::TimeSlider,       "Time Slider"),
+        ],
+        crate::ui::types::SimulationMode::Gpu => &[
+            ("🌐", Panel::WorldSettings,       "World Settings"),
+            ("☀",  Panel::LightSettings,       "Light & Fog"),
+            ("🌊", Panel::FluidSettings,       "Fluid System"),
+            ("⛰",  Panel::CaveSystem,          "Cave System"),
+            ("🔬", Panel::CellInspector,       "Cell Inspector"),
+            ("📊", Panel::PerformanceMonitor,  "Performance"),
+            ("🎬", Panel::SceneManager,        "Scene Manager"),
+            ("🎨", Panel::RenderingControls,   "Rendering"),
+        ],
+    };
+
+    for (icon, panel, tooltip) in buttons {
+        let is_open = is_panel_open(dock_manager.current_tree(), panel);
+        if rail_button(ui, icon, tooltip, is_open) {
+            if is_open {
+                close_panel(dock_manager.current_tree_mut(), panel);
+            } else {
+                open_panel(dock_manager.current_tree_mut(), panel);
+            }
+        }
+    }
+
+    // Reset-layout button pinned to the bottom
+    ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
+        if rail_button(ui, "⟲", "Reset Layout", false) {
+            dock_manager.reset_current_to_default();
+        }
+    });
+}
+
+/// Render a single icon button on the side rail.
+/// Returns `true` when clicked.
+fn rail_button(ui: &mut egui::Ui, icon: &str, tooltip: &str, active: bool) -> bool {
+    let size = egui::vec2(32.0, 32.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let resp = resp.on_hover_text(tooltip);
+
+    // Background
+    let (bg_color, border_color, icon_color) = if active {
+        (
+            theme::BG_ACTIVE,
+            theme::ACCENT_TEAL,
+            theme::ACCENT_TEAL,
+        )
+    } else if resp.hovered() {
+        (
+            theme::BG_HOVER,
+            theme::BORDER_NORMAL,
+            theme::TEXT_PRIMARY,
+        )
+    } else {
+        (
+            theme::BG_WIDGET,
+            theme::BORDER_SUBTLE,
+            theme::TEXT_SECONDARY,
+        )
+    };
+
+    let painter = ui.painter();
+    painter.rect_filled(rect, egui::CornerRadius::same(3), bg_color);
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(3),
+        egui::Stroke::new(1.0, border_color),
+        egui::StrokeKind::Inside,
+    );
+
+    // Active accent bar on the left edge
+    if active {
+        let bar_rect = egui::Rect::from_min_size(
+            rect.left_top() + egui::vec2(0.0, 4.0),
+            egui::vec2(2.0, rect.height() - 8.0),
+        );
+        painter.rect_filled(bar_rect, 1.0, theme::ACCENT_TEAL);
+    }
+
+    // Icon
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(15.0),
+        icon_color,
+    );
+
+    resp.clicked()
+}
+
+
+/// Load the embedded app icon PNG into an egui texture handle.
+///
+/// The PNG bytes are embedded at compile time so the icon always ships with
+/// the binary regardless of the runtime working directory. Returns `None` if
+/// decoding fails — callers should fall back to a procedural glyph.
+fn load_app_icon_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    const ICON_BYTES: &[u8] = include_bytes!("../../assets/icon.png");
+
+    let img = match image::load_from_memory(ICON_BYTES) {
+        Ok(img) => img.to_rgba8(),
+        Err(e) => {
+            log::warn!("Failed to decode embedded app icon: {}", e);
+            return None;
+        }
+    };
+    let (w, h) = img.dimensions();
+    let pixels = img.into_raw();
+    let color_image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &pixels);
+
+    Some(ctx.load_texture(
+        "bio_spheres_app_icon",
+        color_image,
+        egui::TextureOptions::LINEAR,
+    ))
+}
+
+
+/// Paint L-shaped teal corner brackets around the GPU-mode viewport rect.
+fn paint_viewport_brackets(painter: &egui::Painter, viewport_rect: egui::Rect) {
+    if viewport_rect.width() <= 0.0 || viewport_rect.height() <= 0.0 {
+        return;
+    }
+
+    // Inset from the viewport edge so the brackets sit clearly inside.
+    let inset = 16.0;
+    let r = viewport_rect.shrink(inset);
+    if r.width() <= 0.0 || r.height() <= 0.0 {
+        return;
+    }
+
+    // Arm length: 4% of the smaller dimension, clamped 20–50px.
+    let arm = (r.width().min(r.height()) * 0.04).clamp(20.0, 50.0);
+
+    let color  = theme::ACCENT_TEAL;
+    let stroke = egui::Stroke::new(1.5, color);
+
+    // Each bracket is a single connected polyline (3 points forming an L).
+    // Drawing as a polyline ensures the corner pixel is shared and the join
+    // looks clean — no gap, no overlap, no double-painted corner.
+    let brackets: [&[egui::Pos2; 3]; 4] = [
+        // Top-left
+        &[
+            egui::pos2(r.left(),        r.top() + arm),
+            egui::pos2(r.left(),        r.top()),
+            egui::pos2(r.left() + arm,  r.top()),
+        ],
+        // Top-right
+        &[
+            egui::pos2(r.right() - arm, r.top()),
+            egui::pos2(r.right(),       r.top()),
+            egui::pos2(r.right(),       r.top() + arm),
+        ],
+        // Bottom-left
+        &[
+            egui::pos2(r.left(),        r.bottom() - arm),
+            egui::pos2(r.left(),        r.bottom()),
+            egui::pos2(r.left() + arm,  r.bottom()),
+        ],
+        // Bottom-right
+        &[
+            egui::pos2(r.right() - arm, r.bottom()),
+            egui::pos2(r.right(),       r.bottom()),
+            egui::pos2(r.right(),       r.bottom() - arm),
+        ],
+    ];
+
+    for pts in brackets {
+        painter.line_segment([pts[0], pts[1]], stroke);
+        painter.line_segment([pts[1], pts[2]], stroke);
+    }
+}
+
+/// Paint black corner pieces that make the viewport appear to have rounded
+/// corners — like the reference image showing a rounded rectangle.
+///
+/// At each corner we paint a black shape that fills the gap between the
+/// viewport's straight bounding-box corner and the rounded corner curve.
+/// The shape is: a `radius × radius` square with a quarter-circle notch
+/// cut from the inner corner (toward the viewport centre).
+///
+/// Built as a polygon fan: corner → edge_x → arc[0..N] → edge_y → corner
+fn paint_viewport_rounded_corners(
+    painter: &egui::Painter,
+    viewport_rect: egui::Rect,
+    radius: f32,
+    color: egui::Color32,
+) {
+    const SEGMENTS: usize = 20;
+
+    let vert = |pos: egui::Pos2| egui::epaint::Vertex {
+        pos,
+        uv: egui::epaint::WHITE_UV,
+        color,
+    };
+
+    // For each corner:
+    //   corner   = the actual viewport corner (bounding-box corner)
+    //   edge_x   = point `radius` along the horizontal edge inward
+    //   edge_y   = point `radius` along the vertical edge inward
+    //   arc_cx   = centre of the quarter-circle arc = (edge_x.x, edge_y.y)
+    //              i.e. `radius` inward from the corner diagonally
+    //   arc sweeps from edge_x back to edge_y going through the corner
+    //   (the arc bulges toward the corner, creating the concave notch)
+    let r = viewport_rect;
+    let corners: [(egui::Pos2, egui::Pos2, egui::Pos2, f32, f32); 4] = [
+        // top-left: arc centre (left+r, top+r), sweep 180°→270° (points toward corner)
+        (r.left_top(),
+         egui::pos2(r.left() + radius, r.top()),          // along top edge
+         egui::pos2(r.left(),          r.top() + radius), // along left edge
+         std::f32::consts::PI,
+         std::f32::consts::PI * 1.5),
+        // top-right: arc centre (right-r, top+r), sweep 270°→360°
+        (r.right_top(),
+         egui::pos2(r.right(),          r.top() + radius), // along right edge
+         egui::pos2(r.right() - radius, r.top()),          // along top edge
+         std::f32::consts::PI * 1.5,
+         std::f32::consts::TAU),
+        // bottom-right: arc centre (right-r, bottom-r), sweep 0°→90°
+        (r.right_bottom(),
+         egui::pos2(r.right() - radius, r.bottom()),       // along bottom edge
+         egui::pos2(r.right(),          r.bottom() - radius), // along right edge
+         0.0_f32,
+         std::f32::consts::FRAC_PI_2),
+        // bottom-left: arc centre (left+r, bottom-r), sweep 90°→180°
+        (r.left_bottom(),
+         egui::pos2(r.left(),          r.bottom() - radius), // along left edge
+         egui::pos2(r.left() + radius, r.bottom()),          // along bottom edge
+         std::f32::consts::FRAC_PI_2,
+         std::f32::consts::PI),
+    ];
+
+    for (corner, edge_a, edge_b, start_angle, end_angle) in corners {
+        // Arc centre = radius inward from corner on both axes
+        let arc_cx = egui::pos2(
+            corner.x + (edge_a.x - corner.x) + (edge_b.x - corner.x),
+            corner.y + (edge_a.y - corner.y) + (edge_b.y - corner.y),
+        );
+
+        let mut mesh = egui::Mesh::default();
+
+        // Fan centre = the bounding-box corner.
+        // The arc endpoints land exactly on edge_a and edge_b, so we don't
+        // need explicit spoke vertices — the arc itself closes the shape.
+        mesh.vertices.push(vert(corner));
+
+        // Arc sweeping from start_angle to end_angle
+        for i in 0..=SEGMENTS {
+            let t = i as f32 / SEGMENTS as f32;
+            let angle = start_angle + t * (end_angle - start_angle);
+            mesh.vertices.push(vert(egui::pos2(
+                arc_cx.x + angle.cos() * radius,
+                arc_cx.y + angle.sin() * radius,
+            )));
+        }
+
+        // Triangle fan from corner (0) to each consecutive arc pair
+        let n = mesh.vertices.len() as u32;
+        for i in 1..(n - 1) {
+            mesh.indices.extend_from_slice(&[0, i, i + 1]);
+        }
+
+        painter.add(egui::Shape::mesh(mesh));
     }
 }

@@ -4,7 +4,7 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, DeathParticleRenderer, DepthOfFieldRenderer, GpuAdhesionLineRenderer, GpuSurfaceNets, InstanceBuilder, NutrientParticleRenderer, OrganismSkinRenderer, SteamParticleRenderer, SunRenderer, TailRenderer, VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
+use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, DeathParticleRenderer, DepthOfFieldRenderer, GpuAdhesionLineRenderer, GpuSurfaceNets, InstanceBuilder, NutrientParticleRenderer, OrganismSkinRenderer, SkyboxRenderer, SteamParticleRenderer, SunRenderer, TailRenderer, VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
@@ -343,6 +343,10 @@ pub struct GpuScene {
     pub show_sun: bool,
     /// Sun intensity
     pub sun_intensity: f32,
+    /// Procedural space skybox renderer
+    pub skybox_renderer: Option<SkyboxRenderer>,
+    /// Whether to show the procedural skybox
+    pub show_skybox: bool,
     /// Index of cell currently being dragged (u32::MAX = none)
     pub dragged_cell_index: u32,
     /// Last value written to cell_count_buffer[2] for drag tracking.
@@ -710,6 +714,8 @@ impl GpuScene {
             sun_renderer: None,
             show_sun: true,
             sun_intensity: 10.0,
+            skybox_renderer: None,
+            show_skybox: true,
             dragged_cell_index: u32::MAX,
             // Initialize to a value that differs from both dragged_cell_index (u32::MAX)
             // AND the GPU buffer's zero-initialized value (0), so the first frame always
@@ -3551,6 +3557,10 @@ impl GpuScene {
         let mut sun_renderer = SunRenderer::new(device, surface_format);
         sun_renderer.resize(self.renderer.width, self.renderer.height);
         self.sun_renderer = Some(sun_renderer);
+
+        // Create procedural space skybox renderer
+        let skybox_renderer = SkyboxRenderer::new(device, surface_format);
+        self.skybox_renderer = Some(skybox_renderer);
         
         true
     }
@@ -5867,6 +5877,21 @@ impl Scene for GpuScene {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+        }
+
+        // Render procedural space skybox (before cells so geometry draws over it)
+        if self.show_skybox {
+            if let Some(ref skybox_renderer) = self.skybox_renderer {
+                skybox_renderer.render(
+                    &mut encoder,
+                    queue,
+                    scene_target,
+                    device,
+                    view_proj,
+                    self.camera.position(),
+                    self.current_time,
+                );
+            }
         }
 
         // Render cells using GPU-culled instance buffer

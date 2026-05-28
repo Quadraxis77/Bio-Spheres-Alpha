@@ -241,6 +241,29 @@ pub struct TabInteractionStyle {
 
     /// Color of the title text.
     pub text_color: Color32,
+
+    /// Color of an optional soft radial glow painted *behind* the tab.
+    ///
+    /// Use this to give the active tab a "spotlight" highlight without a
+    /// solid fill. Set to [`Color32::TRANSPARENT`] (the default) to disable.
+    /// The glow fades out over [`Self::glow_radius_factor`] times the tab's
+    /// half-width.
+    pub glow_color: Color32,
+
+    /// Glow falloff radius as a multiple of the tab's half-width.
+    ///
+    /// `1.0` makes the glow exactly fit the tab, `1.5` lets it bleed a bit
+    /// outside, `0.7` keeps it tight to the text. Default is `1.2`.
+    pub glow_radius_factor: f32,
+
+    /// Vertical aspect of the glow ellipse, as a multiple of its horizontal
+    /// radius.
+    ///
+    /// `1.0` produces a circle bounded by the tab's vertical half-extent.
+    /// Values below `1.0` squash the ellipse into a horizontal lozenge so
+    /// the spotlight is genuinely wider than it is tall — useful for tab
+    /// strips where the tab itself is fairly short. Default is `1.0`.
+    pub glow_aspect: f32,
 }
 
 /// Specifies the look and feel of the tab body.
@@ -464,6 +487,9 @@ impl Default for TabInteractionStyle {
             outline_color: Color32::BLACK,
             corner_radius: CornerRadius::default(),
             text_color: Color32::DARK_GRAY,
+            glow_color: Color32::TRANSPARENT,
+            glow_radius_factor: 1.2,
+            glow_aspect: 1.0,
         }
     }
 }
@@ -678,6 +704,9 @@ impl TabInteractionStyle {
                 se: 0,
                 ..style.visuals.widgets.active.corner_radius
             },
+            glow_color: Color32::TRANSPARENT,
+            glow_radius_factor: 1.2,
+            glow_aspect: 1.0,
         }
     }
 
