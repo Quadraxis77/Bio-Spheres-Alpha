@@ -663,7 +663,8 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
     let fluid_type = get_fluid_type(state);
     
     // Steam condensation check - convert steam back to water when contacting solids
-    if fluid_type == 3u && should_condense_steam(gid) {
+    // Guard: skip the expensive neighbor scan entirely when probability is zero
+    if fluid_type == 3u && params.condensation_probability > 0.0 && should_condense_steam(gid) {
         // Try to condense steam back to water
         let result = atomicCompareExchangeWeak(&voxels[idx], state, (65535u << 16u) | 1u);
         if result.exchanged {
@@ -672,7 +673,8 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Water-to-steam conversion check - convert water to steam when touching hot surfaces near boundary
-    if fluid_type == 1u && should_convert_to_steam(gid) {
+    // Guard: skip the expensive neighbor scan entirely when probability is zero
+    if fluid_type == 1u && params.vaporization_probability > 0.0 && should_convert_to_steam(gid) {
         // Try to convert water to steam
         let result = atomicCompareExchangeWeak(&voxels[idx], state, (65535u << 16u) | 3u);
         if result.exchanged {
@@ -690,7 +692,8 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         let up_offset = get_offset(gravity_dir_index_steam ^ 1u);
 
         // Scan upward (against gravity) to find the nearest water voxel
-        for (var step = 1; step <= 64; step++) {
+        // Cap at 16 steps — enough for realistic steam behavior, avoids 64-step worst case
+        for (var step = 1; step <= 16; step++) {
             let sx = i32(gid.x) + up_offset.x * step;
             let sy = i32(gid.y) + up_offset.y * step;
             let sz = i32(gid.z) + up_offset.z * step;
@@ -821,18 +824,24 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+    // Cache support check once — reused by fast-drop and all process_direction calls below.
+    // water_is_supported() does a neighbor atomic load; calling it once here avoids
+    // repeating it up to 8 more times (twice per process_direction × 4 horizontal calls).
+    let this_voxel_supported = params.gravity_mode == 3u || fluid_type != 1u || water_is_supported(gid);
+
     // Water fast-drop: unsupported water falls instantly to nearest support
     // This bypasses checker/probability gates in process_direction
     // Skip in radial mode — radial_move() handles all movement there.
-    if fluid_type == 1u && params.gravity_mode != 3u && !water_is_supported(gid) {
+    if fluid_type == 1u && params.gravity_mode != 3u && !this_voxel_supported {
         let grav_dir = get_effective_gravity(gid);
         let gravity_dir_index = gravity_dir_to_index(grav_dir);
         
         let down = get_offset(gravity_dir_index);
         
         // Scan downward to find the lowest empty cell above a surface
+        // Cap at 16 steps — matches steam teleport cap, avoids 64-step worst case
         var target_y = -1;
-        for (var step = 1; step <= 64; step++) {
+        for (var step = 1; step <= 16; step++) {
             let sx = i32(gid.x) + down.x * step;
             let sy = i32(gid.y) + down.y * step;
             let sz = i32(gid.z) + down.z * step;
@@ -966,22 +975,22 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
     let gravity_dir_index = gravity_dir_to_index_noisy(grav_dir, gid);
     
     // Process gravity direction first (highest priority)
-    process_direction(gid, gravity_dir_index);
+    process_direction(gid, gravity_dir_index, this_voxel_supported);
     
     // Process opposite direction for upward prevention
     let opposite_dir = gravity_dir_index ^ 1u; // Flip last bit to get opposite
-    process_direction(gid, opposite_dir);
+    process_direction(gid, opposite_dir, this_voxel_supported);
     
     // Phase 2: Accelerated horizontal spreading for faster settling
     let horizontal_order = get_horizontal_direction_order(gid, params.time, gravity_dir_index);
     
     // Process all 4 horizontal directions with increased probability
     for (var i = 0u; i < 4u; i++) {
-        process_direction(gid, horizontal_order[i]);
+        process_direction(gid, horizontal_order[i], this_voxel_supported);
     }
 }
 
-fn process_direction(gid: vec3<u32>, direction: u32) {
+fn process_direction(gid: vec3<u32>, direction: u32, a_supported: bool) {
     let res = params.grid_resolution;
     let offset = get_offset(direction);
     let nx = i32(gid.x) + offset.x;
@@ -1060,13 +1069,7 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
         
         // Skip movement based on gravity strength (lower gravity = less movement)
         // EXCEPTION: Unsupported water gets guaranteed fall chance to prevent hanging in air
-        var is_unsupported_water = false;
-        if (a_is_water && !water_is_supported(gid)) {
-            is_unsupported_water = true;
-        }
-        if (b_is_water && !water_is_supported(vec3<u32>(u32(nx), u32(ny), u32(nz)))) {
-            is_unsupported_water = true;
-        }
+        // (a_supported is pre-computed by the caller to avoid redundant neighbor lookups)
         
         // Always respect gravity probability, even for unsupported water
         // Unsupported water just gets priority in the movement logic, not guaranteed movement
@@ -1101,13 +1104,8 @@ fn process_direction(gid: vec3<u32>, direction: u32) {
         // Water can only move laterally if it's supported (touching other water or solids)
         // Exception: radial mode — water on the shell surface must flow freely to round out
         if params.gravity_mode != 3u && (a_is_water || b_is_water) {
-            var a_supported = true;
+            // a_supported is pre-computed by the caller; only compute b's support on demand.
             var b_supported = true;
-            
-            if a_is_water {
-                a_supported = water_is_supported(gid);
-            }
-            
             if b_is_water {
                 b_supported = water_is_supported(vec3<u32>(u32(nx), u32(ny), u32(nz)));
             }

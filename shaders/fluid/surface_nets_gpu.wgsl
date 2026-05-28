@@ -110,20 +110,19 @@ fn sample_density_height_filtered(x: i32, y: i32, z: i32) -> f32 {
     if !is_in_density_bounds(x, y, z) {
         return 0.0;
     }
-    // Use a 5x5x5 kernel so density bleeds further into cave walls,
-    // hiding the gap between the water surface and solid geometry.
+    // Use a 3x3x3 kernel for strong averaging (27 samples vs 125 for 5x5x5).
     var sum = 0.0;
     var weight_sum = 0.0;
     
-    for (var dx = -2; dx <= 2; dx++) {
-        for (var dy = -2; dy <= 2; dy++) {
-            for (var dz = -2; dz <= 2; dz++) {
+    for (var dx = -1; dx <= 1; dx++) {
+        for (var dy = -1; dy <= 1; dy++) {
+            for (var dz = -1; dz <= 1; dz++) {
                 let nx = x + dx;
                 let ny = y + dy;
                 let nz = z + dz;
                 
                 let dist_sq = f32(dx * dx + dy * dy + dz * dz);
-                let weight = exp(-dist_sq * 0.8);
+                let weight = exp(-dist_sq * 0.8); // Strong falloff for more smoothing
                 
                 // sample_density_clamped returns 0.0 for out-of-bounds
                 sum += sample_density_clamped(nx, ny, nz) * weight;

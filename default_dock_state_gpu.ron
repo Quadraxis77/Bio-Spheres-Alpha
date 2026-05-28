@@ -5,15 +5,15 @@
                 Horizontal((
                     rect: (
                         min: (
-                            x: 0.0,
-                            y: 22.0,
+                            x: 45.0,
+                            y: 43.0,
                         ),
                         max: (
-                            x: 1965.7188,
-                            y: 752.0,
+                            x: 1960.7188,
+                            y: 708.28125,
                         ),
                     ),
-                    fraction: 0.8799416,
+                    fraction: 0.8501132,
                     fully_collapsed: false,
                     collapsed_leaf_count: 0,
                     absolute_size_left: None,
@@ -21,15 +21,15 @@
                 Horizontal((
                     rect: (
                         min: (
-                            x: 0.0,
-                            y: 22.0,
+                            x: 45.0,
+                            y: 43.0,
                         ),
                         max: (
-                            x: 1729.7142,
-                            y: 752.0,
+                            x: 1671.4286,
+                            y: 708.28125,
                         ),
                     ),
-                    fraction: 0.13032703,
+                    fraction: 0.16439992,
                     fully_collapsed: false,
                     collapsed_leaf_count: 0,
                     absolute_size_left: None,
@@ -37,15 +37,15 @@
                 Vertical((
                     rect: (
                         min: (
-                            x: 1730.8572,
-                            y: 22.0,
+                            x: 1676.5714,
+                            y: 43.0,
                         ),
                         max: (
-                            x: 1965.7188,
-                            y: 752.0,
+                            x: 1960.7188,
+                            y: 708.28125,
                         ),
                     ),
-                    fraction: 0.20684928,
+                    fraction: 0.1590057,
                     fully_collapsed: false,
                     collapsed_leaf_count: 0,
                     absolute_size_left: None,
@@ -53,12 +53,12 @@
                 Vertical((
                     rect: (
                         min: (
-                            x: 0.0,
-                            y: 22.0,
+                            x: 45.0,
+                            y: 43.0,
                         ),
                         max: (
-                            x: 225.14285,
-                            y: 752.0,
+                            x: 309.7143,
+                            y: 708.28125,
                         ),
                     ),
                     fraction: 0.38962814,
@@ -69,22 +69,22 @@
                 Leaf((
                     rect: (
                         min: (
-                            x: 225.71428,
-                            y: 22.0,
+                            x: 314.2857,
+                            y: 43.0,
                         ),
                         max: (
-                            x: 1729.7142,
-                            y: 752.0,
+                            x: 1671.4286,
+                            y: 708.28125,
                         ),
                     ),
                     viewport: (
                         min: (
-                            x: 0.0,
-                            y: 46.0,
+                            x: 314.28125,
+                            y: 43.0,
                         ),
                         max: (
-                            x: 1784.0,
-                            y: 752.0,
+                            x: 1671.4375,
+                            y: 708.28125,
                         ),
                     ),
                     tabs: [
@@ -97,56 +97,56 @@
                 Leaf((
                     rect: (
                         min: (
-                            x: 1730.8572,
-                            y: 22.0,
+                            x: 1676.5714,
+                            y: 43.0,
                         ),
                         max: (
-                            x: 1965.7188,
-                            y: 172.0,
+                            x: 1960.7188,
+                            y: 146.28572,
                         ),
                     ),
                     viewport: (
                         min: (
-                            x: 1730.8438,
-                            y: 22.0,
+                            x: 1676.5625,
+                            y: 43.0,
                         ),
                         max: (
-                            x: 1965.7188,
-                            y: 172.0,
+                            x: 1960.7188,
+                            y: 146.28125,
                         ),
                     ),
                     tabs: [
                         RightPanel,
                         SceneManager,
                     ],
-                    active: (0),
+                    active: (1),
                     scroll: 0.0,
                     collapsed: false,
                 )),
                 Leaf((
                     rect: (
                         min: (
-                            x: 1730.8572,
-                            y: 173.14285,
+                            x: 1676.5714,
+                            y: 151.42857,
                         ),
                         max: (
-                            x: 1965.7188,
-                            y: 752.0,
+                            x: 1960.7188,
+                            y: 708.28125,
                         ),
                     ),
                     viewport: (
                         min: (
-                            x: 1730.8438,
-                            y: 197.15625,
+                            x: 1676.5625,
+                            y: 177.4375,
                         ),
                         max: (
-                            x: 1965.7188,
-                            y: 752.0,
+                            x: 1960.7188,
+                            y: 708.28125,
                         ),
                     ),
                     tabs: [
-                        CellInspector,
                         PerformanceMonitor,
+                        CellInspector,
                     ],
                     active: (0),
                     scroll: 0.0,
@@ -155,22 +155,22 @@
                 Leaf((
                     rect: (
                         min: (
-                            x: 0.0,
-                            y: 22.0,
+                            x: 45.0,
+                            y: 43.0,
                         ),
                         max: (
-                            x: 225.14285,
-                            y: 305.7143,
+                            x: 309.7143,
+                            y: 300.0,
                         ),
                     ),
                     viewport: (
                         min: (
-                            x: 0.0,
-                            y: 46.0,
+                            x: 45.0,
+                            y: 76.5,
                         ),
                         max: (
-                            x: 225.15625,
-                            y: 305.71875,
+                            x: 309.71875,
+                            y: 300.0,
                         ),
                     ),
                     tabs: [
@@ -184,29 +184,29 @@
                 Leaf((
                     rect: (
                         min: (
-                            x: 0.0,
-                            y: 306.85715,
+                            x: 45.0,
+                            y: 304.57144,
                         ),
                         max: (
-                            x: 225.14285,
-                            y: 752.0,
+                            x: 309.7143,
+                            y: 708.28125,
                         ),
                     ),
                     viewport: (
                         min: (
-                            x: 0.0,
-                            y: 330.84375,
+                            x: 45.0,
+                            y: 330.5625,
                         ),
                         max: (
-                            x: 225.15625,
-                            y: 752.0,
+                            x: 309.71875,
+                            y: 708.28125,
                         ),
                     ),
                     tabs: [
                         CaveSystem,
                         FluidSettings,
                     ],
-                    active: (0),
+                    active: (1),
                     scroll: 0.0,
                     collapsed: false,
                 )),
@@ -216,8 +216,24 @@
                 Empty,
                 Empty,
                 Empty,
+                Empty,
+                Empty,
+                Empty,
+                Empty,
+                Empty,
+                Empty,
+                Empty,
+                Empty,
+                Empty,
+                Empty,
+                Empty,
+                Empty,
+                Empty,
+                Empty,
+                Empty,
+                Empty,
             ],
-            focused_node: Some((5)),
+            focused_node: Some((7)),
             collapsed: false,
             collapsed_leaf_count: 0,
         )),

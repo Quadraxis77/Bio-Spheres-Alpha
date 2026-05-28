@@ -54,6 +54,8 @@ pub struct PreviewScene {
     pub fov_cone_renderer: FovConeRenderer,
     /// Procedural background skybox (gradient + grid)
     pub skybox_renderer: PreviewSkyboxRenderer,
+    /// Whether to show the skybox background (disable for main menu panels)
+    pub show_skybox: bool,
 }
 
 impl PreviewScene {
@@ -94,6 +96,7 @@ impl PreviewScene {
             camera: CameraController::new_for_preview_scene(),
             last_ui_time_value: 0.0,
             show_adhesion_lines: true,
+            show_skybox: true,
             selected_mode_indices: Vec::new(),
             context_menu_cell: None,
             test_signals: Vec::new(),
@@ -227,7 +230,7 @@ impl Scene for PreviewScene {
         }
 
         // Pass 1.5: Render procedural background skybox
-        {
+        if self.show_skybox {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Preview Scene Skybox Encoder"),
             });

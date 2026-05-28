@@ -99,6 +99,7 @@ impl MainMenuScene {
         let left_name = left_genome.name.clone();
         let mut left_preview = crate::scene::PreviewScene::new(device, queue, &panel_config);
         left_preview.show_adhesion_lines = true;
+        left_preview.show_skybox = false;
         left_preview.camera.distance = ORBIT_DISTANCE;
         left_preview.camera.target_distance = ORBIT_DISTANCE;
         left_preview.update_genome(&left_genome);
@@ -118,6 +119,7 @@ impl MainMenuScene {
         let right_name = right_genome.name.clone();
         let mut right_preview = crate::scene::PreviewScene::new(device, queue, &panel_config);
         right_preview.show_adhesion_lines = true;
+        right_preview.show_skybox = false;
         right_preview.camera.distance = ORBIT_DISTANCE;
         right_preview.camera.target_distance = ORBIT_DISTANCE;
         right_preview.update_genome(&right_genome);

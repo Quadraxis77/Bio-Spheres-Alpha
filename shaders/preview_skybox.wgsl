@@ -71,22 +71,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var grid_contrib = vec3<f32>(0.0);
 
     if (dir.y < -0.001) {
-        // Ray-plane intersection: floor at world y = -floor_y
-        let floor_y = 8.0; // how far below camera the floor sits
-        let t = -(camera.camera_pos.y + floor_y) / dir.y;
+        // Ray-plane intersection: floor at fixed world y = FLOOR_WORLD_Y
+        // Placed well below the origin so organisms don't clip through it.
+        let floor_world_y = -28.0;
+        let t = (floor_world_y - camera.camera_pos.y) / dir.y;
 
         if (t > 0.0 && t < 800.0) {
             let hit = camera.camera_pos + dir * t;
 
-            // Grid spacing
-            let grid_scale = 2.0;
-            let gx = grid_line(hit.x / grid_scale, 0.025);
-            let gz = grid_line(hit.z / grid_scale, 0.025);
+            // Grid spacing — larger value = fewer, more spread-out lines
+            let grid_scale = 6.0;
+            let gx = grid_line(hit.x / grid_scale, 0.02);
+            let gz = grid_line(hit.z / grid_scale, 0.02);
             let line = max(gx, gz);
 
             // Fade with distance
             let dist = t;
-            let fade = exp(-dist * 0.012) * clamp(1.0 - dist * 0.002, 0.0, 1.0);
+            let fade = exp(-dist * 0.008) * clamp(1.0 - dist * 0.001, 0.0, 1.0);
 
             // Cyan grid color matching the UI aesthetic
             let grid_color = vec3<f32>(0.05, 0.55, 0.65);
