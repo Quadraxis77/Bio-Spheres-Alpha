@@ -111,6 +111,7 @@ impl GifCaptureState {
         sim_time: f32,
         cam_rotation: Quat,
         cam_distance: f32,
+        cam_center: Vec3,
         cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
     ) -> Result<Self, String> {
         let panel_config = wgpu::SurfaceConfiguration {
@@ -195,6 +196,7 @@ impl GifCaptureState {
         scene.show_skybox = false;
         scene.camera.distance = cam_distance;
         scene.camera.target_distance = cam_distance;
+        scene.camera.center = cam_center;
         scene.gizmo_renderer.update_config(&crate::rendering::orientation_gizmo::GizmoConfig {
             visible: false, ..Default::default()
         });
@@ -300,12 +302,10 @@ impl GifCaptureState {
             self.scene.state.step_forward(self.frame_interval, &g, &c);
         }
 
-        // Set camera for this frame.
-        // Decompose the saved rotation: extract pitch by looking at how far the
-        // forward vector dips below the horizon, then orbit purely around Y at
-        // that pitch, starting from the saved yaw angle.
+        // Set camera for this frame — orbit around the saved center point at
+        // the saved distance, starting from the saved yaw, with the saved pitch.
         let saved_forward = self.initial_rotation * Vec3::NEG_Z;
-        let pitch_angle = saved_forward.y.asin(); // negative = looking down
+        let pitch_angle = saved_forward.y.asin();
         let pitch = Quat::from_axis_angle(Vec3::X, pitch_angle);
         let yaw   = Quat::from_axis_angle(Vec3::Y, self.orbit_angle);
         let rot   = yaw * pitch;

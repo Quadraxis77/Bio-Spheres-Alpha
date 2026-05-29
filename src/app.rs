@@ -2306,17 +2306,19 @@ impl App {
                 }
                 DeferredAction::CaptureGif => {
                     // Start the incremental GIF capture state machine.
-                    let (genome, cam_rotation, cam_distance) = if let Some(preview) = self.scene_manager.get_preview_scene() {
+                    let (genome, cam_rotation, cam_distance, cam_center) = if let Some(preview) = self.scene_manager.get_preview_scene() {
                         (
                             preview.genome.clone(),
                             preview.camera.rotation,
                             preview.camera.distance,
+                            preview.camera.center,
                         )
                     } else {
                         (
                             self.working_genome.clone(),
                             glam::Quat::from_axis_angle(glam::Vec3::X, -0.35),
                             40.0,
+                            glam::Vec3::ZERO,
                         )
                     };
                     let sim_time = self.editor_state.time_value;
@@ -2330,6 +2332,7 @@ impl App {
                         sim_time,
                         cam_rotation,
                         cam_distance,
+                        cam_center,
                         Some(&cell_type_visuals),
                     ) {
                         Ok(state) => {

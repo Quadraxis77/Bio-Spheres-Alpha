@@ -1806,6 +1806,8 @@ pub struct PanelContext<'a> {
     pub current_mode: SimulationMode,
     /// Performance metrics
     pub performance: &'a PerformanceMetrics,
+    /// When true, panel content should not render (hide UI mode).
+    pub hide_ui: bool,
 }
 
 impl<'a> PanelContext<'a> {
@@ -1818,6 +1820,7 @@ impl<'a> PanelContext<'a> {
         scene_request: &'a mut SceneModeRequest,
         current_mode: SimulationMode,
         performance: &'a PerformanceMetrics,
+        hide_ui: bool,
     ) -> Self {
         Self {
             genome,
@@ -1827,6 +1830,7 @@ impl<'a> PanelContext<'a> {
             scene_request,
             current_mode,
             performance,
+            hide_ui,
         }
     }
 

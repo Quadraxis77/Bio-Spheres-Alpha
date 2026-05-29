@@ -60,6 +60,18 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
     }
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
+        // When hide_ui is active, only render the viewport — all other panels
+        // are skipped entirely so their content doesn't appear on screen.
+        if self.context.hide_ui {
+            if matches!(tab, Panel::Viewport) {
+                let is_gpu_mode = self.context.current_mode == crate::ui::types::SimulationMode::Gpu;
+                render_viewport(ui, self.viewport_rect, is_gpu_mode);
+                if let Some(r) = *self.viewport_rect {
+                    self.context.editor_state.panel_rects.insert("Viewport".to_string(), r);
+                }
+            }
+            return;
+        }
         match tab {
             Panel::Viewport => {
                 let is_gpu_mode = self.context.current_mode == crate::ui::types::SimulationMode::Gpu;
@@ -4483,9 +4495,39 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-        ui.checkbox(&mut context.editor_state.qball_snapping, "Enable Snapping (15°)")
-            .on_hover_text("Snap child orientations to 15° increments for precise alignment");
-        ui.add_space(4.0); // Reduced spacing
+        // Reset button — clears both child orientations back to identity
+        ui.horizontal(|ui| {
+            if ui.add(egui::Button::new(
+                egui::RichText::new("↺ Reset Orientations").size(11.0))
+                .min_size(egui::vec2(0.0, 20.0)))
+                .on_hover_text("Reset both Child A and Child B orientations to identity (no rotation)")
+                .clicked()
+            {
+                let identity = glam::Quat::IDENTITY;
+                context.editor_state.child_a_orientation = identity;
+                context.editor_state.child_b_orientation = identity;
+                context.editor_state.child_a_x_axis_lat = 0.0;
+                context.editor_state.child_a_x_axis_lon = 0.0;
+                context.editor_state.child_a_y_axis_lat = 0.0;
+                context.editor_state.child_a_y_axis_lon = 0.0;
+                context.editor_state.child_a_z_axis_lat = 0.0;
+                context.editor_state.child_a_z_axis_lon = 0.0;
+                context.editor_state.child_b_x_axis_lat = 0.0;
+                context.editor_state.child_b_x_axis_lon = 0.0;
+                context.editor_state.child_b_y_axis_lat = 0.0;
+                context.editor_state.child_b_y_axis_lon = 0.0;
+                context.editor_state.child_b_z_axis_lat = 0.0;
+                context.editor_state.child_b_z_axis_lon = 0.0;
+                context.editor_state.qball1_locked_axis = -1;
+                context.editor_state.qball2_locked_axis = -1;
+                let idx = context.editor_state.selected_mode_index;
+                if idx < context.genome.modes.len() {
+                    context.genome.modes[idx].child_a.orientation = identity;
+                    context.genome.modes[idx].child_b.orientation = identity;
+                }
+            }
+        });
+        ui.add_space(4.0);
 
         // Get selected mode for keep_adhesion checkboxes
         let selected_idx = context.editor_state.selected_mode_index;

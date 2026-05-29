@@ -1414,6 +1414,7 @@ impl UiSystem {
                 scene_request,
                 current_mode,
                 performance,
+                ui_state_copy.hide_ui,
             );
             
             let mut dock_area = egui_dock::DockArea::new(dock_manager.current_tree_mut())

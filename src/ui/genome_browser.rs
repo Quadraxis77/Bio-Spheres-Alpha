@@ -153,6 +153,8 @@ pub struct GenomeEntry {
     pub name: String,
     pub stats: GenomeStats,
     pub thumbnail: Option<GenomeThumbnail>,
+    /// File modification time for "Recent" sort (seconds since UNIX epoch, 0 if unavailable).
+    pub modified_secs: u64,
 }
 
 impl GenomeEntry {
@@ -162,9 +164,15 @@ impl GenomeEntry {
             Ok(g) => GenomeStats::compute(&g),
             Err(_) => GenomeStats { mode_count: 0, tags: vec![] },
         };
+        let modified_secs = std::fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let gif_path = path.with_extension("gif");
         let thumbnail = if gif_path.exists() { GenomeThumbnail::load(ctx, &gif_path) } else { None };
-        Self { path, name, stats, thumbnail }
+        Self { path, name, stats, thumbnail, modified_secs }
     }
 }
 
@@ -176,20 +184,38 @@ pub struct GenomeBrowserState {
     pub selected: Option<usize>,
     pub search: String,
     pub needs_refresh: bool,
-    /// When true, the next refresh does a full reload even if the file list hasn't changed.
-    /// Set after saves so updated GIFs are picked up.
     pub force_full_reload: bool,
-    /// When true, show the delete confirmation popup.
     pub confirm_delete: bool,
     pub status_msg: Option<(String, bool)>,
     pub status_timer: f32,
+    /// Current sort order.
+    pub sort_mode: BrowserSort,
+    /// Active tag filter — empty string means no tag filter.
+    pub tag_filter: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrowserSort {
+    /// Alphabetical A→Z (default).
+    NameAsc,
+    /// Alphabetical Z→A.
+    NameDesc,
+    /// Most recently modified first.
+    Recent,
+    /// Most modes first (most complex).
+    Complexity,
+}
+
+impl Default for BrowserSort {
+    fn default() -> Self { BrowserSort::NameAsc }
 }
 
 impl Default for GenomeBrowserState {
     fn default() -> Self {
         Self { open: false, entries: Vec::new(), selected: None, search: String::new(),
                needs_refresh: true, force_full_reload: false, confirm_delete: false,
-               status_msg: None, status_timer: 0.0 }
+               status_msg: None, status_timer: 0.0,
+               sort_mode: BrowserSort::NameAsc, tag_filter: String::new() }
     }
 }
 
@@ -198,7 +224,8 @@ impl Clone for GenomeBrowserState {
         Self { open: self.open, entries: Vec::new(), selected: self.selected,
                search: self.search.clone(), needs_refresh: true, force_full_reload: false,
                confirm_delete: false,
-               status_msg: self.status_msg.clone(), status_timer: self.status_timer }
+               status_msg: self.status_msg.clone(), status_timer: self.status_timer,
+               sort_mode: self.sort_mode.clone(), tag_filter: self.tag_filter.clone() }
     }
 }
 
@@ -218,6 +245,7 @@ impl GenomeBrowserState {
         self.needs_refresh = true;
         self.selected = None;
         self.search.clear();
+        self.tag_filter.clear();
     }
 
     pub fn refresh(&mut self, ctx: &egui::Context) {
@@ -330,16 +358,17 @@ pub fn render_genome_browser(
 
             ui.add(egui::Separator::default().spacing(0.0));
 
-            // Search bar
+            // Search + sort/filter bar
             egui::Frame::new()
                 .fill(p.bg_panel)
                 .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: 6 })
                 .show(ui, |ui| {
+                    // Row 1: search field
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("🔍").size(12.0).color(p.text_dim));
                         ui.add_space(4.0);
                         let r = ui.add(egui::TextEdit::singleline(&mut state.search)
-                            .desired_width(260.0).hint_text("Filter genomes…")
+                            .desired_width(260.0).hint_text("Filter by name or tag…")
                             .font(egui::FontId::proportional(12.0)).text_color(p.text_primary).frame(false));
                         if r.changed() { state.selected = None; }
                         if !state.search.is_empty() {
@@ -356,15 +385,110 @@ pub fn render_genome_browser(
                             }
                         });
                     });
+
+                    ui.add_space(4.0);
+
+                    // Row 2: sort buttons + tag filter chips
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+
+                        // Sort buttons
+                        let sorts: &[(&str, BrowserSort, &str)] = &[
+                            ("A→Z",      BrowserSort::NameAsc,    "Sort alphabetically A to Z"),
+                            ("Z→A",      BrowserSort::NameDesc,   "Sort alphabetically Z to A"),
+                            ("Recent",   BrowserSort::Recent,     "Sort by most recently saved"),
+                            ("Complex",  BrowserSort::Complexity, "Sort by number of modes (most complex first)"),
+                        ];
+                        for (label, mode, tip) in sorts {
+                            let active = &state.sort_mode == mode;
+                            let btn = egui::Button::new(egui::RichText::new(*label).size(10.5)
+                                .color(if active { p.bg_darkest } else { p.text_secondary }))
+                                .fill(if active { p.accent_primary } else { p.bg_widget })
+                                .stroke(egui::Stroke::new(1.0, if active { p.accent_primary } else { p.border_subtle }))
+                                .corner_radius(egui::CornerRadius::same(3))
+                                .min_size(Vec2::new(0.0, 18.0));
+                            if ui.add(btn).on_hover_text(*tip).clicked() {
+                                state.sort_mode = mode.clone();
+                            }
+                        }
+
+                        ui.add(egui::Separator::default().vertical().spacing(4.0));
+
+                        // Collect unique diet tags across all entries for quick-filter chips
+                        let diet_tags: Vec<String> = {
+                            let mut seen = std::collections::HashSet::new();
+                            state.entries.iter()
+                                .filter_map(|e| e.stats.tags.first())
+                                .map(|(label, _)| {
+                                    // Strip emoji prefix to get the word part
+                                    label.trim_start_matches(|c: char| !c.is_alphabetic()).trim().to_string()
+                                })
+                                .filter(|t| seen.insert(t.clone()))
+                                .collect()
+                        };
+
+                        for tag in &diet_tags {
+                            let active = state.tag_filter == *tag;
+                            let btn = egui::Button::new(egui::RichText::new(tag).size(10.0)
+                                .color(if active { p.bg_darkest } else { p.text_dim }))
+                                .fill(if active { p.accent_primary } else { Color32::TRANSPARENT })
+                                .stroke(egui::Stroke::new(1.0, if active { p.accent_primary } else { p.border_subtle }))
+                                .corner_radius(egui::CornerRadius::same(3))
+                                .min_size(Vec2::new(0.0, 18.0));
+                            if ui.add(btn).on_hover_text(format!("Show only {} genomes", tag)).clicked() {
+                                if active {
+                                    state.tag_filter.clear();
+                                } else {
+                                    state.tag_filter = tag.clone();
+                                }
+                                state.selected = None;
+                            }
+                        }
+
+                        // Clear tag filter chip
+                        if !state.tag_filter.is_empty() {
+                            if ui.add(egui::Button::new(egui::RichText::new("✕ Clear").size(10.0).color(p.text_dim))
+                                .fill(Color32::TRANSPARENT).stroke(egui::Stroke::NONE)).clicked() {
+                                state.tag_filter.clear();
+                                state.selected = None;
+                            }
+                        }
+                    });
                 });
 
             ui.add(egui::Separator::default().spacing(0.0));
 
-            // Card grid
+            // Card grid — filter then sort
             let search_lower = state.search.to_lowercase();
-            let vis: Vec<usize> = state.entries.iter().enumerate()
-                .filter(|(_, e)| search_lower.is_empty() || e.name.to_lowercase().contains(&search_lower))
+            let tag_lower = state.tag_filter.to_lowercase();
+            let mut vis: Vec<usize> = state.entries.iter().enumerate()
+                .filter(|(_, e)| {
+                    // Text search
+                    if !search_lower.is_empty() {
+                        let name_match = e.name.to_lowercase().contains(&search_lower);
+                        let tag_match = e.stats.tags.iter().any(|(label, _)| {
+                            label.trim_start_matches(|c: char| !c.is_alphabetic()).to_lowercase().contains(&search_lower)
+                        });
+                        if !name_match && !tag_match { return false; }
+                    }
+                    // Tag filter chip
+                    if !tag_lower.is_empty() {
+                        let has_tag = e.stats.tags.iter().any(|(label, _)| {
+                            label.trim_start_matches(|c: char| !c.is_alphabetic()).to_lowercase() == tag_lower
+                        });
+                        if !has_tag { return false; }
+                    }
+                    true
+                })
                 .map(|(i, _)| i).collect();
+
+            // Apply sort
+            match state.sort_mode {
+                BrowserSort::NameAsc  => vis.sort_by(|&a, &b| state.entries[a].name.to_lowercase().cmp(&state.entries[b].name.to_lowercase())),
+                BrowserSort::NameDesc => vis.sort_by(|&a, &b| state.entries[b].name.to_lowercase().cmp(&state.entries[a].name.to_lowercase())),
+                BrowserSort::Recent   => vis.sort_by(|&a, &b| state.entries[b].modified_secs.cmp(&state.entries[a].modified_secs)),
+                BrowserSort::Complexity => vis.sort_by(|&a, &b| state.entries[b].stats.mode_count.cmp(&state.entries[a].stats.mode_count)),
+            }
 
             let strip_h = 52.0;
             let grid_h = ui.available_height() - strip_h;
