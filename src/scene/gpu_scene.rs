@@ -1647,6 +1647,11 @@ impl GpuScene {
         // Clear occupancy grid using DMA (faster than compute dispatch)
         encoder.clear_buffer(light_field.cell_occupancy_buffer_ref(), 0, None);
         
+        // Clear light field buffer so stale values don't persist when the compute
+        // dispatch is skipped (e.g. no cells + fog off). Without this, the last
+        // frame's shadow pattern burns into the camera until cells reappear.
+        encoder.clear_buffer(light_field.light_field_buffer(), 0, None);
+        
         let occupancy_bg = &self.cached_occupancy_bind_groups.as_ref().unwrap()[output_idx];
         let light_field_bg = self.cached_light_field_bind_group.as_ref().unwrap();
         
