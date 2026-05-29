@@ -208,7 +208,7 @@ impl Panel {
             Panel::CaveSystem => "Cave System",
             Panel::FluidSettings => "Fluid System",
             Panel::WorldSettings => "World Settings",
-            Panel::LightSettings => "Light & Fog",
+            Panel::LightSettings => "Lighting",
             Panel::Modes => "Modes",
             Panel::NameTypeEditor => "Name & Type",
             Panel::AdhesionSettings => "Adhesion Settings",

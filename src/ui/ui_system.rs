@@ -1945,13 +1945,13 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
             }
         });
         
-        // Light & Fog Settings (GPU mode only)
+        // Lighting Settings (GPU mode only)
         let light_open = is_panel_open(dock_manager.current_tree(), &Panel::LightSettings);
         let light_name = format!("{:?}", Panel::LightSettings);
         let light_locked = state.is_panel_locked(&light_name);
         
         ui.horizontal(|ui| {
-            if ui.selectable_label(light_open, "  Light & Fog").clicked() {
+            if ui.selectable_label(light_open, "  Lighting").clicked() {
                 if light_open {
                     close_panel(dock_manager.current_tree_mut(), &Panel::LightSettings);
                 } else {
@@ -2166,6 +2166,12 @@ fn render_side_rail(
             let _ = rail_button(ui, "⏱",  "Placeholder", &p);
         }
         crate::ui::types::SimulationMode::Gpu => {
+            // Advanced Options toggle — reveals fine-tuning sliders in all panels
+            let adv_active = state.show_advanced_options;
+            if rail_button_toggle(ui, "⚙", "Advanced Options (toggle fine-tuning sliders)", adv_active, &p) {
+                state.show_advanced_options = !adv_active;
+            }
+
             let buttons: &[(&str, &str)] = &[
                 ("🌐", "Placeholder"),
                 ("☀",  "Placeholder"),

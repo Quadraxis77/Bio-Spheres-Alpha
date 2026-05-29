@@ -76,13 +76,13 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::GenomeEditor => render_genome_editor(ui, self.context),
             Panel::PerformanceMonitor => render_performance_monitor(ui, self.context, self.state),
             Panel::RenderingControls => render_rendering_controls(ui),
-            Panel::CaveSystem => render_cave_system(ui, self.context),
+            Panel::CaveSystem => render_cave_system(ui, self.context, self.state),
             Panel::FluidSettings => {
                 render_fluid_settings(ui, self.context, self.state);
                 render_organism_skin_settings(ui, self.context, &mut self.state.fluid_settings.organism_skin);
             }
             Panel::WorldSettings => render_world_settings(ui, self.context, self.state),
-            Panel::LightSettings => render_light_settings(ui, self.context),
+            Panel::LightSettings => render_light_settings(ui, self.context, self.state),
             Panel::TimeScrubber => render_time_scrubber(ui, self.context),
             Panel::ThemeEditor => render_theme_editor(ui),
             Panel::CameraSettings => render_camera_settings(ui, self.context),
@@ -664,7 +664,8 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
     
     // GPU Readbacks toggle at the top
     ui.horizontal(|ui| {
-        ui.checkbox(&mut state.gpu_readbacks_enabled, "Enable GPU Readbacks");
+        ui.checkbox(&mut state.gpu_readbacks_enabled, "Enable GPU Readbacks")
+            .on_hover_text("Allow the CPU to read back cell data from the GPU for the Cell Inspector. Disable to reduce GPU-CPU synchronization overhead if the inspector is not needed");
     });
     ui.add_space(4.0);
     
@@ -838,7 +839,7 @@ fn render_rendering_controls(ui: &mut Ui) {
 }
 
 /// Render the Cave System panel for procedural cave generation and collision.
-fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
+fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiState) {
     let sw = (ui.available_width() - 60.0).max(60.0);
     ui.style_mut().spacing.slider_width = sw;
     ui.separator();
@@ -893,24 +894,31 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
             
             // Editable parameters
             ui.add_space(4.0);
-            ui.label("Density:");
+            ui.label("Density:")
+                .on_hover_text("How much of the world is filled with cave rock. Higher values create denser, more enclosed caves with less open space");
             params_changed |= ui.add(egui::Slider::new(&mut density, 0.01..=1.0)).changed();
             
             ui.add_space(4.0);
-            ui.label("Scale:");
+            ui.label("Scale:")
+                .on_hover_text("Size of the cave features. Higher values create larger, more open chambers; lower values create tighter, more intricate passages");
             params_changed |= ui.add(egui::Slider::new(&mut scale, 50.0..=100.0)).changed();
-            
-            ui.add_space(4.0);
-            ui.label("Octaves:");
-            params_changed |= ui.add(egui::Slider::new(&mut octaves, 1..=8)).changed();
-            
-            ui.add_space(4.0);
-            ui.label("Smoothness:");
-            params_changed |= ui.add(egui::Slider::new(&mut smoothness, 0.0..=1.0)).changed();
-            
-            ui.add_space(4.0);
-            ui.label("Resolution:");
-            params_changed |= ui.add(egui::Slider::new(&mut resolution, 32..=128)).changed();
+
+            if state.show_advanced_options {
+                ui.add_space(4.0);
+                ui.label("Octaves:")
+                    .on_hover_text("Number of noise layers combined to generate the cave shape. More octaves add finer detail and rougher surfaces");
+                params_changed |= ui.add(egui::Slider::new(&mut octaves, 1..=8)).changed();
+                
+                ui.add_space(4.0);
+                ui.label("Smoothness:")
+                    .on_hover_text("How smooth the cave walls are. 0 = rough and jagged; 1 = smooth and rounded");
+                params_changed |= ui.add(egui::Slider::new(&mut smoothness, 0.0..=1.0)).changed();
+                
+                ui.add_space(4.0);
+                ui.label("Resolution:")
+                    .on_hover_text("Voxel grid resolution for the cave mesh. Higher values produce more detailed geometry but take longer to generate and use more memory");
+                params_changed |= ui.add(egui::Slider::new(&mut resolution, 32..=128)).changed();
+            }
             
             ui.add_space(4.0);
             ui.label("Seed:");
@@ -937,16 +945,16 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 }
             });
             
-            ui.add_space(10.0);
-            ui.separator();
-            ui.label(format!("Triangle Count: {}", params.triangle_count));
+            if state.show_advanced_options {
+                ui.add_space(10.0);
+                ui.separator();
+                ui.label(format!("Triangle Count: {}", params.triangle_count));
+            }
             
             ui.add_space(10.0);
             
-            let regenerate_clicked = ui.button("🔄 Regenerate Cave").clicked();
-            
-            // Apply changes if any parameter changed or regenerate was clicked
-            if params_changed || regenerate_clicked {
+            // Apply changes whenever any parameter changed
+            if params_changed {
                 // Store changes in editor state for the app to apply
                 // Invert density so that 1.0 = higher density (lower actual value)
                 context.editor_state.cave_density = 1.0 - density;
@@ -991,7 +999,8 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Growth & Spread");
                 ui.add_space(3.0);
 
-                ui.label("Growth Rate:");
+                ui.label("Growth Rate:")
+                    .on_hover_text("How quickly moss spreads to adjacent voxels per second. Logarithmic scale — small values create slow, patchy growth; large values fill surfaces rapidly");
                 if ui.add(egui::Slider::new(&mut context.editor_state.moss_growth_rate, 0.001..=1.0)
                     .logarithmic(true)).changed() {
                     moss.growth_rate = context.editor_state.moss_growth_rate;
@@ -999,21 +1008,24 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 }
 
                 ui.add_space(2.0);
-                ui.label("Min Light Level:");
+                ui.label("Min Light Level:")
+                    .on_hover_text("Minimum light intensity required for moss to grow in a voxel. Moss won't grow in completely dark areas below this threshold");
                 if ui.add(egui::Slider::new(&mut context.editor_state.moss_min_light, 0.0..=0.5)).changed() {
                     moss.min_light = context.editor_state.moss_min_light;
                     moss_changed = true;
                 }
 
                 ui.add_space(2.0);
-                ui.label("Water Radius (voxels):");
+                ui.label("Water Radius (voxels):")
+                    .on_hover_text("Radius around water voxels where moss can grow. Moss requires proximity to water — larger values allow moss to grow further from water sources");
                 if ui.add(egui::Slider::new(&mut context.editor_state.moss_water_radius, 2.0..=50.0)).changed() {
                     moss.water_radius = context.editor_state.moss_water_radius;
                     moss_changed = true;
                 }
 
                 ui.add_space(2.0);
-                ui.label("Decay Rate:");
+                ui.label("Decay Rate:")
+                    .on_hover_text("How quickly moss dies when conditions are unfavorable (too dark or too dry). Logarithmic scale");
                 if ui.add(egui::Slider::new(&mut context.editor_state.moss_decay_rate, 0.001..=0.5)
                     .logarithmic(true)).changed() {
                     moss.decay_rate = context.editor_state.moss_decay_rate;
@@ -1024,14 +1036,16 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Erosion");
                 ui.add_space(3.0);
 
-                ui.label("Water Erosion Rate:");
+                ui.label("Water Erosion Rate:")
+                    .on_hover_text("How much flowing water erodes moss. Higher values cause moss to be washed away more quickly by water currents");
                 if ui.add(egui::Slider::new(&mut context.editor_state.moss_erosion_rate, 0.0..=2.0)).changed() {
                     moss.erosion_rate = context.editor_state.moss_erosion_rate;
                     moss_changed = true;
                 }
 
                 ui.add_space(2.0);
-                ui.label("Wetness Evaporation:");
+                ui.label("Wetness Evaporation:")
+                    .on_hover_text("How quickly surface wetness dries out. Higher values mean moss dries faster and needs more frequent water contact to survive");
                 if ui.add(egui::Slider::new(&mut context.editor_state.moss_wetness_evaporation, 0.001..=0.2)
                     .logarithmic(true)).changed() {
                     moss.wetness_evaporation = context.editor_state.moss_wetness_evaporation;
@@ -1042,115 +1056,121 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Consumption (Phagocytes)");
                 ui.add_space(3.0);
 
-                ui.label("Graze Cooldown:");
+                ui.label("Graze Cooldown:")
+                    .on_hover_text("Seconds a phagocyte must wait before it can graze the same moss voxel again. Prevents a single cell from instantly consuming all nearby moss");
                 if ui.add(egui::Slider::new(&mut context.editor_state.moss_consume_rate, 1.0..=30.0)).changed() {
                     moss.graze_cooldown = context.editor_state.moss_consume_rate;
                     moss_changed = true;
                 }
 
                 ui.add_space(2.0);
-                ui.label("Nutrients per Moss:");
+                ui.label("Nutrients per Moss:")
+                    .on_hover_text("How many nutrients a phagocyte gains from grazing one moss voxel. Higher values make moss a richer food source");
                 if ui.add(egui::Slider::new(&mut context.editor_state.moss_nutrient_per_moss, 1.0..=200.0)).changed() {
                     moss.nutrient_per_moss = context.editor_state.moss_nutrient_per_moss;
                     moss_changed = true;
                 }
 
-                ui.add_space(8.0);
-                ui.label("Appearance");
-                ui.add_space(3.0);
+                if state.show_advanced_options {
+                    ui.add_space(8.0);
+                    ui.label("Appearance");
+                    ui.add_space(3.0);
 
-                ui.label("Texture Scale:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_scale, 0.02..=0.5)).changed() {
-                    context.editor_state.light_params_dirty = true;
-                    moss_changed = true;
-                }
+                    ui.label("Texture Scale:")
+                        .on_hover_text("UV scale of the moss texture on cave surfaces. Smaller values = larger texture tiles; larger values = finer, more detailed texture");
+                    if ui.add(egui::Slider::new(&mut context.editor_state.moss_scale, 0.02..=0.5)).changed() {
+                        context.editor_state.light_params_dirty = true;
+                        moss_changed = true;
+                    }
 
-                ui.add_space(2.0);
-                ui.label("Parallax Depth:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_parallax_depth, 0.0..=0.3)).changed() {
-                    context.editor_state.light_params_dirty = true;
-                    moss_changed = true;
-                }
+                    ui.add_space(2.0);
+                    ui.label("Parallax Depth:")
+                        .on_hover_text("Strength of the parallax occlusion mapping effect on moss. Higher values make the moss appear to have more 3D depth and volume");
+                    if ui.add(egui::Slider::new(&mut context.editor_state.moss_parallax_depth, 0.0..=0.3)).changed() {
+                        context.editor_state.light_params_dirty = true;
+                        moss_changed = true;
+                    }
 
-                ui.add_space(5.0);
-                ui.label("Noise Type:");
-                let noise_labels = ["Value Noise", "Worley (Cellular)", "Ridged"];
-                let mut noise_type = context.editor_state.moss_noise_type as usize;
-                egui::ComboBox::from_id_salt("moss_noise_type")
-                    .selected_text(noise_labels[noise_type.min(2)])
-                    .show_ui(ui, |ui| {
-                        for (i, label) in noise_labels.iter().enumerate() {
-                            if ui.selectable_value(&mut noise_type, i, *label).changed() {
-                                context.editor_state.moss_noise_type = noise_type as u32;
-                                context.editor_state.light_params_dirty = true;
+                    ui.add_space(5.0);
+                    ui.label("Noise Type:");
+                    let noise_labels = ["Value Noise", "Worley (Cellular)", "Ridged"];
+                    let mut noise_type = context.editor_state.moss_noise_type as usize;
+                    egui::ComboBox::from_id_salt("moss_noise_type")
+                        .selected_text(noise_labels[noise_type.min(2)])
+                        .show_ui(ui, |ui| {
+                            for (i, label) in noise_labels.iter().enumerate() {
+                                if ui.selectable_value(&mut noise_type, i, *label).changed() {
+                                    context.editor_state.moss_noise_type = noise_type as u32;
+                                    context.editor_state.light_params_dirty = true;
+                                }
                             }
+                        });
+                    if noise_type as u32 != context.editor_state.moss_noise_type {
+                        context.editor_state.moss_noise_type = noise_type as u32;
+                        context.editor_state.light_params_dirty = true;
+                        moss_changed = true;
+                    }
+
+                    ui.add_space(2.0);
+                    ui.label("Noise Frequency:");
+                    if ui.add(egui::Slider::new(&mut context.editor_state.moss_noise_frequency, 4.0..=80.0)
+                        .logarithmic(true)).changed() {
+                        context.editor_state.light_params_dirty = true;
+                        moss_changed = true;
+                    }
+
+                    ui.add_space(2.0);
+                    ui.label("Noise Lacunarity:");
+                    if ui.add(egui::Slider::new(&mut context.editor_state.moss_noise_lacunarity, 1.5..=5.0)).changed() {
+                        context.editor_state.light_params_dirty = true;
+                        moss_changed = true;
+                    }
+
+                    ui.add_space(2.0);
+                    ui.label("Height Sharpness (low):");
+                    if ui.add(egui::Slider::new(&mut context.editor_state.moss_height_sharpness_low, 0.0..=0.5)).changed() {
+                        context.editor_state.light_params_dirty = true;
+                        moss_changed = true;
+                    }
+
+                    ui.add_space(2.0);
+                    ui.label("Height Sharpness (high):");
+                    if ui.add(egui::Slider::new(&mut context.editor_state.moss_height_sharpness_high, 0.3..=1.0)).changed() {
+                        context.editor_state.light_params_dirty = true;
+                        moss_changed = true;
+                    }
+
+                    ui.add_space(2.0);
+                    ui.label("Bump Strength:");
+                    if ui.add(egui::Slider::new(&mut context.editor_state.moss_bump_strength, 0.0..=15.0)).changed() {
+                        context.editor_state.light_params_dirty = true;
+                        moss_changed = true;
+                    }
+
+                    ui.add_space(5.0);
+                    ui.label("Colors");
+                    ui.add_space(3.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Dark (base):");
+                        let mut color = context.editor_state.moss_color_dark;
+                        if ui.color_edit_button_rgb(&mut color).changed() {
+                            context.editor_state.moss_color_dark = color;
+                            context.editor_state.light_params_dirty = true;
+                            moss_changed = true;
                         }
                     });
-                if noise_type as u32 != context.editor_state.moss_noise_type {
-                    context.editor_state.moss_noise_type = noise_type as u32;
-                    context.editor_state.light_params_dirty = true;
-                    moss_changed = true;
-                }
 
-                ui.add_space(2.0);
-                ui.label("Noise Frequency:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_noise_frequency, 4.0..=80.0)
-                    .logarithmic(true)).changed() {
-                    context.editor_state.light_params_dirty = true;
-                    moss_changed = true;
-                }
-
-                ui.add_space(2.0);
-                ui.label("Noise Lacunarity:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_noise_lacunarity, 1.5..=5.0)).changed() {
-                    context.editor_state.light_params_dirty = true;
-                    moss_changed = true;
-                }
-
-                ui.add_space(2.0);
-                ui.label("Height Sharpness (low):");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_height_sharpness_low, 0.0..=0.5)).changed() {
-                    context.editor_state.light_params_dirty = true;
-                    moss_changed = true;
-                }
-
-                ui.add_space(2.0);
-                ui.label("Height Sharpness (high):");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_height_sharpness_high, 0.3..=1.0)).changed() {
-                    context.editor_state.light_params_dirty = true;
-                    moss_changed = true;
-                }
-
-                ui.add_space(2.0);
-                ui.label("Bump Strength:");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_bump_strength, 0.0..=15.0)).changed() {
-                    context.editor_state.light_params_dirty = true;
-                    moss_changed = true;
-                }
-
-                ui.add_space(5.0);
-                ui.label("Colors");
-                ui.add_space(3.0);
-
-                ui.horizontal(|ui| {
-                    ui.label("Dark (base):");
-                    let mut color = context.editor_state.moss_color_dark;
-                    if ui.color_edit_button_rgb(&mut color).changed() {
-                        context.editor_state.moss_color_dark = color;
-                        context.editor_state.light_params_dirty = true;
-                        moss_changed = true;
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("Bright (tips):");
-                    let mut color = context.editor_state.moss_color_bright;
-                    if ui.color_edit_button_rgb(&mut color).changed() {
-                        context.editor_state.moss_color_bright = color;
-                        context.editor_state.light_params_dirty = true;
-                        moss_changed = true;
-                    }
-                });
+                    ui.horizontal(|ui| {
+                        ui.label("Bright (tips):");
+                        let mut color = context.editor_state.moss_color_bright;
+                        if ui.color_edit_button_rgb(&mut color).changed() {
+                            context.editor_state.moss_color_bright = color;
+                            context.editor_state.light_params_dirty = true;
+                            moss_changed = true;
+                        }
+                    });
+                } // end advanced moss appearance
             } else {
                 ui.add_space(5.0);
                 ui.label("Moss system not yet initialized.");
@@ -1183,7 +1203,8 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
 
             // Target count
             let mut target = gpu_scene.boulder_target_count as i32;
-            ui.label("Target Count:");
+            ui.label("Target Count:")
+                .on_hover_text("How many mossrocks the system tries to maintain in the world at any time. New rocks spawn when the count falls below this");
             if ui.add(egui::Slider::new(&mut target, 1..=128)).changed() {
                 gpu_scene.boulder_target_count = target as u32;
                 if let Some(ref mut bs) = gpu_scene.boulder_system {
@@ -1196,7 +1217,8 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
 
             // Spawn frequency
             let mut interval = gpu_scene.boulder_spawn_interval;
-            ui.label("Approx. Spawn Interval (seconds):");
+            ui.label("Approx. Spawn Interval (seconds):")
+                .on_hover_text("Average time between new mossrock spawns. Logarithmic scale — small values spawn rocks rapidly; large values create rare spawns");
             if ui.add(egui::Slider::new(&mut interval, 0.5..=60.0)
                 .logarithmic(true)).changed() {
                 gpu_scene.boulder_spawn_interval = interval;
@@ -1233,63 +1255,65 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext) {
                 }
             });
 
-            ui.add_space(3.0);
-            ui.label("Moss Store Range (nutrients):");
-            ui.horizontal(|ui| {
-                ui.label("Min");
-                let mut mmin = gpu_scene.boulder_moss_min;
-                let mmax_cur = gpu_scene.boulder_moss_max;
-                if ui.add(egui::DragValue::new(&mut mmin)
-                    .range(100.0..=mmax_cur - 100.0)
-                    .speed(100.0)).changed() {
-                    gpu_scene.boulder_moss_min = mmin;
-                    if let Some(ref mut bs) = gpu_scene.boulder_system { bs.moss_min = mmin; }
+            if state.show_advanced_options {
+                ui.add_space(3.0);
+                ui.label("Moss Store Range (nutrients):");
+                ui.horizontal(|ui| {
+                    ui.label("Min");
+                    let mut mmin = gpu_scene.boulder_moss_min;
+                    let mmax_cur = gpu_scene.boulder_moss_max;
+                    if ui.add(egui::DragValue::new(&mut mmin)
+                        .range(100.0..=mmax_cur - 100.0)
+                        .speed(100.0)).changed() {
+                        gpu_scene.boulder_moss_min = mmin;
+                        if let Some(ref mut bs) = gpu_scene.boulder_system { bs.moss_min = mmin; }
+                        boulder_changed = true;
+                    }
+                    ui.label("–  Max");
+                    let mut mmax = gpu_scene.boulder_moss_max;
+                    let mmin_cur = gpu_scene.boulder_moss_min;
+                    if ui.add(egui::DragValue::new(&mut mmax)
+                        .range(mmin_cur + 100.0..=500_000.0)
+                        .speed(500.0)).changed() {
+                        gpu_scene.boulder_moss_max = mmax;
+                        if let Some(ref mut bs) = gpu_scene.boulder_system { bs.moss_max = mmax; }
+                        boulder_changed = true;
+                    }
+                });
+
+                ui.add_space(5.0);
+
+                // Buoyancy slider
+                let mut buoyancy = gpu_scene.boulder_buoyancy;
+                ui.label("Buoyancy in Water:");
+                ui.add_space(2.0);
+                ui.label(egui::RichText::new(
+                    "0 = floats, 1 = sinks at full gravity"
+                ).small().weak());
+                if ui.add(egui::Slider::new(&mut buoyancy, 0.0..=1.0)
+                    .step_by(0.01)).changed() {
+                    gpu_scene.boulder_buoyancy = buoyancy;
+                    if let Some(ref mut bs) = gpu_scene.boulder_system {
+                        bs.buoyancy = buoyancy;
+                        bs.buoyancy_dirty = true;
+                    }
                     boulder_changed = true;
                 }
-                ui.label("–  Max");
-                let mut mmax = gpu_scene.boulder_moss_max;
-                let mmin_cur = gpu_scene.boulder_moss_min;
-                if ui.add(egui::DragValue::new(&mut mmax)
-                    .range(mmin_cur + 100.0..=500_000.0)
-                    .speed(500.0)).changed() {
-                    gpu_scene.boulder_moss_max = mmax;
-                    if let Some(ref mut bs) = gpu_scene.boulder_system { bs.moss_max = mmax; }
+
+                ui.add_space(3.0);
+
+                // Size gate
+                let mut gate = gpu_scene.boulder_size_gate;
+                ui.label("Size Gate (half-saturation):");
+                ui.add_space(2.0);
+                ui.label(egui::RichText::new(
+                    "Organism size at which consumption reaches 50% of max rate."
+                ).small().weak());
+                if ui.add(egui::Slider::new(&mut gate, 1.0..=200.0)).changed() {
+                    gpu_scene.boulder_size_gate = gate;
                     boulder_changed = true;
                 }
-            });
-
-            ui.add_space(5.0);
-
-            // Buoyancy slider
-            let mut buoyancy = gpu_scene.boulder_buoyancy;
-            ui.label("Buoyancy in Water:");
-            ui.add_space(2.0);
-            ui.label(egui::RichText::new(
-                "0 = floats, 1 = sinks at full gravity"
-            ).small().weak());
-            if ui.add(egui::Slider::new(&mut buoyancy, 0.0..=1.0)
-                .step_by(0.01)).changed() {
-                gpu_scene.boulder_buoyancy = buoyancy;
-                if let Some(ref mut bs) = gpu_scene.boulder_system {
-                    bs.buoyancy = buoyancy;
-                    bs.buoyancy_dirty = true;
-                }
-                boulder_changed = true;
-            }
-
-            ui.add_space(3.0);
-
-            // Size gate
-            let mut gate = gpu_scene.boulder_size_gate;
-            ui.label("Size Gate (half-saturation):");
-            ui.add_space(2.0);
-            ui.label(egui::RichText::new(
-                "Organism size at which consumption reaches 50% of max rate."
-            ).small().weak());
-            if ui.add(egui::Slider::new(&mut gate, 1.0..=200.0)).changed() {
-                gpu_scene.boulder_size_gate = gate;
-                boulder_changed = true;
-            }
+            } // end advanced boulder settings
 
             if boulder_changed {
                 // Mirror to editor_state so save_cave_settings picks them up
@@ -1344,7 +1368,9 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.separator();
     ui.heading("Fluid Spawning");
     ui.separator();
-    let spawn_changed = ui.checkbox(&mut context.editor_state.fluid_continuous_spawn, "Water Fill").changed();
+    let spawn_changed = ui.checkbox(&mut context.editor_state.fluid_continuous_spawn, "Water Fill")
+        .on_hover_text("Continuously spawn water voxels to fill the world. Disable to let the existing water drain or evaporate without replenishment")
+        .changed();
     
     if spawn_changed {
         // Update fluid simulator continuous spawn state when toggled
@@ -1362,7 +1388,8 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.heading("Nutrients");
     ui.separator();
 
-    ui.label("Density:");
+    ui.label("Density:")
+        .on_hover_text("Fraction of the world volume that contains nutrient voxels at any given time. Higher values create a richer food environment");
     if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_density, 0.0..=0.5)
         .step_by(0.01)
         .fixed_decimals(2)
@@ -1373,7 +1400,8 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         context.editor_state.save_fluid_settings();
     }
 
-    ui.label("Epoch Duration:");
+    ui.label("Epoch Duration:")
+        .on_hover_text("Total length of one nutrient spawn cycle in seconds. Nutrients spawn during the first part of the epoch and despawn during the last part");
     if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_epoch_duration, 2.0..=30.0)
         .step_by(0.5)
         .fixed_decimals(1)
@@ -1384,7 +1412,8 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         }
     }
 
-    ui.label("Epoch Spacing:");
+    ui.label("Epoch Spacing:")
+        .on_hover_text("Gap between consecutive nutrient epochs in seconds. Longer spacing creates feast-and-famine cycles that drive organism behavior");
     if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_epoch_spacing, 1.0..=30.0)
         .step_by(0.5)
         .fixed_decimals(1)
@@ -1398,43 +1427,48 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         }
     }
 
-    ui.label("Spawn Ramp:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_spawn_end, 0.05..=0.9)
-        .step_by(0.05)
-        .fixed_decimals(2)
-    ).changed() {
-        // Ensure spawn_end < despawn_start
-        if context.editor_state.nutrient_spawn_end >= context.editor_state.nutrient_despawn_start {
-            context.editor_state.nutrient_despawn_start = (context.editor_state.nutrient_spawn_end + 0.05).min(0.95);
+    if state.show_advanced_options {
+        ui.label("Spawn Ramp:")
+            .on_hover_text("Fraction of the epoch duration over which nutrients gradually appear. 0.1 = nutrients appear quickly at the start; 0.9 = nutrients trickle in slowly over most of the epoch");
+        if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_spawn_end, 0.05..=0.9)
+            .step_by(0.05)
+            .fixed_decimals(2)
+        ).changed() {
+            // Ensure spawn_end < despawn_start
+            if context.editor_state.nutrient_spawn_end >= context.editor_state.nutrient_despawn_start {
+                context.editor_state.nutrient_despawn_start = (context.editor_state.nutrient_spawn_end + 0.05).min(0.95);
+            }
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                gpu_scene.nutrient_spawn_end = context.editor_state.nutrient_spawn_end;
+                gpu_scene.nutrient_despawn_start = context.editor_state.nutrient_despawn_start;
+            }
         }
-        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-            gpu_scene.nutrient_spawn_end = context.editor_state.nutrient_spawn_end;
-            gpu_scene.nutrient_despawn_start = context.editor_state.nutrient_despawn_start;
-        }
-    }
 
-    ui.label("Despawn Ramp:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_despawn_start, 0.1..=0.95)
-        .step_by(0.05)
-        .fixed_decimals(2)
-    ).changed() {
-        // Ensure despawn_start > spawn_end
-        if context.editor_state.nutrient_despawn_start <= context.editor_state.nutrient_spawn_end {
-            context.editor_state.nutrient_spawn_end = (context.editor_state.nutrient_despawn_start - 0.05).max(0.05);
+        ui.label("Despawn Ramp:")
+            .on_hover_text("Fraction of the epoch at which nutrients start disappearing. Must be greater than Spawn Ramp. Lower values give organisms less time to consume nutrients before they vanish");
+        if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_despawn_start, 0.1..=0.95)
+            .step_by(0.05)
+            .fixed_decimals(2)
+        ).changed() {
+            // Ensure despawn_start > spawn_end
+            if context.editor_state.nutrient_despawn_start <= context.editor_state.nutrient_spawn_end {
+                context.editor_state.nutrient_spawn_end = (context.editor_state.nutrient_despawn_start - 0.05).max(0.05);
+            }
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                gpu_scene.nutrient_spawn_end = context.editor_state.nutrient_spawn_end;
+                gpu_scene.nutrient_despawn_start = context.editor_state.nutrient_despawn_start;
+            }
         }
-        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-            gpu_scene.nutrient_spawn_end = context.editor_state.nutrient_spawn_end;
-            gpu_scene.nutrient_despawn_start = context.editor_state.nutrient_despawn_start;
-        }
-    }
+    } // end advanced nutrient ramps
 
     // Surface pressure control for radial fluid mode
     ui.separator();
     ui.heading("Fluid Physics");
     
-    // Only show surface pressure when gravity mode is radial
-    if state.world_settings.gravity_mode == 3 {
-        ui.label("Surface Pressure:");
+    // Only show surface pressure when gravity mode is radial (advanced only)
+    if state.show_advanced_options && state.world_settings.gravity_mode == 3 {
+        ui.label("Surface Pressure:")
+            .on_hover_text("Tangential smoothing strength for radial fluid mode. Higher values push fluid toward the world surface more aggressively, creating a more uniform water layer");
         if ui.add(egui::Slider::new(&mut state.fluid_settings.surface_pressure, 0.0..=1.0)
         ).changed() {
             // Apply to GPU scene
@@ -1445,35 +1479,35 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.label(egui::RichText::new("Tangential smoothing strength for radial fluid mode").small());
     }
 
-    // Lateral flow probability control for selected fluid type
-    ui.separator();
-    
-    // Show lateral flow probability only for the selected fluid type
-    let selected_fluid_type = context.editor_state.selected_fluid_type;
-    
-    if selected_fluid_type > 0 && selected_fluid_type <= 3 {
-        let mut probabilities = context.editor_state.fluid_lateral_flow_probabilities;
-        let mut changed = false;
+    // Lateral flow probability — advanced only
+    if state.show_advanced_options {
+        let selected_fluid_type = context.editor_state.selected_fluid_type;
         
-        ui.add_space(4.0);
-        ui.label("Lateral Flow Probability:");
-        if ui.add(egui::Slider::new(&mut probabilities[selected_fluid_type as usize], 0.0..=1.0)
-            .step_by(0.01)
-            .fixed_decimals(2)
-        ).changed() {
-            changed = true;
+        if selected_fluid_type > 0 && selected_fluid_type <= 3 {
+            let mut probabilities = context.editor_state.fluid_lateral_flow_probabilities;
+            let mut changed = false;
+            
+            ui.add_space(4.0);
+            ui.label("Lateral Flow Probability:")
+                .on_hover_text("Probability that a fluid voxel moves sideways each step. Higher values create more horizontal spreading and mixing");
+            if ui.add(egui::Slider::new(&mut probabilities[selected_fluid_type as usize], 0.0..=1.0)
+                .step_by(0.01)
+                .fixed_decimals(2)
+            ).changed() {
+                changed = true;
+            }
+            
+            if changed {
+                context.editor_state.fluid_lateral_flow_probabilities = probabilities;
+                context.editor_state.save_fluid_settings();
+            }
         }
-        
-        if changed {
-            context.editor_state.fluid_lateral_flow_probabilities = probabilities;
-            // Save fluid settings
-            context.editor_state.save_fluid_settings();
-        }
-    }
+    } // end advanced fluid physics
     
     // Condensation probability (steam to water)
     ui.add_space(4.0);
-    ui.label("Condensation Probability:");
+    ui.label("Condensation Probability:")
+        .on_hover_text("Probability per step that a steam voxel converts to water. Higher values cause steam to condense into water more quickly");
     if ui.add(egui::Slider::new(&mut context.editor_state.fluid_condensation_probability, 0.0..=0.05)
         .step_by(0.001)
         .fixed_decimals(3)
@@ -1491,7 +1525,8 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     
     // Vaporization probability (water to steam)
     ui.add_space(4.0);
-    ui.label("Vaporization Probability:");
+    ui.label("Vaporization Probability:")
+        .on_hover_text("Probability per step that a water voxel converts to steam. Higher values cause water to evaporate into steam more quickly");
     if ui.add(egui::Slider::new(&mut context.editor_state.fluid_vaporization_probability, 0.0..=0.05)
         .step_by(0.001)
         .fixed_decimals(3)
@@ -1513,163 +1548,187 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.heading("Water Surface Lighting");
     ui.add_space(4.0);
 
-    ui.label("Ambient:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_ambient, 0.0..=1.0)
-        .step_by(0.01).fixed_decimals(2)).changed() {
-        context.editor_state.save_fluid_render_settings();
-    }
+    if state.show_advanced_options {
+        ui.label("Ambient:")
+            .on_hover_text("Minimum light level on the water surface regardless of light direction. Higher values brighten the water in shadowed areas");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_ambient, 0.0..=1.0)
+            .step_by(0.01).fixed_decimals(2)).changed() {
+            context.editor_state.save_fluid_render_settings();
+        }
 
-    ui.add_space(4.0);
-    ui.label("Diffuse:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_diffuse, 0.0..=1.0)
-        .step_by(0.01).fixed_decimals(2)).changed() {
-        context.editor_state.save_fluid_render_settings();
-    }
+        ui.add_space(4.0);
+        ui.label("Diffuse:")
+            .on_hover_text("Strength of the diffuse (Lambertian) lighting on the water surface. Higher values make the water respond more strongly to the light direction");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_diffuse, 0.0..=1.0)
+            .step_by(0.01).fixed_decimals(2)).changed() {
+            context.editor_state.save_fluid_render_settings();
+        }
 
-    ui.add_space(4.0);
-    ui.label("Specular:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_specular, 0.0..=2.0)
-        .step_by(0.01).fixed_decimals(2)).changed() {
-        context.editor_state.save_fluid_render_settings();
-    }
+        ui.add_space(4.0);
+        ui.label("Specular:")
+            .on_hover_text("Strength of the specular highlight (glint) on the water surface. Higher values create a brighter, more mirror-like reflection of the light source");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_specular, 0.0..=2.0)
+            .step_by(0.01).fixed_decimals(2)).changed() {
+            context.editor_state.save_fluid_render_settings();
+        }
 
-    ui.add_space(4.0);
-    ui.label("Shininess:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_shininess, 1.0..=256.0)
-        .step_by(1.0).fixed_decimals(0).logarithmic(true)).changed() {
-        context.editor_state.save_fluid_render_settings();
-    }
+        ui.add_space(4.0);
+        ui.label("Shininess:")
+            .on_hover_text("Sharpness of the specular highlight. Low values = broad, soft glint. High values = tight, sharp glint like polished glass");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_shininess, 1.0..=256.0)
+            .step_by(1.0).fixed_decimals(0).logarithmic(true)).changed() {
+            context.editor_state.save_fluid_render_settings();
+        }
 
-    ui.add_space(4.0);
-    ui.label("Rim Light:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_rim, 0.0..=2.0)
-        .step_by(0.01).fixed_decimals(2)).changed() {
-        context.editor_state.save_fluid_render_settings();
-    }
+        ui.add_space(4.0);
+        ui.label("Rim Light:")
+            .on_hover_text("Backlit glow around the edges of the water surface. Creates a halo effect when the light is behind the water");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_rim, 0.0..=2.0)
+            .step_by(0.01).fixed_decimals(2)).changed() {
+            context.editor_state.save_fluid_render_settings();
+        }
 
-    ui.add_space(4.0);
-    ui.label("Alpha (Transparency):");
+        ui.add_space(4.0);
+    } // end advanced water surface lighting
+
+    ui.label("Alpha (Transparency):")
+        .on_hover_text("Overall transparency of the water surface. 0 = fully transparent (invisible); 1 = fully opaque");
     if ui.add(egui::Slider::new(&mut context.editor_state.fluid_alpha, 0.0..=1.0)
         .step_by(0.01).fixed_decimals(2)).changed() {
         context.editor_state.save_fluid_render_settings();
     }
 
-    ui.add_space(8.0);
-    ui.separator();
-    ui.heading("Cubemap Reflection");
-    ui.add_space(4.0);
+    if state.show_advanced_options {
+        ui.add_space(8.0);
+        ui.separator();
+        ui.heading("Cubemap Reflection");
+        ui.add_space(4.0);
 
-    ui.label("Fresnel Strength:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_fresnel, 0.0..=2.0)
-        .step_by(0.01).fixed_decimals(2)).changed() {
-        context.editor_state.save_fluid_render_settings();
-    }
-
-    ui.add_space(4.0);
-    ui.label("Fresnel Power:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_fresnel_power, 0.5..=10.0)
-        .step_by(0.1).fixed_decimals(1)).changed() {
-        context.editor_state.save_fluid_render_settings();
-    }
-
-    ui.add_space(4.0);
-    ui.label("Reflection Intensity:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_reflection, 0.0..=2.0)
-        .step_by(0.01).fixed_decimals(2)).changed() {
-        context.editor_state.save_fluid_render_settings();
-    }
-
-    ui.add_space(4.0);
-    ui.label("Reflection Brightness:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_reflection_brightness, 1.0..=50.0)
-        .step_by(0.5).fixed_decimals(1)).changed() {
-        context.editor_state.save_fluid_render_settings();
-    }
-
-    // === Water Surface Waves ===
-    ui.add_space(8.0);
-    ui.separator();
-    ui.heading("Water Surface Waves");
-    ui.add_space(4.0);
-    
-    ui.label("Wave Height:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_wave_height, 0.0..=5.0)
-        .step_by(0.05).fixed_decimals(2)).changed() {
-        context.editor_state.fluid_mesh_params_dirty = true;
-        context.editor_state.save_fluid_render_settings();
-    }
-    
-    ui.add_space(4.0);
-    ui.label("Wave Speed:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_wave_speed, 0.0..=5.0)
-        .step_by(0.05).fixed_decimals(2)).changed() {
-        context.editor_state.fluid_mesh_params_dirty = true;
-        context.editor_state.save_fluid_render_settings();
-    }
-    
-    ui.add_space(4.0);
-    ui.label("Noise Scale (lower = larger waves):");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_scale, 0.01..=20.0)
-        .step_by(0.01).fixed_decimals(2).logarithmic(true)).changed() {
-        context.editor_state.fluid_mesh_params_dirty = true;
-        context.editor_state.save_fluid_render_settings();
-    }
-    
-    ui.add_space(4.0);
-    ui.label("Octaves:");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_octaves, 1.0..=6.0)
-        .step_by(1.0).fixed_decimals(0)).changed() {
-        context.editor_state.fluid_mesh_params_dirty = true;
-        context.editor_state.save_fluid_render_settings();
-    }
-    
-    ui.add_space(4.0);
-    ui.label("Lacunarity (freq per octave):");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_lacunarity, 1.0..=4.0)
-        .step_by(0.1).fixed_decimals(1)).changed() {
-        context.editor_state.fluid_mesh_params_dirty = true;
-        context.editor_state.save_fluid_render_settings();
-    }
-    
-    ui.add_space(4.0);
-    ui.label("Persistence (amp per octave):");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_persistence, 0.1..=1.0)
-        .step_by(0.05).fixed_decimals(2)).changed() {
-        context.editor_state.fluid_mesh_params_dirty = true;
-        context.editor_state.save_fluid_render_settings();
-    }
-    
-    // === Caustics ===
-    ui.add_space(8.0);
-    ui.separator();
-    ui.heading("Caustics");
-    ui.add_space(4.0);
-    let mut caustic_changed = false;
-    
-    ui.label("Intensity:");
-    caustic_changed |= ui.add(egui::Slider::new(&mut context.editor_state.caustic_intensity, 0.0..=2.0)
-        .step_by(0.01).fixed_decimals(2)).changed();
-    
-    ui.add_space(4.0);
-    ui.label("Scale:");
-    caustic_changed |= ui.add(egui::Slider::new(&mut context.editor_state.caustic_scale, 0.1..=30.0)
-        .step_by(0.1).fixed_decimals(1)).changed();
-    
-    ui.add_space(4.0);
-    ui.label("Speed:");
-    caustic_changed |= ui.add(egui::Slider::new(&mut context.editor_state.caustic_speed, 0.0..=5.0)
-        .step_by(0.1).fixed_decimals(1)).changed();
-    
-    if caustic_changed {
-        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-            if let Some(ref mut light_field) = gpu_scene.light_field_system {
-                light_field.set_caustic_intensity(context.editor_state.caustic_intensity);
-                light_field.set_caustic_scale(context.editor_state.caustic_scale);
-                light_field.set_caustic_speed(context.editor_state.caustic_speed);
-            }
+        ui.label("Fresnel Strength:")
+            .on_hover_text("How strongly the Fresnel effect controls reflection intensity. Higher values make the water more reflective at grazing angles");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_fresnel, 0.0..=2.0)
+            .step_by(0.01).fixed_decimals(2)).changed() {
+            context.editor_state.save_fluid_render_settings();
         }
-        context.editor_state.save_light_settings();
-    }
+
+        ui.add_space(4.0);
+        ui.label("Fresnel Power:")
+            .on_hover_text("Sharpness of the Fresnel transition. Higher values make the reflection appear only at very shallow angles; lower values spread it across more of the surface");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_fresnel_power, 0.5..=10.0)
+            .step_by(0.1).fixed_decimals(1)).changed() {
+            context.editor_state.save_fluid_render_settings();
+        }
+
+        ui.add_space(4.0);
+        ui.label("Reflection Intensity:")
+            .on_hover_text("Overall strength of the cubemap/environment reflection on the water surface");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_reflection, 0.0..=2.0)
+            .step_by(0.01).fixed_decimals(2)).changed() {
+            context.editor_state.save_fluid_render_settings();
+        }
+
+        ui.add_space(4.0);
+        ui.label("Reflection Brightness:")
+            .on_hover_text("Brightness multiplier applied to the reflected environment. Higher values make the reflection appear brighter and more vivid");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_reflection_brightness, 1.0..=50.0)
+            .step_by(0.5).fixed_decimals(1)).changed() {
+            context.editor_state.save_fluid_render_settings();
+        }
+
+        // === Water Surface Waves ===
+        ui.add_space(8.0);
+        ui.separator();
+        ui.heading("Water Surface Waves");
+        ui.add_space(4.0);
+        
+        ui.label("Wave Height:")
+            .on_hover_text("Amplitude of the animated wave displacement on the water surface. 0 = flat water; higher values create more dramatic waves");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_wave_height, 0.0..=5.0)
+            .step_by(0.05).fixed_decimals(2)).changed() {
+            context.editor_state.fluid_mesh_params_dirty = true;
+            context.editor_state.save_fluid_render_settings();
+        }
+        
+        ui.add_space(4.0);
+        ui.label("Wave Speed:")
+            .on_hover_text("How fast the wave pattern animates across the water surface");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_wave_speed, 0.0..=5.0)
+            .step_by(0.05).fixed_decimals(2)).changed() {
+            context.editor_state.fluid_mesh_params_dirty = true;
+            context.editor_state.save_fluid_render_settings();
+        }
+        
+        ui.add_space(4.0);
+        ui.label("Noise Scale (lower = larger waves):")
+            .on_hover_text("Spatial frequency of the wave noise pattern. Lower values create large, rolling waves; higher values create small, choppy ripples");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_scale, 0.01..=20.0)
+            .step_by(0.01).fixed_decimals(2).logarithmic(true)).changed() {
+            context.editor_state.fluid_mesh_params_dirty = true;
+            context.editor_state.save_fluid_render_settings();
+        }
+        
+        ui.add_space(4.0);
+        ui.label("Octaves:")
+            .on_hover_text("Number of noise layers combined for the wave pattern. More octaves add finer detail to the waves");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_octaves, 1.0..=6.0)
+            .step_by(1.0).fixed_decimals(0)).changed() {
+            context.editor_state.fluid_mesh_params_dirty = true;
+            context.editor_state.save_fluid_render_settings();
+        }
+        
+        ui.add_space(4.0);
+        ui.label("Lacunarity (freq per octave):")
+            .on_hover_text("How much the frequency increases with each successive noise octave. Higher values create more varied, complex wave patterns");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_lacunarity, 1.0..=4.0)
+            .step_by(0.1).fixed_decimals(1)).changed() {
+            context.editor_state.fluid_mesh_params_dirty = true;
+            context.editor_state.save_fluid_render_settings();
+        }
+        
+        ui.add_space(4.0);
+        ui.label("Persistence (amp per octave):")
+            .on_hover_text("How much the amplitude decreases with each successive noise octave. Lower values make higher octaves contribute less, creating smoother waves");
+        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_persistence, 0.1..=1.0)
+            .step_by(0.05).fixed_decimals(2)).changed() {
+            context.editor_state.fluid_mesh_params_dirty = true;
+            context.editor_state.save_fluid_render_settings();
+        }
+        
+        // === Caustics ===
+        ui.add_space(8.0);
+        ui.separator();
+        ui.heading("Caustics");
+        ui.add_space(4.0);
+        let mut caustic_changed = false;
+        
+        ui.label("Intensity:")
+            .on_hover_text("Brightness of the caustic light patterns projected onto surfaces beneath the water");
+        caustic_changed |= ui.add(egui::Slider::new(&mut context.editor_state.caustic_intensity, 0.0..=2.0)
+            .step_by(0.01).fixed_decimals(2)).changed();
+        
+        ui.add_space(4.0);
+        ui.label("Scale:")
+            .on_hover_text("Size of the caustic pattern. Smaller values create tighter, more detailed caustic ripples; larger values create broader patterns");
+        caustic_changed |= ui.add(egui::Slider::new(&mut context.editor_state.caustic_scale, 0.1..=30.0)
+            .step_by(0.1).fixed_decimals(1)).changed();
+        
+        ui.add_space(4.0);
+        ui.label("Speed:")
+            .on_hover_text("How fast the caustic pattern animates. Higher values create more dynamic, rapidly shifting light patterns");
+        caustic_changed |= ui.add(egui::Slider::new(&mut context.editor_state.caustic_speed, 0.0..=5.0)
+            .step_by(0.1).fixed_decimals(1)).changed();
+        
+        if caustic_changed {
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                if let Some(ref mut light_field) = gpu_scene.light_field_system {
+                    light_field.set_caustic_intensity(context.editor_state.caustic_intensity);
+                    light_field.set_caustic_scale(context.editor_state.caustic_scale);
+                    light_field.set_caustic_speed(context.editor_state.caustic_speed);
+                }
+            }
+            context.editor_state.save_light_settings();
+        }
+    } // end advanced water visuals (cubemap, waves, caustics)
     
     ui.add_space(10.0);
 }
@@ -1688,7 +1747,9 @@ fn render_organism_skin_settings(ui: &mut Ui, context: &mut PanelContext, organi
     ui.label("Wrap cell clusters in a smooth biological membrane.");
     ui.add_space(4.0);
 
-    if ui.checkbox(&mut organism_skin.enabled, "Show Organism Skins").changed() {
+    if ui.checkbox(&mut organism_skin.enabled, "Show Organism Skins")
+        .on_hover_text("Wrap cell clusters in a smooth biological membrane mesh. Requires GPU mode and fluid system initialization")
+        .changed() {
         // Enabling is handled in app.rs (lazy initialisation)
     }
 
@@ -1700,35 +1761,41 @@ fn render_organism_skin_settings(ui: &mut Ui, context: &mut PanelContext, organi
     ui.add_space(6.0);
 
     // ── Geometry ──────────────────────────────────────────────────────────────
-    ui.label("Skin Offset (gap from cell surface, world units):");
+    ui.label("Skin Offset (gap from cell surface, world units):")
+        .on_hover_text("How far the skin mesh extends beyond the cell surfaces. Larger values create a more inflated, blobby appearance");
     ui.add(egui::Slider::new(&mut organism_skin.radius_scale, 0.0..=5.0)
         .step_by(0.05).fixed_decimals(2));
 
     ui.add_space(4.0);
-    ui.label("Shrink Speed (fraction of gap closed per iteration):");
+    ui.label("Shrink Speed (fraction of gap closed per iteration):")
+        .on_hover_text("How aggressively the skin mesh wraps around the cells each iteration. Higher values create a tighter fit but may cause artifacts");
     ui.add(egui::Slider::new(&mut organism_skin.shrink_speed, 0.01..=1.0)
         .step_by(0.01).fixed_decimals(2));
 
     ui.add_space(4.0);
-    ui.label("Smooth Factor (Laplacian blend per iteration):");
+    ui.label("Smooth Factor (Laplacian blend per iteration):")
+        .on_hover_text("How much the skin mesh is smoothed each iteration. Higher values create a smoother, more organic surface");
     ui.add(egui::Slider::new(&mut organism_skin.smooth_factor, 0.0..=0.8)
         .step_by(0.01).fixed_decimals(2));
 
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.label("Shrink Iterations:");
+        ui.label("Shrink Iterations:")
+            .on_hover_text("Number of shrink-wrap passes. More iterations create a tighter skin but increase GPU cost");
         ui.add(egui::Slider::new(&mut organism_skin.shrink_iters, 1u32..=20u32));
     });
 
     ui.add_space(2.0);
     ui.horizontal(|ui| {
-        ui.label("Smooth Iterations:");
+        ui.label("Smooth Iterations:")
+            .on_hover_text("Number of Laplacian smoothing passes. More iterations create a smoother surface");
         ui.add(egui::Slider::new(&mut organism_skin.smooth_iters, 0u32..=8u32));
     });
 
     ui.add_space(2.0);
     ui.horizontal(|ui| {
-        ui.label("Min Cells for Skin:");
+        ui.label("Min Cells for Skin:")
+            .on_hover_text("Minimum number of cells an organism must have before a skin is rendered. Prevents skins on isolated single cells");
         ui.add(egui::Slider::new(&mut organism_skin.min_cells, 1u32..=50u32));
     });
 
@@ -1751,17 +1818,20 @@ fn render_organism_skin_settings(ui: &mut Ui, context: &mut PanelContext, organi
     });
 
     ui.add_space(4.0);
-    ui.label("Opacity:");
+    ui.label("Opacity:")
+        .on_hover_text("Transparency of the organism skin. 0 = fully transparent; 1 = fully opaque");
     ui.add(egui::Slider::new(&mut organism_skin.alpha, 0.0..=1.0)
         .step_by(0.01).fixed_decimals(2));
 
     ui.add_space(4.0);
-    ui.label("Subsurface Scattering:");
+    ui.label("Subsurface Scattering:")
+        .on_hover_text("Simulates light penetrating and scattering beneath the skin surface, creating a soft, translucent biological look");
     ui.add(egui::Slider::new(&mut organism_skin.sss_strength, 0.0..=3.0)
         .step_by(0.05).fixed_decimals(2));
 
     ui.add_space(4.0);
-    ui.label("Rim Light:");
+    ui.label("Rim Light:")
+        .on_hover_text("Backlit glow around the edges of the organism skin. Creates a halo effect that makes organisms stand out against the background");
     ui.add(egui::Slider::new(&mut organism_skin.rim_strength, 0.0..=3.0)
         .step_by(0.05).fixed_decimals(2));
 
@@ -1792,12 +1862,12 @@ fn render_organism_skin_settings(ui: &mut Ui, context: &mut PanelContext, organi
     ui.add_space(4.0);
 }
 
-/// Render the Light & Fog settings panel for light field, photocyte, and volumetric fog controls.
-fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
+/// Render the Lighting settings panel.
+fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiState) {
     let sw = (ui.available_width() - 60.0).max(60.0);
     ui.style_mut().spacing.slider_width = sw;
     if !context.is_gpu_mode() {
-        ui.label("Light & Fog settings are only available in GPU mode.");
+        ui.label("Lighting settings are only available in GPU mode.");
         return;
     }
     
@@ -1808,25 +1878,28 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
     if !has_light_field {
         ui.label("Light field system not initialized.");
         ui.add_space(5.0);
-        ui.label("Initialize the fluid system first to enable light & fog.");
+        ui.label("Initialize the fluid system first to enable lighting.");
         return;
     }
     
     let mut changed = false;
-    
+    let mut sun_changed = false;
+
     // === Light Direction ===
-    ui.add_space(8.0);
-    ui.separator();
+    ui.add_space(4.0);
     ui.heading("Light Direction");
     ui.add_space(4.0);
     
-    ui.label("X:");
+    ui.label("X:")
+        .on_hover_text("X component of the light direction vector. Negative = light comes from the right");
     changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[0], -1.0..=1.0)
         .step_by(0.01).fixed_decimals(2)).changed();
-    ui.label("Y:");
+    ui.label("Y:")
+        .on_hover_text("Y component of the light direction vector. Positive = light comes from above (top-down)");
     changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[1], -1.0..=1.0)
         .step_by(0.01).fixed_decimals(2)).changed();
-    ui.label("Z:");
+    ui.label("Z:")
+        .on_hover_text("Z component of the light direction vector");
     changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[2], -1.0..=1.0)
         .step_by(0.01).fixed_decimals(2)).changed();
     
@@ -1845,183 +1918,219 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
             changed = true;
         }
     });
-    
+
+    // === Sun ===
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("Sun");
     ui.add_space(4.0);
-    ui.label("Sun Brightness:");
+
+    ui.label("Brightness:")
+        .on_hover_text("Overall intensity of the directional sun light. Also affects how much energy photocyte cells generate from light");
     let brightness_changed = ui.add(egui::Slider::new(&mut context.editor_state.sun_intensity, 0.0..=20.0)
         .step_by(0.1).fixed_decimals(1)).changed();
     if brightness_changed {
         changed = true;
-        // Sync immediately so photocyte gain rate updates
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
             gpu_scene.sun_intensity = context.editor_state.sun_intensity;
         }
     }
-    
-    // === Procedural Sun ===
-    ui.add_space(8.0);
-    ui.separator();
-    ui.heading("Procedural Sun");
-    ui.add_space(4.0);
-    
-    let mut sun_changed = false;
-    
-    sun_changed |= ui.checkbox(&mut context.editor_state.show_sun, "Enable Sun").changed();
-    
+
+    sun_changed |= ui.checkbox(&mut context.editor_state.show_sun, "Show Sun Disc")
+        .on_hover_text("Render a visible sun disc in the skybox at the light direction position")
+        .changed();
+
     if context.editor_state.show_sun {
         ui.add_space(4.0);
-        
-        // Sun color
         let mut sc = context.editor_state.sun_color;
-        ui.label("Sun Color R:");
-        sun_changed |= ui.add(egui::Slider::new(&mut sc[0], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
-        ui.label("Sun Color G:");
-        sun_changed |= ui.add(egui::Slider::new(&mut sc[1], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
-        ui.label("Sun Color B:");
-        sun_changed |= ui.add(egui::Slider::new(&mut sc[2], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+        ui.label("Sun Color:");
+        ui.horizontal(|ui| {
+            ui.label("R:");
+            sun_changed |= ui.add(egui::Slider::new(&mut sc[0], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+        });
+        ui.horizontal(|ui| {
+            ui.label("G:");
+            sun_changed |= ui.add(egui::Slider::new(&mut sc[1], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+        });
+        ui.horizontal(|ui| {
+            ui.label("B:");
+            sun_changed |= ui.add(egui::Slider::new(&mut sc[2], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+        });
         context.editor_state.sun_color = sc;
-        
-        ui.add_space(4.0);
-        ui.label("Sun Size:");
-        sun_changed |= ui.add(egui::Slider::new(&mut context.editor_state.sun_angular_radius, 0.005..=0.2)
-            .step_by(0.005).fixed_decimals(3)).changed();
-        
-        ui.add_space(4.0);
-    }
-    
-    // === Surface Shadows ===
-    ui.heading("Surface Shadows");
-    ui.add_space(4.0);
-    
-    let mut shadow_changed = false;
-    shadow_changed |= ui.checkbox(&mut context.editor_state.shadow_enabled, "Enable Surface Shadows").changed();
-    
-    ui.add_space(4.0);
-    ui.label("Shadow Strength:");
-    shadow_changed |= ui.add(egui::Slider::new(&mut context.editor_state.shadow_strength, 0.0..=1.0)
-        .step_by(0.01).fixed_decimals(2)).changed();
-    
-    ui.add_space(4.0);
-    ui.label("Shadow Quality:");
-    shadow_changed |= ui.add(egui::Slider::new(&mut context.editor_state.shadow_quality, 0.0..=1.0)
-        .step_by(0.01).fixed_decimals(2)).changed();
-    
-    if shadow_changed {
-        changed = true;
-        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-            if let Some(ref mut light_field) = gpu_scene.light_field_system {
-                light_field.set_shadow_enabled(context.editor_state.shadow_enabled);
-                light_field.set_shadow_strength(context.editor_state.shadow_strength);
-                light_field.set_shadow_quality(context.editor_state.shadow_quality);
-            }
+
+        if state.show_advanced_options {
+            ui.add_space(4.0);
+            ui.label("Sun Size:")
+                .on_hover_text("Angular radius of the sun disc in the skybox. Larger values create a bigger, more diffuse sun");
+            sun_changed |= ui.add(egui::Slider::new(&mut context.editor_state.sun_angular_radius, 0.005..=0.2)
+                .step_by(0.005).fixed_decimals(3)).changed();
         }
-        context.editor_state.save_light_settings();
-    }
-    
-    // === Light Field Settings ===
-    ui.add_space(8.0);
-    ui.separator();
-    ui.heading("Light Field (Shadows)");
-    ui.add_space(4.0);
-    
-    ui.label("Ray Steps:");
-    let mut steps = context.editor_state.light_field_max_steps as i32;
-    if ui.add(egui::Slider::new(&mut steps, 1..=256)).changed() {
-        context.editor_state.light_field_max_steps = steps as u32;
-        changed = true;
-    }
-    
-    ui.label("Step Size:");
-    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_step_size, 0.5..=4.0)
-        .step_by(0.1).fixed_decimals(1)).changed();
-    
-    ui.label("Solid Absorption:");
-    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_absorption_solid, 0.1..=20.0)
-        .step_by(0.1).fixed_decimals(1)).changed();
-    
-    ui.label("Cell Absorption:");
-    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_absorption_cell, 0.0..=5.0)
-        .step_by(0.05).fixed_decimals(2)).changed();
-    
-    ui.label("Ambient Floor:");
-    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_ambient_floor, 0.0..=0.2)
-        .step_by(0.005).fixed_decimals(3)).changed();
-    
-    // === Volumetric Fog ===
-    ui.add_space(8.0);
-    ui.separator();
-    ui.heading("Volumetric Fog");
-    ui.add_space(4.0);
-    
-    changed |= ui.checkbox(&mut context.editor_state.show_volumetric_fog, "Enable Volumetric Fog").changed();
-    
-    if context.editor_state.show_volumetric_fog {
+    } // end show_sun
+
+    // === Advanced: Shadows, Light Field, Fog, DoF ===
+    if state.show_advanced_options {
+        // Surface Shadows
+        ui.add_space(8.0);
+        ui.separator();
+        ui.heading("Surface Shadows");
         ui.add_space(4.0);
-        ui.label("Fog Density:");
-        changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_density, 0.0..=2.0)
+
+        let mut shadow_changed = false;
+        shadow_changed |= ui.checkbox(&mut context.editor_state.shadow_enabled, "Enable Surface Shadows")
+            .on_hover_text("Cast shadows from cave geometry and cells onto surfaces using the light field")
+            .changed();
+
+        ui.add_space(4.0);
+        ui.label("Shadow Strength:")
+            .on_hover_text("How dark the shadows are. 0 = no shadows visible; 1 = fully opaque black shadows");
+        shadow_changed |= ui.add(egui::Slider::new(&mut context.editor_state.shadow_strength, 0.0..=1.0)
             .step_by(0.01).fixed_decimals(2)).changed();
-        
-        ui.label("Fog Steps:");
-        let mut fsteps = context.editor_state.fog_steps as i32;
-        if ui.add(egui::Slider::new(&mut fsteps, 8..=128)).changed() {
-            context.editor_state.fog_steps = fsteps as u32;
+
+        ui.add_space(4.0);
+        ui.label("Shadow Quality:")
+            .on_hover_text("Sampling quality for shadow rays. Higher values reduce noise and banding but increase GPU cost");
+        shadow_changed |= ui.add(egui::Slider::new(&mut context.editor_state.shadow_quality, 0.0..=1.0)
+            .step_by(0.01).fixed_decimals(2)).changed();
+
+        if shadow_changed {
+            changed = true;
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                if let Some(ref mut light_field) = gpu_scene.light_field_system {
+                    light_field.set_shadow_enabled(context.editor_state.shadow_enabled);
+                    light_field.set_shadow_strength(context.editor_state.shadow_strength);
+                    light_field.set_shadow_quality(context.editor_state.shadow_quality);
+                }
+            }
+            context.editor_state.save_light_settings();
+        }
+    } // temporary close — rest of advanced below
+
+    if state.show_advanced_options {
+        // Light Field
+        ui.add_space(8.0);
+        ui.separator();
+        ui.heading("Light Field");
+        ui.add_space(4.0);
+
+        ui.label("Ray Steps:")
+            .on_hover_text("Number of steps each light ray takes through the voxel grid. More steps = more accurate shadows and lighting but higher GPU cost");
+        let mut steps = context.editor_state.light_field_max_steps as i32;
+        if ui.add(egui::Slider::new(&mut steps, 1..=256)).changed() {
+            context.editor_state.light_field_max_steps = steps as u32;
             changed = true;
         }
-        
-        ui.label("Scattering Anisotropy:");
-        changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_scattering_anisotropy, 0.0..=0.95)
-            .step_by(0.01).fixed_decimals(2)).changed();
-        
-        ui.label("Absorption:");
-        changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_absorption, 0.0..=2.0)
-            .step_by(0.01).fixed_decimals(2)).changed();
-        
-        ui.add_space(4.0);
-        let mut fog_col = context.editor_state.fog_color;
-        ui.label("Fog Color R:");
-        changed |= ui.add(egui::Slider::new(&mut fog_col[0], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
-        ui.label("Fog Color G:");
-        changed |= ui.add(egui::Slider::new(&mut fog_col[1], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
-        ui.label("Fog Color B:");
-        changed |= ui.add(egui::Slider::new(&mut fog_col[2], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
-        context.editor_state.fog_color = fog_col;
-        
-        ui.add_space(4.0);
-        ui.label("Height Fog Density:");
-        changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_height_density, 0.0..=2.0)
-            .step_by(0.01).fixed_decimals(2)).changed();
-        
-        ui.label("Height Fog Falloff:");
-        changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_height_falloff, 0.001..=0.1)
-            .step_by(0.001).fixed_decimals(3)).changed();
-    }
-    
-    ui.add_space(8.0);
-    ui.separator();
-    ui.heading("Depth of Field");
-    ui.add_space(4.0);
-    
-    changed |= ui.checkbox(&mut context.editor_state.show_dof, "Enable Depth of Field").changed();
-    
-    if context.editor_state.show_dof {
-        ui.add_space(4.0);
-        ui.label("Focal Distance:");
-        changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_focal_distance, 5.0..=500.0)
-            .step_by(1.0).fixed_decimals(0)).changed();
-        
-        ui.label("Focal Range:");
-        changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_focal_range, 1.0..=200.0)
-            .step_by(1.0).fixed_decimals(0)).changed();
-        
-        ui.label("Max Blur Radius:");
-        changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_max_blur_radius, 1.0..=24.0)
-            .step_by(0.5).fixed_decimals(1)).changed();
-        
-        ui.label("Blur Strength:");
-        changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_blur_strength, 0.0..=3.0)
+
+        ui.label("Step Size:")
+            .on_hover_text("Distance between ray samples in world units. Smaller steps = more accurate but slower. Larger steps = faster but may miss thin geometry");
+        changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_step_size, 0.5..=4.0)
+            .step_by(0.1).fixed_decimals(1)).changed();
+
+        ui.label("Solid Absorption:")
+            .on_hover_text("How much light is blocked per unit of solid (cave) material. Higher values create darker shadows behind cave walls");
+        changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_absorption_solid, 0.1..=20.0)
+            .step_by(0.1).fixed_decimals(1)).changed();
+
+        ui.label("Cell Absorption:")
+            .on_hover_text("How much light is blocked per unit of cell material. Higher values make cells cast darker shadows on each other");
+        changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_absorption_cell, 0.0..=5.0)
             .step_by(0.05).fixed_decimals(2)).changed();
-    }
-    
+
+        ui.label("Ambient Floor:")
+            .on_hover_text("Minimum light level in fully shadowed areas. Prevents completely black shadows — simulates indirect/ambient light bouncing");
+        changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_ambient_floor, 0.0..=0.2)
+            .step_by(0.005).fixed_decimals(3)).changed();
+
+        // Volumetric Fog
+        ui.add_space(8.0);
+        ui.separator();
+        ui.heading("Volumetric Fog");
+        ui.add_space(4.0);
+
+        changed |= ui.checkbox(&mut context.editor_state.show_volumetric_fog, "Enable Volumetric Fog")
+            .on_hover_text("Render atmospheric fog that scatters light, creating depth and atmosphere in the scene")
+            .changed();
+
+        if context.editor_state.show_volumetric_fog {
+            ui.add_space(4.0);
+            ui.label("Fog Density:")
+                .on_hover_text("Overall thickness of the fog. Higher values create denser, more opaque fog that obscures distant objects");
+            changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_density, 0.0..=2.0)
+                .step_by(0.01).fixed_decimals(2)).changed();
+
+            ui.label("Fog Steps:")
+                .on_hover_text("Number of ray march steps for volumetric fog. More steps = smoother, more accurate fog but higher GPU cost");
+            let mut fsteps = context.editor_state.fog_steps as i32;
+            if ui.add(egui::Slider::new(&mut fsteps, 8..=128)).changed() {
+                context.editor_state.fog_steps = fsteps as u32;
+                changed = true;
+            }
+
+            ui.label("Scattering Anisotropy:")
+                .on_hover_text("Direction of light scattering. 0 = uniform scatter in all directions. Higher values create a forward-scattering glow around the light source (Mie scattering)");
+            changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_scattering_anisotropy, 0.0..=0.95)
+                .step_by(0.01).fixed_decimals(2)).changed();
+
+            ui.label("Absorption:")
+                .on_hover_text("How much light the fog absorbs (as opposed to scattering). Higher values make the fog darker and more opaque");
+            changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_absorption, 0.0..=2.0)
+                .step_by(0.01).fixed_decimals(2)).changed();
+
+            ui.add_space(4.0);
+            let mut fog_col = context.editor_state.fog_color;
+            ui.label("Fog Color R:");
+            changed |= ui.add(egui::Slider::new(&mut fog_col[0], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+            ui.label("Fog Color G:");
+            changed |= ui.add(egui::Slider::new(&mut fog_col[1], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+            ui.label("Fog Color B:");
+            changed |= ui.add(egui::Slider::new(&mut fog_col[2], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+            context.editor_state.fog_color = fog_col;
+
+            ui.add_space(4.0);
+            ui.label("Height Fog Density:")
+                .on_hover_text("Density of fog that accumulates at the bottom of the world (or toward the center in radial gravity mode). Creates a ground-hugging mist effect");
+            changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_height_density, 0.0..=2.0)
+                .step_by(0.01).fixed_decimals(2)).changed();
+
+            ui.label("Height Fog Falloff:")
+                .on_hover_text("How quickly the height fog thins out with altitude. Smaller values = fog extends higher; larger values = fog stays close to the ground");
+            changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_height_falloff, 0.001..=0.1)
+                .step_by(0.001).fixed_decimals(3)).changed();
+        }
+
+        // Depth of Field
+        ui.add_space(8.0);
+        ui.separator();
+        ui.heading("Depth of Field");
+        ui.add_space(4.0);
+
+        changed |= ui.checkbox(&mut context.editor_state.show_dof, "Enable Depth of Field")
+            .on_hover_text("Blur objects that are out of the camera's focal range, simulating a camera lens effect")
+            .changed();
+
+        if context.editor_state.show_dof {
+            ui.add_space(4.0);
+            ui.label("Focal Distance:")
+                .on_hover_text("Distance from the camera at which objects are in perfect focus");
+            changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_focal_distance, 5.0..=500.0)
+                .step_by(1.0).fixed_decimals(0)).changed();
+
+            ui.label("Focal Range:")
+                .on_hover_text("Depth of the in-focus zone. Objects within this distance from the focal point remain sharp");
+            changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_focal_range, 1.0..=200.0)
+                .step_by(1.0).fixed_decimals(0)).changed();
+
+            ui.label("Max Blur Radius:")
+                .on_hover_text("Maximum blur radius in pixels for objects far outside the focal range. Higher values create a more dramatic bokeh effect");
+            changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_max_blur_radius, 1.0..=24.0)
+                .step_by(0.5).fixed_decimals(1)).changed();
+
+            ui.label("Blur Strength:")
+                .on_hover_text("Overall intensity of the depth-of-field blur effect. 0 = no blur; higher values create stronger out-of-focus blurring");
+            changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_blur_strength, 0.0..=3.0)
+                .step_by(0.05).fixed_decimals(2)).changed();
+        }
+    } // end advanced lighting sections
+
     // Apply sun settings to GPU
     if sun_changed {
         changed = true;
@@ -2035,13 +2144,13 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext) {
         }
         context.editor_state.save_light_settings();
     }
-    
+
     // Mark dirty and save if any parameter changed
     if changed {
         context.editor_state.light_params_dirty = true;
         context.editor_state.save_light_settings();
     }
-    
+
     ui.add_space(10.0);
 }
 
@@ -2082,15 +2191,20 @@ fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext) {
     ui.label(format!("Mode: {:?}", camera.mode));
     ui.label(format!("Distance: {:.1}", camera.distance));
 
+    ui.label("Move Speed:")
+        .on_hover_text("Camera movement speed in FreeFly mode. Higher values let you traverse the world faster");
     ui.add(
         egui::Slider::new(&mut camera.move_speed, 1.0..=50.0)
             .logarithmic(true),
     );
+    ui.label("Mouse Sensitivity:")
+        .on_hover_text("How much the camera rotates per pixel of mouse movement. Lower values give finer control; higher values feel more responsive");
     ui.add(
         egui::Slider::new(&mut camera.mouse_sensitivity, 0.001..=0.01)
             .logarithmic(true),
     );
-    ui.checkbox(&mut camera.enable_spring, "Enable Spring");
+    ui.checkbox(&mut camera.enable_spring, "Enable Spring")
+        .on_hover_text("Adds a spring/lag to camera movement for a smoother cinematic feel. Disable for instant, precise camera control");
 }
 
 /// Render the LightingSettings panel (placeholder).
@@ -2872,7 +2986,8 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
                     "cell_type_dropdown".to_string(), combo_resp.response.rect,
                 );
 
-                let chk = ui.checkbox(&mut mode.parent_make_adhesion, "Make Adhesion");
+                let chk = ui.checkbox(&mut mode.parent_make_adhesion, "Make Adhesion")
+                    .on_hover_text("When enabled, this cell creates an adhesion bond with its parent cell when it is born. This is how multicellular organisms form — cells stay connected to their parent after division");
                 context.editor_state.panel_rects.insert(
                     "make_adhesion_checkbox".to_string(), chk.rect,
                 );
@@ -2934,9 +3049,11 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
 
             // Breaking Properties Group (Red)
             group_container(ui, "Breaking Properties", egui::Color32::from_rgb(200, 100, 100), |ui| {
-                ui.checkbox(&mut mode.adhesion_settings.can_break, "Adhesion Can Break");
+                ui.checkbox(&mut mode.adhesion_settings.can_break, "Adhesion Can Break")
+                    .on_hover_text("When enabled, adhesion bonds will snap if the force between cells exceeds the break force threshold");
 
-                ui.label("Adhesion Break Force:");
+                ui.label("Adhesion Break Force:")
+                    .on_hover_text("Force magnitude (in simulation units) required to snap this adhesion bond. Higher values make bonds harder to break");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -2948,7 +3065,8 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
 
             // Physical Properties Group (Orange)
             group_container(ui, "Physical Properties", egui::Color32::from_rgb(200, 150, 80), |ui| {
-                ui.label("Adhesion Rest Length:");
+                ui.label("Adhesion Rest Length:")
+                    .on_hover_text("The natural (equilibrium) distance between two bonded cells. The spring pulls them toward this distance");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -2960,7 +3078,8 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
 
             // Linear Spring Group (Blue)
             group_container(ui, "Linear Spring", egui::Color32::from_rgb(100, 150, 200), |ui| {
-                ui.label("Linear Spring Stiffness:");
+                ui.label("Linear Spring Stiffness:")
+                    .on_hover_text("How strongly the bond resists stretching or compression along its axis. Higher values create stiffer, more rigid connections");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -2969,7 +3088,8 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut mode.adhesion_settings.linear_spring_stiffness).speed(0.1).range(0.1..=500.0));
                 });
 
-                ui.label("Linear Spring Damping:");
+                ui.label("Linear Spring Damping:")
+                    .on_hover_text("Reduces oscillation along the bond axis. Higher values cause the spring to settle faster with less bouncing");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -2981,7 +3101,8 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
 
             // Orientation Spring Group (Green)
             group_container(ui, "Orientation Spring", egui::Color32::from_rgb(100, 180, 120), |ui| {
-                ui.label("Orientation Spring Stiffness:");
+                ui.label("Orientation Spring Stiffness:")
+                    .on_hover_text("How strongly the bond resists angular bending. Higher values keep bonded cells more rigidly aligned to each other");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -2990,7 +3111,8 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut mode.adhesion_settings.orientation_spring_stiffness).speed(0.1).range(0.1..=100.0));
                 });
 
-                ui.label("Orientation Spring Damping:");
+                ui.label("Orientation Spring Damping:")
+                    .on_hover_text("Reduces rotational oscillation. Higher values prevent cells from wobbling around their bond axis");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -2999,7 +3121,8 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut mode.adhesion_settings.orientation_spring_damping).speed(0.01).range(0.0..=10.0));
                 });
 
-                ui.label("Max Angular Deviation:");
+                ui.label("Max Angular Deviation:")
+                    .on_hover_text("Maximum angle (in degrees) the bond can bend before the orientation spring starts pushing back. 0° = perfectly rigid, 180° = fully flexible");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3011,9 +3134,11 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
 
             // Twist Constraint Group (Purple)
             group_container(ui, "Twist Constraint", egui::Color32::from_rgb(160, 120, 180), |ui| {
-                ui.checkbox(&mut mode.adhesion_settings.enable_twist_constraint, "Enable Twist Constraint");
+                ui.checkbox(&mut mode.adhesion_settings.enable_twist_constraint, "Enable Twist Constraint")
+                    .on_hover_text("Prevents bonded cells from spinning freely around the bond axis. Useful for maintaining body orientation in structured organisms");
 
-                ui.label("Twist Constraint Stiffness:");
+                ui.label("Twist Constraint Stiffness:")
+                    .on_hover_text("How strongly the constraint resists axial rotation. Higher values lock the twist angle more firmly");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3022,7 +3147,8 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut mode.adhesion_settings.twist_constraint_stiffness).speed(0.01).range(0.0..=2.0));
                 });
 
-                ui.label("Twist Constraint Damping:");
+                ui.label("Twist Constraint Damping:")
+                    .on_hover_text("Reduces rotational oscillation around the bond axis. Higher values prevent spinning after a disturbance");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3099,7 +3225,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
             // Special Functions Group (Purple) - cell type specific settings at the top
             if mode.cell_type == 0 { // Test cells (cell_type == 0)
                 group_container(ui, "Special Functions", egui::Color32::from_rgb(180, 140, 200), |ui| {
-                    ui.label("Nutrient Generation Rate:");
+                    ui.label("Nutrient Generation Rate:")
+                        .on_hover_text("Nutrients produced per second by this cell. Test cells generate nutrients directly without needing food sources");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3110,14 +3237,16 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
             } else if mode.cell_type == 6 { // Glueocyte (cell_type == 6)
                 group_container(ui, "Glueocyte Functions", egui::Color32::from_rgb(140, 200, 140), |ui| {
-                    ui.checkbox(&mut mode.glueocyte_cell_adhesion, "Cell Adhesion");
+                    ui.checkbox(&mut mode.glueocyte_cell_adhesion, "Cell Adhesion")
+                        .on_hover_text("When enabled, this cell will form adhesion bonds with other cells it touches. Bonds are released when the signal gate goes inactive");
                     if mode.glueocyte_cell_adhesion {
                         ui.indent("glue_cell_signal", |ui| {
                             let channel_labels = ["Ch 0", "Ch 1", "Ch 2", "Ch 3", "Ch 4", "Ch 5", "Ch 6", "Ch 7"];
                             let has_gate = mode.glueocyte_cell_adhesion_signal_channel >= 0
                                 && mode.glueocyte_cell_adhesion_signal_channel <= 7;
                             ui.horizontal(|ui| {
-                                ui.label("Signal Gate:");
+                                ui.label("Signal Gate:")
+                                    .on_hover_text("Always On: bonds whenever touching a cell. Signal: only bonds when the chosen oculocyte channel (0–7) is above the threshold");
                                 if ui.selectable_label(!has_gate, "Always On").clicked() {
                                     mode.glueocyte_cell_adhesion_signal_channel = -1;
                                 }
@@ -3139,15 +3268,18 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                         }
                                     });
                                 ui.add(egui::Slider::new(&mut mode.glueocyte_cell_adhesion_signal_threshold, 0.0..=2047.0)
-                                    .logarithmic(false));
+                                    .logarithmic(false))
+                                    .on_hover_text("Signal strength threshold. The cell bonds when the oculocyte channel value is at or above this level");
                                 ui.label("Active when signal ≥ threshold.\nReleases all created bonds when inactive.");
                             }
                         });
                     }
-                    ui.checkbox(&mut mode.glueocyte_env_adhesion, "Environment Adhesion");
+                    ui.checkbox(&mut mode.glueocyte_env_adhesion, "Environment Adhesion")
+                        .on_hover_text("When enabled, this cell will bond to cave walls and other solid environment surfaces it touches");
                     if mode.glueocyte_env_adhesion {
                         ui.indent("glue_boulder", |ui| {
-                            ui.checkbox(&mut mode.glueocyte_boulder_adhesion, "Include Boulders/Mossrocks");
+                            ui.checkbox(&mut mode.glueocyte_boulder_adhesion, "Include Boulders/Mossrocks")
+                                .on_hover_text("Also bond to floating mossrock boulders in addition to cave walls");
                         });
                     }
                 });
@@ -3155,7 +3287,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 group_container(ui, "Flagellocyte Functions", egui::Color32::from_rgb(140, 180, 220), |ui| {
                     // Mode toggle
                     ui.horizontal(|ui| {
-                        ui.label("Speed Mode:");
+                        ui.label("Speed Mode:")
+                            .on_hover_text("Fixed: constant thrust force. Signal: switches between two thrust levels based on an oculocyte channel reading (0–7)");
                         if ui.selectable_label(!mode.flagellocyte_use_signal, "Fixed").clicked() {
                             mode.flagellocyte_use_signal = false;
                         }
@@ -3168,7 +3301,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     if !mode.flagellocyte_use_signal {
                         // Fixed speed mode
-                        ui.label("Swim Force:");
+                        ui.label("Swim Force:")
+                            .on_hover_text("Thrust force applied in the cell's forward direction each frame. Higher values = faster swimming. Consumes nutrients proportional to force (5 nutrients/sec at force 1.0)");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3182,7 +3316,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             let flag_ch_labels = ["Ch 0", "Ch 1", "Ch 2", "Ch 3", "Ch 4", "Ch 5", "Ch 6", "Ch 7"];
                             let flag_ch_idx = (mode.flagellocyte_signal_channel as usize).min(7);
                             ui.horizontal(|ui| {
-                                ui.label("Channel:");
+                                ui.label("Channel:")
+                                    .on_hover_text("Oculocyte channel (0–7) to read. Speed A is used when the channel is below Threshold C; Speed B is used when at or above it");
                                 egui::ComboBox::from_id_salt("flag_signal_channel")
                                     .selected_text(flag_ch_labels[flag_ch_idx])
                                     .show_ui(ui, |ui| {
@@ -3193,7 +3328,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             });
                         }
 
-                        ui.label("Speed A (signal < C):");
+                        ui.label("Speed A (signal < C):")
+                            .on_hover_text("Swim force when the signal channel is below Threshold C. Use 0 to stop swimming when no target is detected");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3202,7 +3338,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             ui.add(egui::DragValue::new(&mut mode.flagellocyte_speed_a).speed(0.01).range(0.0..=3.0));
                         });
 
-                        ui.label("Speed B (signal >= C):");
+                        ui.label("Speed B (signal >= C):")
+                            .on_hover_text("Swim force when the signal channel is at or above Threshold C. Use a higher value to accelerate toward a detected target");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3211,7 +3348,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             ui.add(egui::DragValue::new(&mut mode.flagellocyte_speed_b).speed(0.01).range(0.0..=3.0));
                         });
 
-                        ui.label("Threshold C:");
+                        ui.label("Threshold C:")
+                            .on_hover_text("Signal strength at which the flagellocyte switches from Speed A to Speed B");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3223,7 +3361,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
             } else if mode.cell_type == 5 { // Buoyocyte (cell_type == 5)
                 group_container(ui, "Buoyocyte Functions", egui::Color32::from_rgb(140, 200, 140), |ui| {
-                    ui.label("Buoyancy Force:");
+                    ui.label("Buoyancy Force:")
+                        .on_hover_text("Upward force applied to this cell each frame. Positive values push the cell upward (away from gravity). Use to make cells float or rise through water");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3235,19 +3374,20 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
             } else if mode.cell_type == 7 { // Oculocyte (cell_type == 7)
                 group_container(ui, "Oculocyte Functions", egui::Color32::from_rgb(200, 160, 220), |ui| {
                     // Sense Type checkboxes (bitmask: multiple types can be active simultaneously)
-                    ui.label("Sense Type:");
-                    let sense_bits: &[(&str, u32)] = &[
-                        ("Cell",      1 << 0),
-                        ("Food",      1 << 1),
-                        ("Light",     1 << 2),
-                        ("Wall/Cave", 1 << 3),
-                        ("Self",      1 << 4),
-                        ("Mossrock",  1 << 5),
+                    ui.label("Sense Type:")
+                        .on_hover_text("What this oculocyte detects with its ray. Multiple types can be active at once. 'Self' fires unconditionally every frame regardless of what is in front");
+                    let sense_bits: &[(&str, u32, &str)] = &[
+                        ("Cell",      1 << 0, "Detect other cells in the ray's path"),
+                        ("Food",      1 << 1, "Detect nutrient voxels in the fluid"),
+                        ("Light",     1 << 2, "Detect light intensity along the ray"),
+                        ("Wall/Cave", 1 << 3, "Detect cave walls and solid surfaces"),
+                        ("Self",      1 << 4, "Always fires — unconditional signal emitter, useful for positional gradients"),
+                        ("Mossrock",  1 << 5, "Detect floating mossrock boulders"),
                     ];
                     ui.horizontal_wrapped(|ui| {
-                        for (label, bit) in sense_bits {
+                        for (label, bit, tip) in sense_bits {
                             let mut checked = (mode.oculocyte_sense_type & bit) != 0;
-                            if ui.checkbox(&mut checked, *label).changed() {
+                            if ui.checkbox(&mut checked, *label).on_hover_text(*tip).changed() {
                                 if checked {
                                     mode.oculocyte_sense_type |= bit;
                                 } else {
@@ -3258,7 +3398,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     });
 
                     // Signal Channel (oculocyte: 0-7 only)
-                    ui.label("Signal Channel:");
+                    ui.label("Signal Channel:")
+                        .on_hover_text("Which oculocyte channel (0–7) to emit on when the ray detects its target. These channels can only drive behavioral fields (flagellocyte speed, myocyte contraction) — they cannot gate division or mode switching");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3268,7 +3409,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     });
 
                     // Signal Value
-                    ui.label("Signal Value:");
+                    ui.label("Signal Value:")
+                        .on_hover_text("Strength of the signal emitted when the ray detects its target. The signal attenuates by half at each adhesion hop away from this cell");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3278,7 +3420,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     });
 
                     // Signal Hops
-                    ui.label("Signal Hops:");
+                    ui.label("Signal Hops:")
+                        .on_hover_text("How many adhesion bonds the signal travels through. Signal strength halves at each hop beyond the first. 3 hops = 25% strength at the 3rd cell away");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3288,7 +3431,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     });
 
                     // Ray Length
-                    ui.label("Ray Length:");
+                    ui.label("Ray Length:")
+                        .on_hover_text("Maximum distance the detection ray travels from this cell. Longer rays detect targets further away but may be more expensive");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3301,7 +3445,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 group_container(ui, "Ciliocyte Functions", egui::Color32::from_rgb(160, 200, 180), |ui| {
                     // Mode toggle
                     ui.horizontal(|ui| {
-                        ui.label("Speed Mode:");
+                        ui.label("Speed Mode:")
+                            .on_hover_text("Fixed: cilia beat at a constant speed. Signal: speed switches between two values based on an oculocyte channel reading");
                         if ui.selectable_label(!mode.cilia_use_signal, "Fixed").clicked() {
                             mode.cilia_use_signal = false;
                         }
@@ -3314,7 +3459,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     if !mode.cilia_use_signal {
                         // Fixed speed mode
-                        ui.label("Cilia Speed:");
+                        ui.label("Cilia Speed:")
+                            .on_hover_text("Beat speed and direction. Positive values push fluid/particles in the cell's forward direction; negative values push backward. 0 = no movement");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3328,7 +3474,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             let cilia_ch_labels = ["Ch 0", "Ch 1", "Ch 2", "Ch 3", "Ch 4", "Ch 5", "Ch 6", "Ch 7"];
                             let cilia_ch_idx = (mode.cilia_signal_channel as usize).min(7);
                             ui.horizontal(|ui| {
-                                ui.label("Channel:");
+                                ui.label("Channel:")
+                                    .on_hover_text("Oculocyte channel (0–7) to read. The cilia speed switches between Speed Below and Speed Above based on whether this channel exceeds the threshold");
                                 egui::ComboBox::from_id_salt("cilia_signal_channel")
                                     .selected_text(cilia_ch_labels[cilia_ch_idx])
                                     .show_ui(ui, |ui| {
@@ -3339,7 +3486,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             });
                         }
 
-                        ui.label("Speed Below (signal < threshold):");
+                        ui.label("Speed Below (signal < threshold):")
+                            .on_hover_text("Cilia speed when the signal channel is below the threshold. Negative = reverse direction");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3348,7 +3496,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             ui.add(egui::DragValue::new(&mut mode.cilia_speed_below).speed(0.01).range(-1.0..=1.0));
                         });
 
-                        ui.label("Speed Above (signal >= threshold):");
+                        ui.label("Speed Above (signal >= threshold):")
+                            .on_hover_text("Cilia speed when the signal channel is at or above the threshold");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3357,7 +3506,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             ui.add(egui::DragValue::new(&mut mode.cilia_speed_above).speed(0.01).range(-1.0..=1.0));
                         });
 
-                        ui.label("Threshold:");
+                        ui.label("Threshold:")
+                            .on_hover_text("Signal strength at which the cilia switch from Speed Below to Speed Above");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3368,10 +3518,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     }
 
                     ui.add_space(4.0);
-                    ui.checkbox(&mut mode.cilia_push_bonded, "Push Organism Cells");
+                    ui.checkbox(&mut mode.cilia_push_bonded, "Push Organism Cells")
+                        .on_hover_text("When enabled, cilia force is applied to bonded cells in the same organism (useful for internal pumping). When disabled, only pushes unattached particles and fluid");
 
                     ui.add_space(4.0);
-                    ui.label("Attract Force:");
+                    ui.label("Attract Force:")
+                        .on_hover_text("Pulls nearby unattached cells and particles toward this cell. 0 = no attraction. Useful for filter-feeding structures that funnel food inward");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3384,7 +3536,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 group_container(ui, "Myocyte Functions", egui::Color32::from_rgb(200, 140, 140), |ui| {
                     // Mode toggle
                     ui.horizontal(|ui| {
-                        ui.label("Contraction Mode:");
+                        ui.label("Contraction Mode:")
+                            .on_hover_text("Pulse: contracts on a timer, alternating between Pulse A and Pulse B phases. Signal: contraction strength is controlled by a signal channel (0–15)");
                         if ui.selectable_label(!mode.myocyte_use_signal, "Pulse").clicked() {
                             mode.myocyte_use_signal = false;
                         }
@@ -3397,7 +3550,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     if !mode.myocyte_use_signal {
                         // Phased timer mode
-                        ui.label("Pulse Phase:");
+                        ui.label("Pulse Phase:")
+                            .on_hover_text("Pulse A and Pulse B are offset by half a cycle. Assign opposite ring positions to different phases to create a traveling wave for locomotion");
                         ui.horizontal(|ui| {
                             if ui.selectable_label(mode.myocyte_pulse_phase == 0, "Pulse A").clicked() {
                                 mode.myocyte_pulse_phase = 0;
@@ -3407,7 +3561,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             }
                         });
 
-                        ui.label("Pulse Rate (cycles/sec):");
+                        ui.label("Pulse Rate (cycles/sec):")
+                            .on_hover_text("How many full contraction-relaxation cycles per second. Higher rates create faster but potentially less powerful strokes. Must match between paired myocytes for coordinated locomotion");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3416,7 +3571,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             ui.add(egui::DragValue::new(&mut mode.myocyte_pulse_rate).speed(0.01).range(0.1..=10.0));
                         });
 
-                        ui.label("Contraction:");
+                        ui.label("Contraction:")
+                            .on_hover_text("How much the cell shortens its adhesion bonds during the active phase. 0 = no contraction, 1 = maximum shortening");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3431,7 +3587,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                                  "Ch 8", "Ch 9", "Ch 10", "Ch 11", "Ch 12", "Ch 13", "Ch 14", "Ch 15"];
                             let myo_ch_idx = (mode.myocyte_signal_channel as usize).min(15);
                             ui.horizontal(|ui| {
-                                ui.label("Channel:");
+                                ui.label("Channel:")
+                                    .on_hover_text("Signal channel to read. Channels 0–7 are oculocyte channels (for sensor-driven steering); 8–15 are regulation channels");
                                 egui::ComboBox::from_id_salt("myocyte_signal_channel")
                                     .selected_text(myo_ch_labels[myo_ch_idx])
                                     .show_ui(ui, |ui| {
@@ -3442,7 +3599,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             });
                         }
 
-                        ui.label("Contraction Below (signal < threshold):");
+                        ui.label("Contraction Below (signal < threshold):")
+                            .on_hover_text("How much the cell shortens its adhesion bonds when the signal is below the threshold. 0 = no contraction, 1 = maximum shortening");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3451,7 +3609,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             ui.add(egui::DragValue::new(&mut mode.myocyte_contraction_below).speed(0.01).range(0.0..=1.0));
                         });
 
-                        ui.label("Contraction Above (signal >= threshold):");
+                        ui.label("Contraction Above (signal >= threshold):")
+                            .on_hover_text("How much the cell shortens its adhesion bonds when the signal is at or above the threshold. Pair opposite ring positions with different above/below values to create locomotion");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3460,7 +3619,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             ui.add(egui::DragValue::new(&mut mode.myocyte_contraction_above).speed(0.01).range(0.0..=1.0));
                         });
 
-                        ui.label("Threshold:");
+                        ui.label("Threshold:")
+                            .on_hover_text("Signal strength at which the myocyte switches between Contraction Below and Contraction Above");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3478,10 +3638,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     // Timer trigger
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut mode.embryocyte_use_timer, "Timer");
+                        ui.checkbox(&mut mode.embryocyte_use_timer, "Timer")
+                            .on_hover_text("Release after the egg has been attached to the parent for at least this many seconds. Ensures minimum incubation time");
                     });
                     if mode.embryocyte_use_timer {
-                        ui.label("Release after (seconds attached):");
+                        ui.label("Release after (seconds attached):")
+                            .on_hover_text("Minimum time in seconds the egg must remain attached before it can be released");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3495,10 +3657,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     // Threshold trigger
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut mode.embryocyte_use_threshold, "Reserve Threshold");
+                        ui.checkbox(&mut mode.embryocyte_use_threshold, "Reserve Threshold")
+                            .on_hover_text("Release only when the egg's reserve has been filled to at least this level. Max reserve is 65535. At 62000 (~95%) the egg has ~6.2 seconds of free-floating life");
                     });
                     if mode.embryocyte_use_threshold {
-                        ui.label("Release when reserve >=:");
+                        ui.label("Release when reserve >=:")
+                            .on_hover_text("Reserve level required before release. The egg burns reserve at 10 units/sec when free. 62000 ≈ 6.2 seconds of life after detachment");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3514,14 +3678,16 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     // Signal trigger
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut mode.embryocyte_use_signal, "Signal");
+                        ui.checkbox(&mut mode.embryocyte_use_signal, "Signal")
+                            .on_hover_text("Release only when the parent organism is sending a specific signal. Use a maturation signal (ch_mat) to ensure the parent is fully grown before releasing eggs");
                     });
                     if mode.embryocyte_use_signal {
                         let emb_ch_labels = ["Ch 0", "Ch 1", "Ch 2", "Ch 3", "Ch 4", "Ch 5", "Ch 6", "Ch 7",
                                              "Ch 8", "Ch 9", "Ch 10", "Ch 11", "Ch 12", "Ch 13", "Ch 14", "Ch 15"];
                         let emb_ch_idx = (mode.embryocyte_signal_channel as usize).min(15);
                         ui.horizontal(|ui| {
-                            ui.label("Channel:");
+                            ui.label("Channel:")
+                                .on_hover_text("Signal channel to monitor. Channels 0–7 are oculocyte channels; 8–15 are regulation channels. Use a regulation channel for maturation/feeding gates");
                             egui::ComboBox::from_id_salt("embryocyte_signal_channel")
                                 .selected_text(emb_ch_labels[emb_ch_idx])
                                 .show_ui(ui, |ui| {
@@ -3531,7 +3697,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                 });
                         });
 
-                        ui.label("Release when signal >=:");
+                        ui.label("Release when signal >=:")
+                            .on_hover_text("Minimum signal strength required on the chosen channel before the egg will release");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3555,7 +3722,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.separator();
 
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut mode.vascular_outlet, "Outlet");
+                        ui.checkbox(&mut mode.vascular_outlet, "Outlet")
+                            .on_hover_text("Outlet open: nutrients flow out to adjacent non-vascular cells. Sealed: acts as a pure transport pipe — nutrients pass through but are not released to neighbors. Every non-vascular cell must have an outlet somewhere in its parent chain");
                         ui.label("Release nutrients to non-vascular neighbors.");
                     });
                     if mode.vascular_outlet {
@@ -3576,7 +3744,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Ignores cells of the same organism or genome.");
                     ui.separator();
 
-                    ui.label("Contact Range:");
+                    ui.label("Contact Range:")
+                        .on_hover_text("Extra reach beyond the cell's physical radius. A value of 0 means the devorocyte must physically overlap the target. Higher values let it steal nutrients from nearby cells without touching");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3585,7 +3754,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::DragValue::new(&mut mode.devorocyte_consume_range).speed(0.01).range(0.0..=3.0).suffix(" u"));
                     });
 
-                    ui.label("Consume Rate:");
+                    ui.label("Consume Rate:")
+                        .on_hover_text("Nutrients stolen per second from each target cell in range. The target loses nutrients at this rate and dies when depleted");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3605,7 +3775,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 let never_sentinel = if is_lipocyte { 201.0f32 } else { 101.0f32 };
                 let max_nutrients = if is_lipocyte { 200.0f32 } else { 100.0f32 };
                 let mut nutrient_threshold = ((mode.split_mass - 1.0) * 100.0).clamp(1.0, never_sentinel);
-                ui.label("Split Nutrients:");
+                ui.label("Split Nutrients:")
+                    .on_hover_text("How many nutrients this cell must accumulate before it can divide. 'Never' means the cell will never divide regardless of nutrients");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3625,7 +3796,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 mode.split_mass = 1.0 + nutrient_threshold / 100.0;
 
                 ui.add_space(4.0);
-                ui.label("Split Ratio:");
+                ui.label("Split Ratio:")
+                    .on_hover_text("Controls the split axis and Zone C width. 0.5 = symmetric split (Zone C only 3° wide — ring bonds may be lost). 0.65 or 0.35 = asymmetric split (Zone C widens to 22° — recommended for ring-forming cells)");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3635,7 +3807,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
 
                 ui.add_space(4.0);
-                ui.label("Split Interval:");
+                ui.label("Split Interval:")
+                    .on_hover_text("Minimum time in seconds between consecutive divisions. The cell will not divide again until this cooldown has elapsed after the previous split");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3645,7 +3818,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
 
                 ui.add_space(4.0);
-                ui.label("Max Cell Size:");
+                ui.label("Max Cell Size:")
+                    .on_hover_text("Maximum radius this cell can grow to before it is forced to divide (if nutrients allow). Larger values let the cell grow bigger before splitting");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3654,7 +3828,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut mode.max_cell_size).speed(0.01).range(0.5..=2.0));
                 });
 
-                ui.label("Membrane Stiffness:");
+                ui.label("Membrane Stiffness:")
+                    .on_hover_text("How strongly this cell resists being compressed by collisions. Higher values make the cell harder and bouncier; lower values make it softer and more deformable");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3670,7 +3845,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 // Map regulation_emit_channel: -1 = Disabled (index 0), 8 = index 1, 9 = index 2, etc.
                 let reg_ch_idx = if mode.regulation_emit_channel < 8 { 0usize } else { (mode.regulation_emit_channel - 7).clamp(0, 8) as usize };
                 
-                ui.label("Emit Channel:");
+                ui.label("Emit Channel:")
+                    .on_hover_text("Regulation channel (8–15) to broadcast a signal on. Any cell type can emit on these channels. Use them to gate division, mode switching, and apoptosis in other cells. Channels 0–7 are reserved for oculocytes");
                 egui::ComboBox::from_id_salt("reg_emit_channel")
                     .selected_text(reg_channel_labels[reg_ch_idx])
                     .show_ui(ui, |ui| {
@@ -3681,7 +3857,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     });
 
                 if mode.regulation_emit_channel >= 8 {
-                    ui.label("Emit Value:");
+                    ui.label("Emit Value:")
+                        .on_hover_text("Signal strength broadcast from this cell. Attenuates by half at each adhesion hop. A value of 50 with 20 hops reaches every connected cell at ≥1.0 strength");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3690,7 +3867,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::DragValue::new(&mut mode.regulation_emit_value).speed(1.0).range(0.0..=2047.0));
                     });
 
-                    ui.label("Emit Hops:");
+                    ui.label("Emit Hops:")
+                        .on_hover_text("How many adhesion bonds the signal travels through. Signal halves at each hop beyond the first. 3 hops = 25% strength at the 3rd cell. Use 15–20 for body-wide flood signals");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3712,7 +3890,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 let channel_to_idx = |ch: i32| -> usize { if ch < 8 { 0 } else { (ch - 7).clamp(0, 8) as usize } };
 
                 // --- Division Gating ---
-                ui.label("Division Gating:");
+                ui.label("Division Gating:")
+                    .on_hover_text("Gate cell division on a regulation channel (8–15). The cell only divides when the signal condition is met. ⚠ Channels 0–7 silently disable this gate — always use 8–15 here");
                 let div_ch_idx = channel_to_idx(mode.division_signal_channel);
                 egui::ComboBox::from_id_salt("div_signal_channel")
                     .selected_text(channel_labels[div_ch_idx])
@@ -3726,17 +3905,20 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.division_signal_threshold, 0.0..=2047.0).show_value(false));
+                        ui.add(egui::Slider::new(&mut mode.division_signal_threshold, 0.0..=2047.0).show_value(false))
+                            .on_hover_text("Signal strength threshold. The cell divides when the channel value is above this level (or below it if Invert is checked)");
                         ui.add(egui::DragValue::new(&mut mode.division_signal_threshold).speed(1.0).range(0.0..=2047.0));
                     });
-                    ui.checkbox(&mut mode.division_signal_invert, "Invert (divide below threshold)");
+                    ui.checkbox(&mut mode.division_signal_invert, "Invert (divide below threshold)")
+                        .on_hover_text("Absence gating: when checked, the cell divides when the signal is BELOW the threshold (i.e. when the signal is absent). Use for hunger-driven growth, damage response, or juvenile-only growth that stops when a maturation signal arrives");
                 }
 
                 ui.add_space(4.0);
                 ui.separator();
 
                 // --- Apoptosis ---
-                ui.label("Apoptosis (Signal Death):");
+                ui.label("Apoptosis (Signal Death):")
+                    .on_hover_text("Trigger programmed cell death based on a regulation channel (8–15). The cell dies when the signal condition is met. ⚠ Channels 0–7 silently disable this — always use 8–15");
                 let apo_ch_idx = channel_to_idx(mode.apoptosis_signal_channel);
                 egui::ComboBox::from_id_salt("apo_signal_channel")
                     .selected_text(channel_labels[apo_ch_idx])
@@ -3750,17 +3932,20 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.apoptosis_signal_threshold, 0.0..=2047.0).show_value(false));
+                        ui.add(egui::Slider::new(&mut mode.apoptosis_signal_threshold, 0.0..=2047.0).show_value(false))
+                            .on_hover_text("Signal strength threshold for triggering death");
                         ui.add(egui::DragValue::new(&mut mode.apoptosis_signal_threshold).speed(1.0).range(0.0..=2047.0));
                     });
-                    ui.checkbox(&mut mode.apoptosis_signal_invert, "Invert (die below threshold)");
+                    ui.checkbox(&mut mode.apoptosis_signal_invert, "Invert (die below threshold)")
+                        .on_hover_text("Absence gating: when checked, the cell dies when the signal is BELOW the threshold. Use for cells that survive only while a support signal is present (e.g. leaf cells that die when the maturation signal disappears)");
                 }
 
                 ui.add_space(4.0);
                 ui.separator();
 
                 // --- Signal-Conditional Child A Mode ---
-                ui.label("Child A Signal Routing:");
+                ui.label("Child A Signal Routing:")
+                    .on_hover_text("Override which mode Child A is born as, based on a regulation channel (8–15). When the signal is above the threshold, Child A uses the 'Above' mode; otherwise it uses the 'Below' mode. Disabled = always use the default Child A mode");
                 let ch_a_idx = channel_to_idx(mode.signal_child_a_channel);
                 egui::ComboBox::from_id_salt("sig_child_a_channel")
                     .selected_text(channel_labels[ch_a_idx])
@@ -3835,7 +4020,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 ui.separator();
 
                 // --- Signal-Conditional Child B Mode ---
-                ui.label("Child B Signal Routing:");
+                ui.label("Child B Signal Routing:")
+                    .on_hover_text("Override which mode Child B is born as, based on a regulation channel (8–15). When the signal is above the threshold, Child B uses the 'Above' mode; otherwise it uses the 'Below' mode. Disabled = always use the default Child B mode");
                 let ch_b_idx = channel_to_idx(mode.signal_child_b_channel);
                 egui::ComboBox::from_id_salt("sig_child_b_channel")
                     .selected_text(channel_labels[ch_b_idx])
@@ -3910,7 +4096,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 ui.separator();
 
                 // --- Mode Switching ---
-                ui.label("Mode Switch (No Division):");
+                ui.label("Mode Switch (No Division):")
+                    .on_hover_text("Switch this cell to a different mode without dividing, triggered by a regulation channel (8–15). The cell changes its behavior in-place. ⚠ Channels 0–7 silently disable this — always use 8–15");
                 let ms_ch_idx = channel_to_idx(mode.mode_switch_signal_channel);
                 egui::ComboBox::from_id_salt("mode_switch_channel")
                     .selected_text(channel_labels[ms_ch_idx])
@@ -3924,10 +4111,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.mode_switch_signal_threshold, 0.0..=2047.0).show_value(false));
+                        ui.add(egui::Slider::new(&mut mode.mode_switch_signal_threshold, 0.0..=2047.0).show_value(false))
+                            .on_hover_text("Signal strength threshold for triggering the mode switch");
                         ui.add(egui::DragValue::new(&mut mode.mode_switch_signal_threshold).speed(1.0).range(0.0..=2047.0));
                     });
-                    ui.checkbox(&mut mode.mode_switch_invert, "Invert (switch below threshold)");
+                    ui.checkbox(&mut mode.mode_switch_invert, "Invert (switch below threshold)")
+                        .on_hover_text("Absence gating: when checked, the cell switches mode when the signal is BELOW the threshold. Use for starvation responses or dormancy when a support signal disappears");
                     // Target mode
                     {
                         let current = mode.mode_switch_target;
@@ -3959,7 +4148,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
             // Nutrient Settings Group (Green)
             group_container(ui, "Nutrient Settings", egui::Color32::from_rgb(100, 180, 120), |ui| {
-                ui.label("Nutrient Priority:");
+                ui.label("Nutrient Priority:")
+                    .on_hover_text("How aggressively this cell competes for nutrients from its vascular connections. Higher priority cells are fed first. Embryocytes use 4.0, gonads 3.5, structural cells 1.0–1.5, vascular pipes 0.4");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3968,12 +4158,14 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut mode.nutrient_priority).speed(0.01).range(0.1..=10.0));
                 });
 
-                ui.checkbox(&mut mode.prioritize_when_low, "Prioritize When Low");
+                ui.checkbox(&mut mode.prioritize_when_low, "Prioritize When Low")
+                    .on_hover_text("When enabled, this cell's effective priority increases when its nutrient level is critically low, helping it recover before dying");
             });
 
             // Connection Settings Group (Cyan)
             group_container(ui, "Connection Settings", egui::Color32::from_rgb(100, 180, 200), |ui| {
-                ui.label("Max Connections:");
+                ui.label("Max Connections:")
+                    .on_hover_text("Maximum number of adhesion bonds this cell can hold simultaneously. Hard limit is 20 per cell. Ring leaf nodes should budget carefully: 2 ring bonds + 1 per attached sequence");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3982,7 +4174,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut mode.max_adhesions).speed(1).range(0..=20));
                 });
 
-                ui.label("Min Connections:");
+                ui.label("Min Connections:")
+                    .on_hover_text("Minimum adhesion bonds required before this cell will divide or emit signals. Use as a structural completion gate — e.g. set to 4 on a gonad so it only starts shedding eggs once the body is fully connected");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3991,7 +4184,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut mode.min_adhesions).speed(1).range(0..=10));
                 });
 
-                ui.label("Max Splits:");
+                ui.label("Max Splits:")
+                    .on_hover_text("Maximum number of times this cell can divide. -1 (∞) means unlimited divisions. Once the limit is reached, the cell switches to the 'After Splits' mode if one is set");
                 let max_splits_row = ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -4040,7 +4234,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     let mut new_mode_b: Option<i32> = None;
                     
                     ui.add_space(4.0);
-                    ui.label("Child A After Splits:");
+                    ui.label("Child A After Splits:")
+                        .on_hover_text("Mode that Child A transitions to once this cell has divided the maximum number of times. 'Default' keeps the normal Child A mode");
                     let after_splits_a_row = ui.horizontal(|ui| {
                         let selected_text = if current_mode_a < 0 {
                             "Default".to_string()
@@ -4080,7 +4275,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         "after_splits_child_a".to_string(), after_splits_a_row.response.rect,
                     );
 
-                    ui.label("Child B After Splits:");
+                    ui.label("Child B After Splits:")
+                        .on_hover_text("Mode that Child B transitions to once this cell has divided the maximum number of times. 'Default' keeps the normal Child B mode");
                     let after_splits_b_row = ui.horizontal(|ui| {
                         let selected_text = if current_mode_b < 0 {
                             "Default".to_string()
@@ -4178,10 +4374,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
-                            ui.checkbox(&mut mode.child_a_after_split_keep_adhesion, "Keep Adhesion");
+                            ui.checkbox(&mut mode.child_a_after_split_keep_adhesion, "Keep Adhesion")
+                                .on_hover_text("When enabled, Child A maintains its adhesion bond with the parent cell after the max splits limit is reached");
                         });
                         ui.vertical(|ui| {
-                            ui.checkbox(&mut mode.child_b_after_split_keep_adhesion, "Keep Adhesion");
+                            ui.checkbox(&mut mode.child_b_after_split_keep_adhesion, "Keep Adhesion")
+                                .on_hover_text("When enabled, Child B maintains its adhesion bond with the parent cell after the max splits limit is reached");
                         });
                     });
                 }
@@ -4353,7 +4551,8 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
     // Record panel rect for the tutorial pointer.
     context.editor_state.panel_rects.insert("CircleSliders".to_string(), ui.max_rect());
 
-    ui.checkbox(&mut context.editor_state.enable_snapping, "Enable Snapping (15°)");
+    ui.checkbox(&mut context.editor_state.enable_snapping, "Enable Snapping (15°)")
+        .on_hover_text("Snap the pitch and yaw angles to 15° increments for precise alignment");
     ui.add_space(4.0); // Reduced spacing
     
     // Ensure we have at least one mode
@@ -4433,7 +4632,8 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-        ui.checkbox(&mut context.editor_state.qball_snapping, "Enable Snapping (15°)");
+        ui.checkbox(&mut context.editor_state.qball_snapping, "Enable Snapping (15°)")
+            .on_hover_text("Snap child orientations to 15° increments for precise alignment");
         ui.add_space(4.0); // Reduced spacing
 
         // Get selected mode for keep_adhesion checkboxes
@@ -4536,7 +4736,8 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
 
                     // Keep Adhesion checkbox for Child A - modify genome directly
                     if has_valid_mode {
-                        ui.checkbox(&mut context.genome.modes[selected_idx].child_a.keep_adhesion, "Keep Adhesion");
+                        ui.checkbox(&mut context.genome.modes[selected_idx].child_a.keep_adhesion, "Keep Adhesion")
+                            .on_hover_text("When enabled, Child A maintains its adhesion bond with the parent cell after division");
                     } else {
                         ui.add_enabled(false, egui::Checkbox::new(&mut false, "Keep Adhesion"));
                     }
@@ -4703,7 +4904,8 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
 
                     // Keep Adhesion checkbox for Child B - modify genome directly
                     if has_valid_mode {
-                        ui.checkbox(&mut context.genome.modes[selected_idx].child_b.keep_adhesion, "Keep Adhesion");
+                        ui.checkbox(&mut context.genome.modes[selected_idx].child_b.keep_adhesion, "Keep Adhesion")
+                            .on_hover_text("When enabled, Child B maintains its adhesion bond with the parent cell after division");
                     } else {
                         ui.add_enabled(false, egui::Checkbox::new(&mut false, "Keep Adhesion"));
                     }
@@ -4919,8 +5121,10 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
 /// Render the gizmo settings panel.
 fn render_gizmo_settings(ui: &mut Ui, context: &mut PanelContext) {
     section_header(ui, "GIZMO RENDERING");
-    ui.checkbox(&mut context.editor_state.gizmo_visible, "Show Orientation Lines");
-    ui.checkbox(&mut context.editor_state.split_rings_visible, "Show Split Rings");
+    ui.checkbox(&mut context.editor_state.gizmo_visible, "Show Orientation Lines")
+        .on_hover_text("Display colored axis lines on each cell showing its current orientation. Red = X, Green = Y, Blue = Z");
+    ui.checkbox(&mut context.editor_state.split_rings_visible, "Show Split Rings")
+        .on_hover_text("Display animated ring effects around cells that are about to divide");
 }
 
 /// Render the Cell Type Visuals panel for appearance settings.
@@ -4935,7 +5139,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
             // Global outline setting (applies to all cell types)
             ui.label(egui::RichText::new("Cell Outline").strong());
             ui.add_space(4.0);
-            ui.label("Outline Width:");
+            ui.label("Outline Width:")
+                .on_hover_text("Width of the dark outline drawn around each cell. 0 = no outline; higher values create a more pronounced cell border");
             ui.horizontal(|ui| {
                 let available = ui.available_width();
                 let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -4991,7 +5196,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
             ui.add_space(4.0);
 
             // Specular Strength
-            ui.label("Specular Strength:");
+            ui.label("Specular Strength:")
+                .on_hover_text("How much this cell type reflects specular (mirror-like) highlights. 0 = fully matte; 1 = maximum gloss");
             ui.horizontal(|ui| {
                 let available = ui.available_width();
                 let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5001,7 +5207,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
             });
 
             // Specular Power (shininess)
-            ui.label("Specular Sharpness:");
+            ui.label("Specular Sharpness:")
+                .on_hover_text("Tightness of the specular highlight. Low values = broad, soft gloss. High values = tight, sharp glint like polished metal");
             ui.horizontal(|ui| {
                 let available = ui.available_width();
                 let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5011,7 +5218,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
             });
 
             // Fresnel (rim lighting)
-            ui.label("Rim Lighting:");
+            ui.label("Rim Lighting:")
+                .on_hover_text("Backlit glow around the cell edges. Creates a halo effect that makes cells stand out against the background");
             ui.horizontal(|ui| {
                 let available = ui.available_width();
                 let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5053,7 +5261,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.add_space(4.0);
 
                 // Tail Length (0.5 - 3.0, default 1.7)
-                ui.label("Tail Length:");
+                ui.label("Tail Length:")
+                    .on_hover_text("Length of the flagellum tail relative to the cell radius");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5063,7 +5272,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 });
 
                 // Tail Thickness (0.01 - 0.3, default 0.15)
-                ui.label("Tail Thickness:");
+                ui.label("Tail Thickness:")
+                    .on_hover_text("Diameter of the flagellum at its base");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5073,7 +5283,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 });
 
                 // Wave Amplitude (0.0 - 0.5, default 0.17)
-                ui.label("Wave Amplitude:");
+                ui.label("Wave Amplitude:")
+                    .on_hover_text("How far the flagellum bends side-to-side during its wave motion");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5083,7 +5294,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 });
 
                 // Wave Frequency (0.5 - 10.0, default 1.0)
-                ui.label("Wave Frequency:");
+                ui.label("Wave Frequency:")
+                    .on_hover_text("How many wave cycles appear along the flagellum length. Higher values create more tightly coiled waves");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5093,7 +5305,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 });
 
                 // Taper (0.0 - 1.0, default 1.0)
-                ui.label("Taper:");
+                ui.label("Taper:")
+                    .on_hover_text("How much the flagellum narrows toward its tip. 0 = uniform thickness; 1 = tapers to a point");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5103,7 +5316,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 });
 
                 // Segments (4 - 64, default 10)
-                ui.label("Segments:");
+                ui.label("Segments:")
+                    .on_hover_text("Number of geometry segments in the flagellum mesh. More segments = smoother curves but higher GPU cost");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5121,7 +5335,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label(egui::RichText::new("Slime Pattern").strong());
                 ui.add_space(4.0);
 
-                ui.label("Cell Scale:");
+                ui.label("Cell Scale:")
+                    .on_hover_text("Scale of the slime pattern cells on the surface. Higher values create larger, more visible pattern cells");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5130,7 +5345,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut visuals.goldberg_scale).speed(0.1).range(1.0..=12.0));
                 });
 
-                ui.label("Border Width:");
+                ui.label("Border Width:")
+                    .on_hover_text("Width of the borders between slime pattern cells");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5139,7 +5355,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_width).speed(0.005).range(0.01..=0.5));
                 });
 
-                ui.label("Meander:");
+                ui.label("Meander:")
+                    .on_hover_text("How much the pattern borders waver and curve. Higher values create a more organic, irregular look");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5148,7 +5365,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut visuals.goldberg_meander).speed(0.01).range(0.0..=1.0));
                 });
 
-                ui.label("Border Darkness:");
+                ui.label("Border Darkness:")
+                    .on_hover_text("How dark the borders between pattern cells appear. Higher values create more visible, defined borders");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5157,7 +5375,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_strength).speed(0.01).range(0.0..=1.0));
                 });
 
-                ui.label("Anim Speed:");
+                ui.label("Anim Speed:")
+                    .on_hover_text("Speed of the animated slime pattern movement. 0 = static pattern; higher values create faster flowing motion");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5176,7 +5395,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.add_space(4.0);
 
                 // Nucleus Scale
-                ui.label("Nucleus Scale:");
+                ui.label("Nucleus Scale:")
+                    .on_hover_text("Size of the inner nucleus sphere relative to the cell. Smaller values create a more prominent nucleus");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5186,7 +5406,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 });
 
                 // Subdivision level (1-6)
-                ui.label("Subdivision:");
+                ui.label("Subdivision:")
+                    .on_hover_text("Number of membrane ridge subdivisions. Higher values create more, finer ridges on the cell surface");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5196,7 +5417,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 });
 
                 // Ridge Width
-                ui.label("Ridge Width:");
+                ui.label("Ridge Width:")
+                    .on_hover_text("Width of the membrane ridges on the cell surface");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5206,7 +5428,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 });
 
                 // Meander
-                ui.label("Meander:");
+                ui.label("Meander:")
+                    .on_hover_text("How much the ridge lines waver. Higher values create more organic, irregular ridge patterns");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5216,7 +5439,8 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 });
 
                 // Ridge Strength (normal perturbation)
-                ui.label("Ridge Depth:");
+                ui.label("Ridge Depth:")
+                    .on_hover_text("How pronounced the ridges appear. Higher values create deeper, more visible ridges with stronger normal map perturbation");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -5379,7 +5603,8 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         .map(|s| s.config.sphere_radius)
         .unwrap_or(world.world_radius);
 
-    ui.label("World Radius:");
+    ui.label("World Radius:")
+        .on_hover_text("Radius of the spherical world boundary in simulation units. Cells are confined within this sphere. ⚠ Changing this requires a scene reset to take effect");
     ui.add(egui::Slider::new(&mut world.world_radius, 50.0..=300.0).suffix(" units"));
 
     if (world.world_radius - current_world_radius).abs() > 0.5 {
@@ -5392,7 +5617,8 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     let current_capacity = context.gpu_capacity().unwrap_or(world.cell_capacity);
     let capacity_k = world.cell_capacity / 1000;
     
-    ui.label("Cell Capacity:");
+    ui.label("Cell Capacity:")
+        .on_hover_text("Maximum number of cells the simulation can hold simultaneously. Higher values use more GPU memory. ⚠ Changing this requires a scene reset to take effect");
     let mut capacity_k_mut = capacity_k;
     if ui.add(egui::Slider::new(&mut capacity_k_mut, 10..=200).suffix("k")).changed() {
         world.cell_capacity = capacity_k_mut * 1000;
@@ -5412,11 +5638,13 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.separator();
     
     // Gravity slider
-    ui.label("Gravity:");
+    ui.label("Gravity:")
+        .on_hover_text("Gravitational acceleration applied to all cells each frame. Positive = downward (or toward the chosen axis). Negative = upward/repulsive. 0 = weightless");
     ui.add(egui::Slider::new(&mut world.gravity, -50.0..=50.0).suffix(" m/s²"));
     
     // Gravity axis / mode
-    ui.label("Gravity Axis:");
+    ui.label("Gravity Axis:")
+        .on_hover_text("Direction gravity pulls. X/Y/Z = along a world axis. Radial = pulls all cells toward the world center — the boundary sphere becomes the 'floor'");
     ui.horizontal(|ui| {
         if ui.selectable_label(world.gravity_mode == 0, "X").clicked() {
             world.gravity_mode = 0;
@@ -5437,24 +5665,29 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     
     ui.add_space(8.0);
     
-    // Adhesion constraint solver iterations
-    ui.label("Constraint Iterations:");
-    ui.add(egui::Slider::new(&mut world.constraint_iterations, 0..=16));
-    ui.label(egui::RichText::new("Extra adhesion solver passes (higher = stiffer joints, more GPU cost)").small());
-    
-    ui.add_space(8.0);
-    
     // Global velocity damping
-    ui.label("Velocity Damping:");
+    ui.label("Velocity Damping:")
+        .on_hover_text("Multiplier applied to cell velocity each frame. 1.0 = no drag (cells coast forever). 0.8 = heavy drag (cells slow down quickly). Lower values create a more viscous environment");
     ui.add(egui::Slider::new(&mut world.acceleration_damping, 0.8..=1.0));
     ui.label(egui::RichText::new("Global drag on cell movement (lower = more drag, higher = less damping)").small());
     
-    ui.add_space(8.0);
-    
-    // Water viscosity
-    ui.label("Water Viscosity:");
-    ui.add(egui::Slider::new(&mut world.water_viscosity, 0.0..=1.0));
-    ui.label(egui::RichText::new("Drag applied to cells moving through water (0 = off, higher = thicker fluid)").small());
+    if state.show_advanced_options {
+        ui.add_space(8.0);
+        
+        // Adhesion constraint solver iterations
+        ui.label("Constraint Iterations:")
+            .on_hover_text("Number of extra adhesion solver passes per physics step. More iterations = stiffer, more accurate joints but higher GPU cost. 0 = single pass (fast, slightly springy). 8–16 = rigid joints");
+        ui.add(egui::Slider::new(&mut world.constraint_iterations, 0..=16));
+        ui.label(egui::RichText::new("Extra adhesion solver passes (higher = stiffer joints, more GPU cost)").small());
+        
+        ui.add_space(8.0);
+        
+        // Water viscosity
+        ui.label("Water Viscosity:")
+            .on_hover_text("Additional drag applied to cells that are inside water voxels. 0 = water has no effect on movement. 1 = maximum resistance — cells move very slowly through water");
+        ui.add(egui::Slider::new(&mut world.water_viscosity, 0.0..=1.0));
+        ui.label(egui::RichText::new("Drag applied to cells moving through water (0 = off, higher = thicker fluid)").small());
+    } // end advanced physics
 
     ui.add_space(12.0);
 
@@ -5462,79 +5695,84 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.heading("Biology");
     ui.separator();
 
-    ui.checkbox(&mut world.solo_metabolism_enabled, "Solo cell metabolism penalty");
+    ui.checkbox(&mut world.solo_metabolism_enabled, "Solo cell metabolism penalty")
+        .on_hover_text("Isolated cells (with few or no adhesion bonds) burn nutrients faster, making single-cell survival harder and favoring multicellular organisms");
     ui.label(egui::RichText::new("Cells with fewer adhesion connections burn nutrients faster, favoring multicellular organisms").small());
 
     if world.solo_metabolism_enabled {
         ui.add_space(4.0);
-        ui.label("Metabolism Multiplier:");
+        ui.label("Metabolism Multiplier:")
+            .on_hover_text("How much faster solo cells (0 connections) burn nutrients compared to connected cells. Gradient: 1 connection = partial penalty, 3+ connections = normal rate");
         ui.add(egui::Slider::new(&mut world.solo_metabolism_multiplier, 1.5..=10.0));
         ui.label(egui::RichText::new("Solo cells (0 connections) drain at this rate. Gradient: 1 conn = partial, 3+ = normal").small());
     }
 
-    ui.add_space(12.0);
+    if state.show_advanced_options {
+        ui.add_space(12.0);
 
-    // Mutation section
-    ui.heading("Mutation");
-    ui.separator();
+        // Mutation section
+        ui.heading("Mutation");
+        ui.separator();
 
-    ui.label("Radiation Level:");
-    
-    // Logarithmic slider: position 0.0 = exactly 0.0 (off)
-    // position > 0.0 maps to [0.00001, 1.0] over 5 decades for fine low-end control
-    const EPSILON: f32 = 0.0001;
-    const DECADES: f64 = 5.0; // 10^-5 to 10^0
+        ui.label("Radiation Level:")
+            .on_hover_text("Probability that each child cell mutates during division. 0 = no mutations. Uses a logarithmic scale for fine control at low values. Higher radiation drives faster evolution but may destabilize organisms");
+        
+        // Logarithmic slider: position 0.0 = exactly 0.0 (off)
+        // position > 0.0 maps to [0.00001, 1.0] over 5 decades for fine low-end control
+        const EPSILON: f32 = 0.0001;
+        const DECADES: f64 = 5.0; // 10^-5 to 10^0
 
-    let mut log_slider = if world.radiation_level <= 0.0 {
-        0.0f32
-    } else {
-        // Map [1e-5, 1.0] → [0.0, 1.0]
-        let normalized = (world.radiation_level.log10() as f64 + DECADES) / DECADES;
-        normalized.clamp(0.0, 1.0) as f32
-    };
+        let mut log_slider = if world.radiation_level <= 0.0 {
+            0.0f32
+        } else {
+            // Map [1e-5, 1.0] → [0.0, 1.0]
+            let normalized = (world.radiation_level.log10() as f64 + DECADES) / DECADES;
+            normalized.clamp(0.0, 1.0) as f32
+        };
 
-    let response = ui.add(
-        egui::Slider::new(&mut log_slider, 0.0..=1.0)
-            .custom_formatter(|value, _| {
-                if value < EPSILON as f64 {
-                    "0.0000".to_string()
-                } else {
-                    let radiation = 10_f64.powf(value * DECADES - DECADES);
-                    if radiation < 0.001 {
-                        format!("{:.5}", radiation)
-                    } else if radiation < 0.01 {
-                        format!("{:.4}", radiation)
+        let response = ui.add(
+            egui::Slider::new(&mut log_slider, 0.0..=1.0)
+                .custom_formatter(|value, _| {
+                    if value < EPSILON as f64 {
+                        "0.0000".to_string()
                     } else {
-                        format!("{:.3}", radiation)
-                    }
-                }
-            })
-            .custom_parser(|s| {
-                s.parse::<f64>().ok().and_then(|v| {
-                    if v <= 0.0 {
-                        Some(0.0)
-                    } else if v <= 1.0 {
-                        Some(((v.log10() + DECADES) / DECADES).clamp(0.0, 1.0))
-                    } else {
-                        None
+                        let radiation = 10_f64.powf(value * DECADES - DECADES);
+                        if radiation < 0.001 {
+                            format!("{:.5}", radiation)
+                        } else if radiation < 0.01 {
+                            format!("{:.4}", radiation)
+                        } else {
+                            format!("{:.3}", radiation)
+                        }
                     }
                 })
-            })
-    );
+                .custom_parser(|s| {
+                    s.parse::<f64>().ok().and_then(|v| {
+                        if v <= 0.0 {
+                            Some(0.0)
+                        } else if v <= 1.0 {
+                            Some(((v.log10() + DECADES) / DECADES).clamp(0.0, 1.0))
+                        } else {
+                            None
+                        }
+                    })
+                })
+        );
 
-    if response.changed() {
-        world.radiation_level = if log_slider < EPSILON {
-            0.0
-        } else {
-            10_f32.powf(log_slider * DECADES as f32 - DECADES as f32).clamp(0.0, 1.0)
-        };
-    }
+        if response.changed() {
+            world.radiation_level = if log_slider < EPSILON {
+                0.0
+            } else {
+                10_f32.powf(log_slider * DECADES as f32 - DECADES as f32).clamp(0.0, 1.0)
+            };
+        }
 
-    ui.label(egui::RichText::new("Probability each child mutates during division (0 = off, logarithmic scale for fine control)").small());
+        ui.label(egui::RichText::new("Probability each child mutates during division (0 = off, logarithmic scale for fine control)").small());
 
-    ui.add_space(4.0);
-    ui.checkbox(&mut world.subtle_mutations, "Subtle mutations")
-        .on_hover_text("When checked, mutations make small color nudges instead of full re-rolls");
+        ui.add_space(4.0);
+        ui.checkbox(&mut world.subtle_mutations, "Subtle mutations")
+            .on_hover_text("When checked, mutations make small color nudges instead of full re-rolls");
+    } // end advanced biology/mutation
 
     ui.add_space(12.0);
 }

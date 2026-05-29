@@ -671,6 +671,12 @@ pub struct GlobalUiState {
     /// Requested mode change (processed by main app loop)
     #[serde(skip)]
     pub mode_request: Option<SimulationMode>,
+
+    /// Whether the Advanced Options overlay is active in GPU mode.
+    /// When true, fine-tuning sliders that are not needed for day-to-day use
+    /// are revealed inside each panel.
+    #[serde(skip)]
+    pub show_advanced_options: bool,
 }
 
 impl Default for GlobalUiState {
@@ -715,6 +721,7 @@ impl Default for GlobalUiState {
             pending_load_path: None,
             pending_save_ready: false,
             mode_request: None,
+            show_advanced_options: false,
         }
     }
 }
