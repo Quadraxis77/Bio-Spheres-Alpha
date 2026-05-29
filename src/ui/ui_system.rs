@@ -771,10 +771,19 @@ impl UiSystem {
         // Show branded top bar
         let mut ui_state_copy = self.state.clone();
 
+        // Tab key toggles UI visibility in GPU mode
+        if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu {
+            if self.ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
+                ui_state_copy.hide_ui = !ui_state_copy.hide_ui;
+            }
+        }
+
         // Read the active theme palette once — used throughout this frame.
         let p = palette();
         let (tb_bg, tb_border, tb_accent, tb_text_primary, tb_text_secondary, tb_text_dim, tb_border_normal) =
             (p.topbar_bg, p.topbar_border, p.accent_primary, p.text_primary, p.text_secondary, p.text_dim, p.border_normal);
+
+        if !ui_state_copy.hide_ui {
 
         #[allow(deprecated)]
         egui::Panel::top("top_bar")
@@ -907,9 +916,6 @@ impl UiSystem {
                                     }
                                 }
                             }
-                            if ui.add(btn("⬡ Graph")).on_hover_text("Genome Graph").clicked() {
-                                editor_state.toggle_mode_graph_panel = true;
-                            }
 
                             ui.add_space(6.0); topbar_divider(ui); ui.add_space(6.0);
 
@@ -933,7 +939,7 @@ impl UiSystem {
                     .stroke(egui::Stroke::new(1.0, p.border_subtle)),
             )
             .show(&self.ctx, |ui| {
-                render_side_rail(ui, &mut ui_state_copy, dock_manager);
+                render_side_rail(ui, &mut ui_state_copy, editor_state, dock_manager);
             });
 
         // Show bottom status bar
@@ -1121,6 +1127,8 @@ impl UiSystem {
                 });
             });
         
+        } // end if !ui_state_copy.hide_ui
+
         // Show dock area in remaining space
         let mut style = egui_dock::Style::from_egui(self.ctx.global_style().as_ref());
         style.separator.extra = 75.0;
@@ -1427,6 +1435,32 @@ impl UiSystem {
                     let _surface_index = dock_manager.current_tree_mut().add_window(vec![panel]);
                 }
             }
+        }
+
+        // Handle procedural genome request (Preview mode rail button)
+        if let Some(seed) = editor_state.procedural_genome_seed.take() {
+            *genome = crate::genome::Genome::generate_procedural(seed);
+            editor_state.selected_mode_index = 0;
+        }
+
+        // Handle water fill toggle request (GPU mode rail button)
+        if editor_state.request_toggle_water {
+            editor_state.request_toggle_water = false;
+            editor_state.fluid_continuous_spawn = !editor_state.fluid_continuous_spawn;
+            if let Some(gpu_scene) = scene_manager.gpu_scene_mut() {
+                if let Some(ref mut simulator) = gpu_scene.fluid_simulator {
+                    simulator.set_continuous_spawn(editor_state.fluid_continuous_spawn);
+                }
+            }
+            editor_state.save_fluid_settings();
+        }
+
+        // Handle fog toggle request (GPU mode rail button)
+        if editor_state.request_toggle_fog {
+            editor_state.request_toggle_fog = false;
+            editor_state.show_volumetric_fog = !editor_state.show_volumetric_fog;
+            editor_state.light_params_dirty = true;
+            editor_state.save_light_settings();
         }
         
         // Render radial menu overlay (GPU mode only)
@@ -2139,10 +2173,11 @@ fn topbar_divider(ui: &mut egui::Ui) {
 // Left side rail — quick access to mode-specific panels
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Render the left side rail with stacked icon buttons (currently non-functional placeholders).
+/// Render the left side rail with stacked icon buttons.
 fn render_side_rail(
     ui: &mut egui::Ui,
     state: &mut GlobalUiState,
+    editor_state: &mut crate::ui::panel_context::GenomeEditorState,
     dock_manager: &mut crate::ui::dock::DockManager,
 ) {
     let p = palette();
@@ -2150,40 +2185,58 @@ fn render_side_rail(
 
     match state.current_mode {
         crate::ui::types::SimulationMode::Preview => {
-            // Adhesion expansion toggle: stretches all bonds to maximum length
-            // temporarily so you can inspect creature structure. Genome is unchanged.
+            // Adhesion expansion toggle
             let expand_active = state.adhesion_expansion_active;
             if rail_button_toggle(ui, "⤢", "Expand Adhesions (toggle)", expand_active, &p) {
                 state.adhesion_expansion_active = !expand_active;
             }
 
-            let _ = rail_button(ui, "⛁",  "Placeholder", &p);
-            let _ = rail_button(ui, "⚙",  "Placeholder", &p);
-            let _ = rail_button(ui, "◉",  "Placeholder", &p);
-            let _ = rail_button(ui, "⊜",  "Placeholder", &p);
-            let _ = rail_button(ui, "🎨", "Placeholder", &p);
-            let _ = rail_button(ui, "⚛",  "Placeholder", &p);
-            let _ = rail_button(ui, "⏱",  "Placeholder", &p);
+            // Procedural genome
+            if rail_button(ui, "🎲", "Generate Procedural Genome", &p) {
+                let seed = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0xdeadbeef_cafebabe);
+                editor_state.procedural_genome_seed = Some(seed);
+            }
+
+            // Angle snapping toggle
+            let snap_active = editor_state.enable_snapping;
+            if rail_button_toggle(ui, "📐", "Snap Angles to 15° (toggle)", snap_active, &p) {
+                editor_state.enable_snapping = !snap_active;
+                // Keep qball snapping in sync
+                editor_state.qball_snapping = !snap_active;
+            }
+
+            // Mode graph toggle
+            let graph_open = is_panel_open(dock_manager.current_tree(), &crate::ui::panel::Panel::ModeGraph);
+            if rail_button_toggle(ui, "🕸", "Toggle Mode Graph", graph_open, &p) {
+                editor_state.toggle_mode_graph_panel = true;
+            }
         }
         crate::ui::types::SimulationMode::Gpu => {
-            // Advanced Options toggle — reveals fine-tuning sliders in all panels
+            // Advanced Options toggle
             let adv_active = state.show_advanced_options;
             if rail_button_toggle(ui, "⚙", "Advanced Options (toggle fine-tuning sliders)", adv_active, &p) {
                 state.show_advanced_options = !adv_active;
             }
 
-            let buttons: &[(&str, &str)] = &[
-                ("🌐", "Placeholder"),
-                ("☀",  "Placeholder"),
-                ("🌊", "Placeholder"),
-                ("⛰",  "Placeholder"),
-                ("🔬", "Placeholder"),
-                ("📊", "Placeholder"),
-                ("🎬", "Placeholder"),
-                ("🎨", "Placeholder"),
-            ];
-            for (icon, tooltip) in buttons {
-                let _ = rail_button(ui, icon, tooltip, &p);
+            // Hide UI toggle
+            let hide_active = state.hide_ui;
+            if rail_button_toggle(ui, "👁", "Hide UI (toggle)", hide_active, &p) {
+                state.hide_ui = !hide_active;
+            }
+
+            // Water fill toggle
+            let water_active = editor_state.fluid_continuous_spawn;
+            if rail_button_toggle(ui, "🌊", "Toggle Water Fill", water_active, &p) {
+                editor_state.request_toggle_water = true;
+            }
+
+            // Fog toggle
+            let fog_active = editor_state.show_volumetric_fog;
+            if rail_button_toggle(ui, "🌫", "Toggle Volumetric Fog", fog_active, &p) {
+                editor_state.request_toggle_fog = true;
             }
         }
     }

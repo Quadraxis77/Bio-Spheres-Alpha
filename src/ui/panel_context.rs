@@ -473,6 +473,17 @@ pub struct GenomeEditorState {
     /// Stored location of mode graph panel when hidden (surface, node, tab indices)
     pub mode_graph_panel_location: Option<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, egui_dock::TabIndex)>,
 
+    /// Request to generate a procedural genome with this seed (set by rail button, consumed in end_frame).
+    pub procedural_genome_seed: Option<u64>,
+
+    /// Request to toggle water fill (fluid_continuous_spawn) from the rail button.
+    /// Processed in end_frame after the dock renders so scene_manager is accessible.
+    pub request_toggle_water: bool,
+
+    /// Request to toggle volumetric fog (show_volumetric_fog) from the rail button.
+    /// Processed in end_frame after the dock renders so scene_manager is accessible.
+    pub request_toggle_fog: bool,
+
     /// Screen-space rects for each named panel, updated every frame by the
     /// panel render functions. Used by the tutorial overlay to position the
     /// schematic pointer line.
@@ -720,6 +731,9 @@ impl GenomeEditorState {
             mode_graph_state: crate::genome::node_graph::ModeGraphState::new(),
             toggle_mode_graph_panel: false,
             mode_graph_panel_location: None,
+            procedural_genome_seed: None,
+            request_toggle_water: false,
+            request_toggle_fog: false,
             panel_rects: std::collections::HashMap::new(),
         };
         state

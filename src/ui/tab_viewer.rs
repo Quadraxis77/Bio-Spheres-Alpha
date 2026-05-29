@@ -1368,19 +1368,15 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.separator();
     ui.heading("Fluid Spawning");
     ui.separator();
-    let spawn_changed = ui.checkbox(&mut context.editor_state.fluid_continuous_spawn, "Water Fill")
-        .on_hover_text("Continuously spawn water voxels to fill the world. Disable to let the existing water drain or evaporate without replenishment")
-        .changed();
-    
-    if spawn_changed {
-        // Update fluid simulator continuous spawn state when toggled
+    // Water fill is toggled via the 🌊 rail button in GPU mode.
+    // Apply any pending state change from the rail button.
+    if context.editor_state.fluid_continuous_spawn {
+        // Ensure simulator state stays in sync (idempotent)
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
             if let Some(ref mut simulator) = gpu_scene.fluid_simulator {
-                simulator.set_continuous_spawn(context.editor_state.fluid_continuous_spawn);
+                simulator.set_continuous_spawn(true);
             }
         }
-        // Save fluid settings
-        context.editor_state.save_fluid_settings();
     }
     
     // === Nutrients ===
@@ -2045,11 +2041,7 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         ui.separator();
         ui.heading("Volumetric Fog");
         ui.add_space(4.0);
-
-        changed |= ui.checkbox(&mut context.editor_state.show_volumetric_fog, "Enable Volumetric Fog")
-            .on_hover_text("Render atmospheric fog that scatters light, creating depth and atmosphere in the scene")
-            .changed();
-
+        // Fog is toggled via the 🌫 rail button. Sliders shown when active.
         if context.editor_state.show_volumetric_fog {
             ui.add_space(4.0);
             ui.label("Fog Density:")
@@ -2932,25 +2924,7 @@ fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
                 }
             });
 
-            // Genome file buttons — row 2
-            ui.horizontal(|ui| {
-                if ui.button("🎲 Procedural")
-                    .on_hover_text(
-                        "Procedurally generate a creature with a random body plan.
-                         All creatures are guaranteed to reproduce by shedding
-                         multiple detached egg cells (3–6 per cycle) that each
-                         grow into the full organism."
-                    )
-                    .clicked()
-                {
-                    let seed = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos() as u64)
-                        .unwrap_or(0xdeadbeef_cafebabe);
-                    *context.genome = crate::genome::Genome::generate_procedural(seed);
-                    context.editor_state.selected_mode_index = 0;
-                }
-            });
+            // Genome file buttons — row 2 (procedural moved to rail button)
 
             ui.add_space(4.0);
 
@@ -4551,8 +4525,6 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
     // Record panel rect for the tutorial pointer.
     context.editor_state.panel_rects.insert("CircleSliders".to_string(), ui.max_rect());
 
-    ui.checkbox(&mut context.editor_state.enable_snapping, "Enable Snapping (15°)")
-        .on_hover_text("Snap the pitch and yaw angles to 15° increments for precise alignment");
     ui.add_space(4.0); // Reduced spacing
     
     // Ensure we have at least one mode
