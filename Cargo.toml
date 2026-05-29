@@ -36,6 +36,7 @@ glam = "0.29"
 web-time = "1.1"
 sysinfo = "0.32"
 image = { version = "0.25", default-features = false, features = ["png"] }
+gif = "0.13"
 dirs = "5.0"
 
 [target.'cfg(windows)'.dependencies]

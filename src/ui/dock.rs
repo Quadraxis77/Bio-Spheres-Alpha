@@ -462,11 +462,6 @@ mod tests {
             tabs.contains(&Panel::TimeSlider),
             "Should have TimeSlider panel"
         );
-        // NameTypeEditor is now in the top bar, not the dock
-        assert!(
-            !tabs.contains(&Panel::NameTypeEditor),
-            "NameTypeEditor should not be in dock (moved to top bar)"
-        );
     }
 
     #[test]

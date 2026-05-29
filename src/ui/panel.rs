@@ -58,8 +58,6 @@ pub enum Panel {
     // Genome editor sub-panels
     /// Cell modes list panel.
     Modes,
-    /// Name and type editor for cells.
-    NameTypeEditor,
     /// Adhesion settings panel.
     AdhesionSettings,
     /// Parent settings panel with rotation controls.
@@ -80,7 +78,7 @@ impl Panel {
     /// Check if this panel is available in the given simulation mode.
     ///
     /// Some panels are only relevant for certain modes:
-    /// - Preview mode: Genome editing panels (Modes, NameTypeEditor, etc.)
+    /// - Preview mode: Genome editing panels (Modes, Adhesion, etc.)
     /// - GPU mode: Performance monitoring, large-scale simulation controls
     pub fn available_in_mode(&self, mode: SimulationMode) -> bool {
         match self {
@@ -104,7 +102,6 @@ impl Panel {
             // Preview mode only (genome editing)
             Panel::GenomeEditor => mode == SimulationMode::Preview,
             Panel::Modes => mode == SimulationMode::Preview,
-            Panel::NameTypeEditor => mode == SimulationMode::Preview,
             Panel::AdhesionSettings => mode == SimulationMode::Preview,
             Panel::ParentSettings => mode == SimulationMode::Preview,
             Panel::CircleSliders => mode == SimulationMode::Preview,
@@ -130,7 +127,6 @@ impl Panel {
                 Panel::Viewport,
                 Panel::SceneManager,
                 Panel::Modes,
-                Panel::NameTypeEditor,
                 Panel::AdhesionSettings,
                 Panel::ParentSettings,
                 Panel::TimeSlider,
@@ -176,7 +172,6 @@ impl Panel {
             Panel::WorldSettings,
             Panel::LightSettings,
             Panel::Modes,
-            Panel::NameTypeEditor,
             Panel::AdhesionSettings,
             Panel::ParentSettings,
             Panel::CircleSliders,
@@ -210,7 +205,6 @@ impl Panel {
             Panel::WorldSettings => "World Settings",
             Panel::LightSettings => "Lighting",
             Panel::Modes => "Modes",
-            Panel::NameTypeEditor => "Name & Type",
             Panel::AdhesionSettings => "Adhesion Settings",
             Panel::ParentSettings => "Parent Settings",
             Panel::CircleSliders => "Circle Sliders",
@@ -271,9 +265,6 @@ mod tests {
     fn test_genome_panels_preview_only() {
         assert!(Panel::Modes.available_in_mode(SimulationMode::Preview));
         assert!(!Panel::Modes.available_in_mode(SimulationMode::Gpu));
-
-        assert!(Panel::NameTypeEditor.available_in_mode(SimulationMode::Preview));
-        assert!(!Panel::NameTypeEditor.available_in_mode(SimulationMode::Gpu));
     }
 
     #[test]

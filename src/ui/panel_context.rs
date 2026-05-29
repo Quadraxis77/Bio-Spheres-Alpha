@@ -484,6 +484,49 @@ pub struct GenomeEditorState {
     /// Processed in end_frame after the dock renders so scene_manager is accessible.
     pub request_toggle_fog: bool,
 
+    /// Request to take a screenshot of the current viewport.
+    /// Processed in app.rs after the frame is presented.
+    pub request_screenshot: bool,
+
+    /// Request to capture a GIF thumbnail of the current genome.
+    /// Processed in app.rs after the frame is presented.
+    pub request_gif_capture: bool,
+
+    /// Request to open the genome browser in save mode.
+    pub open_genome_browser_save: bool,
+
+    /// Request to open the genome browser in load mode.
+    pub open_genome_browser_load: bool,
+
+    /// Set to true for one frame after a genome is loaded from the browser.
+    /// Prevents the pre-frame preview-scene sync from overwriting the loaded genome.
+    pub genome_just_loaded: bool,
+
+    /// After a successful genome save, automatically trigger GIF capture.
+    pub pending_gif_after_save: bool,
+
+    /// When set, show an overwrite-confirmation dialog before saving.
+    /// Contains the path that would be overwritten.
+    pub overwrite_confirm_path: Option<std::path::PathBuf>,
+
+    /// Multi-frame GIF capture state. None = idle.
+    pub gif_capture: Option<crate::gif_capture::GifCaptureState>,
+
+    /// Whether the name field in the top bar should flash red (empty name on save attempt).
+    pub name_field_error: bool,
+    /// Timer for the name field error flash.
+    pub name_field_error_timer: f32,
+    /// Whether the "name your genome" dialog is open (triggered when saving with empty name).
+    pub show_name_dialog: bool,
+    /// Text buffer for the name dialog's custom name field.
+    pub name_dialog_buffer: String,
+    /// Variation seed for the procedural name — incremented each time the user clicks Regenerate.
+    pub name_dialog_seed: u64,
+    /// Names already in use on disk — populated when the dialog opens so suggestions avoid clashes.
+    pub name_dialog_used_names: Vec<String>,
+    /// Whether the name dialog text field has been focused this session (prevents re-stealing focus).
+    pub name_dialog_focused: bool,
+
     /// Screen-space rects for each named panel, updated every frame by the
     /// panel render functions. Used by the tutorial overlay to position the
     /// schematic pointer line.
@@ -734,6 +777,21 @@ impl GenomeEditorState {
             procedural_genome_seed: None,
             request_toggle_water: false,
             request_toggle_fog: false,
+            request_screenshot: false,
+            request_gif_capture: false,
+            open_genome_browser_save: false,
+            open_genome_browser_load: false,
+            genome_just_loaded: false,
+            pending_gif_after_save: false,
+            overwrite_confirm_path: None,
+            gif_capture: None,
+            name_field_error: false,
+            name_field_error_timer: 0.0,
+            show_name_dialog: false,
+            name_dialog_buffer: String::new(),
+            name_dialog_seed: 0,
+            name_dialog_used_names: Vec::new(),
+            name_dialog_focused: false,
             panel_rects: std::collections::HashMap::new(),
         };
         state

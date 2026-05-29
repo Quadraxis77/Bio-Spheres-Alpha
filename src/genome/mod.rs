@@ -1,4 +1,5 @@
 pub mod node_graph;
+pub mod procedural_name;
 pub mod serialization;
 
 use glam::{Vec2, Vec3, Quat};

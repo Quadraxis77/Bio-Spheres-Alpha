@@ -84,6 +84,15 @@ enum MenuAction {
 enum DeferredAction {
     SaveSphere,
     LoadSphere(std::path::PathBuf),
+    TakeScreenshot {
+        staging: wgpu::Buffer,
+        width: u32,
+        height: u32,
+        padded_bytes_per_row: u32,
+        unpadded_bytes_per_row: u32,
+        format: wgpu::TextureFormat,
+    },
+    CaptureGif,
 }
 
 pub struct App {
@@ -647,7 +656,7 @@ impl App {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 // Only pass to camera if egui doesn't want the input
-                if !self.ui.wants_pointer_input() {
+                if !self.ui.wants_scroll_input() {
                     self.scene_manager.active_scene_mut().camera_mut().handle_scroll(*delta);
                 }
             }
@@ -903,10 +912,12 @@ impl App {
     fn render_main_menu_ui(ctx: &egui::Context, left_id: TextureId, right_id: TextureId, left_name: &str, right_name: &str, _panel_w: f32, _panel_h: f32) -> MenuAction {
         use egui::{Align2, Color32, FontId, FontFamily, Pos2, Rect, Stroke, Vec2};
 
-        // Background colours
-        let bg          = Color32::from_rgb(5, 5, 8);
-        let fade_dark   = Color32::from_rgba_premultiplied(5, 5, 8, 255);
-        let fade_clear  = Color32::from_rgba_premultiplied(5, 5, 8, 0);
+        // Background: deep navy blue, darker at edges
+        let bg          = Color32::from_rgb(7, 10, 22);
+        let bg_centre   = Color32::from_rgb(10, 16, 36);
+        // Fade colours match the background so panels blend in
+        let fade_dark   = Color32::from_rgba_premultiplied(7, 10, 22, 255);
+        let fade_clear  = Color32::from_rgba_premultiplied(7, 10, 22, 0);
 
         // Button palette
         let teal_fill   = Color32::from_rgba_premultiplied(29, 158, 117, 30);
@@ -928,15 +939,21 @@ impl App {
 
         #[allow(deprecated)]
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(bg))
+            .frame(egui::Frame::new().fill(bg))
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
                 let h = rect.height();
+                let w = rect.width();
+                let cx = rect.center().x;
+
+                // Subtle horizontal gradient: slightly lighter navy in the centre
+                let left_half  = Rect::from_min_max(rect.min, Pos2::new(cx, rect.max.y));
+                let right_half = Rect::from_min_max(Pos2::new(cx, rect.min.y), rect.max);
+                ui.painter().add(egui::Shape::from(Self::gradient_mesh(left_half,  bg, bg_centre)));
+                ui.painter().add(egui::Shape::from(Self::gradient_mesh(right_half, bg_centre, bg)));
 
                 // ── genome panel images ───────────────────────────────────────
-                // Use 1/3 of the egui rect width so the display rect matches the
-                // texture's aspect ratio regardless of DPI scaling.
-                let display_panel_w = rect.width() / 3.0;
+                let display_panel_w = w / 3.0;
                 let left_rect  = Rect::from_min_size(rect.min, Vec2::new(display_panel_w, h));
                 let right_rect = Rect::from_min_size(
                     Pos2::new(rect.max.x - display_panel_w, rect.min.y),
@@ -946,67 +963,46 @@ impl App {
                 ui.painter().image(left_id,  left_rect,  full_uv, Color32::WHITE);
                 ui.painter().image(right_id, right_rect, full_uv, Color32::WHITE);
 
-                // ── edge fades (gradient meshes) ──────────────────────────────
-                let fade_w = 80.0_f32;
-
-                // Right edge of left panel fades → black
+                // ── edge fades ────────────────────────────────────────────────
+                let fade_w = 90.0_f32;
                 let lr = Rect::from_min_size(
                     Pos2::new(rect.min.x + display_panel_w - fade_w, rect.min.y),
                     Vec2::new(fade_w, h),
                 );
                 ui.painter().add(egui::Shape::from(Self::gradient_mesh(lr, fade_clear, fade_dark)));
-
-                // Left edge of right panel fades black →
                 let rr = Rect::from_min_size(
                     Pos2::new(rect.max.x - display_panel_w, rect.min.y),
                     Vec2::new(fade_w, h),
                 );
                 ui.painter().add(egui::Shape::from(Self::gradient_mesh(rr, fade_dark, fade_clear)));
 
-                // ── genome name labels at panel bottoms ───────────────────────
+                // ── genome name labels ────────────────────────────────────────
                 let label_y = rect.max.y - 20.0;
                 let label_font = FontId::new(11.0, FontFamily::Proportional);
                 let label_color = Color32::from_rgb(47, 110, 84);
                 ui.painter().text(
                     Pos2::new(rect.min.x + display_panel_w * 0.5, label_y),
-                    Align2::CENTER_CENTER,
-                    left_name.to_uppercase(),
-                    label_font.clone(),
-                    label_color,
+                    Align2::CENTER_CENTER, left_name.to_uppercase(), label_font.clone(), label_color,
                 );
                 ui.painter().text(
                     Pos2::new(rect.max.x - display_panel_w * 0.5, label_y),
-                    Align2::CENTER_CENTER,
-                    right_name.to_uppercase(),
-                    label_font,
-                    label_color,
+                    Align2::CENTER_CENTER, right_name.to_uppercase(), label_font, label_color,
                 );
 
                 // ── centre column ─────────────────────────────────────────────
-                let cx = rect.center().x;
                 let btn_w = 240.0_f32;
                 let btn_h = 44.0_f32;
                 let gap   = 12.0_f32;
 
-                // Heights: title block + 2 primary + divider + 2 secondary + divider + 1 exit
-                let block_h = 56.0 + 30.0                // title + subtitle
-                            + btn_h + gap + btn_h + gap  // Play, Genome editor
-                            + 28.0                        // divider gap
-                            + btn_h + gap + btn_h + gap  // Settings, Credits
-                            + 28.0                        // divider gap
+                let block_h = 56.0 + 30.0
+                            + btn_h + gap + btn_h + gap
+                            + 28.0
+                            + btn_h + gap + btn_h + gap
+                            + 28.0
                             + btn_h;
 
                 #[allow(unused_assignments)]
                 let mut y = rect.center().y - block_h * 0.5;
-
-                // Dark background behind the centre column so it always reads
-                // clearly over the panel images at any window width.
-                let col_pad_x = 60.0_f32;
-                let col_rect = Rect::from_center_size(
-                    Pos2::new(cx, rect.center().y),
-                    Vec2::new(btn_w + col_pad_x * 2.0, h),
-                );
-                ui.painter().rect_filled(col_rect, 0.0, bg);
 
                 // Title
                 ui.painter().text(
@@ -1026,26 +1022,21 @@ impl App {
                 );
                 y += 38.0;
 
-                // ── helper: draw one button ───────────────────────────────────
                 macro_rules! btn {
                     ($label:expr, $fill:expr, $fill_h:expr, $border:expr, $text_col:expr) => {{
                         let r = Rect::from_center_size(
                             Pos2::new(cx, y + btn_h * 0.5),
                             Vec2::new(btn_w, btn_h),
                         );
-                        // Use a plain fill first; we'll repaint with hover fill if hovered.
                         let response = ui.put(
                             r,
                             egui::Button::new(
-                                egui::RichText::new($label)
-                                    .color($text_col)
-                                    .size(15.0),
+                                egui::RichText::new($label).color($text_col).size(15.0),
                             )
                             .fill($fill)
                             .stroke(Stroke::new(1.0, $border))
                             .corner_radius(32.0_f32),
                         );
-                        // Repaint with hover fill on top when the pointer is over the button.
                         if response.hovered() {
                             ui.painter().rect_filled(r, 32.0, $fill_h);
                             ui.painter().rect_stroke(r, 32.0, Stroke::new(1.0, $border), egui::StrokeKind::Outside);
@@ -1062,7 +1053,6 @@ impl App {
                     action = MenuAction::GenomeEditor;
                 }
 
-                // Divider
                 y += 4.0;
                 ui.painter().line_segment(
                     [Pos2::new(cx - 50.0, y), Pos2::new(cx + 50.0, y)],
@@ -1077,7 +1067,6 @@ impl App {
                     action = MenuAction::Credits;
                 }
 
-                // Divider
                 y += 4.0;
                 ui.painter().line_segment(
                     [Pos2::new(cx - 50.0, y), Pos2::new(cx + 50.0, y)],
@@ -1088,7 +1077,7 @@ impl App {
                 if btn!("Exit", muted_fill, muted_fill_h, muted_border, muted_text).clicked() {
                     action = MenuAction::Exit;
                 }
-                let _ = y; // y is advanced by the last btn! macro but not read after
+                let _ = y;
             });
 
         action
@@ -1099,7 +1088,7 @@ impl App {
         use egui::epaint::Vertex;
         use egui::Pos2;
 
-        let uv = Pos2::new(0.0, 0.0); // UV unused; texture_id = default (white)
+        let uv = Pos2::new(0.0, 0.0);
         let mut mesh = egui::Mesh::default();
         mesh.vertices.push(Vertex { pos: rect.left_top(),     uv, color: left_color  });
         mesh.vertices.push(Vertex { pos: rect.right_top(),    uv, color: right_color });
@@ -1436,18 +1425,29 @@ impl App {
         let mut scene_request = crate::ui::panel_context::SceneModeRequest::None;
         
         // Sync working genome from preview scene if in Preview mode
-        // This keeps the genome available for GPU scene cell insertion
+        // This keeps the genome available for GPU scene cell insertion.
+        // Skip if a genome was just loaded this frame (the loaded genome takes priority).
         let egui_output = {
             let mut dummy_camera = crate::ui::camera::CameraController::new();
             
             // Get real data if in Preview mode
-            if current_mode == crate::ui::types::SimulationMode::Preview {
+            if current_mode == crate::ui::types::SimulationMode::Preview
+                && !self.editor_state.genome_just_loaded
+            {
                 if let Some(preview_scene) = self.scene_manager.get_preview_scene() {
-                    // Copy the genome data for editing
+                    // Preserve the name the user has typed — it's display-only and
+                    // must not be overwritten by the scene sync every frame.
+                    let preserved_name = self.working_genome.name.clone();
                     self.working_genome = preview_scene.genome.clone();
+                    self.working_genome.name = preserved_name;
                     
                     // One-way sync: read simulation's actual time for progress bar display only
                     // Never write back to time_value — the slider is purely user-driven
+                    self.editor_state.resim_display_time = preview_scene.get_time_for_ui();
+                }
+            } else if current_mode == crate::ui::types::SimulationMode::Preview {
+                // Still sync the display time even when skipping genome sync
+                if let Some(preview_scene) = self.scene_manager.get_preview_scene() {
                     self.editor_state.resim_display_time = preview_scene.get_time_for_ui();
                 }
             }
@@ -1839,6 +1839,10 @@ impl App {
                     preview_scene.config.constraint_iterations = self.ui.state.world_settings.constraint_iterations;
 
                     preview_scene.update_genome(&self.working_genome);
+
+                    // Clear the just-loaded flag now that the genome has been pushed
+                    // into the preview scene. From the next frame the normal sync resumes.
+                    self.editor_state.genome_just_loaded = false;
                     
                     // Sync time slider to simulation (when dragging or changed)
                     preview_scene.sync_time_from_ui(
@@ -2124,11 +2128,70 @@ impl App {
             screen_descriptor,
             egui_output,
         );
-        
-        // Submit egui commands
+
+        // If a screenshot was requested, copy the fully-rendered swapchain texture
+        // to a staging buffer in the same encoder pass (before submit + present).
+        let screenshot_staging = if self.editor_state.request_screenshot {
+            self.editor_state.request_screenshot = false;
+            let w = self.config.width;
+            let h = self.config.height;
+            // Bytes per row must be aligned to 256 bytes (wgpu requirement).
+            let bytes_per_pixel = 4u32; // RGBA8 or BGRA8
+            let unpadded_bytes_per_row = w * bytes_per_pixel;
+            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+            let padded_bytes_per_row = (unpadded_bytes_per_row + align - 1) / align * align;
+            let buffer_size = (padded_bytes_per_row * h) as u64;
+
+            let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Screenshot Staging Buffer"),
+                size: buffer_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+
+            encoder.copy_texture_to_buffer(
+                output.texture.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &staging,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(padded_bytes_per_row),
+                        rows_per_image: Some(h),
+                    },
+                },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+
+            Some((staging, w, h, padded_bytes_per_row, unpadded_bytes_per_row))
+        } else {
+            None
+        };
+
+        // Submit egui commands (includes the screenshot copy if requested)
         self.queue.submit(std::iter::once(encoder.finish()));
-        
+
         output.present();
+
+        // ── Process screenshot readback ────────────────────────────────────────
+        // Runs after present() — the staging buffer is already populated.
+        if let Some((staging, w, h, padded_bpr, unpadded_bpr)) = screenshot_staging {
+            self.deferred_action = Some(DeferredAction::TakeScreenshot {
+                staging,
+                width: w,
+                height: h,
+                padded_bytes_per_row: padded_bpr,
+                unpadded_bytes_per_row: unpadded_bpr,
+                format: self.config.format,
+            });
+        }
+
+        // Check for GIF capture request — deferred to after present().
+        if self.editor_state.request_gif_capture {
+            self.editor_state.request_gif_capture = false;
+            if self.deferred_action.is_none() {
+                self.deferred_action = Some(DeferredAction::CaptureGif);
+            }
+        }
 
         // ── Execute deferred save/load action ─────────────────────────────────
         // This runs AFTER present() so the "Saving…" / "Loading…" popup is
@@ -2145,7 +2208,7 @@ impl App {
                                 if let Some(path) = rfd::FileDialog::new()
                                     .set_title("Save Sphere")
                                     .add_filter("Bio-Spheres Sphere", &["sphere"])
-                                    .set_directory("genomes")
+                                    .set_directory(crate::app_dirs::spheres_dir())
                                     .set_file_name("simulation.sphere")
                                     .save_file()
                                 {
@@ -2181,7 +2244,151 @@ impl App {
                     self.ui.state.show_loading_popup = false;
                     self.window.request_redraw();
                 }
+                DeferredAction::TakeScreenshot { staging, width, height, padded_bytes_per_row, unpadded_bytes_per_row, format } => {
+                    // Map the staging buffer and read back the pixel data.
+                    let slice = staging.slice(..);
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+                    match self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            log::error!("Screenshot: device.poll failed: {:?}", e);
+                            return;
+                        }
+                    }
+                    if rx.recv().map_err(|_| ()).and_then(|r| r.map_err(|_| ())).is_err() {
+                        log::error!("Screenshot: staging buffer map failed");
+                        return;
+                    }
+
+                    let mapped = slice.get_mapped_range();
+                    // Strip row padding and convert BGRA→RGBA if needed.
+                    let is_bgra = matches!(
+                        format,
+                        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+                    );
+                    let mut rgba: Vec<u8> = Vec::with_capacity((width * height * 4) as usize);
+                    for row in 0..height {
+                        let row_start = (row * padded_bytes_per_row) as usize;
+                        let row_bytes = &mapped[row_start..row_start + unpadded_bytes_per_row as usize];
+                        if is_bgra {
+                            for chunk in row_bytes.chunks_exact(4) {
+                                rgba.push(chunk[2]); // R
+                                rgba.push(chunk[1]); // G
+                                rgba.push(chunk[0]); // B
+                                rgba.push(chunk[3]); // A
+                            }
+                        } else {
+                            rgba.extend_from_slice(row_bytes);
+                        }
+                    }
+                    drop(mapped);
+                    staging.unmap();
+
+                    // Build a timestamped filename and save to the screenshots folder.
+                    let screenshots_dir = crate::app_dirs::screenshots_dir();
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let filename = format!("screenshot_{}.png", timestamp);
+                    let path = screenshots_dir.join(&filename);
+
+                    match image::RgbaImage::from_raw(width, height, rgba) {
+                        Some(img) => {
+                            match img.save(&path) {
+                                Ok(()) => log::info!("Screenshot saved to {:?}", path),
+                                Err(e) => log::error!("Screenshot: failed to save PNG: {}", e),
+                            }
+                        }
+                        None => log::error!("Screenshot: failed to construct image from pixel data"),
+                    }
+                }
+                DeferredAction::CaptureGif => {
+                    // Start the incremental GIF capture state machine.
+                    let (genome, cam_rotation, cam_distance) = if let Some(preview) = self.scene_manager.get_preview_scene() {
+                        (
+                            preview.genome.clone(),
+                            preview.camera.rotation,
+                            preview.camera.distance,
+                        )
+                    } else {
+                        (
+                            self.working_genome.clone(),
+                            glam::Quat::from_axis_angle(glam::Vec3::X, -0.35),
+                            40.0,
+                        )
+                    };
+                    let sim_time = self.editor_state.time_value;
+                    let cell_type_visuals = self.editor_state.cell_type_visuals.clone();
+
+                    match crate::gif_capture::GifCaptureState::begin(
+                        &self.device,
+                        &self.queue,
+                        self.config.format,
+                        &genome,
+                        sim_time,
+                        cam_rotation,
+                        cam_distance,
+                        Some(&cell_type_visuals),
+                    ) {
+                        Ok(state) => {
+                            self.editor_state.gif_capture = Some(state);
+                        }
+                        Err(e) => {
+                            log::error!("GIF capture failed to start: {}", e);
+                            crate::ui::toast::remove_progress_toasts(&mut self.ui.toasts);
+                            self.ui.toasts.push(crate::ui::toast::Toast::error(
+                                format!("GIF failed: {}", e)
+                            ));
+                        }
+                    }
+                    self.window.request_redraw();
+                }
             }
+        }
+
+        // ── Drive incremental GIF capture ─────────────────────────────────────
+        if let Some(ref mut capture) = self.editor_state.gif_capture {
+            let cell_type_visuals = self.editor_state.cell_type_visuals.clone();
+            capture.step(&self.device, &self.queue, Some(&cell_type_visuals));
+
+            let done = capture.frames_done();
+            let total = capture.frames_total();
+            let msg = format!("Capturing GIF… {}/{}", done, total);
+            crate::ui::toast::upsert_progress_toast(
+                &mut self.ui.toasts,
+                &msg,
+                capture.progress(),
+            );
+
+            if capture.is_done() {
+                let result = capture.result.take().unwrap();
+                crate::ui::toast::remove_progress_toasts(&mut self.ui.toasts);
+                match result {
+                    Ok(ref gif_path) => {
+                        let gif_stem = gif_path.file_stem()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("thumbnail")
+                            .to_string();
+
+                        self.ui.toasts.push(crate::ui::toast::Toast::success(
+                            format!("✓ GIF saved — {}.gif", gif_stem)
+                        ));
+                        // Refresh the genome browser so the new thumbnail appears.
+                        self.ui.genome_browser.needs_refresh = true;
+                        self.ui.genome_browser.force_full_reload = true;
+                    }
+                    Err(e) => {
+                        self.ui.toasts.push(crate::ui::toast::Toast::error(
+                            format!("GIF failed: {}", e)
+                        ));
+                    }
+                }
+                self.editor_state.gif_capture = None;
+            }
+
+            self.window.request_redraw();
         }
         
         // FPS counter
@@ -2395,7 +2602,7 @@ impl ApplicationHandler for AppState {
         };
 
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             format: surface_format,
             width,
             height,

@@ -90,7 +90,6 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::GizmoSettings => render_gizmo_settings(ui, self.context),
             Panel::CellTypeVisuals => render_cell_type_visuals(ui, self.context),
             Panel::Modes => render_modes(ui, self.context),
-            Panel::NameTypeEditor => render_name_type_editor(ui, self.context),
             Panel::AdhesionSettings => render_adhesion_settings(ui, self.context),
             Panel::ParentSettings => render_parent_settings(ui, self.context),
             Panel::CircleSliders => render_circle_sliders(ui, self.context),
@@ -2871,126 +2870,6 @@ fn section_header(ui: &mut Ui, title: &str) {
     );
     painter.rect_filled(sep_rect, 0.0, palette().border_subtle);
     ui.add_space(3.0);
-}
-
-/// Render the NameTypeEditor panel.
-fn render_name_type_editor(ui: &mut Ui, context: &mut PanelContext) {
-    // Record panel rect for the tutorial pointer.
-    context.editor_state.panel_rects.insert("NameTypeEditor".to_string(), ui.max_rect());
-
-    // Multi-select: snapshot before rendering so we can diff afterwards
-    let selected_idx = context.editor_state.selected_mode_index;
-    let pre_cell_type = context.genome.modes.get(selected_idx).map(|m| m.cell_type);
-    let pre_make_adhesion = context.genome.modes.get(selected_idx).map(|m| m.parent_make_adhesion);
-
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-
-            // Genome file buttons — row 1
-            ui.horizontal(|ui| {
-                if ui.button("Save Genome").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Genome", &["genome"])
-                        .set_directory(crate::genome::Genome::genomes_dir())
-                        .set_file_name(&format!("{}.genome", context.genome.name))
-                        .save_file()
-                    {
-                        match context.genome.save_to_file(&path) {
-                            Ok(()) => log::info!("Genome saved to {:?}", path),
-                            Err(e) => log::error!("Failed to save genome: {}", e),
-                        }
-                    }
-                }
-                if ui.button("Load Genome").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Genome", &["genome"])
-                        .set_directory(crate::genome::Genome::genomes_dir())
-                        .pick_file()
-                    {
-                        match crate::genome::Genome::load_from_file(&path) {
-                            Ok(loaded) => {
-                                *context.genome = loaded;
-                                log::info!("Genome loaded from {:?}", path);
-                            }
-                            Err(e) => log::error!("Failed to load genome: {}", e),
-                        }
-                    }
-                }
-                if ui.button("New Genome").clicked() {
-                    *context.genome = crate::genome::Genome::new_with_random_colors();
-                    context.editor_state.selected_mode_index = 0;
-                }
-            });
-
-            // Genome file buttons — row 2 (procedural moved to rail button)
-
-            ui.add_space(4.0);
-
-            // Genome Name label and field on same line
-            ui.horizontal(|ui| {
-                ui.label("Genome Name:");
-                ui.text_edit_singleline(&mut context.genome.name);
-            });
-
-            ui.add_space(4.0);
-
-            // Get current mode
-            let selected_idx = context.editor_state.selected_mode_index;
-            if selected_idx >= context.genome.modes.len() {
-                ui.label("No mode selected");
-                return;
-            }
-            let mode = &mut context.genome.modes[selected_idx];
-
-            // Type dropdown and checkbox on the same line
-            ui.horizontal(|ui| {
-                ui.label("Type:");
-                let cell_types = crate::cell::types::CellType::all();
-                let combo_resp = egui::ComboBox::from_id_salt("cell_type")
-                    .selected_text(cell_types[mode.cell_type as usize].name())
-                    .show_ui(ui, |ui| {
-                        for ct in cell_types.iter() {
-                            ui.selectable_value(&mut mode.cell_type, ct.to_index() as i32, ct.name())
-                                .on_hover_text(ct.tooltip());
-                        }
-                    });
-                context.editor_state.panel_rects.insert(
-                    "cell_type_dropdown".to_string(), combo_resp.response.rect,
-                );
-
-                let chk = ui.checkbox(&mut mode.parent_make_adhesion, "Make Adhesion")
-                    .on_hover_text("When enabled, this cell creates an adhesion bond with its parent cell when it is born. This is how multicellular organisms form — cells stay connected to their parent after division");
-                context.editor_state.panel_rects.insert(
-                    "make_adhesion_checkbox".to_string(), chk.rect,
-                );
-            });
-        });
-
-    // Multi-select: propagate cell_type and parent_make_adhesion if they changed
-    if let (Some(old_cell_type), Some(old_make_adhesion)) = (pre_cell_type, pre_make_adhesion) {
-        let selected_idx = context.editor_state.selected_mode_index;
-        if selected_idx < context.genome.modes.len() {
-            let new_cell_type     = context.genome.modes[selected_idx].cell_type;
-            let new_make_adhesion = context.genome.modes[selected_idx].parent_make_adhesion;
-
-            let cell_type_changed     = new_cell_type     != old_cell_type;
-            let make_adhesion_changed = new_make_adhesion != old_make_adhesion;
-
-            if cell_type_changed || make_adhesion_changed {
-                let secondary_indices: Vec<usize> = context.editor_state.selected_mode_indices
-                    .iter()
-                    .copied()
-                    .filter(|&i| i != selected_idx && i < context.genome.modes.len())
-                    .collect();
-                for other_idx in secondary_indices {
-                    if cell_type_changed     { context.genome.modes[other_idx].cell_type          = new_cell_type; }
-                    if make_adhesion_changed { context.genome.modes[other_idx].parent_make_adhesion = new_make_adhesion; }
-                }
-            }
-        }
-    }
 }
 
 /// Render the AdhesionSettings panel (placeholder).

@@ -56,6 +56,8 @@ pub struct PreviewScene {
     pub skybox_renderer: PreviewSkyboxRenderer,
     /// Whether to show the skybox background (disable for main menu panels)
     pub show_skybox: bool,
+    /// Background clear color (r, g, b in 0.0–1.0). Defaults to black.
+    pub clear_color: [f64; 3],
 }
 
 impl PreviewScene {
@@ -97,6 +99,7 @@ impl PreviewScene {
             last_ui_time_value: 0.0,
             show_adhesion_lines: true,
             show_skybox: true,
+            clear_color: [0.0, 0.0, 0.0],
             selected_mode_indices: Vec::new(),
             context_menu_cell: None,
             test_signals: Vec::new(),
@@ -203,9 +206,9 @@ impl Scene for PreviewScene {
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.0,
-                                g: 0.0,
-                                b: 0.0,
+                                r: self.clear_color[0],
+                                g: self.clear_color[1],
+                                b: self.clear_color[2],
                                 a: 1.0,
                             }),
                             store: wgpu::StoreOp::Store,

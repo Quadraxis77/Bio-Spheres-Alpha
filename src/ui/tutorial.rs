@@ -141,7 +141,7 @@ impl TutorialTarget {
     pub fn panel_key(&self) -> Option<String> {
         match self {
             TutorialTarget::ModesPanel            => Some("Modes".to_string()),
-            TutorialTarget::NameTypePanel         => Some("NameTypeEditor".to_string()),
+            TutorialTarget::NameTypePanel         => Some("Modes".to_string()), // merged into Modes panel
             TutorialTarget::ParentSettingsPanel   => Some("ParentSettings".to_string()),
             TutorialTarget::AdhesionSettingsPanel => Some("AdhesionSettings".to_string()),
             TutorialTarget::ChildRotationPanel    => Some("QuaternionBall".to_string()),

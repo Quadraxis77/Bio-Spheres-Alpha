@@ -153,8 +153,20 @@ pub struct UiSystem {
     theme_applied: bool,
     /// Last applied theme for change detection
     last_theme: crate::ui::types::UiTheme,
+    /// Genome browser window state — lives here (not on GlobalUiState) so it
+    /// is never cloned and texture handles survive across frames.
+    pub genome_browser: crate::ui::genome_browser::GenomeBrowserState,
+    /// Toast notification queue — short messages shown in the bottom-right corner.
+    /// Also lives here to avoid being wiped by the GlobalUiState clone.
+    pub toasts: Vec<crate::ui::toast::Toast>,
     /// App icon texture used as the brand glyph in the top bar.
     app_icon: Option<egui::TextureHandle>,
+    /// Loading animation GIF frames (user-provided, shown during GIF/save operations).
+    pub loading_gif_frames: Vec<egui::TextureHandle>,
+    /// Current frame index for the loading animation.
+    pub loading_gif_frame: usize,
+    /// Timer for loading animation frame advance.
+    pub loading_gif_timer: f32,
 }
 
 impl UiSystem {
@@ -232,6 +244,9 @@ impl UiSystem {
         // ships with the binary regardless of working directory.
         let app_icon = load_app_icon_texture(&ctx);
 
+        // Try to load a user-provided loading animation GIF from assets/.
+        let loading_gif_frames = load_loading_gif_frames(&ctx);
+
         Self {
             ctx,
             winit_state,
@@ -245,7 +260,12 @@ impl UiSystem {
             ui_state_dirty: false,
             theme_applied: false,
             last_theme: crate::ui::types::UiTheme::default(),
+            genome_browser: crate::ui::genome_browser::GenomeBrowserState::default(),
+            toasts: Vec::new(),
             app_icon,
+            loading_gif_frames,
+            loading_gif_frame: 0,
+            loading_gif_timer: 0.0,
         }
     }
 
@@ -278,6 +298,19 @@ impl UiSystem {
         
         // Otherwise, check if egui wants the pointer
         self.ctx.egui_wants_pointer_input() || self.ctx.is_pointer_over_egui()
+    }
+
+    /// Returns `true` if scroll/wheel input should be consumed by the UI rather
+    /// than passed to the camera. This is a superset of `wants_pointer_input` —
+    /// it also blocks scroll when a floating window (e.g. genome browser) is open,
+    /// because egui floating windows sit on top of the viewport rect but the
+    /// pointer-over check doesn't catch them reliably for scroll events.
+    pub fn wants_scroll_input(&self) -> bool {
+        // If the genome browser is open, always consume scroll.
+        if self.genome_browser.open {
+            return true;
+        }
+        self.wants_pointer_input()
     }
 
     /// Check if egui wants keyboard input.
@@ -771,6 +804,12 @@ impl UiSystem {
         // Show branded top bar
         let mut ui_state_copy = self.state.clone();
 
+        // Pending mutations from inside egui closures (can't borrow self inside them).
+        let mut pending_toasts: Vec<crate::ui::toast::Toast> = Vec::new();
+        let mut pending_browser_open_load = false;
+        let mut pending_browser_refresh = false;
+        let mut pending_gif_capture = false;
+
         // Tab key toggles UI visibility in GPU mode
         if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu {
             if self.ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
@@ -900,46 +939,92 @@ impl UiSystem {
 
                             let btn = |label: &str| egui::Button::new(egui::RichText::new(label).size(11.0).color(tb_text_primary))
                                 .fill(p.bg_widget).stroke(egui::Stroke::new(1.0, tb_border_normal)).corner_radius(egui::CornerRadius::same(3));
-                            if ui.add(btn("⬆ Save")).on_hover_text("Save Genome").clicked() {
-                                if let Some(path) = rfd::FileDialog::new().add_filter("Genome", &["genome"])
-                                    .set_directory(crate::genome::Genome::genomes_dir())
-                                    .set_file_name(&format!("{}.genome", genome.name)).save_file() {
-                                    match genome.save_to_file(&path) { Ok(()) => {}, Err(e) => log::error!("{}", e) }
-                                }
-                            }
-                            if ui.add(btn("⬇ Load")).on_hover_text("Load Genome").clicked() {
-                                if let Some(path) = rfd::FileDialog::new().add_filter("Genome", &["genome"])
-                                    .set_directory(crate::genome::Genome::genomes_dir()).pick_file() {
-                                    match crate::genome::Genome::load_from_file(&path) {
-                                        Ok(loaded) => { *genome = loaded; editor_state.selected_mode_index = 0; }
-                                        Err(e) => log::error!("{}", e),
+
+                            if ui.add(btn("⬆ Save")).on_hover_text("Save genome to disk using the current name").clicked() {
+                                let name = genome.name.trim().to_string();
+                                let is_default = crate::genome::procedural_name::is_default_name(&name);                                if is_default {
+                                    // Collect existing genome names to avoid clashes.
+                                    let used: Vec<String> = crate::genome::Genome::list_genomes_dir()
+                                        .into_iter()
+                                        .filter_map(|p| p.file_stem()
+                                            .and_then(|s| s.to_str())
+                                            .map(|s| s.to_lowercase()))
+                                        .collect();
+                                    editor_state.show_name_dialog = true;
+                                    editor_state.name_dialog_buffer = String::new();
+                                    editor_state.name_dialog_seed = 0;
+                                    editor_state.name_dialog_focused = false;
+                                    editor_state.name_dialog_used_names = used;
+                                } else {
+                                    let path = crate::app_dirs::genomes_dir()
+                                        .join(format!("{}.genome", crate::app_dirs::sanitize_filename(&name)));
+                                    match genome.save_to_file(&path) {
+                                        Ok(()) => {
+                                            pending_toasts.push(crate::ui::toast::Toast::success(
+                                                format!("✓ Saved — {}.genome", name)
+                                            ));
+                                            pending_browser_refresh = true;
+                                            pending_gif_capture = true;
+                                        }
+                                        Err(e) => {
+                                            pending_toasts.push(crate::ui::toast::Toast::error(
+                                                format!("Save failed: {}", e)
+                                            ));
+                                        }
                                     }
                                 }
+                            }
+                            if ui.add(btn("⬇ Load")).on_hover_text("Browse and load a saved genome").clicked() {
+                                pending_browser_open_load = true;
+                            }
+                            if ui.add(btn("✦ New")).on_hover_text("Create a new blank genome").clicked() {
+                                *genome = crate::genome::Genome::new_with_random_colors();
+                                editor_state.selected_mode_index = 0;
+                                editor_state.selected_mode_indices = vec![0];
+                                editor_state.genome_just_loaded = true;
+                                pending_toasts.push(crate::ui::toast::Toast::info(
+                                    "New genome created".to_string()
+                                ));
                             }
 
                             ui.add_space(6.0); topbar_divider(ui); ui.add_space(6.0);
 
-                            ui.add(egui::TextEdit::singleline(&mut genome.name)
-                                .desired_width(130.0).hint_text("Genome Name")
-                                .font(egui::FontId::proportional(11.5)).text_color(tb_text_primary));
+                            // Name field — red tint if error
+                            let name_color = if editor_state.name_field_error {
+                                egui::Color32::from_rgb(255, 100, 100)
+                            } else {
+                                tb_text_primary
+                            };
+                            let name_resp = ui.add(
+                                egui::TextEdit::singleline(&mut genome.name)
+                                    .desired_width(130.0)
+                                    .hint_text("Genome Name")
+                                    .font(egui::FontId::proportional(11.5))
+                                    .text_color(name_color),
+                            );
+                            // Only check for overwrite when the field loses focus or on hover,
+                            // not every frame — avoids blocking disk reads while typing.
+                            if name_resp.hovered() && !name_resp.has_focus() {
+                                let current_name = genome.name.trim().to_string();
+                                if !current_name.is_empty() {
+                                    let path = crate::app_dirs::genomes_dir()
+                                        .join(format!("{}.genome", crate::app_dirs::sanitize_filename(&current_name)));
+                                    if path.exists() {
+                                        egui::show_tooltip_text(ui.ctx(), ui.layer_id(), egui::Id::new("name_overwrite_tip"),
+                                            "⚠ A genome with this name already exists — saving will overwrite it");
+                                    }
+                                }
+                            }
+                            // Tick error timer
+                            if editor_state.name_field_error {
+                                editor_state.name_field_error_timer -= 1.0 / 60.0;
+                                if editor_state.name_field_error_timer <= 0.0 {
+                                    editor_state.name_field_error = false;
+                                }
+                            }
                         }
                     });
                 });
-            });
-
-        // Show left side rail (quick panel access bar)
-        #[allow(deprecated)]
-        egui::Panel::left("side_rail")
-            .resizable(false)
-            .exact_width(40.0)
-            .frame(
-                egui::Frame::none()
-                    .fill(p.topbar_bg)
-                    .inner_margin(egui::Margin { left: 4, right: 4, top: 8, bottom: 8 })
-                    .stroke(egui::Stroke::new(1.0, p.border_subtle)),
-            )
-            .show(&self.ctx, |ui| {
-                render_side_rail(ui, &mut ui_state_copy, editor_state, dock_manager);
             });
 
         // Show bottom status bar
@@ -1127,7 +1212,41 @@ impl UiSystem {
                 });
             });
         
-        } // end if !ui_state_copy.hide_ui
+        } // end if !ui_state_copy.hide_ui (top bar and status bar)
+
+        // Apply pending mutations collected from inside egui closures.
+        self.toasts.extend(pending_toasts);
+        if pending_browser_open_load { self.genome_browser.open_load(); }
+        if pending_browser_refresh {
+            self.genome_browser.needs_refresh = true;
+            self.genome_browser.force_full_reload = true;
+        }
+        if pending_gif_capture && editor_state.gif_capture.is_none() {
+            editor_state.request_gif_capture = true;
+            // Show feedback immediately — the pre-scan in begin() takes a moment
+            // and without this the player sees nothing happen after saving.
+            crate::ui::toast::upsert_progress_toast(
+                &mut self.toasts,
+                "Preparing GIF…",
+                0.0,
+            );
+        }
+
+        // Side rail always renders — it contains the hide_ui toggle itself,
+        // so hiding it would trap the user with no way to restore the UI.
+        #[allow(deprecated)]
+        egui::Panel::left("side_rail")
+            .resizable(false)
+            .exact_width(40.0)
+            .frame(
+                egui::Frame::none()
+                    .fill(p.topbar_bg)
+                    .inner_margin(egui::Margin { left: 4, right: 4, top: 8, bottom: 8 })
+                    .stroke(egui::Stroke::new(1.0, p.border_subtle)),
+            )
+            .show(&self.ctx, |ui| {
+                render_side_rail(ui, &mut ui_state_copy, editor_state, dock_manager);
+            });
 
         // Show dock area in remaining space
         let mut style = egui_dock::Style::from_egui(self.ctx.global_style().as_ref());
@@ -1254,6 +1373,32 @@ impl UiSystem {
         // Apply lock settings to hide tab bar height if locked
         if ui_state_copy.lock_tab_bar {
             style.tab_bar.height = 0.0;
+        }
+
+        // When hide_ui is active, make the dock chrome invisible so only the
+        // viewport content shows. The dock layout is preserved — no panels are
+        // closed or moved.
+        if ui_state_copy.hide_ui {
+            let transparent = egui::Color32::TRANSPARENT;
+            style.tab_bar.bg_fill = transparent;
+            style.tab_bar.hline_color = transparent;
+            style.tab_bar.height = 0.0;
+            style.tab.active.bg_fill = transparent;
+            style.tab.active.text_color = transparent;
+            style.tab.active.outline_color = transparent;
+            style.tab.active.glow_color = transparent;
+            style.tab.inactive.bg_fill = transparent;
+            style.tab.inactive.text_color = transparent;
+            style.tab.inactive.outline_color = transparent;
+            style.tab.tab_body.bg_fill = transparent;
+            style.tab.tab_body.stroke = egui::Stroke::NONE;
+            style.separator.color_idle = transparent;
+            style.separator.color_hovered = transparent;
+            style.separator.color_dragged = transparent;
+            style.separator.width = 0.0;
+            style.dock_area_padding = Some(egui::Margin::same(0));
+            style.buttons.close_tab_color = transparent;
+            style.buttons.add_tab_color = transparent;
         }
 
         // Create panel context for PanelTabViewer
@@ -1397,6 +1542,200 @@ impl UiSystem {
                 });
         }
         
+        // ── Genome browser window ─────────────────────────────────────────────
+        // Floats above the dock. Renders in Preview mode only.
+        if current_mode == crate::ui::types::SimulationMode::Preview {
+            // Process open requests from panels/buttons
+            if editor_state.open_genome_browser_save {
+                editor_state.open_genome_browser_save = false;
+                let name = genome.name.trim().to_string();
+                if !name.is_empty() {
+                    let path = crate::app_dirs::genomes_dir()
+                        .join(format!("{}.genome", crate::app_dirs::sanitize_filename(&name)));
+                    match genome.save_to_file(&path) {
+                        Ok(()) => {
+                            self.toasts.push(crate::ui::toast::Toast::success(
+                                format!("✓ Saved — {}.genome", name)
+                            ));
+                            self.genome_browser.needs_refresh = true;
+                            self.genome_browser.force_full_reload = true;
+                            if editor_state.gif_capture.is_none() {
+                                editor_state.request_gif_capture = true;
+                            }
+                        }
+                        Err(e) => {
+                            self.toasts.push(crate::ui::toast::Toast::error(
+                                format!("Save failed: {}", e)
+                            ));
+                        }
+                    }
+                }
+            }
+            if editor_state.open_genome_browser_load {
+                editor_state.open_genome_browser_load = false;
+                self.genome_browser.open_load();
+            }
+
+            let dt_for_browser = 1.0 / 60.0; // approximate; good enough for animation
+            crate::ui::genome_browser::render_genome_browser(
+                &self.ctx,
+                &mut self.genome_browser,
+                genome,
+                editor_state,
+                dt_for_browser,
+            );
+        }
+
+        // ── Name dialog (shown when saving with an empty name) ────────────────
+        if editor_state.show_name_dialog {
+            let p = palette();
+            // Re-read from disk every frame so deleted genomes free up their names immediately.
+            let used: Vec<String> = crate::genome::Genome::list_genomes_dir()
+                .into_iter()
+                .filter_map(|p| p.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_lowercase()))
+                .collect();
+            let procedural = crate::genome::procedural_name::generate_unique(
+                genome, editor_state.name_dialog_seed, &used);
+            let mut do_save_name: Option<String> = None;
+            let mut cancel = false;
+            let mut regenerate = false;
+
+            let win_frame = egui::Frame::new()
+                .fill(p.bg_darkest)
+                .stroke(egui::Stroke::new(1.5, p.accent_primary))
+                .corner_radius(egui::CornerRadius::same(6))
+                .inner_margin(egui::Margin::same(20));
+
+            egui::Window::new("name_genome_dialog")
+                .frame(win_frame)
+                .title_bar(false)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(&self.ctx, |ui| {
+                    ui.set_min_width(340.0);
+
+                    ui.label(egui::RichText::new("Name Your Genome")
+                        .size(14.0).strong().color(p.text_primary));
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new("Enter a custom name or use the suggested one.")
+                        .size(11.0).color(p.text_dim));
+                    ui.add_space(12.0);
+
+                    // Procedural suggestion
+                    egui::Frame::new()
+                        .fill(p.bg_widget)
+                        .stroke(egui::Stroke::new(1.0, p.border_subtle))
+                        .corner_radius(egui::CornerRadius::same(4))
+                        .inner_margin(egui::Margin::symmetric(10, 8))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Suggested:").size(10.0).color(p.text_dim));
+                                ui.add_space(4.0);
+                                ui.label(egui::RichText::new(&procedural).size(12.0).color(p.accent_primary));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.add(egui::Button::new(
+                                        egui::RichText::new("🔀").size(11.0).color(p.text_secondary))
+                                        .fill(egui::Color32::TRANSPARENT)
+                                        .stroke(egui::Stroke::NONE)
+                                        .min_size(egui::Vec2::new(22.0, 22.0)))
+                                        .on_hover_text("Generate a different name")
+                                        .clicked() {
+                                        regenerate = true;
+                                    }
+                                });
+                            });
+                        });
+                    ui.add_space(8.0);
+
+                    // Custom name field
+                    ui.label(egui::RichText::new("Custom name:").size(10.0).color(p.text_dim));
+                    ui.add_space(2.0);
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(&mut editor_state.name_dialog_buffer)
+                            .desired_width(300.0)
+                            .hint_text("Leave blank to use suggested name…")
+                            .font(egui::FontId::proportional(12.0))
+                            .text_color(p.text_primary),
+                    );
+                    // Auto-focus the text field on the first frame the dialog opens.
+                    if !editor_state.name_dialog_focused {
+                        resp.request_focus();
+                        editor_state.name_dialog_focused = true;
+                    }
+
+                    // Enter key confirms
+                    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        let chosen = if editor_state.name_dialog_buffer.trim().is_empty() {
+                            procedural.clone()
+                        } else {
+                            editor_state.name_dialog_buffer.trim().to_string()
+                        };
+                        do_save_name = Some(chosen);
+                    }
+
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new("Cancel").size(12.0).color(p.text_secondary))
+                            .fill(p.bg_widget)
+                            .stroke(egui::Stroke::new(1.0, p.border_normal))
+                            .min_size(egui::Vec2::new(80.0, 28.0))
+                            .corner_radius(egui::CornerRadius::same(4))).clicked() {
+                            cancel = true;
+                        }
+                        ui.add_space(8.0);
+                        // Save with custom name (or suggested if blank)
+                        let custom = editor_state.name_dialog_buffer.trim().to_string();
+                        let save_label = if custom.is_empty() {
+                            "✨ Use Suggested".to_string()
+                        } else {
+                            format!("⬆ Save as \"{}\"", if custom.len() > 18 { format!("{}…", &custom[..18]) } else { custom.clone() })
+                        };
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new(&save_label).size(12.0).strong()
+                                .color(p.bg_darkest))
+                            .fill(p.accent_primary)
+                            .stroke(egui::Stroke::new(1.0, p.accent_primary))
+                            .min_size(egui::Vec2::new(120.0, 28.0))
+                            .corner_radius(egui::CornerRadius::same(4))).clicked() {
+                            let chosen = if custom.is_empty() { procedural.clone() } else { custom };
+                            do_save_name = Some(chosen);
+                        }
+                    });
+                });
+
+            if regenerate { editor_state.name_dialog_seed = editor_state.name_dialog_seed.wrapping_add(1); }
+            if let Some(name) = do_save_name {                editor_state.show_name_dialog = false;
+                genome.name = name.clone();
+                let path = crate::app_dirs::genomes_dir()
+                    .join(format!("{}.genome", crate::app_dirs::sanitize_filename(&name)));
+                match genome.save_to_file(&path) {
+                    Ok(()) => {
+                        self.toasts.push(crate::ui::toast::Toast::success(
+                            format!("✓ Saved — {}.genome", name)
+                        ));
+                        self.genome_browser.needs_refresh = true;
+                        self.genome_browser.force_full_reload = true;
+                        if editor_state.gif_capture.is_none() {
+                            crate::ui::toast::upsert_progress_toast(
+                                &mut self.toasts, "Preparing GIF…", 0.0,
+                            );
+                            editor_state.request_gif_capture = true;
+                        }
+                    }
+                    Err(e) => {
+                        self.toasts.push(crate::ui::toast::Toast::error(
+                            format!("Save failed: {}", e)
+                        ));
+                    }
+                }
+            }
+            if cancel { editor_state.show_name_dialog = false; editor_state.name_dialog_focused = false; }
+        }
+
         // Handle mode graph panel toggle request
         if editor_state.toggle_mode_graph_panel {
             editor_state.toggle_mode_graph_panel = false;
@@ -1586,6 +1925,40 @@ impl UiSystem {
             }
         }
         
+        // ── Toast notifications ───────────────────────────────────────────────
+        crate::ui::toast::tick_toasts(&mut self.toasts, 1.0 / 60.0);
+        crate::ui::toast::render_toasts(&self.ctx, &self.toasts);
+
+        // ── Loading GIF overlay (shown during GIF capture) ────────────────────
+        if editor_state.gif_capture.is_some() && !self.loading_gif_frames.is_empty() {
+            // Advance loading animation at 20fps
+            self.loading_gif_timer += 1.0 / 60.0;
+            if self.loading_gif_timer >= 1.0 / 20.0 {
+                self.loading_gif_timer = 0.0;
+                self.loading_gif_frame = (self.loading_gif_frame + 1) % self.loading_gif_frames.len();
+            }
+            #[allow(deprecated)]
+            let screen = self.ctx.screen_rect();
+            let size = 64.0_f32;
+            let margin = 16.0 + crate::ui::toast::TOAST_H_PUB + crate::ui::toast::TOAST_GAP_PUB;
+            let pos = egui::pos2(screen.max.x - 16.0 - size, screen.max.y - margin - size);
+            let rect = egui::Rect::from_min_size(pos, egui::vec2(size, size));
+            let painter = self.ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("loading_gif_overlay"),
+            ));
+            painter.image(
+                self.loading_gif_frames[self.loading_gif_frame].id(),
+                rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+            self.ctx.request_repaint();
+        } else if editor_state.gif_capture.is_none() {
+            self.loading_gif_frame = 0;
+            self.loading_gif_timer = 0.0;
+        }
+
         // ── Tutorial overlay ──────────────────────────────────────────────────
         // Auto-launch the tutorial the very first time the player opens the
         // Genome Editor, before they've ever seen it.
@@ -1781,7 +2154,6 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
     let genome_editor_panels = [
         Panel::Modes,
         Panel::ModeGraph,
-        Panel::NameTypeEditor,
         Panel::AdhesionSettings,
         Panel::ParentSettings,
         Panel::CircleSliders,
@@ -2191,6 +2563,12 @@ fn render_side_rail(
                 state.adhesion_expansion_active = !expand_active;
             }
 
+            // Hide UI toggle
+            let hide_active = state.hide_ui;
+            if rail_button_toggle(ui, "👁", "Hide UI (toggle)", hide_active, &p) {
+                state.hide_ui = !hide_active;
+            }
+
             // Procedural genome
             if rail_button(ui, "🎲", "Generate Procedural Genome", &p) {
                 let seed = std::time::SystemTime::now()
@@ -2212,6 +2590,22 @@ fn render_side_rail(
             let graph_open = is_panel_open(dock_manager.current_tree(), &crate::ui::panel::Panel::ModeGraph);
             if rail_button_toggle(ui, "🕸", "Toggle Mode Graph", graph_open, &p) {
                 editor_state.toggle_mode_graph_panel = true;
+            }
+
+            // Screenshot
+            if rail_button(ui, "📷", "Take Screenshot", &p) {
+                editor_state.request_screenshot = true;
+            }
+
+            // Open biospheres folder
+            if rail_button(ui, "📁", "Open Bio-Spheres Folder", &p) {
+                let dir = crate::app_dirs::biospheres_dir();
+                #[cfg(target_os = "windows")]
+                let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+                #[cfg(target_os = "macos")]
+                let _ = std::process::Command::new("open").arg(&dir).spawn();
+                #[cfg(target_os = "linux")]
+                let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
             }
         }
         crate::ui::types::SimulationMode::Gpu => {
@@ -2237,6 +2631,22 @@ fn render_side_rail(
             let fog_active = editor_state.show_volumetric_fog;
             if rail_button_toggle(ui, "🌫", "Toggle Volumetric Fog", fog_active, &p) {
                 editor_state.request_toggle_fog = true;
+            }
+
+            // Screenshot
+            if rail_button(ui, "📷", "Take Screenshot", &p) {
+                editor_state.request_screenshot = true;
+            }
+
+            // Open biospheres folder
+            if rail_button(ui, "📁", "Open Bio-Spheres Folder", &p) {
+                let dir = crate::app_dirs::biospheres_dir();
+                #[cfg(target_os = "windows")]
+                let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+                #[cfg(target_os = "macos")]
+                let _ = std::process::Command::new("open").arg(&dir).spawn();
+                #[cfg(target_os = "linux")]
+                let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
             }
         }
     }
@@ -2329,6 +2739,58 @@ fn load_app_icon_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
         color_image,
         egui::TextureOptions::LINEAR,
     ))
+}
+
+
+/// Load the user-provided loading animation GIF from `assets/loading.gif`.
+/// Returns an empty Vec if the file doesn't exist — callers fall back to a
+/// text spinner. The file is loaded at runtime (not embedded) so the user can
+/// drop in their own GIF without recompiling.
+fn load_loading_gif_frames(ctx: &egui::Context) -> Vec<egui::TextureHandle> {
+    let gif_path = std::path::Path::new("assets/loading.gif");
+    if !gif_path.exists() {
+        return Vec::new();
+    }
+
+    let data = match std::fs::read(gif_path) {
+        Ok(d) => d,
+        Err(e) => {
+            log::warn!("Could not read assets/loading.gif: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let mut opts = gif::DecodeOptions::new();
+    opts.set_color_output(gif::ColorOutput::RGBA);
+    let mut decoder = match opts.read_info(std::io::Cursor::new(&data)) {
+        Ok(d) => d,
+        Err(e) => {
+            log::warn!("Could not decode assets/loading.gif: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let w = decoder.width() as usize;
+    let h = decoder.height() as usize;
+    let mut frames = Vec::new();
+
+    while let Ok(Some(frame)) = decoder.read_next_frame() {
+        let pixels = frame.buffer.to_vec();
+        if pixels.len() == w * h * 4 {
+            let img = egui::ColorImage::from_rgba_unmultiplied([w, h], &pixels);
+            let handle = ctx.load_texture(
+                format!("loading_gif_{}", frames.len()),
+                img,
+                egui::TextureOptions::LINEAR,
+            );
+            frames.push(handle);
+        }
+    }
+
+    if !frames.is_empty() {
+        log::info!("Loaded loading animation: {} frames ({}×{})", frames.len(), w, h);
+    }
+    frames
 }
 
 

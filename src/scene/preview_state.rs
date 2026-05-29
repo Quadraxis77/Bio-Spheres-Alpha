@@ -171,12 +171,13 @@ impl PreviewState {
         }
     }
 
-    /// Compute a comprehensive hash of the genome for change detection
+    /// Compute a comprehensive hash of the genome for change detection.
+    /// Only simulation-relevant fields are hashed — display names are excluded
+    /// so renaming a genome or mode does not trigger a resimulation.
     pub fn compute_genome_hash(genome: &Genome) -> u64 {
         let mut hasher = DefaultHasher::new();
         
-        // Hash genome fields manually since Genome doesn't implement Hash
-        genome.name.hash(&mut hasher);
+        // genome.name intentionally excluded — name changes must not cause resim
         genome.initial_mode.hash(&mut hasher);
         
         // Hash quaternion components
@@ -187,8 +188,7 @@ impl PreviewState {
         
         // Hash each mode
         for mode in &genome.modes {
-            mode.name.hash(&mut hasher);
-            mode.default_name.hash(&mut hasher);
+            // mode.name and mode.default_name excluded — display only, no sim effect
             mode.color.x.to_bits().hash(&mut hasher);
             mode.color.y.to_bits().hash(&mut hasher);
             mode.color.z.to_bits().hash(&mut hasher);
@@ -391,10 +391,18 @@ impl PreviewState {
     }
 
     /// Request seeking to a specific time.
-    /// Cancels any in-progress resim and starts fresh.
+    /// If already resimulating forward and the new target is ahead of current
+    /// work progress, just update the target without restarting — this prevents
+    /// rapid slider drags from repeatedly restarting from t=0.
     pub fn seek_to_time(&mut self, target_time: f32) {
-        self.target_time = Some(target_time);
-        self.is_resimulating = false; // Cancel in-progress resim, force fresh setup
+        if self.is_resimulating && target_time >= self.work_time {
+            // Already making forward progress — just move the goalposts.
+            self.target_time = Some(target_time);
+        } else {
+            // New seek or backward seek — start fresh.
+            self.target_time = Some(target_time);
+            self.is_resimulating = false;
+        }
     }
     
     /// Update initial state when genome changes

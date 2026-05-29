@@ -108,6 +108,7 @@
 
 pub mod app;
 pub mod app_dirs;
+pub mod gif_capture;
 pub mod cell;
 pub mod genome;
 pub mod input;
