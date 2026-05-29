@@ -226,6 +226,11 @@ struct GpuCellTypeVisuals {
     cilia_ring_depth: f32,
     cilia_ring_speed: f32,
     _pad2: f32,
+    // Generic type params packed into type_data_0 for default-branch types
+    param_a: f32,
+    param_b: f32,
+    param_c: f32,
+    param_d: f32,
 }
 
 /// Per-cell instance data for GPU rendering.
@@ -992,8 +997,31 @@ impl InstanceBuilder {
     fn hash_cell_type_visuals(visuals: &[CellTypeVisuals]) -> u64 {
         let mut hash = visuals.len() as u64;
         for v in visuals {
-            hash = hash.wrapping_mul(31).wrapping_add((v.specular_strength * 1000.0) as u64);
-            // Skip noise parameters since they're disabled
+            // Hash every field so any change triggers a GPU buffer update
+            hash = hash.wrapping_mul(31).wrapping_add((v.specular_strength   * 1000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.specular_power      * 100.0)  as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.fresnel_strength    * 1000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.membrane_noise_scale    * 1000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.membrane_noise_strength * 1000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.membrane_noise_speed    * 1000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.tail_length      * 1000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.tail_thickness   * 10000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.tail_amplitude   * 10000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.tail_frequency   * 1000.0)  as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.tail_taper       * 1000.0)  as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.tail_segments    * 10.0)    as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.goldberg_scale       * 1000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.goldberg_ridge_width * 10000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.goldberg_meander     * 10000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.goldberg_ridge_strength * 10000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.nucleus_scale    * 1000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.cilia_ring_frequency * 1000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.cilia_ring_depth    * 10000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.cilia_ring_speed    * 1000.0)  as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.param_a * 10000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.param_b * 10000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.param_c * 10000.0) as u64);
+            hash = hash.wrapping_mul(31).wrapping_add((v.param_d * 10000.0) as u64);
         }
         hash
     }
@@ -1072,9 +1100,9 @@ impl InstanceBuilder {
                 specular_strength: v.specular_strength,
                 specular_power: v.specular_power,
                 fresnel_strength: v.fresnel_strength,
-                membrane_noise_scale: 0.0,        // Noise disabled
-                membrane_noise_strength: 0.0,     // Noise disabled
-                membrane_noise_speed: 0.0,        // Noise disabled
+                membrane_noise_scale: v.membrane_noise_scale,
+                membrane_noise_strength: v.membrane_noise_strength,
+                membrane_noise_speed: v.membrane_noise_speed,
                 // Flagella parameters (used by Flagellocyte cell type)
                 tail_length: v.tail_length,
                 tail_thickness: v.tail_thickness,
@@ -1095,6 +1123,10 @@ impl InstanceBuilder {
                 cilia_ring_depth: v.cilia_ring_depth,
                 cilia_ring_speed: v.cilia_ring_speed,
                 _pad2: 0.0,
+                param_a: v.param_a,
+                param_b: v.param_b,
+                param_c: v.param_c,
+                param_d: v.param_d,
             })
             .collect();
         

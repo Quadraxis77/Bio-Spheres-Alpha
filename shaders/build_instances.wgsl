@@ -84,6 +84,11 @@ struct CellTypeVisuals {
     cilia_ring_depth: f32,
     cilia_ring_speed: f32,
     _pad2: f32,
+    // Generic type params packed into type_data_0 for default-branch types
+    param_a: f32,
+    param_b: f32,
+    param_c: f32,
+    param_d: f32,
 }
 
 // mode_properties_v1 per mode: [split_mass, nutrient_priority, swim_force, prioritize_when_low]
@@ -570,17 +575,38 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         );
         instance.type_data_1 = vec4<f32>(0.0, 0.0, f32(params.lod_debug_colors), f32(cell_type));
     } else {
-        // Default: pack Goldberg ridge params for photocytes (and zeros for others)
+        // Default: pack type-specific params for all remaining cell types.
         // type_data_0: [goldberg_scale, goldberg_ridge_width, goldberg_meander, goldberg_ridge_strength]
-        // type_data_1: [0, 0, debug_colors, cell_type]
+        //   Test:       [ring_frequency, ring_sharpness, ring_brightness, unused]
+        //   Phagocyte:  [nucleus_radius, nucleus_darkness, nucleus_sharpness, unused]
+        //   Lipocyte:   [droplet_scale, droplet_threshold, boundary_sharpness, brightness]
+        //   Buoyocyte:  [bubble_scale, rotation_speed, wall_brightness, gas_brightness]
+        //   Devorocyte: [spike_height, spike_sharpness, spike_embed, tip_fade]
+        //   Photocyte/Oculocyte/Myocyte/Embryocyte/Vasculocyte: goldberg params (as before)
+        // type_data_1: [nucleus_scale, anim_speed, debug_colors, cell_type]
         if (cell_type < params.cell_type_count) {
             let visuals = cell_type_visuals[cell_type];
-            instance.type_data_0 = vec4<f32>(
-                visuals.goldberg_scale,
-                visuals.goldberg_ridge_width,
-                visuals.goldberg_meander,
-                visuals.goldberg_ridge_strength
-            );
+            // For types with dedicated params (Test=0, Phagocyte=2, Lipocyte=4,
+            // Buoyocyte=5, Devorocyte=11), use param_a/b/c/d.
+            // For all others (Photocyte=3, Oculocyte=7, Myocyte=9, Embryocyte=10,
+            // Vasculocyte=12, etc.) use goldberg fields as before.
+            let use_params = (cell_type == 0u || cell_type == 2u || cell_type == 4u
+                           || cell_type == 5u || cell_type == 11u);
+            if (use_params) {
+                instance.type_data_0 = vec4<f32>(
+                    visuals.param_a,
+                    visuals.param_b,
+                    visuals.param_c,
+                    visuals.param_d
+                );
+            } else {
+                instance.type_data_0 = vec4<f32>(
+                    visuals.goldberg_scale,
+                    visuals.goldberg_ridge_width,
+                    visuals.goldberg_meander,
+                    visuals.goldberg_ridge_strength
+                );
+            }
         } else {
             instance.type_data_0 = vec4<f32>(3.0, 0.12, 0.08, 0.15);
         }

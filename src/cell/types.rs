@@ -193,6 +193,22 @@ pub struct CellTypeVisuals {
     pub cilia_ring_depth: f32,
     /// Base animation scroll rate for cilia rings (1.0-10.0, default 4.0)
     pub cilia_ring_speed: f32,
+
+    // Generic type params — packed into type_data_0.xyzw for types using the default branch.
+    // Interpretation depends on cell type (see build_instances.wgsl for mapping):
+    //   Test:       ring_frequency, ring_sharpness, ring_brightness, unused
+    //   Phagocyte:  nucleus_radius, nucleus_darkness, nucleus_sharpness, unused
+    //   Lipocyte:   droplet_scale, droplet_threshold, boundary_sharpness, brightness
+    //   Buoyocyte:  bubble_scale, rotation_speed, wall_brightness, gas_brightness
+    //   Devorocyte: spike_height, spike_sharpness(cos), spike_embed, tip_fade
+    /// First type-specific parameter (x of type_data_0)
+    pub param_a: f32,
+    /// Second type-specific parameter (y of type_data_0)
+    pub param_b: f32,
+    /// Third type-specific parameter (z of type_data_0)
+    pub param_c: f32,
+    /// Fourth type-specific parameter (w of type_data_0)
+    pub param_d: f32,
 }
 
 impl Default for CellTypeVisuals {
@@ -221,7 +237,62 @@ impl Default for CellTypeVisuals {
             cilia_ring_frequency: 5.0,
             cilia_ring_depth: 0.1,
             cilia_ring_speed: 4.0,
+            // Generic type params — defaults match old hardcoded shader values per type.
+            // Since one default covers all types, we use neutral/zero values here.
+            // Per-type defaults are set in CellTypeVisualsStore::default_for_type().
+            param_a: 0.0,
+            param_b: 0.0,
+            param_c: 0.0,
+            param_d: 0.0,
         }
+    }
+}
+
+impl CellTypeVisuals {
+    /// Return sensible defaults for a specific cell type, matching the old hardcoded shader values.
+    pub fn default_for_type(cell_type: CellType) -> Self {
+        let mut v = Self::default();
+        match cell_type {
+            CellType::Test => {
+                // ring_frequency=0 → plain sphere (matches old no-pattern default)
+                v.param_a = 0.0; // ring_frequency (0 = off)
+                v.param_b = 0.3; // ring_sharpness
+                v.param_c = 0.0; // ring_brightness (0 = off)
+                v.param_d = 0.0;
+            }
+            CellType::Phagocyte => {
+                // nucleus_radius=0.3, nucleus_darkness=0.4, nucleus_sharpness=0.05
+                v.param_a = 0.3;
+                v.param_b = 0.4;
+                v.param_c = 0.05;
+                v.param_d = 0.0;
+            }
+            CellType::Lipocyte => {
+                // droplet_scale=3.0, droplet_threshold=0.35, boundary_sharpness=0.15, brightness=1.0
+                v.param_a = 3.0;
+                v.param_b = 0.35;
+                v.param_c = 0.15;
+                v.param_d = 1.0;
+            }
+            CellType::Buoyocyte => {
+                // bubble_scale=1.0, rotation_speed=1.0, wall_brightness=1.0, gas_brightness=1.0
+                v.param_a = 1.0;
+                v.param_b = 1.0;
+                v.param_c = 1.0;
+                v.param_d = 1.0;
+            }
+            CellType::Devorocyte => {
+                // spike_height=0.75, spike_sharpness=0.985, spike_embed=0.12, tip_fade=1.0
+                v.param_a = 0.75;
+                v.param_b = 0.985;
+                v.param_c = 0.12;
+                v.param_d = 1.0;
+            }
+            _ => {
+                // All other types use goldberg_scale etc. via the existing fields — param_a/b/c/d unused
+            }
+        }
+        v
     }
 }
 
@@ -240,7 +311,7 @@ impl Default for CellTypeVisualsStore {
         Self {
             visuals: CellType::all()
                 .iter()
-                .map(|_| CellTypeVisuals::default())
+                .map(|ct| CellTypeVisuals::default_for_type(*ct))
                 .collect(),
             cell_outline_width: 0.0,
         }
@@ -273,8 +344,10 @@ impl CellTypeVisualsStore {
                     log::info!("Loaded cell type visuals from {:?}", path);
                     // Ensure we have visuals for all cell types
                     let mut visuals = store.visuals;
-                    while visuals.len() < CellType::all().len() {
-                        visuals.push(CellTypeVisuals::default());
+                    let all_types = CellType::all();
+                    while visuals.len() < all_types.len() {
+                        let ct = all_types[visuals.len()];
+                        visuals.push(CellTypeVisuals::default_for_type(ct));
                     }
                     return (visuals, store.cell_outline_width);
                 }

@@ -5277,6 +5277,26 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::Slider::new(&mut visuals.membrane_noise_speed, 0.0..=5.0).show_value(false));
                     ui.add(egui::DragValue::new(&mut visuals.membrane_noise_speed).speed(0.05).range(0.0..=5.0));
                 });
+
+                ui.label("Pattern Scale:")
+                    .on_hover_text("Scale of the underlying noise pattern driving the slime texture. Higher values create finer, more detailed noise");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.membrane_noise_scale, 0.0..=10.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.membrane_noise_scale).speed(0.1).range(0.0..=10.0));
+                });
+
+                ui.label("Pattern Strength:")
+                    .on_hover_text("How strongly the noise pattern perturbs the surface normals. Higher values create a more bumpy, textured appearance");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.membrane_noise_strength, 0.0..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.membrane_noise_strength).speed(0.01).range(0.0..=1.0));
+                });
             }
 
             // Goldberg ridge section (only for Photocyte cell type)
@@ -5342,6 +5362,470 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                     ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_strength).speed(0.005).range(0.0..=0.5));
                 });
             }
+
+            // Cilia rings section (only for Ciliocyte cell type)
+            if cell_types.get(selected_idx) == Some(&CellType::Ciliocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Cilia Rings").strong());
+                ui.add_space(4.0);
+
+                ui.label("Ring Frequency:")
+                    .on_hover_text("Number of visible cilia ring bands along the cell's forward axis. Higher values create more, tighter bands");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.cilia_ring_frequency, 2.0..=20.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.cilia_ring_frequency).speed(0.1).range(2.0..=20.0));
+                });
+
+                ui.label("Ring Depth:")
+                    .on_hover_text("How strongly the cilia rings perturb the surface normals. Higher values create deeper, more pronounced ring grooves");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.cilia_ring_depth, 0.0..=0.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.cilia_ring_depth).speed(0.005).range(0.0..=0.5));
+                });
+
+                ui.label("Scroll Speed:")
+                    .on_hover_text("Base animation scroll rate of the cilia ring pattern. Higher values create faster-beating cilia motion");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.cilia_ring_speed, 0.0..=20.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.cilia_ring_speed).speed(0.1).range(0.0..=20.0));
+                });
+            }
+
+            // Test cell: concentric rings pattern
+            if cell_types.get(selected_idx) == Some(&CellType::Test) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Concentric Rings").strong());
+                ui.add_space(4.0);
+
+                ui.label("Ring Frequency:")
+                    .on_hover_text("Number of concentric rings. 0 = plain sphere with no pattern");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_a, 0.0..=20.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.1).range(0.0..=20.0));
+                });
+
+                ui.label("Ring Sharpness:")
+                    .on_hover_text("How sharp the ring edges are. Lower values create soft, blended rings; higher values create crisp bands");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.01..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.01).range(0.01..=1.0));
+                });
+
+                ui.label("Ring Brightness:")
+                    .on_hover_text("Intensity of the ring pattern. 0 = plain sphere; higher values make rings more visible");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.0..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.01).range(0.0..=1.0));
+                });
+            }
+
+            // Phagocyte: nucleus appearance
+            if cell_types.get(selected_idx) == Some(&CellType::Phagocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Nucleus").strong());
+                ui.add_space(4.0);
+
+                ui.label("Nucleus Radius:")
+                    .on_hover_text("Size of the nucleus sphere visible through the cytoplasm");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_a, 0.1..=0.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.005).range(0.1..=0.5));
+                });
+
+                ui.label("Nucleus Darkness:")
+                    .on_hover_text("How much darker the nucleus appears compared to the surrounding cytoplasm");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.1..=0.8).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.01).range(0.1..=0.8));
+                });
+
+                ui.label("Edge Softness:")
+                    .on_hover_text("How soft the nucleus boundary is. Lower values create a sharper, more defined nucleus edge");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.01..=0.15).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.002).range(0.01..=0.15));
+                });
+            }
+
+            // Lipocyte: fat droplet appearance
+            if cell_types.get(selected_idx) == Some(&CellType::Lipocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Fat Droplets").strong());
+                ui.add_space(4.0);
+
+                ui.label("Droplet Scale:")
+                    .on_hover_text("Size of the fat droplets. Lower values create many small droplets; higher values create fewer, larger blobs");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_a, 1.0..=8.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.05).range(1.0..=8.0));
+                });
+
+                ui.label("Droplet Threshold:")
+                    .on_hover_text("Noise threshold that determines where droplets form. Lower values create more droplets; higher values create fewer");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.2..=0.6).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.005).range(0.2..=0.6));
+                });
+
+                ui.label("Boundary Sharpness:")
+                    .on_hover_text("How sharp the dark boundaries between droplets are");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.05..=0.3).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.005).range(0.05..=0.3));
+                });
+
+                ui.label("Brightness:")
+                    .on_hover_text("Overall brightness of the droplet pattern");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_d, 0.3..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_d).speed(0.01).range(0.3..=1.0));
+                });
+            }
+
+            // Buoyocyte: gas bubble appearance
+            if cell_types.get(selected_idx) == Some(&CellType::Buoyocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Gas Bubbles").strong());
+                ui.add_space(4.0);
+
+                ui.label("Bubble Size:")
+                    .on_hover_text("Scale of all gas bubbles inside the cell. Values below 1.0 create smaller bubbles; above 1.0 creates larger ones");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_a, 0.5..=2.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.01).range(0.5..=2.0));
+                });
+
+                ui.label("Rotation Speed:")
+                    .on_hover_text("How fast the bubble cluster rotates inside the cell");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.1..=2.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.01).range(0.1..=2.0));
+                });
+
+                ui.label("Membrane Brightness:")
+                    .on_hover_text("Brightness of the bubble membrane walls");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.3..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.01).range(0.3..=1.0));
+                });
+
+                ui.label("Gas Brightness:")
+                    .on_hover_text("Brightness of the gas interior inside each bubble");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_d, 0.5..=1.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_d).speed(0.01).range(0.5..=1.5));
+                });
+            }
+
+            // Devorocyte: spike appearance
+            if cell_types.get(selected_idx) == Some(&CellType::Devorocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Spikes").strong());
+                ui.add_space(4.0);
+
+                ui.label("Spike Length:")
+                    .on_hover_text("How far the spikes extend beyond the cell surface");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_a, 0.3..=1.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.01).range(0.3..=1.5));
+                });
+
+                ui.label("Spike Sharpness:")
+                    .on_hover_text("How narrow the spike cones are. Higher values create thinner, needle-like spikes; lower values create broader, stubbier ones");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.95..=0.999).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.001).range(0.95..=0.999));
+                });
+
+                ui.label("Embed Depth:")
+                    .on_hover_text("How far the spike base is embedded into the cell body. Higher values anchor spikes more deeply");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.05..=0.25).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.005).range(0.05..=0.25));
+                });
+
+                ui.label("Tip Fade:")
+                    .on_hover_text("How much the spike darkens toward its tip. 0 = uniform color; 1 = fully fades to dark at the tip");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_d, 0.0..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_d).speed(0.01).range(0.0..=1.0));
+                });
+            }
+
+            // Myocyte: muscle fiber appearance
+            if cell_types.get(selected_idx) == Some(&CellType::Myocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Muscle Fibers").strong());
+                ui.add_space(4.0);
+
+                ui.label("Fiber Count:")
+                    .on_hover_text("Number of longitudinal muscle fiber bundles visible on the cell surface. Higher values create more, finer fibers");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_scale, 4.0..=20.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_scale).speed(0.1).range(4.0..=20.0));
+                });
+
+                ui.label("Bulge Strength:")
+                    .on_hover_text("How much each fiber bundle bulges outward. Higher values create more pronounced 3D fiber ridges");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.1..=0.9).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_width).speed(0.01).range(0.1..=0.9));
+                });
+
+                ui.label("Fiber Warp:")
+                    .on_hover_text("How much the fiber lines deviate from straight meridians. Higher values create a more organic, twisted fiber appearance");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=0.3).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_meander).speed(0.005).range(0.0..=0.3));
+                });
+            }
+
+            // Embryocyte: egg yolk appearance
+            if cell_types.get(selected_idx) == Some(&CellType::Embryocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Egg Yolk").strong());
+                ui.add_space(4.0);
+
+                ui.label("Yolk Radius:")
+                    .on_hover_text("Size of the yolk sphere inside the egg. Larger values fill more of the cell interior");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_scale, 0.3..=0.7).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_scale).speed(0.01).range(0.3..=0.7));
+                });
+
+                ui.label("Yolk Drop:")
+                    .on_hover_text("How far the yolk sinks toward the bottom of the cell. Higher values create a more settled, gravity-affected yolk");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.0..=0.35).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_width).speed(0.005).range(0.0..=0.35));
+                });
+
+                ui.label("Yolk Brightness:")
+                    .on_hover_text("How bright and warm the yolk appears. Higher values create a more vivid amber glow");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_meander, 0.5..=1.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_meander).speed(0.01).range(0.5..=1.5));
+                });
+            }
+
+            // Oculocyte: eye appearance
+            if cell_types.get(selected_idx) == Some(&CellType::Oculocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Eye").strong());
+                ui.add_space(4.0);
+
+                ui.label("Pupil Size:")
+                    .on_hover_text("Radius of the dark pupil at the center of the eye. Larger values create a wider, more dilated pupil");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_scale, 0.1..=0.45).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_scale).speed(0.005).range(0.1..=0.45));
+                });
+
+                ui.label("Iris Detail:")
+                    .on_hover_text("Number of radial striations in the iris. Higher values create a more complex, detailed iris pattern");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_width, 2.0..=16.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_width).speed(0.1).range(2.0..=16.0));
+                });
+
+                ui.label("Iris Texture:")
+                    .on_hover_text("Blend between two overlapping striation patterns. Higher values create a more complex, layered iris texture");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=0.6).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_meander).speed(0.01).range(0.0..=0.6));
+                });
+
+                ui.label("Pupil Darkness:")
+                    .on_hover_text("How dark the pupil appears. Higher values create a deeper, more absorbing pupil");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.5..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_strength).speed(0.01).range(0.5..=1.0));
+                });
+            }
+
+            // Vasculocyte: vessel wall pattern
+            if cell_types.get(selected_idx) == Some(&CellType::Vasculocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Vessel Wall").strong());
+                ui.add_space(4.0);
+
+                ui.label("Cell Scale:")
+                    .on_hover_text("Scale of the endothelial cell pattern on the vessel wall surface");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_scale, 1.0..=12.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_scale).speed(0.1).range(1.0..=12.0));
+                });
+
+                ui.label("Border Width:")
+                    .on_hover_text("Width of the borders between vessel wall cells");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.01..=0.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_width).speed(0.005).range(0.01..=0.5));
+                });
+
+                ui.label("Meander:")
+                    .on_hover_text("How much the cell borders waver. Higher values create a more organic, irregular vessel wall pattern");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=0.3).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_meander).speed(0.005).range(0.0..=0.3));
+                });
+
+                ui.label("Border Depth:")
+                    .on_hover_text("How strongly the cell borders perturb the surface normals, creating a 3D cobblestone appearance");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.0..=0.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_strength).speed(0.005).range(0.0..=0.5));
+                });
+            }
+
+            // Save / Reset buttons at the bottom
+            ui.add_space(16.0);
+            ui.separator();
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button("Save").on_hover_text("Save all cell type visuals to disk").clicked() {
+                    context.editor_state.save_cell_type_visuals();
+                }
+                if ui.button("Reset Type").on_hover_text("Reset the selected cell type to its default visual settings").clicked() {
+                    let ct = cell_types[selected_idx];
+                    context.editor_state.cell_type_visuals[selected_idx] =
+                        crate::cell::types::CellTypeVisuals::default_for_type(ct);
+                }
+                if ui.button("Reset All").on_hover_text("Reset all cell types to their default visual settings").clicked() {
+                    for (i, ct) in cell_types.iter().enumerate() {
+                        if i < context.editor_state.cell_type_visuals.len() {
+                            context.editor_state.cell_type_visuals[i] =
+                                crate::cell::types::CellTypeVisuals::default_for_type(*ct);
+                        }
+                    }
+                    context.editor_state.cell_outline_width = 0.0;
+                }
+            });
         });
 }
 

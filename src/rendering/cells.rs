@@ -707,17 +707,30 @@ impl CellRenderer {
             data.data[6] = if selected_mode_indices.contains(&mode_index) { 1.0 } else { 0.0 }; // yellow outline highlight
             data.data[7] = cell_type_index as f32;
             
-            // Pack type_data[0..3]: cilia cells get ring params, all others get Goldberg ridge params
-            // (Flagellocyte tail params are already packed by its behavior module)
+            // Pack type_data[0..3]: route each type to its correct visual params.
+            // Must match the logic in build_instances.wgsl exactly.
             let cell_type = CellType::all().get(cell_type_index).copied().unwrap_or(CellType::Test);
             if cell_type == CellType::Ciliocyte {
-                // Match build_instances.wgsl: [effective_speed, ring_frequency, ring_depth, ring_speed]
+                // [effective_speed, ring_frequency, ring_depth, ring_speed]
                 let cilia_speed = mode_settings.cilia_speed;
                 data.data[0] = cilia_speed;
                 data.data[1] = visuals.cilia_ring_frequency;
                 data.data[2] = visuals.cilia_ring_depth;
                 data.data[3] = visuals.cilia_ring_speed;
-            } else if cell_type != CellType::Flagellocyte {
+            } else if cell_type == CellType::Flagellocyte {
+                // Flagellocyte tail params already packed by its behavior module — leave data[0..3] alone
+            } else if matches!(cell_type,
+                CellType::Test | CellType::Phagocyte | CellType::Lipocyte |
+                CellType::Buoyocyte | CellType::Devorocyte)
+            {
+                // Types with dedicated param_a/b/c/d slots
+                data.data[0] = visuals.param_a;
+                data.data[1] = visuals.param_b;
+                data.data[2] = visuals.param_c;
+                data.data[3] = visuals.param_d;
+            } else {
+                // All remaining types (Photocyte, Glueocyte, Oculocyte, Myocyte,
+                // Embryocyte, Vasculocyte) use goldberg fields
                 data.data[0] = visuals.goldberg_scale;
                 data.data[1] = visuals.goldberg_ridge_width;
                 data.data[2] = visuals.goldberg_meander;

@@ -992,6 +992,73 @@ impl App {
                     Align2::CENTER_CENTER, right_name.to_uppercase(), label_font, label_color,
                 );
 
+                // ── centre hex grid pattern ───────────────────────────────────
+                // Flat-top hexagons tiled across the centre column.
+                // Each hex is stroked with a faint cyan that fades to transparent
+                // at the left/right edges of the centre column.
+                {
+                    let hex_r = 22.0_f32;          // circumradius (centre → vertex)
+                    let hex_w = hex_r * 2.0;       // flat-top: width = 2r
+                    let hex_h = hex_r * 3.0_f32.sqrt(); // flat-top: height = r√3
+                    let col_step = hex_w * 0.75;   // horizontal step between column centres
+                    let row_step = hex_h;           // vertical step between row centres
+
+                    // Centre column bounds — the region between the two side panels
+                    let col_left  = rect.min.x + display_panel_w;
+                    let col_right = rect.max.x - display_panel_w;
+                    let col_cx    = (col_left + col_right) * 0.5;
+                    let col_half_w = (col_right - col_left) * 0.5;
+
+                    // Tile enough columns and rows to cover the full centre strip
+                    let cols_needed = ((col_right - col_left) / col_step).ceil() as i32 + 2;
+                    let rows_needed = (h / row_step).ceil() as i32 + 2;
+
+                    let start_col = -(cols_needed / 2) - 1;
+                    let start_row = -1;
+
+                    for col in start_col..=(cols_needed / 2 + 1) {
+                        for row in start_row..=rows_needed {
+                            // Flat-top hex grid: odd columns are offset by half a row
+                            let offset_y = if col.rem_euclid(2) == 1 { row_step * 0.5 } else { 0.0 };
+                            let hx = col_cx + col as f32 * col_step;
+                            let hy = rect.min.y + row as f32 * row_step + offset_y;
+
+                            // Skip hexes whose centre is outside the centre column
+                            if hx < col_left - hex_r || hx > col_right + hex_r {
+                                continue;
+                            }
+
+                            // Fade alpha based on horizontal distance from centre column edges.
+                            // Full opacity in the middle, fades to 0 near the side panel borders.
+                            let dist_from_edge = (col_half_w - (hx - col_cx).abs()).max(0.0);
+                            let fade_zone = col_half_w * 0.45;
+                            let edge_alpha = (dist_from_edge / fade_zone).min(1.0);
+
+                            // Also fade vertically near top/bottom of screen
+                            let dist_from_v_edge = (h * 0.5 - (hy - rect.center().y).abs()).max(0.0);
+                            let v_fade_zone = h * 0.18;
+                            let v_alpha = (dist_from_v_edge / v_fade_zone).min(1.0);
+
+                            let alpha = (edge_alpha * v_alpha * 18.0) as u8;
+                            if alpha == 0 { continue; }
+
+                            let stroke_color = Color32::from_rgba_unmultiplied(60, 200, 200, alpha);
+
+                            // Build the 6 vertices of a flat-top hexagon
+                            let verts: Vec<Pos2> = (0..6).map(|i| {
+                                // Flat-top: vertex angles are 0°, 60°, 120°, 180°, 240°, 300°
+                                let angle = std::f32::consts::PI / 3.0 * i as f32;
+                                Pos2::new(hx + hex_r * angle.cos(), hy + hex_r * angle.sin())
+                            }).collect();
+
+                            ui.painter().add(egui::Shape::closed_line(
+                                verts,
+                                Stroke::new(0.6, stroke_color),
+                            ));
+                        }
+                    }
+                }
+
                 // ── centre column ─────────────────────────────────────────────
                 let btn_w = 240.0_f32;
                 let btn_h = 44.0_f32;

@@ -471,9 +471,17 @@ fn geodesic_ridge(edge_dist: f32, ridge_width: f32) -> f32 {
 // pattern_value: 0 = pure cytoplasm, 1 = full organelle coverage
 // color_shift: how much to shift the color (positive = lighter, negative = darker)
 
-// Type 0: Test Cell — No special effects. Plain sphere.
-fn internals_test(p: vec3<f32>, r: f32) -> vec3<f32> {
-    return vec3<f32>(0.0, 0.0, 0.0);
+// Type 0: Test Cell — Concentric rings pattern, configurable.
+// type_data_0: x=ring_frequency, y=ring_sharpness, z=ring_brightness, w=unused
+fn internals_test(p: vec3<f32>, r: f32, type_data_0: vec4<f32>) -> vec3<f32> {
+    let freq      = clamp(type_data_0.x, 1.0, 20.0);
+    let sharpness = clamp(type_data_0.y, 0.01, 1.0);
+    let brightness = clamp(type_data_0.z, 0.0, 1.0);
+    if (brightness < 0.01) {
+        return vec3<f32>(0.0, 0.0, 0.0);
+    }
+    let ring = rings_pattern(p, freq, sharpness);
+    return vec3<f32>(ring * brightness * 0.5, ring * brightness * 0.2 - 0.1, 0.0);
 }
 
 // Type 10: Embryocyte — Egg-like appearance.
@@ -512,12 +520,17 @@ fn internals_flagellocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
 }
 
 // Type 2: Phagocyte — nucleus sphere visible through cytoplasm.
-fn internals_phagocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
+// type_data_0: x=nucleus_radius (0.1-0.5), y=nucleus_darkness (0.1-0.8),
+//              z=nucleus_sharpness (0.01-0.15), w=unused
+fn internals_phagocyte(p: vec3<f32>, r: f32, type_data_0: vec4<f32>) -> vec3<f32> {
+    let nuc_radius    = clamp(type_data_0.x, 0.1, 0.5);
+    let nuc_darkness  = clamp(type_data_0.y, 0.1, 0.8);
+    let nuc_sharpness = clamp(type_data_0.z, 0.01, 0.15);
     let nucleus_r = length(p);
-    let nucleus = smoothstep(0.3, 0.2, nucleus_r);
+    let nucleus = smoothstep(nuc_radius + nuc_sharpness, nuc_radius - nuc_sharpness, nucleus_r);
 
     let pattern = nucleus * 0.6;
-    let color_shift = nucleus * -0.4; // nucleus is darker
+    let color_shift = nucleus * -nuc_darkness;
 
     return vec3<f32>(pattern, color_shift, 0.0);
 }
@@ -529,20 +542,23 @@ fn internals_photocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
 
 // Type 4: Lipocyte — Oily looking internals.
 // Large blobby fat droplets with bright highlights and dark boundaries.
-fn internals_lipocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
-    // Layered smooth noise for oily, blobby look
-    let n1 = value_noise_3d(p * 3.0 + 50.0);
-    let n2 = value_noise_3d(p * 5.0 + vec3<f32>(n1 * 2.0, 0.0, 0.0) + 70.0);
+// type_data_0: x=droplet_scale (1.0-8.0), y=droplet_threshold (0.2-0.6),
+//              z=boundary_sharpness (0.05-0.3), w=brightness (0.3-1.0)
+fn internals_lipocyte(p: vec3<f32>, r: f32, type_data_0: vec4<f32>) -> vec3<f32> {
+    let droplet_scale  = clamp(type_data_0.x, 1.0, 8.0);
+    let droplet_thresh = clamp(type_data_0.y, 0.2, 0.6);
+    let boundary_sharp = clamp(type_data_0.z, 0.05, 0.3);
+    let brightness     = clamp(type_data_0.w, 0.3, 1.0);
+
+    let n1 = value_noise_3d(p * droplet_scale + 50.0);
+    let n2 = value_noise_3d(p * droplet_scale * 1.67 + vec3<f32>(n1 * 2.0, 0.0, 0.0) + 70.0);
     let oily = n1 * 0.6 + n2 * 0.4;
 
-    // Fat droplets: bright rounded blobs
-    let droplet = smoothstep(0.35, 0.6, oily);
-    // Dark boundaries between droplets
-    let boundary = 1.0 - smoothstep(0.0, 0.15, abs(oily - 0.45));
+    let droplet  = smoothstep(droplet_thresh - 0.05, droplet_thresh + 0.2, oily);
+    let boundary = 1.0 - smoothstep(0.0, boundary_sharp, abs(oily - droplet_thresh));
 
-    let pattern = max(droplet * 0.85, boundary * 0.7);
-    // Droplets are brighter (yellowish sheen), boundaries are darker
-    let color_shift = droplet * 0.5 - boundary * 0.35;
+    let pattern     = max(droplet * 0.85, boundary * 0.7) * brightness;
+    let color_shift = (droplet * 0.5 - boundary * 0.35) * brightness;
 
     return vec3<f32>(pattern, color_shift, 0.0);
 }
@@ -605,19 +621,26 @@ fn internals_glueocyte(surf: vec3<f32>, voro_scale: f32, border_width: f32, mean
 // Type 5: Buoyocyte — Gas bubbles scattered inside a hollow cell.
 // 7 bubbles of varying sizes. Since p is in rotation-aware cell-local space,
 // the bubbles rotate with the cell automatically.
+// type_data_0: x=bubble_scale (0.5-2.0), y=rotation_speed (0.1-2.0),
+//              z=wall_brightness (0.3-1.0), w=gas_brightness (0.5-1.5)
 fn gas_bubble_sdf(p: vec3<f32>, center: vec3<f32>, radius: f32) -> f32 {
     // Perfect sphere - no noise to avoid breathing effect
     return length(p - center) - radius;
 }
 
-fn internals_buoyocyte(p: vec3<f32>, r: f32, time: f32, cell_index: u32) -> vec3<f32> {
+fn internals_buoyocyte(p: vec3<f32>, r: f32, time: f32, cell_index: u32, type_data_0: vec4<f32>) -> vec3<f32> {
+    let bubble_scale    = clamp(type_data_0.x, 0.5, 2.0);
+    let rot_speed_mult  = clamp(type_data_0.y, 0.1, 2.0);
+    let wall_bright     = clamp(type_data_0.z, 0.3, 1.0);
+    let gas_bright      = clamp(type_data_0.w, 0.5, 1.5);
+
     // Pseudo-random seed from cell index
-    let seed = fract(f32(cell_index) * 12.9898);
+    let seed  = fract(f32(cell_index) * 12.9898);
     let seed2 = fract(f32(cell_index) * 78.233);
-    
+
     // Randomized rotation speed and phase per cell
-    let rotation_speed = 0.3 + seed * 0.4;  // 0.3 to 0.7 radians per second
-    let phase_offset = seed2 * 6.283;  // 0 to 2π
+    let rotation_speed = rot_speed_mult * (0.3 + seed * 0.4);
+    let phase_offset = seed2 * 6.283;
     let angle = time * rotation_speed + phase_offset;
     let cos_a = cos(angle);
     let sin_a = sin(angle);
@@ -649,14 +672,14 @@ fn internals_buoyocyte(p: vec3<f32>, r: f32, time: f32, cell_index: u32) -> vec3
     let rot5 = vec3<f32>(base5.x * cos_a - base5.z * sin_a, base5.y, base5.x * sin_a + base5.z * cos_a);
     let rot6 = vec3<f32>(base6.x * cos_a - base6.z * sin_a, base6.y, base6.x * sin_a + base6.z * cos_a);
     
-    // 7 gas bubbles at rotating positions with varying sizes
-    let d0 = gas_bubble_sdf(p, rot0, 0.30);  // large, top center
-    let d1 = gas_bubble_sdf(p, rot1, 0.22);  // medium, left
-    let d2 = gas_bubble_sdf(p, rot2, 0.20);  // medium, right-low
-    let d3 = gas_bubble_sdf(p, rot3, 0.18);  // small, bottom-front
-    let d4 = gas_bubble_sdf(p, rot4, 0.16);  // small, bottom-left-back
-    let d5 = gas_bubble_sdf(p, rot5, 0.14);  // tiny, upper-right
-    let d6 = gas_bubble_sdf(p, rot6, 0.12);  // tiny, back
+    // 7 gas bubbles at rotating positions with varying sizes, scaled by bubble_scale
+    let d0 = gas_bubble_sdf(p, rot0, 0.30 * bubble_scale);
+    let d1 = gas_bubble_sdf(p, rot1, 0.22 * bubble_scale);
+    let d2 = gas_bubble_sdf(p, rot2, 0.20 * bubble_scale);
+    let d3 = gas_bubble_sdf(p, rot3, 0.18 * bubble_scale);
+    let d4 = gas_bubble_sdf(p, rot4, 0.16 * bubble_scale);
+    let d5 = gas_bubble_sdf(p, rot5, 0.14 * bubble_scale);
+    let d6 = gas_bubble_sdf(p, rot6, 0.12 * bubble_scale);
 
     // Soft masks (negative SDF = inside) - wider soft edges for better visibility
     let b0 = 1.0 - smoothstep(-0.04, 0.02, d0);
@@ -685,13 +708,13 @@ fn internals_buoyocyte(p: vec3<f32>, r: f32, time: f32, cell_index: u32) -> vec3
     let spec = pow(max(0.0, dot(normalize(p), light_dir)), 10.0) * gas;
 
     // Compose
-    let pattern = (1.0 - gas) * 0.08   // cytoplasm between bubbles
-               + gas * 0.90            // gas interior (very bright)
-               + walls * 0.80          // bubble membranes (bright)
-               + spec * 0.3;           // specular
+    let pattern = (1.0 - gas) * 0.08
+               + gas * 0.90 * gas_bright
+               + walls * 0.80 * wall_bright
+               + spec * 0.3;
 
-    let color_shift = gas * 0.60
-                    + walls * 0.40
+    let color_shift = gas * 0.60 * gas_bright
+                    + walls * 0.40 * wall_bright
                     + spec * 0.2;
 
     return vec3<f32>(pattern, color_shift, 0.0);
@@ -728,18 +751,18 @@ fn internals_myocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
 
 fn get_internals(cell_type: u32, p: vec3<f32>, r: f32, cell_index: u32, type_data_0: vec4<f32>) -> vec3<f32> {
     switch (cell_type) {
-        case 0u: { return internals_test(p, r); }
+        case 0u: { return internals_test(p, r, type_data_0); }
         case 1u: { return internals_flagellocyte(p, r); }
-        case 2u: { return internals_phagocyte(p, r); }
+        case 2u: { return internals_phagocyte(p, r, type_data_0); }
         case 3u: { return internals_photocyte(p, r); }
-        case 4u: { return internals_lipocyte(p, r); }
-        case 5u: { return internals_buoyocyte(p, r, camera.time, cell_index); }
+        case 4u: { return internals_lipocyte(p, r, type_data_0); }
+        case 5u: { return internals_buoyocyte(p, r, camera.time, cell_index, type_data_0); }
         case 6u: { return vec3<f32>(0.0); } // handled inline in fs_main using surface dir
         case 7u: { return vec3<f32>(0.0); } // Oculocyte: handled inline in fs_main using surface dir
         case 8u: { return vec3<f32>(0.0); } // Ciliocyte: handled inline in fs_main
         case 9u: { return internals_myocyte(p, r); } // Peripheral nuclei; surface pattern handled inline
         case 10u: { return internals_embryocyte(p, r, type_data_0); }
-        default: { return internals_test(p, r); }
+        default: { return internals_test(p, r, type_data_0); }
     }
 }
 
@@ -1283,15 +1306,16 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     }
 
     // ====================================================================
-    // Devorocyte (type 11): Cone spike rendering — runs for ALL pixels, not just r2>1.
-    //
-    // Spikes pointing toward the camera project inside the sphere billboard (r2<=1).
-    // We must test spikes for every Devorocyte pixel and let the spike win when it
-    // hits closer to the camera than the sphere front surface.
-    //
-    // Ray-cone: tip (apex) at spike_dir*(1+spike_height), axis = -spike_dir (inward).
+    // Devorocyte (type 11): Cone spike rendering
+    // type_data_0: x=spike_height (0.3-1.5), y=spike_sharpness (0.95-0.999),
+    //              z=spike_embed (0.05-0.25), w=tip_fade (0.0-1.0)
     // ====================================================================
     if (cell_type == 11u) {
+        let spike_height  = clamp(in.type_data_0.x, 0.3, 1.5);
+        let cone_half_cos = clamp(in.type_data_0.y, 0.95, 0.999);
+        let spike_embed   = clamp(in.type_data_0.z, 0.05, 0.25);
+        let tip_fade_str  = clamp(in.type_data_0.w, 0.0, 1.0);
+
         let pixel_world   = in.center
                           + in.cam_right * local_pos.x * in.radius
                           + in.cam_up    * local_pos.y * in.radius;
@@ -1335,10 +1359,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
             normalize(vec3<f32>(-0.588, -1.000,  0.000))
         );
 
-        let spike_height   = 0.75;
-        let spike_embed    = 0.12;
         let spike_total    = spike_height + spike_embed;
-        let cone_half_cos  = 0.985;
         let cone_half_cos2 = cone_half_cos * cone_half_cos;
 
         var best_t    = 1e9;
@@ -1398,7 +1419,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
             let spike_spec  = pow(max(dot(spike_world_normal, spike_half), 0.0), 40.0) * 0.8;
 
             let tip_fade    = clamp((length(hit_local) - 1.0) / spike_height, 0.0, 1.0);
-            let spike_color = base_color * (0.8 - tip_fade * 0.4)
+            let spike_color = base_color * (0.8 - tip_fade * tip_fade_str * 0.5)
                             * (0.2 + 0.8 * spike_ndotl)
                             + vec3<f32>(spike_spec);
 
