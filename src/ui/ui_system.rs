@@ -944,7 +944,6 @@ impl UiSystem {
         let sim_time = scene_manager.active_scene().current_time();
         let is_paused = scene_manager.active_scene().is_paused();
         let mem_used_gb = performance.memory_used() as f64 / (1024.0 * 1024.0 * 1024.0);
-        let mem_total_gb = performance.memory_total() as f64 / (1024.0 * 1024.0 * 1024.0);
         let fps = performance.fps();
         let cpu_usage = performance.cpu_usage_total();
 
@@ -1066,20 +1065,15 @@ impl UiSystem {
 
                     status_separator(ui);
 
-                    // System memory
-                    let mem_str = if mem_total_gb >= 1.0 {
-                        format!("{:.1} / {:.0} GB", mem_used_gb, mem_total_gb)
+                    // Process memory (RSS)
+                    let mem_str = if mem_used_gb >= 1.0 {
+                        format!("{:.1} GB", mem_used_gb)
                     } else {
                         format!("{:.0} MB", mem_used_gb * 1024.0)
                     };
-                    let mem_pct = if mem_total_gb > 0.0 {
-                        (mem_used_gb / mem_total_gb) as f32
-                    } else {
-                        0.0
-                    };
-                    let mem_color = if mem_pct > 0.9 {
+                    let mem_color = if mem_used_gb >= 3.5 {
                         p.status_err
-                    } else if mem_pct > 0.7 {
+                    } else if mem_used_gb >= 2.0 {
                         p.status_warn
                     } else {
                         p.status_info
@@ -1096,7 +1090,9 @@ impl UiSystem {
                             egui::Sense::hover(),
                         );
                         ui.painter().rect_filled(bar_rect, 1.0, p.bg_darkest);
-                        let fill_w = mem_pct.clamp(0.0, 1.0) * bar_rect.width();
+                        // Bar scaled to 4 GB reference
+                        let mem_pct = (mem_used_gb / 4.0).clamp(0.0, 1.0) as f32;
+                        let fill_w = mem_pct * bar_rect.width();
                         let fill_rect = egui::Rect::from_min_size(
                             bar_rect.min,
                             egui::vec2(fill_w, bar_rect.height()),

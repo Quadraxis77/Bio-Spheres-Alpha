@@ -801,26 +801,22 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
     section_header(ui, "MEMORY");
     
     let mem_used_mb = perf.memory_used() as f64 / (1024.0 * 1024.0);
-    let mem_total_mb = perf.memory_total() as f64 / (1024.0 * 1024.0);
     let mem_used_gb = mem_used_mb / 1024.0;
-    let mem_total_gb = mem_total_mb / 1024.0;
-    let usage_percent = perf.memory_usage_percent();
     
     egui::Grid::new("mem_grid")
         .num_columns(2)
         .spacing([8.0, 2.0])
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("Used").size(11.0).color(palette().text_secondary));
+            ui.label(egui::RichText::new("Process RSS").size(11.0).color(palette().text_secondary));
             let used_str = if mem_used_gb >= 1.0 { format!("{:.2} GB", mem_used_gb) } else { format!("{:.0} MB", mem_used_mb) };
             ui.label(egui::RichText::new(used_str).size(11.0).color(palette().text_primary));
             ui.end_row();
-            ui.label(egui::RichText::new("Total").size(11.0).color(palette().text_secondary));
-            ui.label(egui::RichText::new(format!("{:.1} GB", mem_total_gb)).size(11.0).color(palette().text_dim));
-            ui.end_row();
         });
     
-    // Memory bar
+    // Memory bar — scaled to a fixed reference (4 GB) so the bar is meaningful
     ui.add_space(3.0);
+    let reference_gb = 4.0_f64;
+    let usage_percent = ((mem_used_gb / reference_gb) * 100.0).min(100.0) as f32;
     let bar_height = 10.0;
     let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), bar_height), egui::Sense::hover());
     let rect = response.rect;
@@ -830,7 +826,7 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
     let usage_rect = egui::Rect::from_min_size(rect.min, egui::vec2(usage_width, bar_height));
     let mem_color = if usage_percent > 90.0 { palette().status_err } else if usage_percent > 70.0 { palette().status_warn } else { palette().status_info };
     painter.rect_filled(usage_rect, 2.0, mem_color);
-    painter.text(rect.center(), egui::Align2::CENTER_CENTER, format!("{:.1}%", usage_percent), egui::FontId::proportional(9.0), egui::Color32::WHITE);
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, format!("{:.0} MB", mem_used_mb), egui::FontId::proportional(9.0), egui::Color32::WHITE);
 }
 
 /// Render the RenderingControls panel (placeholder).

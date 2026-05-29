@@ -4,7 +4,7 @@
 //! performance monitor panel. Also detects and logs performance spikes.
 
 use std::collections::VecDeque;
-use sysinfo::System;
+use sysinfo::{Pid, System};
 
 /// Number of frame time samples to keep for averaging.
 const FRAME_TIME_SAMPLES: usize = 120;
@@ -76,7 +76,6 @@ impl PerformanceMetrics {
         system.refresh_memory();
         
         let cpu_core_count = system.cpus().len();
-        let memory_total = system.total_memory();
         
         Self {
             frame_times: VecDeque::with_capacity(FRAME_TIME_SAMPLES),
@@ -87,7 +86,7 @@ impl PerformanceMetrics {
             cpu_usage_per_core: vec![0.0; cpu_core_count],
             cpu_usage_total: 0.0,
             memory_used: 0,
-            memory_total,
+            memory_total: 0,
             culling_stats: (0, 0, 0, 0),
             frame_count: 0,
             spike_detector: PerformanceSpikeDetector::new(),
@@ -148,8 +147,13 @@ impl PerformanceMetrics {
             self.cpu_usage_total = total / cpus.len() as f32;
         }
         
-        // Update memory usage
-        self.memory_used = self.system.used_memory();
+        // Update memory usage — read this process's resident memory, not total system usage
+        let pid = Pid::from(std::process::id() as usize);
+        self.system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+        if let Some(process) = self.system.process(pid) {
+            self.memory_used = process.memory();
+            self.memory_total = process.virtual_memory();
+        }
     }
     
     /// Get current FPS (frames per second).
