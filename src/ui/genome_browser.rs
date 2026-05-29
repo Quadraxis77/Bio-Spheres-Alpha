@@ -192,6 +192,12 @@ pub struct GenomeBrowserState {
     pub sort_mode: BrowserSort,
     /// Active tag filter — empty string means no tag filter.
     pub tag_filter: String,
+    /// Paths queued for incremental loading (one per frame).
+    pending_load: std::collections::VecDeque<PathBuf>,
+    /// True while incremental loading is in progress.
+    pub is_loading: bool,
+    /// Whether to show the "New Genome" confirmation dialog.
+    pub confirm_new: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,8 +208,6 @@ pub enum BrowserSort {
     NameDesc,
     /// Most recently modified first.
     Recent,
-    /// Most modes first (most complex).
-    Complexity,
 }
 
 impl Default for BrowserSort {
@@ -215,7 +219,9 @@ impl Default for GenomeBrowserState {
         Self { open: false, entries: Vec::new(), selected: None, search: String::new(),
                needs_refresh: true, force_full_reload: false, confirm_delete: false,
                status_msg: None, status_timer: 0.0,
-               sort_mode: BrowserSort::NameAsc, tag_filter: String::new() }
+               sort_mode: BrowserSort::NameAsc, tag_filter: String::new(),
+               pending_load: std::collections::VecDeque::new(), is_loading: false,
+               confirm_new: false }
     }
 }
 
@@ -225,7 +231,9 @@ impl Clone for GenomeBrowserState {
                search: self.search.clone(), needs_refresh: true, force_full_reload: false,
                confirm_delete: false,
                status_msg: self.status_msg.clone(), status_timer: self.status_timer,
-               sort_mode: self.sort_mode.clone(), tag_filter: self.tag_filter.clone() }
+               sort_mode: self.sort_mode.clone(), tag_filter: self.tag_filter.clone(),
+               pending_load: std::collections::VecDeque::new(), is_loading: false,
+               confirm_new: false }
     }
 }
 
@@ -242,47 +250,32 @@ impl PartialEq for GenomeBrowserState {
 impl GenomeBrowserState {
     pub fn open_load(&mut self) {
         self.open = true;
-        self.needs_refresh = true;
+        self.needs_refresh = true; // always refresh on open so GIFs are current
         self.selected = None;
         self.search.clear();
         self.tag_filter.clear();
     }
 
-    pub fn refresh(&mut self, ctx: &egui::Context) {
+    pub fn refresh(&mut self, _ctx: &egui::Context) {
         self.needs_refresh = false;
         let paths = crate::genome::Genome::list_genomes_dir();
+        // Clear existing entries and queue all paths for incremental loading.
+        self.entries.clear();
+        self.pending_load = paths.into_iter().collect();
+        self.is_loading = !self.pending_load.is_empty();
+    }
 
-        // Fast path: same file list and no forced reload — only check for new GIF sidecars.
-        let same = self.entries.len() == paths.len()
-            && self.entries.iter().zip(paths.iter()).all(|(e, p)| e.path == *p);
-
-        if same && !self.entries.is_empty() && !self.force_full_reload {
-            for entry in self.entries.iter_mut() {
-                if entry.thumbnail.is_none() {
-                    let gp = entry.path.with_extension("gif");
-                    if gp.exists() { entry.thumbnail = GenomeThumbnail::load(ctx, &gp); }
-                }
-            }
-            return;
-        }
-
-        self.force_full_reload = false;
-
-        // Full reload — reload all GIFs too (handles updated sidecars after save).
-        let mut existing: std::collections::HashMap<PathBuf, GenomeEntry> =
-            self.entries.drain(..).map(|e| (e.path.clone(), e)).collect();
-
-        self.entries = paths.into_iter().map(|p| {
-            // Always reload the GIF on a full reload so updated thumbnails appear.
-            let mut e = existing.remove(&p).unwrap_or_else(|| GenomeEntry::load(ctx, p.clone()));
-            let gp = p.with_extension("gif");
+    /// Load one pending entry per call. Call once per frame while `is_loading` is true.
+    pub fn tick_load(&mut self, ctx: &egui::Context) {
+        if let Some(path) = self.pending_load.pop_front() {
+            let mut entry = GenomeEntry::load(ctx, path.clone());
+            let gp = path.with_extension("gif");
             if gp.exists() {
-                e.thumbnail = GenomeThumbnail::load(ctx, &gp);
-            } else {
-                e.thumbnail = None;
+                entry.thumbnail = GenomeThumbnail::load(ctx, &gp);
             }
-            e
-        }).collect();
+            self.entries.push(entry);
+        }
+        self.is_loading = !self.pending_load.is_empty();
     }
 
     pub fn set_status(&mut self, msg: impl Into<String>, is_error: bool) {
@@ -310,6 +303,7 @@ pub fn render_genome_browser(
     if !state.open { return None; }
     state.tick(dt);
     if state.needs_refresh { state.refresh(ctx); }
+    if state.is_loading { state.tick_load(ctx); ctx.request_repaint(); }
 
     let p = palette();
     let mut result: Option<PathBuf> = None;
@@ -347,7 +341,12 @@ pub fn render_genome_browser(
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("GENOME BROWSER").size(15.0).strong().color(p.text_primary));
                         ui.add_space(6.0);
-                        ui.label(egui::RichText::new(format!("— {} genomes", state.entries.len())).size(11.0).color(p.text_dim));
+                        let count_label = if state.is_loading {
+                            format!("— loading… ({}/{})", state.entries.len(), state.entries.len() + state.pending_load.len())
+                        } else {
+                            format!("— {} genomes", state.entries.len())
+                        };
+                        ui.label(egui::RichText::new(count_label).size(11.0).color(p.text_dim));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.add(egui::Button::new(egui::RichText::new("✕").size(13.0).color(p.text_secondary))
                                 .fill(Color32::TRANSPARENT).stroke(egui::Stroke::NONE)
@@ -394,10 +393,9 @@ pub fn render_genome_browser(
 
                         // Sort buttons
                         let sorts: &[(&str, BrowserSort, &str)] = &[
-                            ("A→Z",      BrowserSort::NameAsc,    "Sort alphabetically A to Z"),
-                            ("Z→A",      BrowserSort::NameDesc,   "Sort alphabetically Z to A"),
-                            ("Recent",   BrowserSort::Recent,     "Sort by most recently saved"),
-                            ("Complex",  BrowserSort::Complexity, "Sort by number of modes (most complex first)"),
+                            ("A→Z",    BrowserSort::NameAsc,  "Sort alphabetically A to Z"),
+                            ("Z→A",    BrowserSort::NameDesc, "Sort alphabetically Z to A"),
+                            ("Recent", BrowserSort::Recent,   "Sort by most recently saved"),
                         ];
                         for (label, mode, tip) in sorts {
                             let active = &state.sort_mode == mode;
@@ -415,15 +413,19 @@ pub fn render_genome_browser(
                         ui.add(egui::Separator::default().vertical().spacing(4.0));
 
                         // Collect unique diet tags across all entries for quick-filter chips
+                        // Exclude tags that aren't useful as standalone filters.
+                        const EXCLUDED_TAGS: &[&str] = &["mixotroph", "herbivore"];
                         let diet_tags: Vec<String> = {
                             let mut seen = std::collections::HashSet::new();
                             state.entries.iter()
                                 .filter_map(|e| e.stats.tags.first())
                                 .map(|(label, _)| {
-                                    // Strip emoji prefix to get the word part
                                     label.trim_start_matches(|c: char| !c.is_alphabetic()).trim().to_string()
                                 })
-                                .filter(|t| seen.insert(t.clone()))
+                                .filter(|t| {
+                                    let lower = t.to_lowercase();
+                                    !EXCLUDED_TAGS.contains(&lower.as_str()) && seen.insert(t.clone())
+                                })
                                 .collect()
                         };
 
@@ -487,7 +489,6 @@ pub fn render_genome_browser(
                 BrowserSort::NameAsc  => vis.sort_by(|&a, &b| state.entries[a].name.to_lowercase().cmp(&state.entries[b].name.to_lowercase())),
                 BrowserSort::NameDesc => vis.sort_by(|&a, &b| state.entries[b].name.to_lowercase().cmp(&state.entries[a].name.to_lowercase())),
                 BrowserSort::Recent   => vis.sort_by(|&a, &b| state.entries[b].modified_secs.cmp(&state.entries[a].modified_secs)),
-                BrowserSort::Complexity => vis.sort_by(|&a, &b| state.entries[b].stats.mode_count.cmp(&state.entries[a].stats.mode_count)),
             }
 
             let strip_h = 52.0;

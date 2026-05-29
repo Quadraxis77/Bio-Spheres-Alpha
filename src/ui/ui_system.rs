@@ -82,12 +82,14 @@ pub struct ActivePalette {
     pub border_bright:   egui::Color32,
     pub topbar_bg:       egui::Color32,
     pub topbar_border:   egui::Color32,
-    // Status indicator colors — adjusted per theme so they're readable
-    // on both light and dark backgrounds.
-    pub status_ok:       egui::Color32, // green — running / good
-    pub status_warn:     egui::Color32, // yellow/amber — warning / paused
-    pub status_err:      egui::Color32, // red — error / critical
-    pub status_info:     egui::Color32, // blue — info / memory
+    pub status_ok:       egui::Color32,
+    pub status_warn:     egui::Color32,
+    pub status_err:      egui::Color32,
+    pub status_info:     egui::Color32,
+    /// Icon color for inactive rail buttons — always readable against the dark rail bg.
+    pub rail_icon:       egui::Color32,
+    /// Icon color for active/toggled rail buttons (drawn on accent_primary bg).
+    pub rail_icon_active: egui::Color32,
 }
 
 impl Default for ActivePalette {
@@ -114,6 +116,8 @@ impl Default for ActivePalette {
             status_warn:      egui::Color32::from_rgb(220, 180,  50),
             status_err:       egui::Color32::from_rgb(220,  70,  70),
             status_info:      egui::Color32::from_rgb(60,  140, 220),
+            rail_icon:        egui::Color32::from_rgb(160, 185, 220),
+            rail_icon_active: egui::Color32::WHITE,
         }
     }
 }
@@ -734,6 +738,19 @@ impl UiSystem {
                 status_warn:      status_warn,
                 status_err:       status_err,
                 status_info:      status_info,
+                // Rail icon: always bright against the dark rail background.
+                // Use the accent color tinted toward white for inactive icons,
+                // and pure white for active (drawn on accent bg).
+                rail_icon: {
+                    // Blend accent_primary toward white at 60% for a bright but themed icon color.
+                    let a = accent_primary;
+                    egui::Color32::from_rgb(
+                        ((a.r() as u16 * 60 + 255 * 40) / 100) as u8,
+                        ((a.g() as u16 * 60 + 255 * 40) / 100) as u8,
+                        ((a.b() as u16 * 60 + 255 * 40) / 100) as u8,
+                    )
+                },
+                rail_icon_active: egui::Color32::WHITE,
             };
         });
     }
@@ -808,7 +825,7 @@ impl UiSystem {
         let mut pending_toasts: Vec<crate::ui::toast::Toast> = Vec::new();
         let mut pending_browser_open_load = false;
         let mut pending_browser_refresh = false;
-        let mut pending_gif_capture = false;
+        let mut pending_gif_capture: Option<std::path::PathBuf> = None;
 
         // Tab key toggles UI visibility in GPU mode
         if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu {
@@ -964,7 +981,7 @@ impl UiSystem {
                                                 format!("✓ Saved — {}.genome", name)
                                             ));
                                             pending_browser_refresh = true;
-                                            pending_gif_capture = true;
+                                            pending_gif_capture = Some(path.clone());
                                         }
                                         Err(e) => {
                                             pending_toasts.push(crate::ui::toast::Toast::error(
@@ -978,13 +995,7 @@ impl UiSystem {
                                 pending_browser_open_load = true;
                             }
                             if ui.add(btn("✦ New")).on_hover_text("Create a new blank genome").clicked() {
-                                *genome = crate::genome::Genome::new_with_random_colors();
-                                editor_state.selected_mode_index = 0;
-                                editor_state.selected_mode_indices = vec![0];
-                                editor_state.genome_just_loaded = true;
-                                pending_toasts.push(crate::ui::toast::Toast::info(
-                                    "New genome created".to_string()
-                                ));
+                                editor_state.confirm_new_genome = true;
                             }
 
                             ui.add_space(6.0); topbar_divider(ui); ui.add_space(6.0);
@@ -1221,15 +1232,16 @@ impl UiSystem {
             self.genome_browser.needs_refresh = true;
             self.genome_browser.force_full_reload = true;
         }
-        if pending_gif_capture && editor_state.gif_capture.is_none() {
-            editor_state.request_gif_capture = true;
-            // Show feedback immediately — the pre-scan in begin() takes a moment
-            // and without this the player sees nothing happen after saving.
-            crate::ui::toast::upsert_progress_toast(
-                &mut self.toasts,
-                "Preparing GIF…",
-                0.0,
-            );
+        if let Some(ref save_path) = pending_gif_capture {
+            if editor_state.gif_capture.is_none() {
+                editor_state.request_gif_capture = true;
+                editor_state.gif_capture_save_path = Some(save_path.clone());
+                crate::ui::toast::upsert_progress_toast(
+                    &mut self.toasts,
+                    "Preparing GIF…",
+                    0.0,
+                );
+            }
         }
 
         // Side rail always renders — it contains the hide_ui toggle itself,
@@ -1562,6 +1574,10 @@ impl UiSystem {
                             self.genome_browser.force_full_reload = true;
                             if editor_state.gif_capture.is_none() {
                                 editor_state.request_gif_capture = true;
+                                editor_state.gif_capture_save_path = Some(path.clone());
+                                crate::ui::toast::upsert_progress_toast(
+                                    &mut self.toasts, "Preparing GIF…", 0.0,
+                                );
                             }
                         }
                         Err(e) => {
@@ -1585,6 +1601,61 @@ impl UiSystem {
                 editor_state,
                 dt_for_browser,
             );
+        }
+
+        // ── New Genome confirmation dialog ────────────────────────────────────
+        if editor_state.confirm_new_genome {
+            let p = palette();
+            let mut do_new = false;
+            let mut cancel_new = false;
+
+            let win_frame = egui::Frame::new()
+                .fill(p.bg_darkest)
+                .stroke(egui::Stroke::new(1.5, p.accent_primary))
+                .corner_radius(egui::CornerRadius::same(6))
+                .inner_margin(egui::Margin::same(20));
+
+            egui::Window::new("confirm_new_genome")
+                .frame(win_frame)
+                .title_bar(false)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(&self.ctx, |ui| {
+                    ui.set_min_width(300.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(egui::RichText::new("New Genome").size(14.0).strong().color(p.text_primary));
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new("Unsaved changes will be lost.")
+                            .size(12.0).color(p.text_primary));
+                        ui.label(egui::RichText::new("Create a new blank genome?")
+                            .size(11.0).color(p.text_dim));
+                        ui.add_space(14.0);
+                        ui.horizontal(|ui| {
+                            if ui.add(egui::Button::new(egui::RichText::new("Cancel").size(12.0).color(p.text_secondary))
+                                .fill(p.bg_widget).stroke(egui::Stroke::new(1.0, p.border_normal))
+                                .min_size(egui::Vec2::new(90.0, 28.0)).corner_radius(egui::CornerRadius::same(4))).clicked() {
+                                cancel_new = true;
+                            }
+                            ui.add_space(8.0);
+                            if ui.add(egui::Button::new(egui::RichText::new("✦ New Genome").size(12.0).strong().color(p.bg_darkest))
+                                .fill(p.accent_primary).stroke(egui::Stroke::new(1.0, p.accent_primary))
+                                .min_size(egui::Vec2::new(110.0, 28.0)).corner_radius(egui::CornerRadius::same(4))).clicked() {
+                                do_new = true;
+                            }
+                        });
+                    });
+                });
+
+            if do_new {
+                *genome = crate::genome::Genome::new_with_random_colors();
+                editor_state.selected_mode_index = 0;
+                editor_state.selected_mode_indices = vec![0];
+                editor_state.genome_just_loaded = true;
+                editor_state.confirm_new_genome = false;
+                self.toasts.push(crate::ui::toast::Toast::info("New genome created".to_string()));
+            }
+            if cancel_new { editor_state.confirm_new_genome = false; }
         }
 
         // ── Name dialog (shown when saving with an empty name) ────────────────
@@ -1725,6 +1796,7 @@ impl UiSystem {
                                 &mut self.toasts, "Preparing GIF…", 0.0,
                             );
                             editor_state.request_gif_capture = true;
+                            editor_state.gif_capture_save_path = Some(path.clone());
                         }
                     }
                     Err(e) => {
@@ -2680,7 +2752,7 @@ fn rail_button(ui: &mut egui::Ui, icon: &str, tooltip: &str, p: &ActivePalette) 
         egui::Align2::CENTER_CENTER,
         icon,
         egui::FontId::proportional(15.0),
-        p.text_secondary,
+        p.rail_icon,
     );
 
     resp.clicked()
@@ -2696,7 +2768,7 @@ fn rail_button_toggle(ui: &mut egui::Ui, icon: &str, tooltip: &str, active: bool
     let painter = ui.painter();
     let bg_color = if active { p.accent_primary } else { p.bg_widget };
     let border_color = if active { p.accent_primary } else { p.border_subtle };
-    let text_color = if active { egui::Color32::WHITE } else { p.text_secondary };
+    let text_color = if active { p.rail_icon_active } else { p.rail_icon };
 
     painter.rect_filled(rect, egui::CornerRadius::same(3), bg_color);
     painter.rect_stroke(

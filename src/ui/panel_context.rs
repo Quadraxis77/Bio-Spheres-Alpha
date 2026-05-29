@@ -491,6 +491,8 @@ pub struct GenomeEditorState {
     /// Request to capture a GIF thumbnail of the current genome.
     /// Processed in app.rs after the frame is presented.
     pub request_gif_capture: bool,
+    /// The path the genome was just saved to — used to name the GIF correctly.
+    pub gif_capture_save_path: Option<std::path::PathBuf>,
 
     /// Request to open the genome browser in save mode.
     pub open_genome_browser_save: bool,
@@ -512,6 +514,8 @@ pub struct GenomeEditorState {
     /// Multi-frame GIF capture state. None = idle.
     pub gif_capture: Option<crate::gif_capture::GifCaptureState>,
 
+    /// Whether to show the "New Genome" confirmation dialog.
+    pub confirm_new_genome: bool,
     /// Whether the name field in the top bar should flash red (empty name on save attempt).
     pub name_field_error: bool,
     /// Timer for the name field error flash.
@@ -779,6 +783,7 @@ impl GenomeEditorState {
             request_toggle_fog: false,
             request_screenshot: false,
             request_gif_capture: false,
+            gif_capture_save_path: None,
             open_genome_browser_save: false,
             open_genome_browser_load: false,
             genome_just_loaded: false,
@@ -787,6 +792,7 @@ impl GenomeEditorState {
             gif_capture: None,
             name_field_error: false,
             name_field_error_timer: 0.0,
+            confirm_new_genome: false,
             show_name_dialog: false,
             name_dialog_buffer: String::new(),
             name_dialog_seed: 0,

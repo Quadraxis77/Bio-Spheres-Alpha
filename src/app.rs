@@ -92,7 +92,10 @@ enum DeferredAction {
         unpadded_bytes_per_row: u32,
         format: wgpu::TextureFormat,
     },
-    CaptureGif,
+    /// Capture a GIF thumbnail. The `save_path` is the `.genome` file path so
+    /// the GIF is saved alongside it with the correct name, regardless of what
+    /// `genome.name` contains at capture time.
+    CaptureGif { save_path: std::path::PathBuf },
 }
 
 pub struct App {
@@ -2189,7 +2192,13 @@ impl App {
         if self.editor_state.request_gif_capture {
             self.editor_state.request_gif_capture = false;
             if self.deferred_action.is_none() {
-                self.deferred_action = Some(DeferredAction::CaptureGif);
+                let save_path = self.editor_state.gif_capture_save_path.take()
+                    .unwrap_or_else(|| {
+                        // Fallback: derive from working genome name
+                        crate::app_dirs::genomes_dir()
+                            .join(format!("{}.genome", crate::app_dirs::sanitize_filename(&self.working_genome.name)))
+                    });
+                self.deferred_action = Some(DeferredAction::CaptureGif { save_path });
             }
         }
 
@@ -2304,7 +2313,7 @@ impl App {
                         None => log::error!("Screenshot: failed to construct image from pixel data"),
                     }
                 }
-                DeferredAction::CaptureGif => {
+                DeferredAction::CaptureGif { save_path } => {
                     // Start the incremental GIF capture state machine.
                     let (genome, cam_rotation, cam_distance, cam_center) = if let Some(preview) = self.scene_manager.get_preview_scene() {
                         (
@@ -2335,7 +2344,10 @@ impl App {
                         cam_center,
                         Some(&cell_type_visuals),
                     ) {
-                        Ok(state) => {
+                        Ok(mut state) => {
+                            // Override the output path with the exact save path so the
+                            // GIF is always named to match the .genome file.
+                            state.output_path = save_path.with_extension("gif");
                             self.editor_state.gif_capture = Some(state);
                         }
                         Err(e) => {
