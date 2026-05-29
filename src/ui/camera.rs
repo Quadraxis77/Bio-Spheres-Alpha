@@ -258,6 +258,11 @@ impl CameraController {
             }
         }
     }
+
+    /// Returns true if the camera is currently rotating (right-mouse held).
+    pub fn is_dragging(&self) -> bool {
+        self.is_dragging
+    }
     
     /// Handle mouse movement
     pub fn handle_mouse_move(&mut self, position: PhysicalPosition<f64>) {

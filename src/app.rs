@@ -562,6 +562,30 @@ impl App {
                 if !self.ui.wants_pointer_input() && self.editor_state.radial_menu.dragging_cell.is_none() {
                     self.scene_manager.active_scene_mut().camera_mut().handle_mouse_button(*button, *state);
                 }
+
+                // Cursor hide/show and warp on right-click camera rotation.
+                // Always handled regardless of egui state so release is never missed.
+                if *button == MouseButton::Right {
+                    if *state == ElementState::Pressed {
+                        let _ = self.window.set_cursor_visible(false);
+                    } else {
+                        let _ = self.window.set_cursor_visible(true);
+                        // Warp cursor back to window centre so the next drag starts cleanly.
+                        let size = self.window.inner_size();
+                        let centre = winit::dpi::PhysicalPosition::new(
+                            size.width as f64 / 2.0,
+                            size.height as f64 / 2.0,
+                        );
+                        let _ = self.window.set_cursor_position(centre);
+                    }
+                }
+
+                // Always release the camera drag on mouse-up, even if egui now owns the
+                // pointer (e.g. cursor drifted over a panel mid-drag). Without this the
+                // camera stays in is_dragging=true until the user clicks inside the viewport.
+                if *state == ElementState::Released {
+                    self.scene_manager.active_scene_mut().camera_mut().handle_mouse_button(*button, *state);
+                }
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.keyboard_modifiers = *modifiers;
@@ -653,8 +677,13 @@ impl App {
                 }
                 
                 // Only pass to camera if egui doesn't want the input and not dragging
+                let camera = self.scene_manager.active_scene_mut().camera_mut();
                 if !self.ui.wants_pointer_input() && self.editor_state.radial_menu.dragging_cell.is_none() {
-                    self.scene_manager.active_scene_mut().camera_mut().handle_mouse_move(*position);
+                    camera.handle_mouse_move(*position);
+                } else if camera.is_dragging() {
+                    // Camera is mid-drag but cursor drifted over a panel — keep feeding
+                    // move events so the orbit doesn't freeze until re-entering the viewport.
+                    camera.handle_mouse_move(*position);
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -733,6 +762,10 @@ impl App {
                             &mut self.ui.renderer,
                         ));
                         self.app_phase = AppPhase::MainMenu;
+                        // Restore cursor — tools and right-drag don't apply on the main menu.
+                        self.window.set_cursor_visible(true);
+                        self.editor_state.radial_menu.active_tool = crate::ui::radial_menu::RadialTool::None;
+                        self.editor_state.radial_menu.visible = false;
                         self.window.request_redraw();
                         return true;
                     }
@@ -1205,6 +1238,23 @@ impl App {
             );
         }
         self.scene_manager.active_scene_mut().camera_mut().update(dt);
+
+        // ── Per-frame cursor visibility ───────────────────────────────────────
+        // In GPU mode with a tool active: hide the cursor over the viewport so
+        // the tool crosshair is unobstructed, but restore it when the cursor
+        // drifts over a UI panel so panels remain fully interactive.
+        // Right-click camera drag overrides this (handled in handle_event).
+        if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu
+            && !self.scene_manager.active_scene_mut().camera_mut().is_dragging()
+        {
+            let tool_active = self.editor_state.radial_menu.active_tool
+                != crate::ui::radial_menu::RadialTool::None;
+            let menu_open = self.editor_state.radial_menu.visible;
+            let over_panel = self.ui.wants_pointer_input();
+
+            let show = !tool_active || menu_open || over_panel;
+            self.window.set_cursor_visible(show);
+        }
 
         // Push the camera out of cave walls using the same SDF the cells use.
         // Only applies in GPU scene mode when a cave is active.

@@ -90,6 +90,8 @@ pub struct ActivePalette {
     pub rail_icon:       egui::Color32,
     /// Icon color for active/toggled rail buttons (drawn on accent_primary bg).
     pub rail_icon_active: egui::Color32,
+    /// The active theme variant — available to any rendering code that needs per-theme logic.
+    pub theme: crate::ui::types::UiTheme,
 }
 
 impl Default for ActivePalette {
@@ -118,6 +120,7 @@ impl Default for ActivePalette {
             status_info:      egui::Color32::from_rgb(60,  140, 220),
             rail_icon:        egui::Color32::from_rgb(160, 185, 220),
             rail_icon_active: egui::Color32::WHITE,
+            theme:            crate::ui::types::UiTheme::BiotechDark,
         }
     }
 }
@@ -287,6 +290,11 @@ impl UiSystem {
     /// Returns `true` if the mouse is over an egui UI element (excluding the viewport)
     /// or if egui is actively using the pointer (e.g., dragging a slider).
     pub fn wants_pointer_input(&self) -> bool {
+        // When UI is hidden, all pointer input passes straight to the scene.
+        if self.state.hide_ui {
+            return false;
+        }
+
         // Check if pointer is over viewport - if so, camera should get input
         if let Some(viewport) = self.viewport_rect {
             if let Some(pos) = self.ctx.pointer_hover_pos() {
@@ -750,7 +758,21 @@ impl UiSystem {
                         ((a.b() as u16 * 60 + 255 * 40) / 100) as u8,
                     )
                 },
-                rail_icon_active: egui::Color32::WHITE,
+                rail_icon_active: {
+                    // Choose black or white based on accent luminance so the icon
+                    // is always readable on the accent-coloured active button background.
+                    // Bright accents (yellow, neon green) need black; dark accents need white.
+                    let a = accent_primary;
+                    let luminance = 0.2126 * (a.r() as f32 / 255.0)
+                                  + 0.7152 * (a.g() as f32 / 255.0)
+                                  + 0.0722 * (a.b() as f32 / 255.0);
+                    if luminance > 0.45 {
+                        egui::Color32::BLACK
+                    } else {
+                        egui::Color32::WHITE
+                    }
+                },
+                theme: theme_choice,
             };
         });
     }
@@ -1280,24 +1302,38 @@ impl UiSystem {
         style.tab.spacing = 4.0;
 
         let tab_fill = p.bg_panel;
-        // Glow color derived from the active accent — same alpha as original
+        // Active tab gets a slightly lighter background tint so it stands out
+        // from inactive tabs even when the glow is subtle.
+        let active_tab_fill = egui::Color32::from_rgba_unmultiplied(
+            p.accent_primary.r().saturating_add(8),
+            p.accent_primary.g().saturating_add(8),
+            p.accent_primary.b().saturating_add(8),
+            18,
+        );
+        let active_tab_bg = egui::Color32::from_rgba_unmultiplied(
+            (p.bg_panel.r() as u16 + active_tab_fill.r() as u16).min(255) as u8,
+            (p.bg_panel.g() as u16 + active_tab_fill.g() as u16).min(255) as u8,
+            (p.bg_panel.b() as u16 + active_tab_fill.b() as u16).min(255) as u8,
+            255,
+        );
+        // Glow oval: full accent color at high opacity so it reads on any theme.
         let active_glow = egui::Color32::from_rgba_unmultiplied(
             p.accent_primary.r(),
             p.accent_primary.g(),
             p.accent_primary.b(),
-            110,
+            200,
         );
         let hover_glow = egui::Color32::from_rgba_unmultiplied(
             p.accent_primary.r(),
             p.accent_primary.g(),
             p.accent_primary.b(),
-            35,
+            80,
         );
-        const GLOW_ASPECT: f32 = 0.30;
+        const GLOW_ASPECT: f32 = 0.28;
 
         // Active
-        style.tab.active.bg_fill        = tab_fill;
-        style.tab.active.text_color     = p.text_primary;
+        style.tab.active.bg_fill        = active_tab_bg;
+        style.tab.active.text_color     = p.accent_primary;
         style.tab.active.outline_color  = egui::Color32::TRANSPARENT;
         style.tab.active.corner_radius  = egui::CornerRadius::same(3);
         style.tab.active.glow_color     = active_glow;
@@ -1305,8 +1341,8 @@ impl UiSystem {
         style.tab.active.glow_aspect    = GLOW_ASPECT;
 
         // Focused
-        style.tab.focused.bg_fill       = tab_fill;
-        style.tab.focused.text_color    = p.text_primary;
+        style.tab.focused.bg_fill       = active_tab_bg;
+        style.tab.focused.text_color    = p.accent_primary;
         style.tab.focused.outline_color = egui::Color32::TRANSPARENT;
         style.tab.focused.corner_radius = egui::CornerRadius::same(3);
         style.tab.focused.glow_color    = active_glow;
@@ -1330,8 +1366,8 @@ impl UiSystem {
         style.tab.hovered.glow_aspect   = GLOW_ASPECT;
 
         // KB-focus variants
-        style.tab.active_with_kb_focus.bg_fill       = tab_fill;
-        style.tab.active_with_kb_focus.text_color    = p.text_primary;
+        style.tab.active_with_kb_focus.bg_fill       = active_tab_bg;
+        style.tab.active_with_kb_focus.text_color    = p.accent_primary;
         style.tab.active_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
         style.tab.active_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
         style.tab.active_with_kb_focus.glow_color    = active_glow;
@@ -1344,8 +1380,8 @@ impl UiSystem {
         style.tab.inactive_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
         style.tab.inactive_with_kb_focus.glow_color    = egui::Color32::TRANSPARENT;
 
-        style.tab.focused_with_kb_focus.bg_fill       = tab_fill;
-        style.tab.focused_with_kb_focus.text_color    = p.text_primary;
+        style.tab.focused_with_kb_focus.bg_fill       = active_tab_bg;
+        style.tab.focused_with_kb_focus.text_color    = p.accent_primary;
         style.tab.focused_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
         style.tab.focused_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
         style.tab.focused_with_kb_focus.glow_color    = active_glow;
@@ -1399,15 +1435,39 @@ impl UiSystem {
             style.tab.active.text_color = transparent;
             style.tab.active.outline_color = transparent;
             style.tab.active.glow_color = transparent;
+            style.tab.focused.bg_fill = transparent;
+            style.tab.focused.text_color = transparent;
+            style.tab.focused.outline_color = transparent;
+            style.tab.focused.glow_color = transparent;
             style.tab.inactive.bg_fill = transparent;
             style.tab.inactive.text_color = transparent;
             style.tab.inactive.outline_color = transparent;
+            style.tab.inactive.glow_color = transparent;
+            style.tab.hovered.bg_fill = transparent;
+            style.tab.hovered.text_color = transparent;
+            style.tab.hovered.outline_color = transparent;
+            style.tab.hovered.glow_color = transparent;
+            style.tab.active_with_kb_focus.bg_fill = transparent;
+            style.tab.active_with_kb_focus.text_color = transparent;
+            style.tab.active_with_kb_focus.outline_color = transparent;
+            style.tab.active_with_kb_focus.glow_color = transparent;
+            style.tab.inactive_with_kb_focus.bg_fill = transparent;
+            style.tab.inactive_with_kb_focus.text_color = transparent;
+            style.tab.inactive_with_kb_focus.outline_color = transparent;
+            style.tab.inactive_with_kb_focus.glow_color = transparent;
+            style.tab.focused_with_kb_focus.bg_fill = transparent;
+            style.tab.focused_with_kb_focus.text_color = transparent;
+            style.tab.focused_with_kb_focus.outline_color = transparent;
+            style.tab.focused_with_kb_focus.glow_color = transparent;
             style.tab.tab_body.bg_fill = transparent;
             style.tab.tab_body.stroke = egui::Stroke::NONE;
             style.separator.color_idle = transparent;
             style.separator.color_hovered = transparent;
             style.separator.color_dragged = transparent;
             style.separator.width = 0.0;
+            style.overlay.selection_color = transparent;
+            style.overlay.button_color = transparent;
+            style.overlay.button_border_stroke = egui::Stroke::NONE;
             style.dock_area_padding = Some(egui::Margin::same(0));
             style.buttons.close_tab_color = transparent;
             style.buttons.add_tab_color = transparent;
@@ -1415,6 +1475,7 @@ impl UiSystem {
 
         // Create panel context for PanelTabViewer
         let current_mode = ui_state_copy.current_mode;
+        let hide_ui = ui_state_copy.hide_ui;
         
         // Show dock area (scoped to release borrows after)
         {
@@ -1546,7 +1607,10 @@ impl UiSystem {
                     // Paint rounded corners on the Preview viewport — black
                     // quarter-circle fills at each corner make the viewport
                     // appear to have rounded corners against the black gutter.
-                    if current_mode == crate::ui::types::SimulationMode::Preview {
+                    // Hidden when UI is hidden so the full viewport is unobstructed.
+                    if current_mode == crate::ui::types::SimulationMode::Preview
+                        && !hide_ui
+                    {
                         if let Some(viewport_rect) = vp_rect {
                             let panel_rect = viewport_rect.expand2(egui::vec2(6.0, 4.0));
                             paint_viewport_rounded_corners(ui.painter(), panel_rect, 40.0, gutter_color);
@@ -1601,6 +1665,113 @@ impl UiSystem {
                 editor_state,
                 dt_for_browser,
             );
+        }
+
+        // ── Panel close confirmation dialog ───────────────────────────────────
+        // Shown when the user clicks the × on any panel tab.
+        // Keeps the panel open until confirmed so accidental clicks don't lose layout.
+        if let Some(panel_to_close) = ui_state_copy.pending_close_panel {
+            let p = palette();
+            let mut confirmed = false;
+            let mut cancelled = false;
+
+            let win_frame = egui::Frame::new()
+                .fill(p.bg_darkest)
+                .stroke(egui::Stroke::new(1.0, p.border_bright))
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(egui::Margin::same(20));
+
+            egui::Window::new("Close Panel")
+                .id(egui::Id::new("panel_close_confirm"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .frame(win_frame)
+                .title_bar(false)
+                .show(&self.ctx, |ui| {
+                    ui.set_width(260.0);
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new("Close Panel?")
+                                .size(15.0)
+                                .color(p.text_primary)
+                                .strong(),
+                        );
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Close \"{}\"?",
+                                panel_to_close.display_name()
+                            ))
+                            .size(12.0)
+                            .color(p.text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new("You can reopen it from the Windows menu.")
+                                .size(11.0)
+                                .color(p.text_dim),
+                        );
+                        ui.add_space(14.0);
+                        ui.horizontal(|ui| {
+                            let btn_w = 110.0;
+                            let spacing = ui.available_width() - btn_w * 2.0;
+                            if spacing > 0.0 {
+                                ui.add_space(spacing * 0.5);
+                            }
+                            if ui
+                                .add_sized(
+                                    [btn_w, 30.0],
+                                    egui::Button::new(
+                                        egui::RichText::new("Close")
+                                            .color(egui::Color32::from_rgb(220, 80, 80)),
+                                    )
+                                    .fill(egui::Color32::from_rgba_unmultiplied(180, 40, 40, 30))
+                                    .stroke(egui::Stroke::new(
+                                        1.0,
+                                        egui::Color32::from_rgb(140, 40, 40),
+                                    )),
+                                )
+                                .clicked()
+                            {
+                                confirmed = true;
+                            }
+                            ui.add_space(8.0);
+                            if ui
+                                .add_sized(
+                                    [btn_w, 30.0],
+                                    egui::Button::new(
+                                        egui::RichText::new("Keep Open")
+                                            .color(p.accent_primary),
+                                    )
+                                    .fill(egui::Color32::from_rgba_unmultiplied(
+                                        p.accent_primary.r(),
+                                        p.accent_primary.g(),
+                                        p.accent_primary.b(),
+                                        25,
+                                    ))
+                                    .stroke(egui::Stroke::new(1.0, p.border_bright)),
+                                )
+                                .clicked()
+                            {
+                                cancelled = true;
+                            }
+                        });
+                        ui.add_space(4.0);
+                    });
+                });
+
+            if confirmed {
+                // Actually remove the tab from the dock tree.
+                let panel_name = format!("{:?}", panel_to_close);
+                ui_state_copy.set_panel_visible(&panel_name, false);
+                if let Some(loc) = dock_manager.current_tree().find_tab(&panel_to_close) {
+                    dock_manager.current_tree_mut().remove_tab(loc);
+                }
+                ui_state_copy.pending_close_panel = None;
+            } else if cancelled {
+                ui_state_copy.pending_close_panel = None;
+            }
         }
 
         // ── New Genome confirmation dialog ────────────────────────────────────

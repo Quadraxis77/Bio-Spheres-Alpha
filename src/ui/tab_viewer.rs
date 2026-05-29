@@ -118,10 +118,10 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
     }
 
     fn on_close(&mut self, tab: &mut Self::Tab) -> OnCloseResponse {
-        // Update visibility state when panel is closed
-        let panel_name = format!("{:?}", tab);
-        self.state.set_panel_visible(&panel_name, false);
-        OnCloseResponse::Close
+        // Don't close immediately — show a confirmation dialog first.
+        // Store which panel is pending and return Focus to keep it open.
+        self.state.pending_close_panel = Some(*tab);
+        OnCloseResponse::Focus
     }
 
     fn is_closeable(&self, tab: &Self::Tab) -> bool {

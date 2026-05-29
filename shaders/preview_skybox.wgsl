@@ -1,10 +1,7 @@
 // Preview Scene Skybox
 //
-// Dark teal/navy gradient background with a perspective grid floor,
-// matching the Bio-Spheres Lab genome editor aesthetic.
-//
-// Background: deep navy at top, dark teal toward horizon
-// Grid: faint cyan perspective grid on the floor plane
+// Dark gradient background with a perspective grid floor.
+// Colors are driven by theme params uploaded each frame.
 
 struct CameraUniforms {
     // Rotation-only inverse view-proj (no translation = no shaking)
@@ -15,7 +12,22 @@ struct CameraUniforms {
     time: f32,
 }
 
+// Theme-driven color params — uploaded from the active UI palette each frame.
+struct SkyboxThemeParams {
+    zenith_color:  vec3<f32>,  // sky color at the top
+    _pad0:         f32,
+    horizon_color: vec3<f32>,  // sky color at the horizon
+    _pad1:         f32,
+    glow_color:    vec3<f32>,  // horizon glow tint
+    _pad2:         f32,
+    grid_color:    vec3<f32>,  // perspective grid line color
+    grid_opacity:  f32,        // grid brightness multiplier
+    floor_color:   vec3<f32>,  // solid floor background color (between grid lines)
+    _pad3:         f32,
+}
+
 @group(0) @binding(0) var<uniform> camera: CameraUniforms;
+@group(1) @binding(0) var<uniform> theme:  SkyboxThemeParams;
 
 // ── Vertex shader ─────────────────────────────────────────────────────────────
 
@@ -53,48 +65,42 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // ── Sky gradient ──────────────────────────────────────────────────────────
     // dir.y: +1 = straight up, -1 = straight down, 0 = horizon
-    // Map to 0 (horizon) → 1 (zenith) for the upper hemisphere
     let horizon_t = clamp(dir.y * 1.5 + 0.1, 0.0, 1.0);
     let horizon_smooth = horizon_t * horizon_t * (3.0 - 2.0 * horizon_t);
 
-    // Deep navy at zenith, dark teal at horizon
-    let zenith_color  = vec3<f32>(0.012, 0.020, 0.055); // #030514 deep navy
-    let horizon_color = vec3<f32>(0.018, 0.065, 0.085); // #041117 dark teal
-    var sky = mix(horizon_color, zenith_color, horizon_smooth);
+    var sky = mix(theme.horizon_color, theme.zenith_color, horizon_smooth);
 
-    // Very faint teal glow near the horizon
+    // Faint glow near the horizon
     let glow = max(0.0, 1.0 - abs(dir.y) * 4.0);
-    sky += vec3<f32>(0.0, 0.04, 0.06) * glow * glow;
+    sky += theme.glow_color * glow * glow;
 
     // ── Perspective grid floor ────────────────────────────────────────────────
     // Only draw grid where the ray hits the floor plane (y < 0 direction)
-    var grid_contrib = vec3<f32>(0.0);
+    var color = sky;
 
     if (dir.y < -0.001) {
-        // Ray-plane intersection: floor at fixed world y = FLOOR_WORLD_Y
-        // Placed well below the origin so organisms don't clip through it.
         let floor_world_y = -28.0;
         let t = (floor_world_y - camera.camera_pos.y) / dir.y;
 
         if (t > 0.0 && t < 800.0) {
             let hit = camera.camera_pos + dir * t;
 
-            // Grid spacing — larger value = fewer, more spread-out lines
             let grid_scale = 6.0;
             let gx = grid_line(hit.x / grid_scale, 0.02);
             let gz = grid_line(hit.z / grid_scale, 0.02);
             let line = max(gx, gz);
 
             // Fade with distance
-            let dist = t;
-            let fade = exp(-dist * 0.008) * clamp(1.0 - dist * 0.001, 0.0, 1.0);
+            let fade = exp(-t * 0.008) * clamp(1.0 - t * 0.001, 0.0, 1.0);
 
-            // Cyan grid color matching the UI aesthetic
-            let grid_color = vec3<f32>(0.05, 0.55, 0.65);
-            grid_contrib = grid_color * line * fade * 0.35;
+            // Replace sky with the dark floor background, then add grid lines on top.
+            // floor_alpha fades the floor in with distance so it blends into the horizon.
+            let floor_alpha = clamp(fade * 2.0, 0.0, 1.0);
+            let floor_base = mix(sky, theme.floor_color, floor_alpha);
+            let grid_contrib = theme.grid_color * line * fade * theme.grid_opacity;
+            color = floor_base + grid_contrib;
         }
     }
 
-    var color = sky + grid_contrib;
     return vec4<f32>(color, 1.0);
 }

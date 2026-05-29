@@ -171,5 +171,5 @@ pub use volumetric_fog::VolumetricFogRenderer;
 pub use voxel_renderer::{VoxelRenderer, VoxelInstance};
 pub use sun_renderer::SunRenderer;
 pub use skybox::SkyboxRenderer;
-pub use preview_skybox::PreviewSkyboxRenderer;
+pub use preview_skybox::{PreviewSkyboxRenderer, PreviewSkyboxThemeParams};
 pub use world_sphere::{WorldSphereRenderer, WorldSphereParams};

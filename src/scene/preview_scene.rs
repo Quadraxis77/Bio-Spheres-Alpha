@@ -234,6 +234,11 @@ impl Scene for PreviewScene {
 
         // Pass 1.5: Render procedural background skybox
         if self.show_skybox {
+            // Update skybox colors from the active UI theme palette.
+            let p = crate::ui::ui_system::palette();
+            self.skybox_renderer.theme_params =
+                crate::rendering::PreviewSkyboxThemeParams::from_palette(&p);
+
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Preview Scene Skybox Encoder"),
             });

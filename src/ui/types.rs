@@ -682,6 +682,11 @@ pub struct GlobalUiState {
     /// When true only the raw viewport is visible. Toggle with the rail button or Tab key.
     #[serde(skip)]
     pub hide_ui: bool,
+
+    /// Panel pending close confirmation. When Some, a confirmation dialog is shown
+    /// asking the user to confirm before the panel is removed from the layout.
+    #[serde(skip)]
+    pub pending_close_panel: Option<crate::ui::panel::Panel>,
 }
 
 impl Default for GlobalUiState {
@@ -728,6 +733,7 @@ impl Default for GlobalUiState {
             mode_request: None,
             show_advanced_options: false,
             hide_ui: false,
+            pending_close_panel: None,
         }
     }
 }
