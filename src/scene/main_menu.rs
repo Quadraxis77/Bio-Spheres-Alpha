@@ -55,9 +55,6 @@ pub struct MainMenuScene {
     left_orbit_angle: f32,
     right_orbit_angle: f32,
 
-    /// Continuously-advancing simulation clock.
-    sim_time: f32,
-
     pub panel_width: u32,
     pub panel_height: u32,
     format: wgpu::TextureFormat,
@@ -156,7 +153,6 @@ impl MainMenuScene {
             right_tex_id,
             left_orbit_angle: 0.0,
             right_orbit_angle: std::f32::consts::PI, // opposite start
-            sim_time: 0.0,
             panel_width,
             panel_height,
             format: surface_config.format,
@@ -166,7 +162,6 @@ impl MainMenuScene {
     // ── per-frame update ──────────────────────────────────────────────────────
 
     pub fn update(&mut self, dt: f32) {
-        self.sim_time += dt;
         self.left_orbit_angle += ORBIT_SPEED * dt;
         self.right_orbit_angle -= ORBIT_SPEED * dt; // counter-rotate for visual contrast
 
@@ -180,9 +175,14 @@ impl MainMenuScene {
         self.right_preview.camera.rotation = right_rot;
         self.right_preview.camera.target_rotation = right_rot;
 
-        // Advance simulations by seeking the preview states forward in time.
-        self.left_preview.state.seek_to_time(self.sim_time);
-        self.right_preview.state.seek_to_time(self.sim_time);
+        // Advance simulations forward by dt — no seeking, no checkpoints.
+        let left_genome = self.left_preview.genome.clone();
+        let left_config = self.left_preview.config.clone();
+        self.left_preview.state.step_forward(dt, &left_genome, &left_config);
+
+        let right_genome = self.right_preview.genome.clone();
+        let right_config = self.right_preview.config.clone();
+        self.right_preview.state.step_forward(dt, &right_genome, &right_config);
 
         // Run one incremental resimulation chunk each frame.
         self.left_preview.update(dt);
@@ -196,7 +196,6 @@ impl MainMenuScene {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         cell_type_visuals: Option<&[CellTypeVisuals]>,
-        egui_renderer: &mut egui_wgpu::Renderer,
     ) {
         let left_view = self.left_color_tex.create_view(&wgpu::TextureViewDescriptor::default());
         let right_view =
@@ -234,19 +233,12 @@ impl MainMenuScene {
             0.12, // thick black outline for menu backdrop
         );
 
-        // Rebind the (potentially new) views so egui samples the latest frame.
-        egui_renderer.update_egui_texture_from_wgpu_texture(
-            device,
-            &left_view,
-            wgpu::FilterMode::Linear,
-            self.left_tex_id,
-        );
-        egui_renderer.update_egui_texture_from_wgpu_texture(
-            device,
-            &right_view,
-            wgpu::FilterMode::Linear,
-            self.right_tex_id,
-        );
+        // NOTE: Do NOT call update_egui_texture_from_wgpu_texture here.
+        // The TextureIds already point to the correct off-screen textures from
+        // register_native_texture at construction time. Calling update every frame
+        // creates a new wgpu::Sampler + BindGroup each call (120/sec at 60fps)
+        // that leak into wgpu's internal ref-count. Rebinding only happens in
+        // resize() where the underlying texture actually changes.
     }
 
     // ── resize ────────────────────────────────────────────────────────────────

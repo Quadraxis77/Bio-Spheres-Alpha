@@ -764,7 +764,7 @@ impl App {
         // Render preview scenes into their off-screen textures.
         let cell_type_visuals = &self.editor_state.cell_type_visuals;
         if let Some(menu) = &mut self.main_menu_scene {
-            menu.render(&self.device, &self.queue, Some(cell_type_visuals), &mut self.ui.renderer);
+            menu.render(&self.device, &self.queue, Some(cell_type_visuals));
         }
 
         // Acquire swapchain texture.

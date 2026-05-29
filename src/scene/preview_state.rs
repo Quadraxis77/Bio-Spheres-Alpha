@@ -359,6 +359,37 @@ impl PreviewState {
         }
     }
     
+    /// Advance the simulation forward by `dt` seconds without checkpointing.
+    ///
+    /// Used by the main menu where scrub history is not needed. Runs as many
+    /// fixed-timestep physics steps as `dt` covers and promotes the result
+    /// directly to `display_state`. No `target_time`, no checkpoint Vec growth.
+    pub fn step_forward(
+        &mut self,
+        dt: f32,
+        genome: &Genome,
+        config: &crate::simulation::physics_config::PhysicsConfig,
+    ) {
+        let start_step = (self.work_time / config.fixed_timestep).ceil() as u32;
+        let end_time = self.work_time + dt;
+        let end_step = (end_time / config.fixed_timestep).ceil() as u32;
+
+        for step in start_step..end_step {
+            let sim_time = step as f32 * config.fixed_timestep;
+            let _ = crate::simulation::preview_physics::physics_step_with_genome(
+                &mut self.work_state,
+                genome,
+                config,
+                sim_time,
+                None,
+            );
+        }
+
+        self.work_time = end_time;
+        self.display_state = self.work_state.clone();
+        self.display_time = end_time;
+    }
+
     /// Request seeking to a specific time.
     /// Cancels any in-progress resim and starts fresh.
     pub fn seek_to_time(&mut self, target_time: f32) {
@@ -452,11 +483,17 @@ impl PreviewState {
             
             steps_run += 1;
             
-            // Checkpoint at intervals
+            // Checkpoint at intervals — keep a rolling window of 60 entries so
+            // the Vec doesn't grow without bound during long menu sessions.
             let ci = (sim_time / self.checkpoint_interval).floor() as usize;
             if ci > last_checkpoint_index {
                 self.checkpoints.push((sim_time, self.work_state.clone()));
                 last_checkpoint_index = ci;
+                // Trim oldest entries once we exceed 60 checkpoints (~60 seconds of history)
+                const MAX_CHECKPOINTS: usize = 60;
+                if self.checkpoints.len() > MAX_CHECKPOINTS {
+                    self.checkpoints.drain(0..self.checkpoints.len() - MAX_CHECKPOINTS);
+                }
             }
             
             // Check time budget periodically
