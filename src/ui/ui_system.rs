@@ -160,6 +160,8 @@ pub struct UiSystem {
     theme_applied: bool,
     /// Last applied theme for change detection
     last_theme: crate::ui::types::UiTheme,
+    /// Last applied custom theme palette for change detection
+    last_custom_theme: crate::ui::types::CustomThemePalette,
     /// Genome browser window state — lives here (not on GlobalUiState) so it
     /// is never cloned and texture handles survive across frames.
     pub genome_browser: crate::ui::genome_browser::GenomeBrowserState,
@@ -267,6 +269,7 @@ impl UiSystem {
             ui_state_dirty: false,
             theme_applied: false,
             last_theme: crate::ui::types::UiTheme::default(),
+            last_custom_theme: crate::ui::types::CustomThemePalette::default(),
             genome_browser: crate::ui::genome_browser::GenomeBrowserState::default(),
             toasts: Vec::new(),
             app_icon,
@@ -628,6 +631,32 @@ impl UiSystem {
                 egui::Color32::from_rgb(255,  60,  60), // status_err
                 egui::Color32::from_rgb(  0, 200, 255), // status_info
             ),
+            // ── CUSTOM ───────────────────────────────────────────────────────
+            UiTheme::Custom => {
+                let c = &self.state.custom_theme;
+                (
+                    c.bg_darkest.to_egui(),
+                    c.bg_panel.to_egui(),
+                    c.bg_widget.to_egui(),
+                    c.bg_hover.to_egui(),
+                    c.bg_active.to_egui(),
+                    c.bg_selected.to_egui(),
+                    c.accent_primary.to_egui(),
+                    c.accent_secondary.to_egui(),
+                    c.text_primary.to_egui(),
+                    c.text_secondary.to_egui(),
+                    c.text_dim.to_egui(),
+                    c.border_subtle.to_egui(),
+                    c.border_normal.to_egui(),
+                    c.border_bright.to_egui(),
+                    c.topbar_bg.to_egui(),
+                    c.topbar_border.to_egui(),
+                    c.status_ok.to_egui(),
+                    c.status_warn.to_egui(),
+                    c.status_err.to_egui(),
+                    c.status_info.to_egui(),
+                )
+            },
         };
 
         self.ctx.global_style_mut(|style| {
@@ -642,7 +671,7 @@ impl UiSystem {
                 | UiTheme::NeonToxic
                 | UiTheme::NeonUltraviolet
                 | UiTheme::HighContrast
-            );
+            ) || (theme_choice == UiTheme::Custom && self.state.custom_theme.dark_mode);
 
             v.window_fill        = bg_panel;
             v.panel_fill         = bg_panel;
@@ -829,9 +858,13 @@ impl UiSystem {
 
         // Apply biotech theme once at startup, and re-apply when theme changes
         let theme_changed = self.state.selected_theme != self.last_theme;
-        if !self.theme_applied || theme_changed {
+        // Also re-apply when custom theme colors change (compare via selected_theme == Custom)
+        let custom_changed = self.state.selected_theme == crate::ui::types::UiTheme::Custom
+            && self.state.custom_theme != self.last_custom_theme;
+        if !self.theme_applied || theme_changed || custom_changed {
             self.apply_theme(self.state.selected_theme);
             self.last_theme = self.state.selected_theme;
+            self.last_custom_theme = self.state.custom_theme.clone();
             self.theme_applied = true;
             // Reset scale tracking so spacing is re-applied on top of the new theme
             self.last_scale = -1.0;
@@ -848,13 +881,6 @@ impl UiSystem {
         let mut pending_browser_open_load = false;
         let mut pending_browser_refresh = false;
         let mut pending_gif_capture: Option<std::path::PathBuf> = None;
-
-        // Tab key toggles UI visibility in GPU mode
-        if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu {
-            if self.ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
-                ui_state_copy.hide_ui = !ui_state_copy.hide_ui;
-            }
-        }
 
         // Read the active theme palette once — used throughout this frame.
         let p = palette();
@@ -930,7 +956,7 @@ impl UiSystem {
                             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                             .show(|ui| {
                                 ui.set_min_width(180.0);
-                                show_themes_menu(ui, &mut ui_state_copy);
+                                show_themes_menu(ui, &mut ui_state_copy, dock_manager);
                             });
 
                         ui.add_space(8.0); topbar_divider(ui); ui.add_space(8.0);
@@ -2050,7 +2076,11 @@ impl UiSystem {
         // Now editor_state is no longer borrowed by panel_context
         if current_mode == crate::ui::types::SimulationMode::Gpu {
             crate::ui::radial_menu::show_radial_menu(&self.ctx, &mut editor_state.radial_menu);
-            crate::ui::radial_menu::show_tool_cursor(&self.ctx, &editor_state.radial_menu);
+            // Only show the tool cursor icon when the pointer is over the viewport,
+            // not over a panel — over panels the system cursor is visible instead.
+            if !self.wants_pointer_input() {
+                crate::ui::radial_menu::show_tool_cursor(&self.ctx, &editor_state.radial_menu);
+            }
             
             // Check for low FPS and show warning dialog
             let fps = performance.fps();
@@ -2331,8 +2361,9 @@ impl UiSystem {
 }
 
 /// Show the Themes menu for selecting the active UI color theme.
-fn show_themes_menu(ui: &mut egui::Ui, state: &mut GlobalUiState) {
+fn show_themes_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager: &mut crate::ui::dock::DockManager) {
     use crate::ui::types::UiTheme;
+    use crate::ui::panel::Panel;
 
     ui.label("Color Theme:");
     ui.add_space(4.0);
@@ -2349,6 +2380,13 @@ fn show_themes_menu(ui: &mut egui::Ui, state: &mut GlobalUiState) {
             // Selectable label — clicking sets the theme
             if ui.selectable_label(is_selected, theme_choice.display_name()).clicked() {
                 state.selected_theme = theme_choice;
+                // When Custom is selected, open the Theme Editor panel automatically.
+                if theme_choice == UiTheme::Custom {
+                    let panel = Panel::ThemeEditor;
+                    if !is_panel_open(dock_manager.current_tree(), &panel) {
+                        open_panel(dock_manager.current_tree_mut(), &panel);
+                    }
+                }
                 ui.close_kind(egui::UiKind::Menu);
             }
         });

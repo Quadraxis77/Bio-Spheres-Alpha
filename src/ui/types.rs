@@ -30,6 +30,8 @@ pub enum UiTheme {
     NeonUltraviolet,
     /// Near-black with bright white text — maximum contrast.
     HighContrast,
+    /// Fully user-defined colors, edited in the Theme Editor panel.
+    Custom,
 }
 
 impl UiTheme {
@@ -44,6 +46,7 @@ impl UiTheme {
             UiTheme::NeonToxic,
             UiTheme::NeonUltraviolet,
             UiTheme::HighContrast,
+            UiTheme::Custom,
         ]
     }
 
@@ -58,6 +61,7 @@ impl UiTheme {
             UiTheme::NeonToxic       => "Neon Toxic",
             UiTheme::NeonUltraviolet => "Neon Ultraviolet",
             UiTheme::HighContrast    => "High Contrast",
+            UiTheme::Custom          => "Custom",
         }
     }
 
@@ -72,6 +76,77 @@ impl UiTheme {
             UiTheme::NeonToxic       => egui::Color32::from_rgb( 50, 255,  50),
             UiTheme::NeonUltraviolet => egui::Color32::from_rgb(180,  30, 255),
             UiTheme::HighContrast    => egui::Color32::from_rgb(255, 255, 255),
+            UiTheme::Custom          => egui::Color32::from_rgb(200, 200, 200),
+        }
+    }
+}
+
+/// Serializable color stored as [r, g, b] bytes for RON compatibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeColor(pub [u8; 3]);
+
+impl ThemeColor {
+    pub fn to_egui(self) -> egui::Color32 {
+        egui::Color32::from_rgb(self.0[0], self.0[1], self.0[2])
+    }
+    pub fn from_egui(c: egui::Color32) -> Self {
+        Self([c.r(), c.g(), c.b()])
+    }
+}
+
+/// All 20 user-editable palette colors for the Custom theme.
+/// Matches the 20 fields extracted from `apply_theme` (excludes derived rail_icon fields).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomThemePalette {
+    pub bg_darkest:       ThemeColor,
+    pub bg_panel:         ThemeColor,
+    pub bg_widget:        ThemeColor,
+    pub bg_hover:         ThemeColor,
+    pub bg_active:        ThemeColor,
+    pub bg_selected:      ThemeColor,
+    pub accent_primary:   ThemeColor,
+    pub accent_secondary: ThemeColor,
+    pub text_primary:     ThemeColor,
+    pub text_secondary:   ThemeColor,
+    pub text_dim:         ThemeColor,
+    pub border_subtle:    ThemeColor,
+    pub border_normal:    ThemeColor,
+    pub border_bright:    ThemeColor,
+    pub topbar_bg:        ThemeColor,
+    pub topbar_border:    ThemeColor,
+    pub status_ok:        ThemeColor,
+    pub status_warn:      ThemeColor,
+    pub status_err:       ThemeColor,
+    pub status_info:      ThemeColor,
+    /// Whether to use dark_mode (true) or light_mode (false) for egui internals.
+    pub dark_mode:        bool,
+}
+
+impl Default for CustomThemePalette {
+    fn default() -> Self {
+        // Starts as a copy of BiotechDark so the user has a sensible starting point.
+        Self {
+            bg_darkest:       ThemeColor([  6,   9,  18]),
+            bg_panel:         ThemeColor([ 12,  17,  32]),
+            bg_widget:        ThemeColor([ 22,  30,  52]),
+            bg_hover:         ThemeColor([ 32,  44,  72]),
+            bg_active:        ThemeColor([ 42,  58,  95]),
+            bg_selected:      ThemeColor([ 18,  55,  85]),
+            accent_primary:   ThemeColor([  0, 220, 175]),
+            accent_secondary: ThemeColor([ 60, 195, 240]),
+            text_primary:     ThemeColor([225, 235, 255]),
+            text_secondary:   ThemeColor([155, 175, 210]),
+            text_dim:         ThemeColor([ 80, 100, 145]),
+            border_subtle:    ThemeColor([ 28,  42,  72]),
+            border_normal:    ThemeColor([ 50,  72, 115]),
+            border_bright:    ThemeColor([  0, 180, 140]),
+            topbar_bg:        ThemeColor([  4,   6,  14]),
+            topbar_border:    ThemeColor([  0, 160, 125]),
+            status_ok:        ThemeColor([ 60, 210, 100]),
+            status_warn:      ThemeColor([220, 185,  50]),
+            status_err:       ThemeColor([225,  70,  70]),
+            status_info:      ThemeColor([ 60, 150, 230]),
+            dark_mode:        true,
         }
     }
 }
@@ -628,6 +703,10 @@ pub struct GlobalUiState {
     #[serde(default)]
     pub selected_theme: UiTheme,
 
+    /// Custom theme palette — used when `selected_theme == UiTheme::Custom`.
+    #[serde(default)]
+    pub custom_theme: CustomThemePalette,
+
     /// Tutorial system state (step index, active flag, ever-shown flag).
     #[serde(default)]
     pub tutorial: TutorialState,
@@ -721,6 +800,7 @@ impl Default for GlobalUiState {
             world_settings: WorldSettings::default(),
             fluid_settings: FluidSettings::default(),
             selected_theme: UiTheme::default(),
+            custom_theme: CustomThemePalette::default(),
             tutorial: TutorialState::default(),
             show_low_fps_dialog: false,
             suppress_low_fps_dialog: false,

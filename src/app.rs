@@ -563,26 +563,18 @@ impl App {
                     self.scene_manager.active_scene_mut().camera_mut().handle_mouse_button(*button, *state);
                 }
 
-                // Cursor hide/show and warp on right-click camera rotation.
+                // Right-click: hide cursor while rotating, show on release.
                 // Always handled regardless of egui state so release is never missed.
                 if *button == MouseButton::Right {
                     if *state == ElementState::Pressed {
                         let _ = self.window.set_cursor_visible(false);
                     } else {
                         let _ = self.window.set_cursor_visible(true);
-                        // Warp cursor back to window centre so the next drag starts cleanly.
-                        let size = self.window.inner_size();
-                        let centre = winit::dpi::PhysicalPosition::new(
-                            size.width as f64 / 2.0,
-                            size.height as f64 / 2.0,
-                        );
-                        let _ = self.window.set_cursor_position(centre);
                     }
                 }
 
                 // Always release the camera drag on mouse-up, even if egui now owns the
-                // pointer (e.g. cursor drifted over a panel mid-drag). Without this the
-                // camera stays in is_dragging=true until the user clicks inside the viewport.
+                // pointer (e.g. cursor drifted over a panel mid-drag).
                 if *state == ElementState::Released {
                     self.scene_manager.active_scene_mut().camera_mut().handle_mouse_button(*button, *state);
                 }
@@ -763,6 +755,7 @@ impl App {
                         ));
                         self.app_phase = AppPhase::MainMenu;
                         // Restore cursor — tools and right-drag don't apply on the main menu.
+                        let _ = self.window.set_cursor_grab(winit::window::CursorGrabMode::None);
                         self.window.set_cursor_visible(true);
                         self.editor_state.radial_menu.active_tool = crate::ui::radial_menu::RadialTool::None;
                         self.editor_state.radial_menu.visible = false;
@@ -2146,6 +2139,7 @@ impl App {
                                     self.scene_manager.clear_dragged_cell();
                                     self.editor_state.radial_menu.clear_drag_state();
                                 }
+                                let _ = self.window.set_cursor_grab(winit::window::CursorGrabMode::None);
                                 self.window.set_cursor_visible(true);
                                 self.editor_state.radial_menu.active_tool = crate::ui::radial_menu::RadialTool::None;
                                 self.editor_state.radial_menu.visible = false;
@@ -2205,6 +2199,7 @@ impl App {
                     self.scene_manager.clear_dragged_cell();
                     self.editor_state.radial_menu.clear_drag_state();
                 }
+                let _ = self.window.set_cursor_grab(winit::window::CursorGrabMode::None);
                 self.window.set_cursor_visible(true);
                 self.editor_state.radial_menu.active_tool = crate::ui::radial_menu::RadialTool::None;
                 self.editor_state.radial_menu.visible = false;

@@ -96,7 +96,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::WorldSettings => render_world_settings(ui, self.context, self.state),
             Panel::LightSettings => render_light_settings(ui, self.context, self.state),
             Panel::TimeScrubber => render_time_scrubber(ui, self.context),
-            Panel::ThemeEditor => render_theme_editor(ui),
+            Panel::ThemeEditor => render_theme_editor(ui, self.state),
             Panel::CameraSettings => render_camera_settings(ui, self.context),
             Panel::LightingSettings => render_lighting_settings(ui),
             Panel::GizmoSettings => render_gizmo_settings(ui, self.context),
@@ -1379,16 +1379,26 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.separator();
     ui.heading("Fluid Spawning");
     ui.separator();
-    // Water fill is toggled via the 🌊 rail button in GPU mode.
-    // Apply any pending state change from the rail button.
-    if context.editor_state.fluid_continuous_spawn {
-        // Ensure simulator state stays in sync (idempotent)
-        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-            if let Some(ref mut simulator) = gpu_scene.fluid_simulator {
-                simulator.set_continuous_spawn(true);
-            }
-        }
+
+    // Toggle button — same as the 🌊 rail button in the side bar.
+    let water_active = context.editor_state.fluid_continuous_spawn;
+    let label = if water_active { "🌊  Water Fill: ON" } else { "🌊  Water Fill: OFF" };
+    let p = crate::ui::ui_system::palette();
+    let btn_fill = if water_active {
+        egui::Color32::from_rgba_unmultiplied(p.accent_primary.r(), p.accent_primary.g(), p.accent_primary.b(), 40)
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let btn_stroke = if water_active { p.accent_primary } else { p.border_normal };
+    if ui.add(
+        egui::Button::new(egui::RichText::new(label).color(if water_active { p.accent_primary } else { p.text_secondary }))
+            .fill(btn_fill)
+            .stroke(egui::Stroke::new(1.0, btn_stroke))
+    ).clicked() {
+        context.editor_state.request_toggle_water = true;
     }
+    ui.label(egui::RichText::new("Continuously fills the world with water. Same as the 🌊 button in the side bar.").small().color(p.text_dim));
+    ui.add_space(4.0);
     
     // === Nutrients ===
     ui.separator();
@@ -2175,12 +2185,166 @@ fn render_time_scrubber(ui: &mut Ui, context: &mut PanelContext) {
     }
 }
 
-/// Render the ThemeEditor panel (placeholder).
-fn render_theme_editor(ui: &mut Ui) {
-    ui.heading("Theme Editor");
-    ui.separator();
-    ui.label("Customize UI appearance.");
-    // TODO: Implement theme editor
+/// Render the ThemeEditor panel — full custom theme color editor.
+fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
+    use crate::ui::types::{UiTheme, ThemeColor};
+
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+
+            // ── Theme selector ────────────────────────────────────────────────
+            ui.label(egui::RichText::new("Active Theme").strong());
+            ui.add_space(4.0);
+            egui::ComboBox::from_id_salt("theme_editor_selector")
+                .selected_text(state.selected_theme.display_name())
+                .show_ui(ui, |ui| {
+                    for &theme in UiTheme::all() {
+                        ui.selectable_value(
+                            &mut state.selected_theme,
+                            theme,
+                            theme.display_name(),
+                        );
+                    }
+                });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            // Only show the editor when Custom is selected
+            if state.selected_theme != UiTheme::Custom {
+                ui.label(
+                    egui::RichText::new("Select \"Custom\" to edit colors.")
+                        .color(palette().text_dim),
+                );
+                ui.add_space(8.0);
+                if ui.button("Copy current theme to Custom").clicked() {
+                    // Seed the custom palette from the currently active palette
+                    let p = palette();
+                    state.custom_theme = crate::ui::types::CustomThemePalette {
+                        bg_darkest:       ThemeColor::from_egui(p.bg_darkest),
+                        bg_panel:         ThemeColor::from_egui(p.bg_panel),
+                        bg_widget:        ThemeColor::from_egui(p.bg_widget),
+                        bg_hover:         ThemeColor::from_egui(p.bg_hover),
+                        bg_active:        ThemeColor::from_egui(p.bg_active),
+                        bg_selected:      ThemeColor::from_egui(p.bg_selected),
+                        accent_primary:   ThemeColor::from_egui(p.accent_primary),
+                        accent_secondary: ThemeColor::from_egui(p.accent_secondary),
+                        text_primary:     ThemeColor::from_egui(p.text_primary),
+                        text_secondary:   ThemeColor::from_egui(p.text_secondary),
+                        text_dim:         ThemeColor::from_egui(p.text_dim),
+                        border_subtle:    ThemeColor::from_egui(p.border_subtle),
+                        border_normal:    ThemeColor::from_egui(p.border_normal),
+                        border_bright:    ThemeColor::from_egui(p.border_bright),
+                        topbar_bg:        ThemeColor::from_egui(p.topbar_bg),
+                        topbar_border:    ThemeColor::from_egui(p.topbar_border),
+                        status_ok:        ThemeColor::from_egui(p.status_ok),
+                        status_warn:      ThemeColor::from_egui(p.status_warn),
+                        status_err:       ThemeColor::from_egui(p.status_err),
+                        status_info:      ThemeColor::from_egui(p.status_info),
+                        dark_mode:        p.bg_darkest.r() < 128,
+                    };
+                    state.selected_theme = UiTheme::Custom;
+                }
+                return;
+            }
+
+            // ── Dark mode toggle ──────────────────────────────────────────────
+            ui.label(egui::RichText::new("Mode").strong());
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut state.custom_theme.dark_mode, true,  "Dark");
+                ui.radio_value(&mut state.custom_theme.dark_mode, false, "Light");
+            });
+            ui.add_space(8.0);
+
+            // Helper macro: one color row with label + color picker
+            macro_rules! color_row {
+                ($label:expr, $tooltip:expr, $field:expr) => {{
+                    let mut c = $field.to_egui();
+                    ui.label($label).on_hover_text($tooltip);
+                    if ui.color_edit_button_srgba(&mut c).changed() {
+                        $field = ThemeColor::from_egui(c);
+                    }
+                    ui.add_space(2.0);
+                }};
+            }
+
+            // ── Backgrounds ───────────────────────────────────────────────────
+            ui.label(egui::RichText::new("Backgrounds").strong());
+            ui.add_space(4.0);
+            color_row!("Darkest Background",  "Deepest background — window chrome, gutters",          state.custom_theme.bg_darkest);
+            color_row!("Panel Background",    "Panel and window fill color",                           state.custom_theme.bg_panel);
+            color_row!("Widget Background",   "Input fields, buttons, inactive widgets",               state.custom_theme.bg_widget);
+            color_row!("Hover Background",    "Widget background when hovered",                        state.custom_theme.bg_hover);
+            color_row!("Active Background",   "Widget background when pressed or active",              state.custom_theme.bg_active);
+            color_row!("Selected Background", "Selection highlight background",                        state.custom_theme.bg_selected);
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            // ── Accents ───────────────────────────────────────────────────────
+            ui.label(egui::RichText::new("Accents").strong());
+            ui.add_space(4.0);
+            color_row!("Primary Accent",   "Main accent — active tabs, highlights, rail buttons",     state.custom_theme.accent_primary);
+            color_row!("Secondary Accent", "Secondary accent — hyperlinks, secondary highlights",     state.custom_theme.accent_secondary);
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            // ── Text ──────────────────────────────────────────────────────────
+            ui.label(egui::RichText::new("Text").strong());
+            ui.add_space(4.0);
+            color_row!("Primary Text",   "Main body text color",                                      state.custom_theme.text_primary);
+            color_row!("Secondary Text", "Labels, captions, less important text",                     state.custom_theme.text_secondary);
+            color_row!("Dim Text",       "Placeholder text, disabled labels",                         state.custom_theme.text_dim);
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            // ── Borders ───────────────────────────────────────────────────────
+            ui.label(egui::RichText::new("Borders").strong());
+            ui.add_space(4.0);
+            color_row!("Subtle Border",  "Faint dividers, panel edges",                               state.custom_theme.border_subtle);
+            color_row!("Normal Border",  "Standard widget borders",                                   state.custom_theme.border_normal);
+            color_row!("Bright Border",  "Focused/active widget borders, accent outlines",            state.custom_theme.border_bright);
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            // ── Top bar ───────────────────────────────────────────────────────
+            ui.label(egui::RichText::new("Top Bar").strong());
+            ui.add_space(4.0);
+            color_row!("Top Bar Background", "Background of the top menu bar",                        state.custom_theme.topbar_bg);
+            color_row!("Top Bar Border",     "Bottom border line of the top bar",                     state.custom_theme.topbar_border);
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            // ── Status colors ─────────────────────────────────────────────────
+            ui.label(egui::RichText::new("Status Colors").strong());
+            ui.add_space(4.0);
+            color_row!("Status OK",   "Success indicators, healthy state",                            state.custom_theme.status_ok);
+            color_row!("Status Warn", "Warning indicators",                                           state.custom_theme.status_warn);
+            color_row!("Status Error","Error indicators",                                              state.custom_theme.status_err);
+            color_row!("Status Info", "Informational indicators",                                     state.custom_theme.status_info);
+
+            ui.add_space(16.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            // ── Reset ─────────────────────────────────────────────────────────
+            if ui.button("Reset to Defaults").on_hover_text("Reset custom theme to Biotech Dark defaults").clicked() {
+                state.custom_theme = crate::ui::types::CustomThemePalette::default();
+            }
+        });
 }
 
 /// Render the CameraSettings panel (placeholder).

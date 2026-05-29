@@ -186,6 +186,36 @@ impl PreviewSkyboxThemeParams {
                 floor_color:   [0.0, 0.0, 0.0],
                 _pad3: 0.0,
             },
+            // ── CUSTOM ───────────────────────────────────────────────────────
+            // Derive from the active palette's bg and accent colors.
+            UiTheme::Custom => {
+                let bg  = p.bg_darkest;
+                let acc = p.accent_primary;
+                // Sky: very dark tint of bg_darkest
+                let zenith  = [bg.r() as f32 / 255.0 * 0.5,
+                                bg.g() as f32 / 255.0 * 0.5,
+                                bg.b() as f32 / 255.0 * 0.5];
+                let horizon = [bg.r() as f32 / 255.0 * 0.5 + acc.r() as f32 / 255.0 * 0.06,
+                                bg.g() as f32 / 255.0 * 0.5 + acc.g() as f32 / 255.0 * 0.06,
+                                bg.b() as f32 / 255.0 * 0.5 + acc.b() as f32 / 255.0 * 0.06];
+                let glow    = [acc.r() as f32 / 255.0 * 0.04,
+                                acc.g() as f32 / 255.0 * 0.04,
+                                acc.b() as f32 / 255.0 * 0.04];
+                let grid    = [acc.r() as f32 / 255.0 * 0.8,
+                                acc.g() as f32 / 255.0 * 0.8,
+                                acc.b() as f32 / 255.0 * 0.8];
+                let floor   = [acc.r() as f32 / 255.0 * 0.04,
+                                acc.g() as f32 / 255.0 * 0.04,
+                                acc.b() as f32 / 255.0 * 0.04];
+                Self {
+                    zenith_color:  zenith,  _pad0: 0.0,
+                    horizon_color: horizon, _pad1: 0.0,
+                    glow_color:    glow,    _pad2: 0.0,
+                    grid_color:    grid,
+                    grid_opacity:  0.45,
+                    floor_color:   floor,   _pad3: 0.0,
+                }
+            },
         }
     }
 }
