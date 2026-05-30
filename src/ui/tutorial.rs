@@ -1,7 +1,7 @@
 //! In-game tutorial system for Bio-Spheres.
 //!
-//! Walks the player step-by-step through building a 3-cell-type organism
-//! (Photocyte → Flagellocyte → Phagocyte) in the Genome Editor.
+//! Walks the player step-by-step through building a 2-cell-type organism
+//! (Phagocyte head + Flagellocyte tail) in the Genome Editor.
 //!
 //! # Gate system
 //! Every step except the introductory and summary steps has a [`StepGate`]
@@ -38,9 +38,6 @@ pub enum StepGate {
     ChildRouting { mode_idx: usize, a_target: i32, b_target: i32 },
     /// `genome.modes[mode_idx].max_splits` must equal `expected`.
     MaxSplitsSet { mode_idx: usize, expected: i32 },
-    /// `genome.modes[mode_idx].mode_a_after_splits` and `mode_b_after_splits`
-    /// must equal `a_target` and `b_target` respectively.
-    AfterSplitsRouting { mode_idx: usize, a_target: i32, b_target: i32 },
 }
 
 impl StepGate {
@@ -87,15 +84,6 @@ impl StepGate {
                 .get(*mode_idx)
                 .map(|m| m.max_splits == *expected)
                 .unwrap_or(false),
-
-            StepGate::AfterSplitsRouting { mode_idx, a_target, b_target } => genome
-                .modes
-                .get(*mode_idx)
-                .map(|m| {
-                    m.mode_a_after_splits == *a_target
-                        && m.mode_b_after_splits == *b_target
-                })
-                .unwrap_or(false),
         }
     }
 }
@@ -129,10 +117,6 @@ pub enum TutorialTarget {
     MakeAdhesionCheckbox,
     /// The Max Splits slider row in the Parent Settings panel.
     MaxSplitsSlider,
-    /// The "Child A After Splits" ComboBox row in the Parent Settings panel.
-    AfterSplitsChildA,
-    /// The "Child B After Splits" ComboBox row in the Parent Settings panel.
-    AfterSplitsChildB,
 }
 
 impl TutorialTarget {
@@ -154,8 +138,6 @@ impl TutorialTarget {
             TutorialTarget::CellTypeDropdown      => Some("cell_type_dropdown".to_string()),
             TutorialTarget::MakeAdhesionCheckbox  => Some("make_adhesion_checkbox".to_string()),
             TutorialTarget::MaxSplitsSlider       => Some("max_splits_slider".to_string()),
-            TutorialTarget::AfterSplitsChildA     => Some("after_splits_child_a".to_string()),
-            TutorialTarget::AfterSplitsChildB     => Some("after_splits_child_b".to_string()),
         }
     }
 
@@ -170,8 +152,6 @@ impl TutorialTarget {
                 | TutorialTarget::CellTypeDropdown
                 | TutorialTarget::MakeAdhesionCheckbox
                 | TutorialTarget::MaxSplitsSlider
-                | TutorialTarget::AfterSplitsChildA
-                | TutorialTarget::AfterSplitsChildB
         )
     }
 }
@@ -350,37 +330,54 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                 normal growth phase. That one split produces the tail (M2). \
                 After that, the head is \"used up\" — but instead of stopping \
                 forever, it will do something special on its next split. \
-                You'll set that up in the next step.\n\n\
-                Drag the Time Slider to preview — you should see a two-cell \
-                creature: one head, one tail.",
+                You'll set that up in the next steps.",
         gate_hint:  "Set Max Splits to 1 on M1 to continue.",
         gate:       StepGate::MaxSplitsSet { mode_idx: 0, expected: 1 },
         target:     TutorialTarget::MaxSplitsSlider,
         target_pos: [0.5, 0.5],
     },
 
-    // ── 7 ── M1 after-splits routing ─────────────────────────────────────────
+    // ── 7b ── M1 normal child routing ────────────────────────────────────────
     TutorialStepData {
-        title: "Step 8 — The Head Sheds an Egg",
-        body:  "Now that Max Splits is set, two new dropdowns have appeared at \
-                the bottom of the Parent Settings panel: the After-Splits children.\n\n\
-                These decide what the head produces on its very next split after \
-                hitting the limit. Set Child A → M1 and Child B → M2.\n\n\
-                Child A will be a new free-floating M1 head — a fresh egg that \
-                drifts off and restarts the whole cycle. Child B stays as the \
-                tail, keeping the original creature intact.\n\n\
-                One more thing: find the Keep Adhesion checkbox under the \
-                Child A ball in the Child Rotation panel and untick it. This \
-                makes the egg detach from the parent so it can swim away freely.",
-        gate_hint:  "Set After-Splits Child A → M1 and Child B → M2 to continue.",
-        gate:       StepGate::AfterSplitsRouting { mode_idx: 0, a_target: 0, b_target: 1 },
-        target:     TutorialTarget::AfterSplitsChildA,
-        target_pos: [0.5, 0.5],
+        title: "Step 8 — Grow the Tail",
+        body:  "Look at the Child Rotation panel. Under the Child B ball you'll \
+                see a Mode dropdown — this decides what cell type Child B becomes \
+                when M1 divides.\n\n\
+                Change Child B's Mode to M2.\n\n\
+                Right now both children default to M1, so the head just clones \
+                itself. By routing Child B → M2, every split produces a \
+                Flagellocyte tail instead of another head.\n\n\
+                Drag the Time Slider after making this change — you should see \
+                a two-cell creature: one Phagocyte head, one Flagellocyte tail.",
+        gate_hint:  "Set Child B's Mode to M2 in the Child Rotation panel to continue.",
+        gate:       StepGate::ChildBMode { mode_idx: 0, target: 1 },
+        target:     TutorialTarget::ChildRotationPanel,
+        target_pos: [0.75, 0.7],
     },
 
-    // ── 8 ── Select M2 ───────────────────────────────────────────────────────
+    // ── 8 ── M1 egg shedding via keep_adhesion ────────────────────────────────
     TutorialStepData {
-        title: "Step 9 — Open Mode 2",
+        title: "Step 9 — Shed an Egg",
+        body:  "The head divides once and stops — but we want it to reproduce. \
+                Here's the trick: once M1 hits its split limit, it uses the same \
+                Child A and Child B modes again. Child A becomes a new M1 head, \
+                Child B stays as the M2 tail.\n\n\
+                The only difference is that the new M1 head should float away \
+                freely instead of staying bonded. Find the Keep Adhesion \
+                checkbox under the Child A ball in the Child Rotation panel \
+                and untick it.\n\n\
+                Now every time the head reaches its limit it sheds a free M1 \
+                egg that drifts off and starts the cycle again — while the \
+                original tail stays attached.",
+        gate_hint:  "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::ChildRotationPanel,
+        target_pos: [0.25, 0.7],
+    },
+
+    // ── 9 ── Select M2 ───────────────────────────────────────────────────────
+    TutorialStepData {
+        title: "Step 10 — Open Mode 2",
         body:  "M1 is fully set up. Now let's define the tail.\n\n\
                 Click M2 in the Modes panel.",
         gate_hint:  "Click M2 in the Modes panel to continue.",
@@ -389,9 +386,9 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         target_pos: [0.5, 0.5],
     },
 
-    // ── 9 ── M2 cell type ────────────────────────────────────────────────────
+    // ── 10 ── M2 cell type ────────────────────────────────────────────────────
     TutorialStepData {
-        title: "Step 10 — Give M2 a Flagella",
+        title: "Step 11 — Give M2 a Flagella",
         body:  "Open the Type dropdown and choose Flagellocyte.\n\n\
                 A Flagellocyte has a whip-like flagellum tail. It beats the \
                 flagellum to push itself — and anything bonded to it — through \
@@ -402,9 +399,9 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         target_pos: [0.5, 0.5],
     },
 
-    // ── 10 ── M2 adhesion ────────────────────────────────────────────────────
+    // ── 11 ── M2 adhesion ────────────────────────────────────────────────────
     TutorialStepData {
-        title: "Step 11 — Attach the Tail to the Body",
+        title: "Step 12 — Attach the Tail to the Body",
         body:  "Tick Make Adhesion for M2.\n\n\
                 A Flagellocyte without adhesion just swims off on its own. With \
                 adhesion on, its thrust is applied to the whole bonded cluster — \
@@ -415,9 +412,9 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         target_pos: [0.5, 0.5],
     },
 
-    // ── 11 ── M2 max splits = 0 ──────────────────────────────────────────────
+    // ── 12 ── M2 max splits = 0 ──────────────────────────────────────────────
     TutorialStepData {
-        title: "Step 12 — The Tail Never Divides",
+        title: "Step 13 — The Tail Never Divides",
         body:  "Set Max Splits to 0 for M2.\n\n\
                 The tail's only job is to swim — it should never divide and \
                 produce more cells. Zero means it is permanently locked as a \
@@ -429,9 +426,9 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         target_pos: [0.5, 0.5],
     },
 
-    // ── 12 ── Preview ────────────────────────────────────────────────────────
+    // ── 13 ── Preview ────────────────────────────────────────────────────────
     TutorialStepData {
-        title: "Step 13 — Watch It Come to Life",
+        title: "Step 14 — Watch It Come to Life",
         body:  "Drag the Time Slider to fast-forward through time.\n\n\
                 You'll see a single Phagocyte appear, then split into a head-tail \
                 pair. The Flagellocyte tail starts beating and the pair swims \

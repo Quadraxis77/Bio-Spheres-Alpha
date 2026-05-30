@@ -549,6 +549,78 @@ pub fn quaternion_ball(
         col_ball
     };
     painter.circle_stroke(center, radius, egui::Stroke::new(2.0, ball_color));
+
+    // Draw arcing rotation hint arrows along the rim.
+    // Two short arcs with arrowheads at opposite sides of the ball show the
+    // player they can drag around the edge to roll the orientation.
+    // Opacity pulses gently when idle and fades out while dragging.
+    {
+        let t = ui.input(|i| i.time) as f32;
+        let is_dragging = response.dragged();
+        let base_alpha: u8 = if is_dragging {
+            0
+        } else if is_mouse_in_ball {
+            200
+        } else {
+            // Gentle idle pulse: 80..140
+            let pulse = (t * 1.4).sin() * 0.5 + 0.5;
+            (80.0 + pulse * 60.0) as u8
+        };
+
+        if base_alpha > 0 {
+            let arc_color = egui::Color32::from_rgba_unmultiplied(200, 200, 220, base_alpha);
+            let arc_r = radius + 4.5; // Just outside the rim stroke
+            let arc_half_angle: f32 = 0.55; // ~31° half-arc
+            let arrow_size: f32 = 5.5;
+            let segments = 16;
+
+            // Draw one arc + arrowhead at a given center angle (radians, screen space)
+            // direction: +1.0 = arc goes counter-clockwise (arrow points CCW), -1.0 = CW
+            let draw_arc_arrow = |center_angle: f32, direction: f32| {
+                let start_angle = center_angle - arc_half_angle * direction;
+                let end_angle   = center_angle + arc_half_angle * direction;
+
+                // Arc polyline
+                let mut pts: Vec<egui::Pos2> = Vec::with_capacity(segments + 1);
+                for i in 0..=segments {
+                    let a = start_angle + (end_angle - start_angle) * (i as f32 / segments as f32);
+                    pts.push(egui::pos2(
+                        center.x + a.cos() * arc_r,
+                        center.y + a.sin() * arc_r,
+                    ));
+                }
+                painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, arc_color)));
+
+                // Arrowhead at the end of the arc (tangent direction)
+                let tip = egui::pos2(
+                    center.x + end_angle.cos() * arc_r,
+                    center.y + end_angle.sin() * arc_r,
+                );
+                // Tangent at end_angle (perpendicular to radius, in direction of arc travel)
+                let tangent_angle = end_angle + std::f32::consts::FRAC_PI_2 * direction;
+                let tx = tangent_angle.cos();
+                let ty = tangent_angle.sin();
+                // Perpendicular to tangent for arrowhead wings
+                let px = -ty;
+                let py =  tx;
+                let base = egui::pos2(tip.x - tx * arrow_size, tip.y - ty * arrow_size);
+                painter.add(egui::Shape::convex_polygon(
+                    vec![
+                        tip,
+                        egui::pos2(base.x + px * arrow_size * 0.45, base.y + py * arrow_size * 0.45),
+                        egui::pos2(base.x - px * arrow_size * 0.45, base.y - py * arrow_size * 0.45),
+                    ],
+                    arc_color,
+                    egui::Stroke::NONE,
+                ));
+            };
+
+            // Top arc: CCW arrow at 270° (top of ball)
+            draw_arc_arrow(-std::f32::consts::FRAC_PI_2, 1.0);
+            // Bottom arc: CW arrow at 90° (bottom of ball)
+            draw_arc_arrow(std::f32::consts::FRAC_PI_2, -1.0);
+        }
+    }
     
     // Handle mouse interaction - rotate quaternion and track relative lat/lon changes
     let mut orientation_changed = false;

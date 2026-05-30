@@ -4269,7 +4269,13 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let selected_text = if current_mode_a < 0 {
                             "Default".to_string()
                         } else if (current_mode_a as usize) < mode_count {
-                            mode_info_for_dropdowns[current_mode_a as usize].0.clone()
+                            let full_name = mode_info_for_dropdowns[current_mode_a as usize].0.clone();
+                            let max_chars = ((ui.available_width() - 28.0) / 7.0).max(3.0) as usize;
+                            if full_name.len() > max_chars {
+                                format!("{}…", &full_name[..full_name.char_indices().nth(max_chars.saturating_sub(1)).map(|(i, _)| i).unwrap_or(full_name.len())])
+                            } else {
+                                full_name
+                            }
                         } else {
                             "Invalid".to_string()
                         };
@@ -4278,25 +4284,50 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             .selected_text(selected_text)
                             .width(ui.available_width() - 10.0)
                             .show_ui(ui, |ui| {
-                                // Default option (use normal child_a mode)
-                                if ui.selectable_label(current_mode_a < 0, "Default").clicked() {
+                                let item_width = ui.available_width();
+                                // Default option
+                                let (def_rect, def_response) = ui.allocate_exact_size(
+                                    egui::vec2(item_width, 18.0),
+                                    egui::Sense::click(),
+                                );
+                                let def_bg = if current_mode_a < 0 {
+                                    egui::Color32::from_rgb(60, 80, 60)
+                                } else if def_response.hovered() {
+                                    egui::Color32::from_rgb(50, 60, 50)
+                                } else {
+                                    egui::Color32::from_rgb(35, 45, 35)
+                                };
+                                ui.painter().rect_filled(def_rect, 2.0, def_bg);
+                                if current_mode_a < 0 {
+                                    ui.painter().rect_stroke(def_rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
+                                }
+                                draw_marquee_text(ui, def_rect, "Default", egui::Color32::GRAY, def_response.hovered(), egui::Id::new("after_a_default"));
+                                if def_response.clicked() {
                                     new_mode_a = Some(-1);
                                 }
-                                ui.separator();
                                 // Mode options
                                 for (idx, (name, color)) in mode_info_for_dropdowns.iter().enumerate() {
                                     let is_selected = current_mode_a == idx as i32;
-                                    let color32 = egui::Color32::from_rgb(
+                                    let bg_color = egui::Color32::from_rgb(
                                         (color.x * 255.0) as u8,
                                         (color.y * 255.0) as u8,
                                         (color.z * 255.0) as u8,
                                     );
-                                    ui.horizontal(|ui| {
-                                        ui.colored_label(color32, "●");
-                                        if ui.selectable_label(is_selected, name).clicked() {
-                                            new_mode_a = Some(idx as i32);
-                                        }
-                                    });
+                                    let luminance = 0.299 * color.x + 0.587 * color.y + 0.114 * color.z;
+                                    let text_color = if luminance > 0.5 { egui::Color32::BLACK } else { egui::Color32::WHITE };
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(item_width, 18.0),
+                                        egui::Sense::click(),
+                                    );
+                                    let bg = if response.hovered() { bg_color.gamma_multiply(1.2) } else { bg_color };
+                                    ui.painter().rect_filled(rect, 2.0, bg);
+                                    if is_selected {
+                                        ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
+                                    }
+                                    draw_marquee_text(ui, rect, name, text_color, response.hovered(), egui::Id::new(("after_a_item", idx)));
+                                    if response.clicked() {
+                                        new_mode_a = Some(idx as i32);
+                                    }
                                 }
                             });
                     });
@@ -4310,7 +4341,13 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let selected_text = if current_mode_b < 0 {
                             "Default".to_string()
                         } else if (current_mode_b as usize) < mode_count {
-                            mode_info_for_dropdowns[current_mode_b as usize].0.clone()
+                            let full_name = mode_info_for_dropdowns[current_mode_b as usize].0.clone();
+                            let max_chars = ((ui.available_width() - 28.0) / 7.0).max(3.0) as usize;
+                            if full_name.len() > max_chars {
+                                format!("{}…", &full_name[..full_name.char_indices().nth(max_chars.saturating_sub(1)).map(|(i, _)| i).unwrap_or(full_name.len())])
+                            } else {
+                                full_name
+                            }
                         } else {
                             "Invalid".to_string()
                         };
@@ -4319,25 +4356,50 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             .selected_text(selected_text)
                             .width(ui.available_width() - 10.0)
                             .show_ui(ui, |ui| {
-                                // Default option (use normal child_b mode)
-                                if ui.selectable_label(current_mode_b < 0, "Default").clicked() {
+                                let item_width = ui.available_width();
+                                // Default option
+                                let (def_rect, def_response) = ui.allocate_exact_size(
+                                    egui::vec2(item_width, 18.0),
+                                    egui::Sense::click(),
+                                );
+                                let def_bg = if current_mode_b < 0 {
+                                    egui::Color32::from_rgb(60, 80, 60)
+                                } else if def_response.hovered() {
+                                    egui::Color32::from_rgb(50, 60, 50)
+                                } else {
+                                    egui::Color32::from_rgb(35, 45, 35)
+                                };
+                                ui.painter().rect_filled(def_rect, 2.0, def_bg);
+                                if current_mode_b < 0 {
+                                    ui.painter().rect_stroke(def_rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
+                                }
+                                draw_marquee_text(ui, def_rect, "Default", egui::Color32::GRAY, def_response.hovered(), egui::Id::new("after_b_default"));
+                                if def_response.clicked() {
                                     new_mode_b = Some(-1);
                                 }
-                                ui.separator();
                                 // Mode options
                                 for (idx, (name, color)) in mode_info_for_dropdowns.iter().enumerate() {
                                     let is_selected = current_mode_b == idx as i32;
-                                    let color32 = egui::Color32::from_rgb(
+                                    let bg_color = egui::Color32::from_rgb(
                                         (color.x * 255.0) as u8,
                                         (color.y * 255.0) as u8,
                                         (color.z * 255.0) as u8,
                                     );
-                                    ui.horizontal(|ui| {
-                                        ui.colored_label(color32, "●");
-                                        if ui.selectable_label(is_selected, name).clicked() {
-                                            new_mode_b = Some(idx as i32);
-                                        }
-                                    });
+                                    let luminance = 0.299 * color.x + 0.587 * color.y + 0.114 * color.z;
+                                    let text_color = if luminance > 0.5 { egui::Color32::BLACK } else { egui::Color32::WHITE };
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(item_width, 18.0),
+                                        egui::Sense::click(),
+                                    );
+                                    let bg = if response.hovered() { bg_color.gamma_multiply(1.2) } else { bg_color };
+                                    ui.painter().rect_filled(rect, 2.0, bg);
+                                    if is_selected {
+                                        ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
+                                    }
+                                    draw_marquee_text(ui, rect, name, text_color, response.hovered(), egui::Id::new(("after_b_item", idx)));
+                                    if response.clicked() {
+                                        new_mode_b = Some(idx as i32);
+                                    }
                                 }
                             });
                     });

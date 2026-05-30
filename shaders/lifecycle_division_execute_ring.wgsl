@@ -673,12 +673,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     mode_indices[cell_idx] = child_a_mode_idx;
     
     // Split count: reset if mode changes OR if the after-splits routing fires with an
-    // explicit mode_a/b_after_splits configured (lifecycle transition — stem cycling).
-    // When will_reach_max_splits fires but no after-splits mode is set, keep incrementing
-    // so the count stays >= max_splits and the cell stops dividing permanently.
+    // explicit mode_a/b_after_splits that is DIFFERENT from the normal child mode
+    // (lifecycle transition — stem cycling). Setting after-splits to the same mode
+    // as the normal child is identical to leaving it at default (-1): no reset.
     let parent_props_4_for_count = mode_properties_v4[parent_mode_idx];
-    let after_splits_a_fires = will_reach_max_splits && parent_props_4_for_count.y >= 0.0;
-    let after_splits_b_fires = will_reach_max_splits && parent_props_4_for_count.z >= 0.0;
+    let normal_child_a_mode_idx = u32(max(child_mode_indices[parent_mode_idx].x, 0));
+    let normal_child_b_mode_idx = u32(max(child_mode_indices[parent_mode_idx].y, 0));
+    let after_splits_a_fires = will_reach_max_splits
+        && parent_props_4_for_count.y >= 0.0
+        && u32(parent_props_4_for_count.y) != normal_child_a_mode_idx;
+    let after_splits_b_fires = will_reach_max_splits
+        && parent_props_4_for_count.z >= 0.0
+        && u32(parent_props_4_for_count.z) != normal_child_b_mode_idx;
     if (child_a_mode_idx != parent_mode_idx || after_splits_a_fires) {
         split_counts[cell_idx] = 0u;
     } else {
