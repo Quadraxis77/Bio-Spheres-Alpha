@@ -20,7 +20,7 @@ pub fn compute_adhesion_forces(
     rotations: &[Quat],
     angular_velocities: &[Vec3],
     masses: &[f32],
-    _genome_orientations: &[Quat],
+    genome_orientations: &[Quat],
     mode_settings: &[AdhesionSettings],
     forces: &mut [Vec3],
     torques: &mut [Vec3],
@@ -50,6 +50,9 @@ pub fn compute_adhesion_forces(
         
         let settings = &mode_settings[mode_idx];
         
+        let genome_rot_a = if cell_a_idx < genome_orientations.len() { genome_orientations[cell_a_idx] } else { rotations[cell_a_idx] };
+        let genome_rot_b = if cell_b_idx < genome_orientations.len() { genome_orientations[cell_b_idx] } else { rotations[cell_b_idx] };
+        
         // Calculate forces and torques
         let (force_a, torque_a, force_b, torque_b, spring_force_mag) = compute_adhesion_force_pair(
             positions[cell_a_idx],
@@ -62,8 +65,8 @@ pub fn compute_adhesion_forces(
             rotations[cell_b_idx],
             angular_velocities[cell_b_idx],
             masses[cell_b_idx],
-            rotations[cell_a_idx],
-            rotations[cell_b_idx],
+            genome_rot_a,
+            genome_rot_b,
             connections.anchor_direction_a[i],
             connections.anchor_direction_b[i],
             connections.twist_reference_a[i],
@@ -103,7 +106,7 @@ pub fn compute_adhesion_forces_parallel(
     rotations: &[Quat],
     angular_velocities: &[Vec3],
     masses: &[f32],
-    _genome_orientations: &[Quat],
+    genome_orientations: &[Quat],
     mode_settings: &[AdhesionSettings],
     forces: &mut [Vec3],
     torques: &mut [Vec3],
@@ -131,6 +134,9 @@ pub fn compute_adhesion_forces_parallel(
                 return vec![];
             }
             
+            let genome_rot_a = if cell_a_idx < genome_orientations.len() { genome_orientations[cell_a_idx] } else { rotations[cell_a_idx] };
+            let genome_rot_b = if cell_b_idx < genome_orientations.len() { genome_orientations[cell_b_idx] } else { rotations[cell_b_idx] };
+            
             let settings = &mode_settings[mode_idx];
             
             // Get per-cell muscle contraction values
@@ -148,8 +154,8 @@ pub fn compute_adhesion_forces_parallel(
                 rotations[cell_b_idx],
                 angular_velocities[cell_b_idx],
                 masses[cell_b_idx],
-                rotations[cell_a_idx],
-                rotations[cell_b_idx],
+                genome_rot_a,
+                genome_rot_b,
                 connections.anchor_direction_a[i],
                 connections.anchor_direction_b[i],
                 connections.twist_reference_a[i],
@@ -654,7 +660,7 @@ pub fn compute_adhesion_forces_batched(
     rotations: &[Quat],
     angular_velocities: &[Vec3],
     masses: &[f32],
-    _genome_orientations: &[Quat],
+    genome_orientations: &[Quat],
     mode_settings: &[AdhesionSettings],
     forces: &mut [Vec3],
     torques: &mut [Vec3],
@@ -691,6 +697,9 @@ pub fn compute_adhesion_forces_batched(
             
             let settings = &mode_settings[mode_idx];
             
+            let genome_rot_a = if cell_a_idx < genome_orientations.len() { genome_orientations[cell_a_idx] } else { rotations[cell_a_idx] };
+            let genome_rot_b = if cell_b_idx < genome_orientations.len() { genome_orientations[cell_b_idx] } else { rotations[cell_b_idx] };
+            
             // Calculate forces and torques
             let (force_a, torque_a, force_b, torque_b, spring_force_mag) = compute_adhesion_force_pair(
                 positions[cell_a_idx],
@@ -703,8 +712,8 @@ pub fn compute_adhesion_forces_batched(
                 rotations[cell_b_idx],
                 angular_velocities[cell_b_idx],
                 masses[cell_b_idx],
-                rotations[cell_a_idx],
-                rotations[cell_b_idx],
+                genome_rot_a,
+                genome_rot_b,
                 connections.anchor_direction_a[i],
                 connections.anchor_direction_b[i],
                 connections.twist_reference_a[i],

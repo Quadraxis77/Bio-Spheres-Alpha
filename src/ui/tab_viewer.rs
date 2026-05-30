@@ -3172,8 +3172,8 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                     ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.twist_constraint_stiffness, 0.0..=2.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.twist_constraint_stiffness).speed(0.01).range(0.0..=2.0));
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.twist_constraint_stiffness, 0.0..=20.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.twist_constraint_stiffness).speed(0.1).range(0.0..=20.0));
                 });
 
                 ui.label("Twist Constraint Damping:")
@@ -3182,8 +3182,8 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                     ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.twist_constraint_damping, 0.0..=10.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.twist_constraint_damping).speed(0.01).range(0.0..=10.0));
+                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.twist_constraint_damping, 0.0..=50.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.twist_constraint_damping).speed(0.1).range(0.0..=50.0));
                 });
             });
 

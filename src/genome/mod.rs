@@ -79,7 +79,7 @@ impl Default for AdhesionSettings {
             orientation_spring_damping: 0.5,
             max_angular_deviation: 0.0,
             twist_constraint_stiffness: 2.0,
-            twist_constraint_damping: 0.05,
+            twist_constraint_damping: 20.0,
             enable_twist_constraint: true,
         }
     }

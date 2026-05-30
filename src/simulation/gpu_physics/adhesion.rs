@@ -172,7 +172,7 @@ impl Default for GpuAdhesionSettings {
             orientation_spring_damping: 2.0,
             max_angular_deviation: 0.0,
             twist_constraint_stiffness: 2.0,
-            twist_constraint_damping: 0.5,
+            twist_constraint_damping: 20.0,
             enable_twist_constraint: 1,
             _padding: 0,
         }

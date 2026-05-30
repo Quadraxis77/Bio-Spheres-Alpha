@@ -258,8 +258,13 @@ fn compute_adhesion_forces_for_cell(
     // Two myocytes at full contraction shorten it to zero.
     let effective_rest_length = rest_length * max(1.0 - contraction_a * 0.5 - contraction_b * 0.5, 0.0);
     
-    // Transform anchor directions to world space using current physics rotations
-    // so that adhesion structure rotates with the cells rather than being locked to world orientation.
+    // Transform anchor directions to world space using GENOME orientations
+    // (not physics rotations) so structures are defined purely by genome data.
+    // Physics rotations drift due to torques and collisions; genome orientations
+    // are the pure accumulated split chain and never drift, matching the CPU path.
+    let genome_rot_a = genome_orientations[connection.cell_a_index];
+    let genome_rot_b = genome_orientations[connection.cell_b_index];
+
     var anchor_a: vec3<f32>;
     var anchor_b: vec3<f32>;
 
@@ -267,8 +272,8 @@ fn compute_adhesion_forces_for_cell(
         anchor_a = vec3<f32>(1.0, 0.0, 0.0);
         anchor_b = vec3<f32>(-1.0, 0.0, 0.0);
     } else {
-        anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
-        anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
+        anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, genome_rot_a);
+        anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, genome_rot_b);
     }
     
     // Spring force: standard Hooke's law along the bond axis, plus a geometric

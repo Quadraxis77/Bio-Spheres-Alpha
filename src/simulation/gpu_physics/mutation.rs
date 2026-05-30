@@ -1264,17 +1264,17 @@ impl MutationSystem {
                 weight: 0.7, min_delta: 0.1, max_delta: 0.3,
                 min_value: 0.1, max_value: 3.14, data_type: data_type::CONTINUOUS_F32,
             },
-            // twist_constraint_stiffness [0.0, 2.0]: delta ~3–10% of range (v2.x, element_offset 8)
+            // twist_constraint_stiffness [0.0, 20.0]: delta ~3–10% of range (v2.x, element_offset 8)
             MutationParamEntry {
                 buffer_id: buffer_id::ADHESION_SETTINGS, element_offset: 8,
-                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: 0.0, max_value: 2.0, data_type: data_type::CONTINUOUS_F32,
+                weight: 0.5, min_delta: 0.5, max_delta: 2.0,
+                min_value: 0.0, max_value: 20.0, data_type: data_type::CONTINUOUS_F32,
             },
-            // twist_constraint_damping [0.0, 2.0]: delta ~3–10% of range (v2.y, element_offset 9)
+            // twist_constraint_damping [0.0, 50.0]: delta ~3–10% of range (v2.y, element_offset 9)
             MutationParamEntry {
                 buffer_id: buffer_id::ADHESION_SETTINGS, element_offset: 9,
-                weight: 0.5, min_delta: 0.05, max_delta: 0.2,
-                min_value: 0.0, max_value: 2.0, data_type: data_type::CONTINUOUS_F32,
+                weight: 0.5, min_delta: 1.5, max_delta: 5.0,
+                min_value: 0.0, max_value: 50.0, data_type: data_type::CONTINUOUS_F32,
             },
             // enable_twist_constraint: boolean flip (v2.z, element_offset 10)
             MutationParamEntry {
@@ -1727,17 +1727,17 @@ impl MutationSystem {
                     weight: 0.7, min_delta: 0.05, max_delta: 0.15,
                     min_value: 0.1, max_value: 3.14, data_type: data_type::CONTINUOUS_F32,
                 },
-                // twist_constraint_stiffness [0.0, 2.0] (v2.x, element_offset 8)
+                // twist_constraint_stiffness [0.0, 20.0] (v2.x, element_offset 8)
                 MutationParamEntry {
                     buffer_id: buffer_id::ADHESION_SETTINGS, element_offset: 8,
-                    weight: 0.5, min_delta: 0.02, max_delta: 0.08,
-                    min_value: 0.0, max_value: 2.0, data_type: data_type::CONTINUOUS_F32,
+                    weight: 0.5, min_delta: 0.5, max_delta: 2.0,
+                    min_value: 0.0, max_value: 20.0, data_type: data_type::CONTINUOUS_F32,
                 },
-                // twist_constraint_damping [0.0, 2.0] (v2.y, element_offset 9)
+                // twist_constraint_damping [0.0, 50.0] (v2.y, element_offset 9)
                 MutationParamEntry {
                     buffer_id: buffer_id::ADHESION_SETTINGS, element_offset: 9,
-                    weight: 0.5, min_delta: 0.02, max_delta: 0.08,
-                    min_value: 0.0, max_value: 2.0, data_type: data_type::CONTINUOUS_F32,
+                    weight: 0.5, min_delta: 1.5, max_delta: 5.0,
+                    min_value: 0.0, max_value: 50.0, data_type: data_type::CONTINUOUS_F32,
                 },
 
                 // --- Signal settings (subtle: thresholds only, small nudges) ---
