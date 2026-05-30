@@ -594,7 +594,36 @@ pub fn division_step(
                         let child_b_split_ratio = child_b_mode.map(|m| m.split_ratio).unwrap_or(0.5);
 
 
-                        // Create child-to-child connection with parent's mode index
+                        // Create child-to-child connection with parent's mode index.
+                        // Disconnect any existing bond on child A whose anchor occupies the
+                        // same direction as the new sibling bond (within ANCHOR_OVERLAP_COS).
+                        // Both anchors are compared in child A's LOCAL frame so the test is
+                        // independent of genome orientation. This matches the GPU shader.
+                        {
+                            let mut old_bond_to_remove: Option<usize> = None;
+                            for slot in 0..crate::cell::MAX_ADHESIONS_PER_CELL {
+                                let conn_idx = state.adhesion_manager.cell_adhesion_indices[data.child_a_slot][slot];
+                                if conn_idx < 0 { continue; }
+                                let conn_idx = conn_idx as usize;
+                                if conn_idx >= state.adhesion_connections.active_count { continue; }
+                                if state.adhesion_connections.is_active[conn_idx] == 0 { continue; }
+                                // This cell's (child A's) side anchor in its own local frame
+                                let existing_anchor_local =
+                                    if state.adhesion_connections.cell_a_index[conn_idx] == data.child_a_slot {
+                                        state.adhesion_connections.anchor_direction_a[conn_idx]
+                                    } else {
+                                        state.adhesion_connections.anchor_direction_b[conn_idx]
+                                    };
+                                if anchor_direction_a.dot(existing_anchor_local) > crate::cell::ANCHOR_OVERLAP_COS {
+                                    old_bond_to_remove = Some(conn_idx);
+                                    break;
+                                }
+                            }
+                            if let Some(idx) = old_bond_to_remove {
+                                state.adhesion_manager.remove_adhesion(&mut state.adhesion_connections, idx);
+                            }
+                        }
+
                         let _result = state.adhesion_manager.add_adhesion_with_directions(
                             &mut state.adhesion_connections,
                             data.child_a_slot,
@@ -1092,7 +1121,34 @@ pub fn division_step_multi(
                     
                     // Calculate global mode index for adhesion settings lookup
                     let global_mode_idx = genome_mode_offsets.get(data.parent_genome_id).copied().unwrap_or(0) + data.parent_mode_idx;
-                    
+
+                    // Disconnect any existing bond on child A whose anchor occupies the same
+                    // direction as the new sibling bond (compared in child A's local frame).
+                    // Matches division_step and the GPU shader so both scenes behave identically.
+                    {
+                        let mut old_bond_to_remove: Option<usize> = None;
+                        for slot in 0..crate::cell::MAX_ADHESIONS_PER_CELL {
+                            let conn_idx = state.adhesion_manager.cell_adhesion_indices[data.child_a_slot][slot];
+                            if conn_idx < 0 { continue; }
+                            let conn_idx = conn_idx as usize;
+                            if conn_idx >= state.adhesion_connections.active_count { continue; }
+                            if state.adhesion_connections.is_active[conn_idx] == 0 { continue; }
+                            let existing_anchor_local =
+                                if state.adhesion_connections.cell_a_index[conn_idx] == data.child_a_slot {
+                                    state.adhesion_connections.anchor_direction_a[conn_idx]
+                                } else {
+                                    state.adhesion_connections.anchor_direction_b[conn_idx]
+                                };
+                            if anchor_direction_a.dot(existing_anchor_local) > crate::cell::ANCHOR_OVERLAP_COS {
+                                old_bond_to_remove = Some(conn_idx);
+                                break;
+                            }
+                        }
+                        if let Some(idx) = old_bond_to_remove {
+                            state.adhesion_manager.remove_adhesion(&mut state.adhesion_connections, idx);
+                        }
+                    }
+
                     let _ = state.adhesion_manager.add_adhesion_with_directions(
                         &mut state.adhesion_connections,
                         data.child_a_slot,

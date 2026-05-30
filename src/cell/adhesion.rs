@@ -3,6 +3,14 @@ use glam::{Vec3, Quat};
 /// Maximum adhesions per cell
 pub const MAX_ADHESIONS_PER_CELL: usize = 20;
 
+/// Cosine threshold for deciding when a newly created sibling bond occupies the same
+/// direction as an existing (inherited) bond on the same cell. When two anchor
+/// directions (in the same local frame) have a dot product above this value, the
+/// older bond is disconnected so the new sibling bond replaces it. ~8 degrees.
+/// Shared by the CPU (division.rs) and GPU (lifecycle_division_execute_ring.wgsl)
+/// paths so both scenes disconnect identically.
+pub const ANCHOR_OVERLAP_COS: f32 = 0.99;
+
 /// Legacy constant - actual capacity is computed dynamically as cell_capacity * MAX_ADHESIONS_PER_CELL / 2
 /// Kept for backwards compatibility with code that references it
 pub const MAX_ADHESION_CONNECTIONS: usize = 2_000_000;

@@ -193,8 +193,7 @@ pub fn compute_adhesion_forces_parallel(
 
 /// Compute adhesion forces for a single connection pair.
 /// Matches GPU adhesion_physics.wgsl exactly:
-/// - Genome orientations for geometric spring anchors (genome-pure positioning)
-/// - Physics rotations for orientation/twist springs (detects actual misalignment)
+/// - Physics rotations for all springs (geometric, orientation, twist)
 /// - Anchor-based geometric spring (not simple distance spring)
 /// - Full-strength twist constraints (no reduction factors)
 #[inline]
@@ -210,8 +209,8 @@ fn compute_adhesion_force_pair(
     rot_b: Quat,
     ang_vel_b: Vec3,
     _mass_b: f32,
-    genome_rot_a: Quat,
-    genome_rot_b: Quat,
+    _genome_rot_a: Quat,
+    _genome_rot_b: Quat,
     anchor_dir_a: Vec3,
     anchor_dir_b: Vec3,
     twist_ref_a: Quat,
@@ -239,34 +238,19 @@ fn compute_adhesion_force_pair(
     // Two myocytes at full contraction shorten it to zero.
     let effective_rest_length = rest_length * (1.0 - contraction_a * 0.5 - contraction_b * 0.5).max(0.0);
 
-    // Transform anchor directions to world space using GENOME orientations
-    // (not physics rotations) so structures are defined purely by genome data.
+    // Transform anchor directions to world space using physics rotations.
+    // Both the geometric spring and orientation spring use physics rotations so the
+    // structure moves freely with the creature.
     let anchor_a = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
-        Vec3::X
-    } else {
-        rotate_vector_by_quaternion(anchor_dir_a, genome_rot_a)
-    };
-    let anchor_b = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
-        -Vec3::X
-    } else {
-        rotate_vector_by_quaternion(anchor_dir_b, genome_rot_b)
-    };
-
-    // Compute physics-based anchors for orientation/twist constraints.
-    // These track the cell's ACTUAL physical rotation so springs can detect
-    // and correct misalignment. Genome anchors above are fixed and can't detect rotation.
-    let phys_anchor_a = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
         Vec3::X
     } else {
         rotate_vector_by_quaternion(anchor_dir_a, rot_a)
     };
-    let phys_anchor_b = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
+    let anchor_b = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
         -Vec3::X
     } else {
         rotate_vector_by_quaternion(anchor_dir_b, rot_b)
     };
-
-    // Geometric spring force: anchor-defined target positions (matches GPU)
     // Each cell uses its own contracted reach for its anchor
     let target_b = pos_a + anchor_a * effective_rest_length;
     let target_a = pos_b + anchor_b * effective_rest_length;
@@ -286,12 +270,11 @@ fn compute_adhesion_force_pair(
     force_b -= geo_force_on_a + damping_force;
 
     // Orientation spring: aligns each cell's anchor toward the live adhesion direction.
-    // Matches GPU adhesion_physics.wgsl: cross(anchor, adhesion_dir) / dot(anchor, adhesion_dir).
     // This is what enforces the angular shape — it pulls the cell's anchor to point at
     // its bonded neighbor, creating the rigid inter-cell angle defined by the genome.
-    let axis_a = phys_anchor_a.cross(adhesion_dir);
+    let axis_a = anchor_a.cross(adhesion_dir);
     let sin_a = axis_a.length();
-    let cos_a = phys_anchor_a.dot(adhesion_dir);
+    let cos_a = anchor_a.dot(adhesion_dir);
     let angle_a = sin_a.atan2(cos_a);
     if sin_a > QUATERNION_EPSILON {
         let axis_a_norm = axis_a.normalize();
@@ -303,9 +286,9 @@ fn compute_adhesion_force_pair(
     torque_a -= adhesion_dir * ang_vel_a.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
 
     // Orientation spring for cell B: aligns B's anchor toward -adhesion_dir (toward A)
-    let axis_b = phys_anchor_b.cross(-adhesion_dir);
+    let axis_b = anchor_b.cross(-adhesion_dir);
     let sin_b = axis_b.length();
-    let cos_b = phys_anchor_b.dot(-adhesion_dir);
+    let cos_b = anchor_b.dot(-adhesion_dir);
     let angle_b = sin_b.atan2(cos_b);
     if sin_b > QUATERNION_EPSILON {
         let axis_b_norm = axis_b.normalize();

@@ -12,6 +12,7 @@ pub use adhesion::{
     AdhesionConnections, 
     AdhesionIndices, 
     MAX_ADHESIONS_PER_CELL, 
+    ANCHOR_OVERLAP_COS,
     MAX_ADHESION_CONNECTIONS,
     init_adhesion_indices,
 };

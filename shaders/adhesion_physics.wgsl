@@ -258,10 +258,10 @@ fn compute_adhesion_forces_for_cell(
     // Two myocytes at full contraction shorten it to zero.
     let effective_rest_length = rest_length * max(1.0 - contraction_a * 0.5 - contraction_b * 0.5, 0.0);
     
-    // Transform anchor directions to world space using GENOME orientations
-    // (not physics rotations) so structures are defined purely by genome data.
-    // Physics rotations drift due to torques and collisions; genome orientations
-    // are the pure accumulated split chain and never drift, matching the CPU path.
+    // Transform anchor directions to world space using GENOME orientations.
+    // genome_orientations is synced from rotations each frame in velocity_update.wgsl,
+    // so it tracks the creature's actual orientation. Using it here (rather than rotations
+    // directly) keeps the geometric spring target consistent with the orientation spring.
     let genome_rot_a = genome_orientations[connection.cell_a_index];
     let genome_rot_b = genome_orientations[connection.cell_b_index];
 
@@ -275,27 +275,14 @@ fn compute_adhesion_forces_for_cell(
         anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, genome_rot_a);
         anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, genome_rot_b);
     }
-    
-    // Spring force: standard Hooke's law along the bond axis, plus a geometric
-    // correction that enforces the genome-defined anchor angles.
-    //
-    // Component 1 — axial spring (Hooke's law):
-    //   Pulls/pushes cells along the bond to maintain rest_length.
-    //   This is the dominant stiffness term and responds directly to stretch/compression.
-    let extension = dist - effective_rest_length;
-    let axial_force_on_a = adhesion_dir * extension * settings.linear_spring_stiffness;
-
-    // Component 2 — geometric anchor correction:
-    //   Pulls each cell toward the position its anchor says it should be at.
-    //   Uses a fraction of stiffness so it shapes structure without fighting the axial spring.
+    // The geometric correction is what enforces the genome-defined angle between bonded cells.
+    // Applying it at full stiffness (not a reduced fraction) is what gives organisms rigid shape.
     let target_b = pos_a + anchor_a * effective_rest_length;
     let target_a = pos_b + anchor_b * effective_rest_length;
     let error_a = target_a - pos_a;
     let error_b = target_b - pos_b;
-    let geo_correction_on_a = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness * 0.3;
-
-    let geo_force_on_a = axial_force_on_a + geo_correction_on_a;
-    *spring_force_mag_out = length(axial_force_on_a);
+    let geo_force_on_a = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness;
+    *spring_force_mag_out = length(geo_force_on_a);
     
     // Linear damping: pure velocity-damping along the bond axis.
     // Only the component of relative velocity along the bond is damped,
@@ -314,11 +301,23 @@ fn compute_adhesion_forces_for_cell(
     // Calculate torques for both cells
     var torque_a = vec3<f32>(0.0);
     var torque_b = vec3<f32>(0.0);
-    
+
+    // Physics-based anchors for orientation/twist springs — use actual physics rotations
+    // so the spring detects and corrects angular drift relative to the genome target.
+    var phys_anchor_a: vec3<f32>;
+    var phys_anchor_b: vec3<f32>;
+    if (length(connection.anchor_direction_a.xyz) < 0.001 && length(connection.anchor_direction_b.xyz) < 0.001) {
+        phys_anchor_a = vec3<f32>(1.0, 0.0, 0.0);
+        phys_anchor_b = vec3<f32>(-1.0, 0.0, 0.0);
+    } else {
+        phys_anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
+        phys_anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
+    }
+
     // Orientation spring for cell A - aligns anchor toward bonded neighbor
-    let axis_a = cross(anchor_a, adhesion_dir);
+    let axis_a = cross(phys_anchor_a, adhesion_dir);
     let sin_a = length(axis_a);
-    let cos_a = dot(anchor_a, adhesion_dir);
+    let cos_a = dot(phys_anchor_a, adhesion_dir);
     let angle_a = atan2(sin_a, cos_a);
     if (sin_a > 0.0001) {
         let norm_axis_a = normalize(axis_a);
@@ -332,9 +331,9 @@ fn compute_adhesion_forces_for_cell(
     torque_a -= adhesion_dir * dot(ang_vel_a, adhesion_dir) * settings.orientation_spring_damping * 0.5;
     
     // Orientation spring for cell B
-    let axis_b = cross(anchor_b, -adhesion_dir);
+    let axis_b = cross(phys_anchor_b, -adhesion_dir);
     let sin_b = length(axis_b);
-    let cos_b = dot(anchor_b, -adhesion_dir);
+    let cos_b = dot(phys_anchor_b, -adhesion_dir);
     let angle_b = atan2(sin_b, cos_b);
     if (sin_b > 0.0001) {
         let norm_axis_b = normalize(axis_b);

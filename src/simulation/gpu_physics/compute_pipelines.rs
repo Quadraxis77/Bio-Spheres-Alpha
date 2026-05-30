@@ -3899,6 +3899,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 5: Genome orientations (read-write) — synced from rotations each frame
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -4131,6 +4142,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: triple_buffers.rotations[buffer_index].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: triple_buffers.genome_orientations.as_entire_binding(),
                 },
             ],
         })

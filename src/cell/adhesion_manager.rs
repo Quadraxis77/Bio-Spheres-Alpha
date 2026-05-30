@@ -79,6 +79,31 @@ impl AdhesionConnectionManager {
         removed
     }
 
+    /// Find an active connection between two specific cells, if one exists.
+    /// Returns the connection index, or None if no active bond exists between them.
+    pub fn find_connection_between(
+        &self,
+        connections: &AdhesionConnections,
+        cell_a: usize,
+        cell_b: usize,
+    ) -> Option<usize> {
+        for &conn_idx_signed in &self.cell_adhesion_indices[cell_a] {
+            if conn_idx_signed < 0 {
+                continue;
+            }
+            let conn_idx = conn_idx_signed as usize;
+            if conn_idx >= connections.active_count || connections.is_active[conn_idx] == 0 {
+                continue;
+            }
+            let ca = connections.cell_a_index[conn_idx];
+            let cb = connections.cell_b_index[conn_idx];
+            if (ca == cell_a && cb == cell_b) || (ca == cell_b && cb == cell_a) {
+                return Some(conn_idx);
+            }
+        }
+        None
+    }
+
     /// Add adhesion connection with proper slot management and zone classification
     /// 
     /// # Arguments
@@ -114,6 +139,13 @@ impl AdhesionConnectionManager {
         // Check if cells are the same
         if cell_a == cell_b {
             return None;
+        }
+
+        // Check if a bond between these two cells already exists — if so, replace it.
+        // This handles the case where a cell splits and the new sibling bond would
+        // stack on top of an inherited bond pointing in the same direction.
+        if let Some(existing_idx) = self.find_connection_between(connections, cell_a, cell_b) {
+            self.remove_adhesion(connections, existing_idx);
         }
         
         // Check connection capacity

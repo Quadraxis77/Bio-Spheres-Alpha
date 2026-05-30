@@ -409,6 +409,11 @@ fn quat_multiply(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
 
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 
+// Cosine threshold for deciding when a new sibling bond occupies the same direction
+// as an existing inherited bond on the same cell (~8 degrees). Must match the CPU
+// constant ANCHOR_OVERLAP_COS in src/cell/adhesion.rs so both scenes disconnect identically.
+const ANCHOR_OVERLAP_COS: f32 = 0.99;
+
 // Calculate child anchor direction using geometric approach (matches reference)
 // child_pos_parent_frame: child position in parent's local frame
 // neighbor_pos_parent_frame: neighbor position in parent's local frame (from anchor * distance)
@@ -1149,6 +1154,44 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // else: spurious failure, retry same i
                 }
 
+            }
+        }
+    }
+
+    // === Disconnect inherited bonds overlapping the sibling bond ===
+    // Runs AFTER inheritance so the inherited bonds have been re-expressed into child A's
+    // local frame. The sibling bond's child-A-side anchor and the inherited bonds' child-A-side
+    // anchors are now in the same frame, so the overlap test is valid. This matches the CPU
+    // path in division.rs (which runs inheritance before sibling creation + scan).
+    if (sibling_adhesion_slot != 0xFFFFFFFFu) {
+        let sibling_anchor_a = adhesion_connections[sibling_adhesion_slot].anchor_direction_a.xyz;
+        let disc_base_a = cell_idx * MAX_ADHESIONS_PER_CELL;
+        for (var k = 0u; k < MAX_ADHESIONS_PER_CELL; k++) {
+            let existing_idx_signed = atomicLoad(&cell_adhesion_indices[disc_base_a + k]);
+            if (existing_idx_signed < 0) { continue; }
+            let existing_idx = u32(existing_idx_signed);
+            if (existing_idx == sibling_adhesion_slot) { continue; }
+            let existing_conn = adhesion_connections[existing_idx];
+            if (existing_conn.is_active == 0u) { continue; }
+            // Child A's side anchor in its own local frame
+            var existing_anchor_local: vec3<f32>;
+            if (existing_conn.cell_a_index == cell_idx) {
+                existing_anchor_local = existing_conn.anchor_direction_a.xyz;
+            } else {
+                existing_anchor_local = existing_conn.anchor_direction_b.xyz;
+            }
+            if (dot(sibling_anchor_a, existing_anchor_local) > ANCHOR_OVERLAP_COS) {
+                // Disconnect the old bond and clear it from both cells' index lists
+                adhesion_connections[existing_idx].is_active = 0u;
+                let other_idx = select(existing_conn.cell_a_index, existing_conn.cell_b_index, existing_conn.cell_a_index == cell_idx);
+                atomicStore(&cell_adhesion_indices[disc_base_a + k], -1);
+                let other_base = other_idx * MAX_ADHESIONS_PER_CELL;
+                for (var j = 0u; j < MAX_ADHESIONS_PER_CELL; j++) {
+                    if (atomicLoad(&cell_adhesion_indices[other_base + j]) == i32(existing_idx)) {
+                        atomicStore(&cell_adhesion_indices[other_base + j], -1);
+                    }
+                }
+                break;
             }
         }
     }
