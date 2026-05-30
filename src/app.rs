@@ -132,6 +132,9 @@ pub struct App {
     last_left_click_time: Option<std::time::Instant>,
     /// Screen position of the last left-click for double-click proximity check
     last_left_click_pos: (f32, f32),
+    /// Screen position where the right mouse button was pressed (physical pixels).
+    /// Used to distinguish a tap (open context menu) from a drag (rotate camera).
+    right_click_start_pos: Option<(f32, f32)>,
     // IMPORTANT: surface must be declared before device so it drops first.
     // Rust drops fields in declaration order; wgpu/Vulkan requires the surface
     // to be destroyed before the device, otherwise the Vulkan validation layer
@@ -183,6 +186,7 @@ impl App {
             deferred_action: None,
             last_left_click_time: None,
             last_left_click_pos: (0.0, 0.0),
+            right_click_start_pos: None,
             device,
             surface,
             app_phase: AppPhase::MainMenu,
@@ -360,56 +364,79 @@ impl App {
                     && *state == ElementState::Pressed
                     && !self.ui.wants_pointer_input()
                 {
-                    if let Some(preview_scene) = self.scene_manager.preview_scene_mut() {
+                    // Record where the right-click started so we can decide on release
+                    // whether this was a tap (open menu) or a drag (rotate camera).
+                    self.right_click_start_pos = Some(self.mouse_position);
+                    self.window.request_redraw();
+                }
+
+                if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Preview
+                    && *button == MouseButton::Right
+                    && *state == ElementState::Released
+                    && !self.ui.wants_pointer_input()
+                {
+                    // Determine whether this was a tap or a drag.
+                    const DRAG_THRESHOLD_PX: f32 = 5.0;
+                    let was_tap = self.right_click_start_pos.map_or(false, |(sx, sy)| {
                         let (mx, my) = self.mouse_position;
-                        let w = self.config.width as f32;
-                        let h = self.config.height as f32;
-                        let aspect = w / h;
+                        let dx = mx - sx;
+                        let dy = my - sy;
+                        dx * dx + dy * dy <= DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX
+                    });
+                    self.right_click_start_pos = None;
 
-                        let cam_pos = preview_scene.camera.position();
-                        let cam_rot = preview_scene.camera.rotation;
-                        let fov_y = 45.0_f32.to_radians();
-                        let tan_half_fov = (fov_y / 2.0).tan();
+                    if was_tap {
+                        if let Some(preview_scene) = self.scene_manager.preview_scene_mut() {
+                            let (mx, my) = self.mouse_position;
+                            let w = self.config.width as f32;
+                            let h = self.config.height as f32;
+                            let aspect = w / h;
 
-                        let ndc_x = (mx / w) * 2.0 - 1.0;
-                        let ndc_y = 1.0 - (my / h) * 2.0;
+                            let cam_pos = preview_scene.camera.position();
+                            let cam_rot = preview_scene.camera.rotation;
+                            let fov_y = 45.0_f32.to_radians();
+                            let tan_half_fov = (fov_y / 2.0).tan();
 
-                        let ray_dir_cam = glam::Vec3::new(
-                            ndc_x * aspect * tan_half_fov,
-                            ndc_y * tan_half_fov,
-                            -1.0,
-                        ).normalize();
-                        let ray_dir = cam_rot * ray_dir_cam;
+                            let ndc_x = (mx / w) * 2.0 - 1.0;
+                            let ndc_y = 1.0 - (my / h) * 2.0;
 
-                        let cell_count = preview_scene.state.display_state.cell_count;
-                        let mut best_t = f32::MAX;
-                        let mut hit_cell: Option<usize> = None;
+                            let ray_dir_cam = glam::Vec3::new(
+                                ndc_x * aspect * tan_half_fov,
+                                ndc_y * tan_half_fov,
+                                -1.0,
+                            ).normalize();
+                            let ray_dir = cam_rot * ray_dir_cam;
 
-                        for i in 0..cell_count {
-                            let center = preview_scene.state.display_state.positions[i];
-                            let radius = preview_scene.state.display_state.radii[i];
-                            let oc = cam_pos - center;
-                            let b = oc.dot(ray_dir);
-                            let c = oc.dot(oc) - radius * radius;
-                            let disc = b * b - c;
-                            if disc >= 0.0 {
-                                let t = -b - disc.sqrt();
-                                if t > 0.001 && t < best_t {
-                                    best_t = t;
-                                    hit_cell = Some(i);
+                            let cell_count = preview_scene.state.display_state.cell_count;
+                            let mut best_t = f32::MAX;
+                            let mut hit_cell: Option<usize> = None;
+
+                            for i in 0..cell_count {
+                                let center = preview_scene.state.display_state.positions[i];
+                                let radius = preview_scene.state.display_state.radii[i];
+                                let oc = cam_pos - center;
+                                let b = oc.dot(ray_dir);
+                                let c = oc.dot(oc) - radius * radius;
+                                let disc = b * b - c;
+                                if disc >= 0.0 {
+                                    let t = -b - disc.sqrt();
+                                    if t > 0.001 && t < best_t {
+                                        best_t = t;
+                                        hit_cell = Some(i);
+                                    }
                                 }
                             }
-                        }
 
-                        if let Some(cell_idx) = hit_cell {
-                            preview_scene.context_menu_cell = Some(cell_idx);
-                            // Convert physical pixels to egui logical points
-                            let scale = self.window.scale_factor() as f32;
-                            preview_scene.context_menu_screen_pos = (mx / scale, my / scale);
-                            preview_scene.context_menu_open_time = std::time::Instant::now();
-                            log::info!("Right-click on cell {} at screen ({}, {})", cell_idx, mx, my);
-                        } else {
-                            preview_scene.context_menu_cell = None;
+                            if let Some(cell_idx) = hit_cell {
+                                preview_scene.context_menu_cell = Some(cell_idx);
+                                // Convert physical pixels to egui logical points
+                                let scale = self.window.scale_factor() as f32;
+                                preview_scene.context_menu_screen_pos = (mx / scale, my / scale);
+                                preview_scene.context_menu_open_time = std::time::Instant::now();
+                                log::info!("Right-click tap on cell {} at screen ({}, {})", cell_idx, mx, my);
+                            } else {
+                                preview_scene.context_menu_cell = None;
+                            }
                         }
                     }
                     self.window.request_redraw();
@@ -570,6 +597,22 @@ impl App {
                         let _ = self.window.set_cursor_visible(false);
                     } else {
                         let _ = self.window.set_cursor_visible(true);
+                        // Only warp the cursor back to centre if this was a camera drag.
+                        // For a tap (context menu), the cursor should stay where it is so
+                        // the menu appears under the pointer.
+                        let was_drag = self.right_click_start_pos.map_or(true, |(sx, sy)| {
+                            let (mx, my) = self.mouse_position;
+                            let dx = mx - sx;
+                            let dy = my - sy;
+                            dx * dx + dy * dy > 5.0 * 5.0
+                        });
+                        if was_drag {
+                            let size = self.window.inner_size();
+                            let _ = self.window.set_cursor_position(winit::dpi::PhysicalPosition::new(
+                                size.width as f64 / 2.0,
+                                size.height as f64 / 2.0,
+                            ));
+                        }
                     }
                 }
 
