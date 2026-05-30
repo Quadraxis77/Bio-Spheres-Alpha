@@ -3825,17 +3825,6 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 mode.split_mass = 1.0 + nutrient_threshold / 100.0;
 
                 ui.add_space(4.0);
-                ui.label("Split Ratio:")
-                    .on_hover_text("Controls the split axis and Zone C width. 0.5 = symmetric split (Zone C only 3° wide — ring bonds may be lost). 0.65 or 0.35 = asymmetric split (Zone C widens to 22° — recommended for ring-forming cells)");
-                ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.split_ratio, 0.0..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.split_ratio).speed(0.01).range(0.0..=1.0));
-                });
-
-                ui.add_space(4.0);
                 ui.label("Split Interval:")
                     .on_hover_text("Minimum time in seconds between consecutive divisions. The cell will not divide again until this cooldown has elapsed after the previous split");
                 ui.horizontal(|ui| {
@@ -3844,6 +3833,17 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.style_mut().spacing.slider_width = slider_width;
                     ui.add(egui::Slider::new(&mut mode.split_interval, 1.0..=60.0).show_value(false));
                     ui.add(egui::DragValue::new(&mut mode.split_interval).speed(0.1).range(1.0..=60.0).suffix("s"));
+                });
+
+                ui.add_space(4.0);
+                ui.label("Split Ratio:")
+                    .on_hover_text("Controls the split axis and Zone C width. 0.5 = symmetric split (Zone C only 3° wide — ring bonds may be lost). 0.65 or 0.35 = asymmetric split (Zone C widens to 22° — recommended for ring-forming cells)");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut mode.split_ratio, 0.0..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut mode.split_ratio).speed(0.01).range(0.0..=1.0));
                 });
 
                 ui.add_space(4.0);
@@ -4264,10 +4264,10 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     
                     ui.add_space(4.0);
                     ui.label("Child A After Splits:")
-                        .on_hover_text("Mode that Child A transitions to once this cell has divided the maximum number of times. 'Default' keeps the normal Child A mode");
+                        .on_hover_text("Mode that Child A transitions to once this cell has divided the maximum number of times. 'None' keeps the normal Child A mode. A self-referential mode is equivalent to None.");
                     let after_splits_a_row = ui.horizontal(|ui| {
                         let selected_text = if current_mode_a < 0 {
-                            "Default".to_string()
+                            "None".to_string()
                         } else if (current_mode_a as usize) < mode_count {
                             let full_name = mode_info_for_dropdowns[current_mode_a as usize].0.clone();
                             let max_chars = ((ui.available_width() - 28.0) / 7.0).max(3.0) as usize;
@@ -4301,7 +4301,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                 if current_mode_a < 0 {
                                     ui.painter().rect_stroke(def_rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
                                 }
-                                draw_marquee_text(ui, def_rect, "Default", egui::Color32::GRAY, def_response.hovered(), egui::Id::new("after_a_default"));
+                                draw_marquee_text(ui, def_rect, "None", egui::Color32::GRAY, def_response.hovered(), egui::Id::new("after_a_default"));
                                 if def_response.clicked() {
                                     new_mode_a = Some(-1);
                                 }
@@ -4336,10 +4336,10 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     );
 
                     ui.label("Child B After Splits:")
-                        .on_hover_text("Mode that Child B transitions to once this cell has divided the maximum number of times. 'Default' keeps the normal Child B mode");
+                        .on_hover_text("Mode that Child B transitions to once this cell has divided the maximum number of times. 'None' keeps the normal Child B mode. A self-referential mode is equivalent to None.");
                     let after_splits_b_row = ui.horizontal(|ui| {
                         let selected_text = if current_mode_b < 0 {
-                            "Default".to_string()
+                            "None".to_string()
                         } else if (current_mode_b as usize) < mode_count {
                             let full_name = mode_info_for_dropdowns[current_mode_b as usize].0.clone();
                             let max_chars = ((ui.available_width() - 28.0) / 7.0).max(3.0) as usize;
@@ -4373,7 +4373,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                 if current_mode_b < 0 {
                                     ui.painter().rect_stroke(def_rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
                                 }
-                                draw_marquee_text(ui, def_rect, "Default", egui::Color32::GRAY, def_response.hovered(), egui::Id::new("after_b_default"));
+                                draw_marquee_text(ui, def_rect, "None", egui::Color32::GRAY, def_response.hovered(), egui::Id::new("after_b_default"));
                                 if def_response.clicked() {
                                     new_mode_b = Some(-1);
                                 }

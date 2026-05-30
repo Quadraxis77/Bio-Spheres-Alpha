@@ -1180,7 +1180,7 @@ impl App {
                     }};
                 }
 
-                if btn!("Play", teal_fill, teal_fill_h, teal_border, teal_text).clicked() {
+                if btn!("Main Simulation", teal_fill, teal_fill_h, teal_border, teal_text).clicked() {
                     action = MenuAction::Play;
                 }
                 if btn!("Genome editor", blue_fill, blue_fill_h, blue_border, blue_text).clicked() {

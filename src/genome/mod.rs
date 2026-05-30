@@ -342,7 +342,7 @@ impl Default for ModeSettings {
 impl Default for Genome {
     /// Creates a genome with 10 default modes.
     ///
-    /// M1 is Embryocyte; M2–M10 are Phagocyte. This is the serialization
+    /// All modes are Phagocyte. This is the serialization
     /// baseline — `from_serializable` starts from this and applies diffs.
     ///
     /// Old `.genome` files still load correctly because `from_serializable`
@@ -362,7 +362,7 @@ impl Default for Genome {
             let mut mode = ModeSettings {
                 name: mode_name.clone(),
                 default_name: mode_name,
-                cell_type: if i == 0 { 10 } else { 2 }, // M1 = Embryocyte, rest = Phagocyte
+                cell_type: 2, // All modes = Phagocyte
                 color: Vec3::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0),
                 ..Default::default()
             };

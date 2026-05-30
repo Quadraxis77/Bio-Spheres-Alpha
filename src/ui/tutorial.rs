@@ -206,7 +206,7 @@ pub struct TutorialStepData {
 // mechanic, not that they set it to a prescribed value.
 //
 // Chapter 1 — Orientation:    what you're looking at, how to observe
-// Chapter 2 — Division:       split mass and interval, watching timing
+// Chapter 2 — Division:       split nutrients and interval, watching timing
 // Chapter 3 — Cell types:     changing type, observing behavior
 // Chapter 4 — Adhesion:       bonding on/off, bodies vs solo cells
 // Chapter 5 — Body shape:     child routing and orientation
@@ -222,38 +222,33 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
     // ════════════════════════════════════════════════════════════════════════
 
     TutorialStepData {
-        title: "Chapter 1 — What You're Looking At",
-        body: "You're in the Genome Editor — a sandboxed simulation that runs \
-               a single organism from your current genome in real time.\n\n\
-               The genome is a list of cell blueprints called modes. Each mode \
-               answers one question: when a cell of this type divides, what \
-               happens? The simulation reads those rules and runs them forward.\n\n\
-               You never write code. You set rules, and the cells follow them.\n\n\
-               The Time Slider at the bottom is your main observation tool. \
-               Drag it right to fast-forward through time and watch your \
-               creature grow. Drag it back to rewind. Every change you make \
-               to the genome is reflected immediately when you scrub.",
+        title: "Chapter 1 — The Genome Editor",
+        body: "This is the Genome Editor. It runs a single organism from your \
+               genome in a sandboxed simulation.\n\n\
+               A genome is a list of modes. Each mode is a blueprint that \
+               defines what a cell does and how it divides.\n\n\
+               The Modes panel lists all modes in the genome. Click a mode \
+               (M1, M2, …) to select it — the surrounding panels update to \
+               show that mode's settings.\n\n\
+               The Time Slider at the bottom scrubs through time. Drag it \
+               right to watch your organism grow, left to rewind. Changes \
+               to the genome take effect immediately.",
         gate_hint: "",
         gate:       StepGate::None,
-        target:     TutorialTarget::TimeSliderPanel,
+        target:     TutorialTarget::ModesPanel,
         target_pos: [0.5, 0.5],
     },
 
     TutorialStepData {
         title: "Try It — Scrub Through Time",
-        body: "Drag the Time Slider all the way to the right.\n\n\
-               You'll see a single cell appear, then divide repeatedly. \
-               The default genome has no special cell types yet — everything \
-               is a plain Test cell that just divides and grows.\n\n\
-               Notice:\n\
-               • Each division produces two children\n\
-               • The children stay bonded (adhesion is on by default)\n\
-               • The cluster grows outward over time\n\n\
-               Now drag the slider back to zero. The simulation rewinds \
-               completely — it's deterministic, so the same genome always \
-               produces the same result.\n\n\
-               Right-click any cell to inspect it: you'll see its nutrient \
-               level, cell type, mode index, and signal channels live.",
+        body: "Drag the Time Slider to the right.\n\n\
+               Cells appear and divide. The default genome has 10 Phagocyte \
+               modes — each one divides and routes its children back to \
+               itself by default.\n\n\
+               The genome can start from any mode and any cell type — there \
+               is no required starting cell.\n\n\
+               Drag the slider back to zero. The simulation rewinds — the \
+               same genome always produces the same result.",
         gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::TimeSliderPanel,
@@ -268,15 +263,15 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         title: "Chapter 2 — Division Timing",
         body: "The Parent Settings panel controls when a cell divides.\n\n\
                The two most important settings:\n\n\
-               Split Mass — how much nutrient mass the cell must accumulate \
+               Split Nutrients — how many nutrients the cell must accumulate \
                before it can divide. Higher = slower growth, larger cells.\n\n\
                Split Interval — minimum time in seconds between divisions. \
                A cell that has enough mass still waits this long before \
                splitting again.\n\n\
                Together these two sliders control the pace of your organism. \
-               A fast-dividing creature with low split mass grows a large \
+               A fast-dividing creature with low split nutrients grows a large \
                colony quickly but each cell is small. A slow-dividing creature \
-               with high split mass grows fewer, larger cells.",
+               with high split nutrients grows fewer, larger cells.",
         gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::ParentSettingsPanel,
@@ -285,17 +280,17 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
 
     TutorialStepData {
         title: "Experiment — Change the Division Speed",
-        body: "Select M1 in the Modes panel, then open Parent Settings.\n\n\
-               Try dragging Split Interval to a high value (5–10 seconds), \
-               then scrub the Time Slider. Notice how much slower the colony \
-               grows — each cell waits longer before dividing.\n\n\
-               Now try a very low value (0.2 seconds). The colony explodes \
-               outward almost immediately.\n\n\
-               Try the same with Split Mass — higher values mean cells need \
+        body: "In the Parent Settings panel, try dragging Split Interval \
+               to a high value (5–10 seconds), then scrub the Time Slider. \
+               Notice how much slower the colony grows — each cell waits \
+               longer before dividing.\n\n\
+               Now try the minimum (1 second). The colony grows as fast as \
+               nutrients allow.\n\n\
+               Try the same with Split Nutrients — higher values mean cells need \
                more food before they can split, so growth slows down even if \
                the interval is short.\n\n\
-               Change Split Interval or Split Mass on any mode to continue.",
-        gate_hint: "Change Split Interval or Split Mass on any mode to continue.",
+               Change Split Interval or Split Nutrients on any mode to continue.",
+        gate_hint: "Change Split Interval or Split Nutrients on any mode to continue.",
         gate:       StepGate::AnySplitIntervalChanged,
         target:     TutorialTarget::ParentSettingsPanel,
         target_pos: [0.5, 0.3],
@@ -307,21 +302,16 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
 
     TutorialStepData {
         title: "Chapter 3 — Cell Types",
-        body: "The Type dropdown in the Modes panel is the most important \
-               setting in the whole editor. It determines what a cell actually \
-               does while it's alive — not just how it divides.\n\n\
-               The main types:\n\n\
-               Phagocyte — absorbs free-floating nutrient particles on contact. \
-               The primary food source for the whole organism.\n\n\
-               Flagellocyte — beats a flagellum to push itself and anything \
-               bonded to it through the fluid. The main locomotion cell.\n\n\
-               Buoyocyte — generates upward buoyancy force. Useful for \
-               controlling depth without active swimming.\n\n\
-               Vasculocyte — a nutrient pipe. With Outlet on it releases \
-               nutrients to neighbours; sealed it just transports them at 5× \
-               the normal rate. Essential for large organisms.\n\n\
-               Oculocyte — fires a detection ray and emits a chemical signal \
-               when it sees something. The sensor cell.",
+        body: "The Type dropdown sets what a cell does while it's alive.\n\n\
+               Nutrient sources:\n\
+               Phagocyte — absorbs free-floating nutrient particles on contact.\n\
+               Photocyte — converts light into nutrients near a light source.\n\
+               Devorocyte — steals nutrients from neighbouring foreign cells.\n\n\
+               Locomotion:\n\
+               Flagellocyte — beats a flagellum to propel itself and anything bonded to it.\n\
+               Ciliocyte — uses rows of cilia to push nearby cells and fluid in the forward direction.\n\
+               Myocyte — rhythmically contracts its adhesion bonds, producing \
+               peristaltic pumping or coordinated movement.",
         gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::CellTypeDropdown,
@@ -332,18 +322,10 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         title: "Experiment — Give a Cell a Job",
         body: "Select any mode in the Modes panel and change its Type to \
                something other than Test.\n\n\
-               Try Flagellocyte first — scrub the Time Slider and watch the \
-               cells with flagella push the whole cluster around. Notice that \
-               the thrust is transmitted through the adhesion bonds to the \
-               entire body.\n\n\
-               Then try Phagocyte — the cells will start absorbing nutrient \
-               particles from the environment. Watch the nutrient bar in the \
-               right-click inspector fill up faster.\n\n\
-               Try Buoyocyte — the cluster drifts upward.\n\n\
-               You can mix types: set M1 to Phagocyte and M2 to Flagellocyte \
-               and you already have a creature with a feeding cell and a \
-               swimming cell. The genome doesn't care which mode you change — \
-               experiment freely.\n\n\
+               You can mix types across modes — a Phagocyte mode and a \
+               Flagellocyte mode together already give you a creature that \
+               feeds and swims. The genome doesn't care which mode you \
+               change — experiment freely.\n\n\
                Change at least one mode's Type to continue.",
         gate_hint: "Change at least one mode's Type to something other than Test.",
         gate:       StepGate::AnyCellTypeChanged,
@@ -361,14 +343,12 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                body. Without it, every division produces two cells that \
                immediately drift apart — you get a cloud of individuals, \
                not an organism.\n\n\
-               The Make Adhesion checkbox in the Modes panel controls whether \
-               a cell creates a spring bond with its children when it divides. \
-               With it on, parent and children stay connected.\n\n\
-               The Adhesion Settings panel on the right controls the physics \
-               of that spring: stiffness, damping, break force, and twist \
-               constraints. The defaults work well for most creatures — you \
-               only need to tune them for specific behaviours like rigid \
-               skeletons or breakable joints.",
+               The Make Adhesion checkbox controls whether a cell creates a \
+               spring bond between its two children when it divides. It is \
+               off by default — siblings scatter freely unless you enable it.\n\n\
+               The Adhesion Settings panel controls the physics of that \
+               spring: stiffness, damping, break force, and twist constraints. \
+               The defaults work well for most creatures.",
         gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::AdhesionSettingsPanel,
@@ -377,19 +357,16 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
 
     TutorialStepData {
         title: "Experiment — Bonds On and Off",
-        body: "Select M1 and untick Make Adhesion. Scrub the Time Slider.\n\n\
-               The cells now scatter on every division — no body forms. Each \
-               cell is an independent individual. If M1 is a Flagellocyte, \
-               you'll see dozens of solo swimmers instead of one coordinated \
-               organism.\n\n\
-               Now tick Make Adhesion back on. The cluster reforms — cells \
-               stay bonded and move together.\n\n\
-               Key insight: adhesion is per-mode. You can have some modes \
-               bonded and others free. A mode with adhesion off produces \
-               \"eggs\" — free cells that drift away and start their own \
-               independent lifecycle. This is how reproduction works.\n\n\
-               Toggle Make Adhesion on any mode to continue.",
-        gate_hint: "Toggle Make Adhesion on any mode to continue.",
+        body: "Select any mode and tick Make Adhesion on. Scrub the Time Slider.\n\n\
+               The two children produced by each division are now bonded \
+               together — they form a connected body instead of drifting apart.\n\n\
+               Untick it again and the siblings scatter on every division.\n\n\
+               Adhesion is per-mode. You can have some modes bonded and others \
+               free. A mode with adhesion off produces free cells that drift \
+               away and start their own independent lifecycle — this is how \
+               reproduction works.\n\n\
+               Enable Make Adhesion on any mode to continue.",
+        gate_hint: "Enable Make Adhesion on any mode to continue.",
         gate:       StepGate::AnyAdhesionEnabled,
         target:     TutorialTarget::MakeAdhesionCheckbox,
         target_pos: [0.5, 0.5],
@@ -458,11 +435,13 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                reached. The cell gets one final division using these alternate \
                routes. This is how you build reproduction: the normal splits \
                grow the body, and the after-splits division sheds a free egg \
-               (Keep Adhesion off) that starts a new lifecycle.",
+               (Keep Adhesion off) that starts a new lifecycle.\n\n\
+               Setting an after-splits child to a self-referential mode \
+               is the same as leaving it at None.",
         gate_hint: "",
         gate:       StepGate::None,
-        target:     TutorialTarget::MaxSplitsSlider,
-        target_pos: [0.5, 0.5],
+        target:     TutorialTarget::ParentSettingsPanel,
+        target_pos: [0.5, 0.3],
     },
 
     TutorialStepData {
@@ -483,8 +462,8 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                Set Max Splits to any finite value (≥ 0) on any mode to continue.",
         gate_hint: "Set Max Splits to a finite value on any mode to continue.",
         gate:       StepGate::AnyFiniteMaxSplits,
-        target:     TutorialTarget::MaxSplitsSlider,
-        target_pos: [0.5, 0.5],
+        target:     TutorialTarget::ParentSettingsPanel,
+        target_pos: [0.5, 0.3],
     },
 
     // ════════════════════════════════════════════════════════════════════════
@@ -504,8 +483,7 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                when it detects something (food, other cells, light, barriers). \
                That signal propagates through the adhesion bonds to nearby \
                cells. A Flagellocyte reading that channel can speed up or \
-               slow down based on the signal value — the creature steers \
-               toward food automatically.\n\n\
+               slow down based on the signal value.\n\n\
                Division and mode-switching can also be gated on signals: \
                a cell only divides when it receives the right chemical cue. \
                This is how complex developmental programs work.",
@@ -530,7 +508,7 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                Scrub the Time Slider. When the Oculocyte detects food, it \
                emits a signal that travels through the adhesion bonds to the \
                Flagellocyte, which speeds up. The creature accelerates toward \
-               food automatically — no code, just signal rules.\n\n\
+               food automatically.\n\n\
                This step is optional — click Next to skip if you want to \
                explore signals on your own later.",
         gate_hint: "",
@@ -549,7 +527,7 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                no fluid dynamics. The Live Simulation is the real world.\n\n\
                When you're ready, click Live Simulation in the top bar or the \
                Scene Manager panel. The full GPU world loads: up to 200,000 \
-               cells, Navier-Stokes fluid, cave systems, light fields, and \
+               cells, fluid simulation, cave systems, light fields, and \
                other organisms competing for the same nutrients.\n\n\
                In the live world, hold Alt to open the radial tool menu. \
                Select the + Insert tool, then click anywhere in the viewport \

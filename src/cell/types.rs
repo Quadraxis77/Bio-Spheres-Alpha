@@ -559,7 +559,7 @@ impl CellType {
                  when a target is detected.",
 
             CellType::Ciliocyte =>
-                "Beats microscopic cilia to push nearby cells and fluid in the \
+                "Uses rows of cilia to push nearby cells and fluid in the \
                  forward direction. Good for conveying particles along a chain or \
                  creating internal circulation.",
 
