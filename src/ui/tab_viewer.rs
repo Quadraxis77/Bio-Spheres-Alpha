@@ -4855,8 +4855,11 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
 
                     // Keep Adhesion checkbox for Child A - modify genome directly
                     if has_valid_mode {
-                        ui.checkbox(&mut context.genome.modes[selected_idx].child_a.keep_adhesion, "Keep Adhesion")
+                        let adh_a = ui.checkbox(&mut context.genome.modes[selected_idx].child_a.keep_adhesion, "Keep Adhesion")
                             .on_hover_text("When enabled, Child A maintains its adhesion bond with the parent cell after division");
+                        context.editor_state.panel_rects.insert(
+                            "child_a_keep_adhesion".to_string(), adh_a.rect,
+                        );
                     } else {
                         ui.add_enabled(false, egui::Checkbox::new(&mut false, "Keep Adhesion"));
                     }
@@ -5023,8 +5026,11 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
 
                     // Keep Adhesion checkbox for Child B - modify genome directly
                     if has_valid_mode {
-                        ui.checkbox(&mut context.genome.modes[selected_idx].child_b.keep_adhesion, "Keep Adhesion")
+                        let adh_b = ui.checkbox(&mut context.genome.modes[selected_idx].child_b.keep_adhesion, "Keep Adhesion")
                             .on_hover_text("When enabled, Child B maintains its adhesion bond with the parent cell after division");
+                        context.editor_state.panel_rects.insert(
+                            "child_b_keep_adhesion".to_string(), adh_b.rect,
+                        );
                     } else {
                         ui.add_enabled(false, egui::Checkbox::new(&mut false, "Keep Adhesion"));
                     }

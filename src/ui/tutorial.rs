@@ -1,19 +1,18 @@
 //! In-game tutorial system for Bio-Spheres.
 //!
-//! Walks the player step-by-step through building a 2-cell-type organism
-//! (Phagocyte head + Flagellocyte tail) in the Genome Editor.
+//! Teaches the core mechanics through guided experimentation rather than
+//! prescribing a single organism.  Each chapter introduces one mechanic,
+//! asks the player to change something, and has them observe the result
+//! in the Time Slider before moving on.
 //!
 //! # Gate system
-//! Every step except the introductory and summary steps has a [`StepGate`]
-//! condition that must be satisfied before "Next" is enabled.  The gate is
-//! checked each frame against the live genome / editor state, so the player
-//! can't skip ahead without actually performing the action.
+//! Action steps have a [`StepGate`] that must be satisfied before "Next"
+//! is enabled.  Gates are checked each frame against the live genome so
+//! the player can't skip ahead without actually doing the thing.
 //!
 //! # Visual overlay
-//! A centred dialogue box is rendered with a teal accent, a progress bar,
-//! a gate-status row (lock icon + hint when blocked; green tick when clear),
-//! and a schematic pointer line (orthogonal, circuit-board style) that
-//! highlights the panel being discussed.
+//! A floating dialogue with a teal accent, progress bar, gate-status row,
+//! and an orthogonal "circuit-board" pointer line to the relevant panel.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -22,26 +21,41 @@ use std::collections::HashMap;
 // Gate system
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A condition that must be true before the player can advance to the next step.
+/// A condition that must be true before the player can advance.
 pub enum StepGate {
-    /// Always satisfied — the player can proceed immediately.
+    /// Always satisfied.
     None,
-    /// `editor_state.selected_mode_index` must equal `idx`.
+    /// The selected mode index must equal `idx`.
     ModeSelected(usize),
     /// `genome.modes[mode_idx].cell_type` must equal `expected`.
     CellTypeSet { mode_idx: usize, expected: i32 },
+    /// At least one mode has `cell_type != 0` (player changed a type).
+    AnyCellTypeChanged,
     /// `genome.modes[mode_idx].parent_make_adhesion` must be `true`.
     AdhesionEnabled(usize),
+    /// At least one mode has `parent_make_adhesion == true`.
+    AnyAdhesionEnabled,
+    /// At least one mode has `parent_make_adhesion == false` (player turned one off).
+    AnyAdhesionDisabled,
     /// `genome.modes[mode_idx].child_b.mode_number` must equal `target`.
     ChildBMode { mode_idx: usize, target: i32 },
-    /// Both child mode numbers of `mode_idx` must match `a_target` and `b_target`.
-    ChildRouting { mode_idx: usize, a_target: i32, b_target: i32 },
+    /// At least one mode routes Child B to a different mode than Child A.
+    AnyChildBDifferentMode,
     /// `genome.modes[mode_idx].max_splits` must equal `expected`.
     MaxSplitsSet { mode_idx: usize, expected: i32 },
+    /// At least one mode has `max_splits` set to a finite value (>= 0).
+    AnyFiniteMaxSplits,
+    /// `genome.modes[mode_idx].child_a.keep_adhesion` must be `false`.
+    ChildAKeepAdhesionOff(usize),
+    /// At least one mode has `split_interval` different from the default (1.0).
+    AnySplitIntervalChanged,
+    /// At least one mode has `split_mass` different from the default (1.5).
+    AnySplitMassChanged,
+    /// Both child mode numbers of `mode_idx` must match `a_target` and `b_target`.
+    ChildRouting { mode_idx: usize, a_target: i32, b_target: i32 },
 }
 
 impl StepGate {
-    /// Evaluate the gate against the current genome / editor state.
     pub fn is_satisfied(
         &self,
         genome: &crate::genome::Genome,
@@ -53,36 +67,59 @@ impl StepGate {
             StepGate::ModeSelected(idx) => selected_mode == *idx,
 
             StepGate::CellTypeSet { mode_idx, expected } => genome
-                .modes
-                .get(*mode_idx)
+                .modes.get(*mode_idx)
                 .map(|m| m.cell_type == *expected)
                 .unwrap_or(false),
 
+            StepGate::AnyCellTypeChanged =>
+                genome.modes.iter().any(|m| m.cell_type != 0),
+
             StepGate::AdhesionEnabled(mode_idx) => genome
-                .modes
-                .get(*mode_idx)
+                .modes.get(*mode_idx)
                 .map(|m| m.parent_make_adhesion)
                 .unwrap_or(false),
 
+            StepGate::AnyAdhesionEnabled =>
+                genome.modes.iter().any(|m| m.parent_make_adhesion),
+
+            StepGate::AnyAdhesionDisabled =>
+                genome.modes.iter().any(|m| !m.parent_make_adhesion),
+
             StepGate::ChildBMode { mode_idx, target } => genome
-                .modes
-                .get(*mode_idx)
+                .modes.get(*mode_idx)
                 .map(|m| m.child_b.mode_number == *target)
                 .unwrap_or(false),
 
+            StepGate::AnyChildBDifferentMode =>
+                genome.modes.iter().any(|m| {
+                    m.child_b.mode_number != m.child_a.mode_number
+                }),
+
+            StepGate::MaxSplitsSet { mode_idx, expected } => genome
+                .modes.get(*mode_idx)
+                .map(|m| m.max_splits == *expected)
+                .unwrap_or(false),
+
+            StepGate::AnyFiniteMaxSplits =>
+                genome.modes.iter().any(|m| m.max_splits >= 0),
+
+            StepGate::ChildAKeepAdhesionOff(mode_idx) => genome
+                .modes.get(*mode_idx)
+                .map(|m| !m.child_a.keep_adhesion)
+                .unwrap_or(false),
+
+            StepGate::AnySplitIntervalChanged =>
+                genome.modes.iter().any(|m| (m.split_interval - 1.0).abs() > 0.05),
+
+            StepGate::AnySplitMassChanged =>
+                genome.modes.iter().any(|m| (m.split_mass - 1.5).abs() > 0.05),
+
             StepGate::ChildRouting { mode_idx, a_target, b_target } => genome
-                .modes
-                .get(*mode_idx)
+                .modes.get(*mode_idx)
                 .map(|m| {
                     m.child_a.mode_number == *a_target
                         && m.child_b.mode_number == *b_target
                 })
-                .unwrap_or(false),
-
-            StepGate::MaxSplitsSet { mode_idx, expected } => genome
-                .modes
-                .get(*mode_idx)
-                .map(|m| m.max_splits == *expected)
                 .unwrap_or(false),
         }
     }
@@ -92,13 +129,8 @@ impl StepGate {
 // Step data
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Which panel or element a tutorial step wants to point at.
-///
-/// Panel-level variants highlight the whole panel; element-level variants
-/// (`ModeRow`, `CellTypeDropdown`, etc.) highlight and point at the specific
-/// widget captured in `panel_rects` each frame.
+/// Which panel or element a tutorial step points at.
 pub enum TutorialTarget {
-    // Panel-level
     ModesPanel,
     NameTypePanel,
     ParentSettingsPanel,
@@ -108,24 +140,21 @@ pub enum TutorialTarget {
     TimeSliderPanel,
     SceneManagerPanel,
     None,
-    // Element-level — point at a specific captured widget rect
-    /// The Nth mode row button in the Modes list (0-indexed).
     ModeRow(usize),
-    /// The cell-type ComboBox in the Name & Type panel.
     CellTypeDropdown,
-    /// The "Make Adhesion" checkbox in the Name & Type panel.
     MakeAdhesionCheckbox,
-    /// The Max Splits slider row in the Parent Settings panel.
     MaxSplitsSlider,
+    AfterSplitsChildA,
+    AfterSplitsChildB,
+    ChildAKeepAdhesion,
+    ChildBKeepAdhesion,
 }
 
 impl TutorialTarget {
-    /// The key used in `panel_rects` to look up this target's screen rect.
-    /// Returns `None` for `TutorialTarget::None`.
     pub fn panel_key(&self) -> Option<String> {
         match self {
             TutorialTarget::ModesPanel            => Some("Modes".to_string()),
-            TutorialTarget::NameTypePanel         => Some("Modes".to_string()), // merged into Modes panel
+            TutorialTarget::NameTypePanel         => Some("Modes".to_string()),
             TutorialTarget::ParentSettingsPanel   => Some("ParentSettings".to_string()),
             TutorialTarget::AdhesionSettingsPanel => Some("AdhesionSettings".to_string()),
             TutorialTarget::ChildRotationPanel    => Some("QuaternionBall".to_string()),
@@ -133,18 +162,17 @@ impl TutorialTarget {
             TutorialTarget::TimeSliderPanel       => Some("TimeSlider".to_string()),
             TutorialTarget::SceneManagerPanel     => Some("SceneManager".to_string()),
             TutorialTarget::None                  => None,
-            // Element-level keys — matched by `render_modes` and `render_parent_settings`
             TutorialTarget::ModeRow(idx)          => Some(format!("mode_row_{}", idx)),
             TutorialTarget::CellTypeDropdown      => Some("cell_type_dropdown".to_string()),
             TutorialTarget::MakeAdhesionCheckbox  => Some("make_adhesion_checkbox".to_string()),
             TutorialTarget::MaxSplitsSlider       => Some("max_splits_slider".to_string()),
+            TutorialTarget::AfterSplitsChildA     => Some("after_splits_child_a".to_string()),
+            TutorialTarget::AfterSplitsChildB     => Some("after_splits_child_b".to_string()),
+            TutorialTarget::ChildAKeepAdhesion    => Some("child_a_keep_adhesion".to_string()),
+            TutorialTarget::ChildBKeepAdhesion    => Some("child_b_keep_adhesion".to_string()),
         }
     }
 
-    /// Returns `true` for element-level targets (specific widgets captured in
-    /// `panel_rects`).  For these the arrow tip lands at `target_pos` inside
-    /// the rect.  For panel-level targets the tip is clamped to the border so
-    /// the arrow points *at* the panel rather than into its interior.
     pub fn is_element_level(&self) -> bool {
         matches!(
             self,
@@ -152,317 +180,409 @@ impl TutorialTarget {
                 | TutorialTarget::CellTypeDropdown
                 | TutorialTarget::MakeAdhesionCheckbox
                 | TutorialTarget::MaxSplitsSlider
+                | TutorialTarget::AfterSplitsChildA
+                | TutorialTarget::AfterSplitsChildB
+                | TutorialTarget::ChildAKeepAdhesion
+                | TutorialTarget::ChildBKeepAdhesion
         )
     }
 }
 
-/// Data for one tutorial step.
 pub struct TutorialStepData {
     pub title: &'static str,
     pub body: &'static str,
-    /// Short instruction shown in the status row when the gate is **not** satisfied.
-    /// Use `""` for ungated steps (no status row is shown).
     pub gate_hint: &'static str,
     pub gate: StepGate,
     pub target: TutorialTarget,
-    /// Normalised [x, y] position within the target panel where the arrow tip lands.
-    /// [0.0, 0.0] = top-left, [1.0, 1.0] = bottom-right, [0.5, 0.5] = centre.
     pub target_pos: [f32; 2],
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tutorial content  —  "Head and Tail" (2-cell swimmer with repeating lifecycle)
+// Tutorial steps
 //
-// Creature design:
-//   M1 = Phagocyte (head) — splits once to produce the tail, then on its
-//                           next split sheds a free egg (Child A → M1,
-//                           keep_adhesion = false) while keeping the tail
-//                           (Child B → M2, keep_adhesion = true).
-//                           max_splits = 1.  After-splits: A → M1, B → M2.
-//   M2 = Flagellocyte (tail) — terminal swimmer.  max_splits = 0.
+// Structure: 8 chapters, each teaching one mechanic through observation.
+// The player is never told to build a specific organism — they experiment
+// with settings and watch what changes.  Gates confirm they touched the
+// mechanic, not that they set it to a prescribed value.
 //
-// Lifecycle:
-//   Single M1 → splits once → M1 head + M2 tail (bonded, swimming pair)
-//   M1 head hits max_splits → sheds a free M1 egg (detaches) + keeps M2 tail
-//   Free M1 egg restarts the cycle independently
-//
-// This teaches: cell types, adhesion, max_splits, after-splits routing, and
-// the keep-adhesion flag — all with a creature that actually reproduces.
+// Chapter 1 — Orientation:    what you're looking at, how to observe
+// Chapter 2 — Division:       split mass and interval, watching timing
+// Chapter 3 — Cell types:     changing type, observing behavior
+// Chapter 4 — Adhesion:       bonding on/off, bodies vs solo cells
+// Chapter 5 — Body shape:     child routing and orientation
+// Chapter 6 — Lifecycle:      max splits, finite growth, after-splits
+// Chapter 7 — Signals:        brief intro to the signal system
+// Chapter 8 — Go live:        releasing into the full world
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
-    // ── 0 ── Welcome ─────────────────────────────────────────────────────────
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CHAPTER 1 — ORIENTATION
+    // ════════════════════════════════════════════════════════════════════════
+
     TutorialStepData {
-        title: "Welcome to Bio-Spheres!",
-        body:  "In this tutorial you'll build a real living creature from scratch — \
-                one that swims, eats, and reproduces on its own.\n\n\
-                Your creature will have just two cell types:\n\n\
-                • M1 — a Phagocyte head that eats food and eventually sheds an egg\n\
-                • M2 — a Flagellocyte tail that propels the whole body\n\n\
-                The head divides once to grow the tail, then later sheds a free \
-                copy of itself that drifts off and starts the whole cycle again. \
-                No dead ends — this creature keeps going.\n\n\
-                Follow the steps one at a time. You can't move on until you've \
-                done the action described. Tip: drag the Time Slider at the \
-                bottom of the screen at any point to preview your creature.",
+        title: "Chapter 1 — What You're Looking At",
+        body: "You're in the Genome Editor — a sandboxed simulation that runs \
+               a single organism from your current genome in real time.\n\n\
+               The genome is a list of cell blueprints called modes. Each mode \
+               answers one question: when a cell of this type divides, what \
+               happens? The simulation reads those rules and runs them forward.\n\n\
+               You never write code. You set rules, and the cells follow them.\n\n\
+               The Time Slider at the bottom is your main observation tool. \
+               Drag it right to fast-forward through time and watch your \
+               creature grow. Drag it back to rewind. Every change you make \
+               to the genome is reflected immediately when you scrub.",
         gate_hint: "",
-        gate:       StepGate::None,
-        target:     TutorialTarget::None,
-        target_pos: [0.5, 0.5],
-    },
-
-    // ── 1 ── Select M1 ───────────────────────────────────────────────────────
-    TutorialStepData {
-        title: "Step 1 — Open Mode 1",
-        body:  "Look at the Modes panel on the left. It lists the cell blueprints \
-                in your creature's genome — each one is a recipe for a different \
-                type of cell. A fresh genome starts with 10 modes; you can add \
-                or remove them with the + and − buttons at the top.\n\n\
-                M1 is selected by default, so all the other panels are already \
-                showing M1's settings. Confirm it's highlighted, then continue.",
-        gate_hint:  "Click M1 in the Modes panel to continue.",
-        gate:       StepGate::ModeSelected(0),
-        target:     TutorialTarget::ModeRow(0),
-        target_pos: [0.5, 0.5],
-    },
-
-    // ── 2 ── Modes panel overview ────────────────────────────────────────────
-    TutorialStepData {
-        title: "Step 2 — The Modes Panel",
-        body:  "A few things worth knowing about the Modes panel before we start.\n\n\
-                The small dot to the left of each mode is the Initial Mode marker. \
-                The mode with the dot lit is the cell your creature starts as. \
-                It's on M1 right now — that's correct.\n\n\
-                The buttons at the top:\n\
-                • Copy Into — copies settings from the selected mode into the \
-                  next mode you click. Handy for making similar cell types.\n\
-                • ⟲ Reset — wipes the selected mode back to defaults.\n\
-                • + / − — add or remove modes.\n\n\
-                You can click the coloured square on a mode row to change its \
-                colour, double-click the name to rename it, and hold Ctrl or \
-                Shift to select multiple modes at once.",
-        gate_hint:  "",
-        gate:       StepGate::None,
-        target:     TutorialTarget::ModesPanel,
-        target_pos: [0.5, 0.04],
-    },
-
-    // ── 3 ── M1 cell type ────────────────────────────────────────────────────
-    TutorialStepData {
-        title: "Step 3 — Make M1 a Phagocyte",
-        body:  "Every mode has a Type — this decides what the cell actually does \
-                when it's alive in the simulation.\n\n\
-                Look at the Name & Type panel. You'll see the Type dropdown for \
-                the currently selected mode. Open it and choose Phagocyte.\n\n\
-                A Phagocyte absorbs free-floating nutrient particles from the \
-                environment on contact. It's the main food-gathering cell type — \
-                our head cell will eat to fuel the whole creature.",
-        gate_hint:  "Set M1's Type to Phagocyte to continue.",
-        gate:       StepGate::CellTypeSet { mode_idx: 0, expected: 2 },
-        target:     TutorialTarget::CellTypeDropdown,
-        target_pos: [0.5, 0.5],
-    },
-
-    // ── 4 ── M1 adhesion ─────────────────────────────────────────────────────
-    TutorialStepData {
-        title: "Step 4 — Stick the Head to the Tail",
-        body:  "By default, when a cell divides its two children float away from \
-                each other. We want a body — cells that stay connected.\n\n\
-                Tick the Make Adhesion checkbox in the Name & Type panel.\n\n\
-                With adhesion on, each new child bonds to its sibling \
-                The head and tail will stay glued together as one organism \
-                instead of drifting apart.\n\n\
-                Try dragging the Time Slider after ticking this to see the \
-                difference.",
-        gate_hint:  "Tick Make Adhesion on M1 to continue.",
-        gate:       StepGate::AdhesionEnabled(0),
-        target:     TutorialTarget::MakeAdhesionCheckbox,
-        target_pos: [0.5, 0.5],
-    },
-
-    // ── 5 ── Child Rotation panel explained ──────────────────────────────────
-    // ── 5 ── Circle Sliders panel explained ──────────────────────────────────
-    TutorialStepData {
-        title: "Step 5 — The Circle Sliders Panel",
-        body:  "The Circle Sliders panel has two circular dials: Pitch and Yaw. \
-                They set a rotation offset that is applied to the parent's \
-                current orientation each time it divides.\n\n\
-                Each division, the split axis is the parent's accumulated \
-                orientation rotated by this pitch/yaw offset. Because the \
-                offset compounds with each generation, even a small angle \
-                produces a consistent incremental turn at every split — \
-                useful for things like curved chains or angled branches.\n\n\
-                At zero (the default) the split axis stays aligned with \
-                whatever direction the parent is already facing. For this \
-                tutorial you don't need to change these.",
-        gate_hint:  "",
-        gate:       StepGate::None,
-        target:     TutorialTarget::CircleSlidersPanel,
-        target_pos: [0.5, 0.5],
-    },
-
-    // ── 6 ── Child Rotation panel explained ──────────────────────────────────
-    TutorialStepData {
-        title: "Step 6 — The Child Rotation Panel",
-        body:  "Below the Circle Sliders is the Child Rotation panel — two 3D \
-                balls labelled Child A and Child B.\n\n\
-                Where the Circle Sliders control the parent's split axis, these \
-                balls control each child's own orientation after it is born — \
-                which way it is facing when it appears. Drag a ball to rotate \
-                that child's starting orientation.\n\n\
-                Below each ball you'll find:\n\
-                • A Mode dropdown — which mode (cell type) that child becomes.\n\
-                • A Keep Adhesion checkbox — whether the child stays bonded to \
-                  the parent after the split.\n\n\
-                You'll use the Mode dropdown and Keep Adhesion checkbox in the \
-                next steps.",
-        gate_hint:  "",
-        gate:       StepGate::None,
-        target:     TutorialTarget::ChildRotationPanel,
-        target_pos: [0.5, 0.5],
-    },
-
-    // ── 7 ── M1 max splits = 1 ───────────────────────────────────────────────
-    TutorialStepData {
-        title: "Step 7 — The Head Divides Once",
-        body:  "Open the Parent Settings panel and set Max Splits to 1.\n\n\
-                This means M1 is allowed to divide exactly once during its \
-                normal growth phase. That one split produces the tail (M2). \
-                After that, the head is \"used up\" — but instead of stopping \
-                forever, it will do something special on its next split. \
-                You'll set that up in the next steps.",
-        gate_hint:  "Set Max Splits to 1 on M1 to continue.",
-        gate:       StepGate::MaxSplitsSet { mode_idx: 0, expected: 1 },
-        target:     TutorialTarget::MaxSplitsSlider,
-        target_pos: [0.5, 0.5],
-    },
-
-    // ── 7b ── M1 normal child routing ────────────────────────────────────────
-    TutorialStepData {
-        title: "Step 8 — Grow the Tail",
-        body:  "Look at the Child Rotation panel. Under the Child B ball you'll \
-                see a Mode dropdown — this decides what cell type Child B becomes \
-                when M1 divides.\n\n\
-                Change Child B's Mode to M2.\n\n\
-                Right now both children default to M1, so the head just clones \
-                itself. By routing Child B → M2, every split produces a \
-                Flagellocyte tail instead of another head.\n\n\
-                Drag the Time Slider after making this change — you should see \
-                a two-cell creature: one Phagocyte head, one Flagellocyte tail.",
-        gate_hint:  "Set Child B's Mode to M2 in the Child Rotation panel to continue.",
-        gate:       StepGate::ChildBMode { mode_idx: 0, target: 1 },
-        target:     TutorialTarget::ChildRotationPanel,
-        target_pos: [0.75, 0.7],
-    },
-
-    // ── 8 ── M1 egg shedding via keep_adhesion ────────────────────────────────
-    TutorialStepData {
-        title: "Step 9 — Shed an Egg",
-        body:  "The head divides once and stops — but we want it to reproduce. \
-                Here's the trick: once M1 hits its split limit, it uses the same \
-                Child A and Child B modes again. Child A becomes a new M1 head, \
-                Child B stays as the M2 tail.\n\n\
-                The only difference is that the new M1 head should float away \
-                freely instead of staying bonded. Find the Keep Adhesion \
-                checkbox under the Child A ball in the Child Rotation panel \
-                and untick it.\n\n\
-                Now every time the head reaches its limit it sheds a free M1 \
-                egg that drifts off and starts the cycle again — while the \
-                original tail stays attached.",
-        gate_hint:  "",
-        gate:       StepGate::None,
-        target:     TutorialTarget::ChildRotationPanel,
-        target_pos: [0.25, 0.7],
-    },
-
-    // ── 9 ── Select M2 ───────────────────────────────────────────────────────
-    TutorialStepData {
-        title: "Step 10 — Open Mode 2",
-        body:  "M1 is fully set up. Now let's define the tail.\n\n\
-                Click M2 in the Modes panel.",
-        gate_hint:  "Click M2 in the Modes panel to continue.",
-        gate:       StepGate::ModeSelected(1),
-        target:     TutorialTarget::ModeRow(1),
-        target_pos: [0.5, 0.5],
-    },
-
-    // ── 10 ── M2 cell type ────────────────────────────────────────────────────
-    TutorialStepData {
-        title: "Step 11 — Give M2 a Flagella",
-        body:  "Open the Type dropdown and choose Flagellocyte.\n\n\
-                A Flagellocyte has a whip-like flagellum tail. It beats the \
-                flagellum to push itself — and anything bonded to it — through \
-                the fluid. This is what will actually move your creature around.",
-        gate_hint:  "Set M2's Type to Flagellocyte to continue.",
-        gate:       StepGate::CellTypeSet { mode_idx: 1, expected: 1 },
-        target:     TutorialTarget::CellTypeDropdown,
-        target_pos: [0.5, 0.5],
-    },
-
-    // ── 11 ── M2 adhesion ────────────────────────────────────────────────────
-    TutorialStepData {
-        title: "Step 12 — Attach the Tail to the Body",
-        body:  "Tick Make Adhesion for M2.\n\n\
-                A Flagellocyte without adhesion just swims off on its own. With \
-                adhesion on, its thrust is applied to the whole bonded cluster — \
-                head and tail move together as one creature.",
-        gate_hint:  "Tick Make Adhesion on M2 to continue.",
-        gate:       StepGate::AdhesionEnabled(1),
-        target:     TutorialTarget::MakeAdhesionCheckbox,
-        target_pos: [0.5, 0.5],
-    },
-
-    // ── 12 ── M2 max splits = 0 ──────────────────────────────────────────────
-    TutorialStepData {
-        title: "Step 13 — The Tail Never Divides",
-        body:  "Set Max Splits to 0 for M2.\n\n\
-                The tail's only job is to swim — it should never divide and \
-                produce more cells. Zero means it is permanently locked as a \
-                terminal cell. It will just keep beating its flagellum for the \
-                life of the creature.",
-        gate_hint:  "Set Max Splits to 0 on M2 to continue.",
-        gate:       StepGate::MaxSplitsSet { mode_idx: 1, expected: 0 },
-        target:     TutorialTarget::MaxSplitsSlider,
-        target_pos: [0.5, 0.5],
-    },
-
-    // ── 13 ── Preview ────────────────────────────────────────────────────────
-    TutorialStepData {
-        title: "Step 14 — Watch It Come to Life",
-        body:  "Drag the Time Slider to fast-forward through time.\n\n\
-                You'll see a single Phagocyte appear, then split into a head-tail \
-                pair. The Flagellocyte tail starts beating and the pair swims \
-                around eating food.\n\n\
-                After a while the head hits its split limit and sheds a new free \
-                Phagocyte egg. That egg drifts off, grows its own tail, and the \
-                cycle repeats — your creature reproduces.",
-        gate_hint:  "",
         gate:       StepGate::None,
         target:     TutorialTarget::TimeSliderPanel,
         target_pos: [0.5, 0.5],
     },
 
-    // ── 13 ── Complete ───────────────────────────────────────────────────────
     TutorialStepData {
-        title: "You Did It!",
-        body:  "You've built a creature with a repeating lifecycle — \
-                it grows, swims, eats, and reproduces, all from just two modes.\n\n\
-                Some ideas for what to try next:\n\
-                • Add a second Flagellocyte (M3, Max Splits = 0) and route M1's \
-                  normal Child B → M3 — now the creature grows two tails\n\
-                • Try a Vasculocyte with Outlet enabled — it forms high-speed \
-                  nutrient pipes through the body, 5× faster than normal transport\n\
-                • Add a Glueocyte to bond to other organisms or cave walls\n\
-                • Add a Devorocyte to steal nutrients from foreign cells on contact\n\
-                • Use the Signal system (Division Signal Channel in Parent Settings) \
-                  to gate cell division on a signal — cells only divide when they \
-                  receive the right chemical cue\n\
-                • Use the 🎲 Procedural button to generate a random creature \
-                  and study how it's built\n\
-                • When you're happy, click Live Simulation and to release your \
-                  creature into the full GPU world just hold ALT and select + from\
-                  the wheel",
-        gate_hint:  "",
+        title: "Try It — Scrub Through Time",
+        body: "Drag the Time Slider all the way to the right.\n\n\
+               You'll see a single cell appear, then divide repeatedly. \
+               The default genome has no special cell types yet — everything \
+               is a plain Test cell that just divides and grows.\n\n\
+               Notice:\n\
+               • Each division produces two children\n\
+               • The children stay bonded (adhesion is on by default)\n\
+               • The cluster grows outward over time\n\n\
+               Now drag the slider back to zero. The simulation rewinds \
+               completely — it's deterministic, so the same genome always \
+               produces the same result.\n\n\
+               Right-click any cell to inspect it: you'll see its nutrient \
+               level, cell type, mode index, and signal channels live.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::TimeSliderPanel,
+        target_pos: [0.5, 0.5],
+    },
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CHAPTER 2 — DIVISION TIMING
+    // ════════════════════════════════════════════════════════════════════════
+
+    TutorialStepData {
+        title: "Chapter 2 — Division Timing",
+        body: "The Parent Settings panel controls when a cell divides.\n\n\
+               The two most important settings:\n\n\
+               Split Mass — how much nutrient mass the cell must accumulate \
+               before it can divide. Higher = slower growth, larger cells.\n\n\
+               Split Interval — minimum time in seconds between divisions. \
+               A cell that has enough mass still waits this long before \
+               splitting again.\n\n\
+               Together these two sliders control the pace of your organism. \
+               A fast-dividing creature with low split mass grows a large \
+               colony quickly but each cell is small. A slow-dividing creature \
+               with high split mass grows fewer, larger cells.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::ParentSettingsPanel,
+        target_pos: [0.5, 0.2],
+    },
+
+    TutorialStepData {
+        title: "Experiment — Change the Division Speed",
+        body: "Select M1 in the Modes panel, then open Parent Settings.\n\n\
+               Try dragging Split Interval to a high value (5–10 seconds), \
+               then scrub the Time Slider. Notice how much slower the colony \
+               grows — each cell waits longer before dividing.\n\n\
+               Now try a very low value (0.2 seconds). The colony explodes \
+               outward almost immediately.\n\n\
+               Try the same with Split Mass — higher values mean cells need \
+               more food before they can split, so growth slows down even if \
+               the interval is short.\n\n\
+               Change Split Interval or Split Mass on any mode to continue.",
+        gate_hint: "Change Split Interval or Split Mass on any mode to continue.",
+        gate:       StepGate::AnySplitIntervalChanged,
+        target:     TutorialTarget::ParentSettingsPanel,
+        target_pos: [0.5, 0.3],
+    },
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CHAPTER 3 — CELL TYPES
+    // ════════════════════════════════════════════════════════════════════════
+
+    TutorialStepData {
+        title: "Chapter 3 — Cell Types",
+        body: "The Type dropdown in the Modes panel is the most important \
+               setting in the whole editor. It determines what a cell actually \
+               does while it's alive — not just how it divides.\n\n\
+               The main types:\n\n\
+               Phagocyte — absorbs free-floating nutrient particles on contact. \
+               The primary food source for the whole organism.\n\n\
+               Flagellocyte — beats a flagellum to push itself and anything \
+               bonded to it through the fluid. The main locomotion cell.\n\n\
+               Buoyocyte — generates upward buoyancy force. Useful for \
+               controlling depth without active swimming.\n\n\
+               Vasculocyte — a nutrient pipe. With Outlet on it releases \
+               nutrients to neighbours; sealed it just transports them at 5× \
+               the normal rate. Essential for large organisms.\n\n\
+               Oculocyte — fires a detection ray and emits a chemical signal \
+               when it sees something. The sensor cell.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::CellTypeDropdown,
+        target_pos: [0.5, 0.5],
+    },
+
+    TutorialStepData {
+        title: "Experiment — Give a Cell a Job",
+        body: "Select any mode in the Modes panel and change its Type to \
+               something other than Test.\n\n\
+               Try Flagellocyte first — scrub the Time Slider and watch the \
+               cells with flagella push the whole cluster around. Notice that \
+               the thrust is transmitted through the adhesion bonds to the \
+               entire body.\n\n\
+               Then try Phagocyte — the cells will start absorbing nutrient \
+               particles from the environment. Watch the nutrient bar in the \
+               right-click inspector fill up faster.\n\n\
+               Try Buoyocyte — the cluster drifts upward.\n\n\
+               You can mix types: set M1 to Phagocyte and M2 to Flagellocyte \
+               and you already have a creature with a feeding cell and a \
+               swimming cell. The genome doesn't care which mode you change — \
+               experiment freely.\n\n\
+               Change at least one mode's Type to continue.",
+        gate_hint: "Change at least one mode's Type to something other than Test.",
+        gate:       StepGate::AnyCellTypeChanged,
+        target:     TutorialTarget::CellTypeDropdown,
+        target_pos: [0.5, 0.5],
+    },
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CHAPTER 4 — ADHESION
+    // ════════════════════════════════════════════════════════════════════════
+
+    TutorialStepData {
+        title: "Chapter 4 — Adhesion",
+        body: "Adhesion is what turns a collection of dividing cells into a \
+               body. Without it, every division produces two cells that \
+               immediately drift apart — you get a cloud of individuals, \
+               not an organism.\n\n\
+               The Make Adhesion checkbox in the Modes panel controls whether \
+               a cell creates a spring bond with its children when it divides. \
+               With it on, parent and children stay connected.\n\n\
+               The Adhesion Settings panel on the right controls the physics \
+               of that spring: stiffness, damping, break force, and twist \
+               constraints. The defaults work well for most creatures — you \
+               only need to tune them for specific behaviours like rigid \
+               skeletons or breakable joints.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::AdhesionSettingsPanel,
+        target_pos: [0.5, 0.3],
+    },
+
+    TutorialStepData {
+        title: "Experiment — Bonds On and Off",
+        body: "Select M1 and untick Make Adhesion. Scrub the Time Slider.\n\n\
+               The cells now scatter on every division — no body forms. Each \
+               cell is an independent individual. If M1 is a Flagellocyte, \
+               you'll see dozens of solo swimmers instead of one coordinated \
+               organism.\n\n\
+               Now tick Make Adhesion back on. The cluster reforms — cells \
+               stay bonded and move together.\n\n\
+               Key insight: adhesion is per-mode. You can have some modes \
+               bonded and others free. A mode with adhesion off produces \
+               \"eggs\" — free cells that drift away and start their own \
+               independent lifecycle. This is how reproduction works.\n\n\
+               Toggle Make Adhesion on any mode to continue.",
+        gate_hint: "Toggle Make Adhesion on any mode to continue.",
+        gate:       StepGate::AnyAdhesionEnabled,
+        target:     TutorialTarget::MakeAdhesionCheckbox,
+        target_pos: [0.5, 0.5],
+    },
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CHAPTER 5 — BODY SHAPE
+    // ════════════════════════════════════════════════════════════════════════
+
+    TutorialStepData {
+        title: "Chapter 5 — Body Shape",
+        body: "So far every cell divides into two copies of itself. To build \
+               a body with different cell types in different positions, you \
+               need to route children to different modes.\n\n\
+               The Child Rotation panel has two 3D balls: Child A and Child B. \
+               Below each ball:\n\n\
+               Mode — which blueprint this child uses after the split. \
+               Change Child B's Mode to M2 and every division produces one \
+               M1 cell and one M2 cell instead of two M1 cells.\n\n\
+               Keep Adhesion — whether this child stays bonded to the parent. \
+               Untick it and that child floats away freely.\n\n\
+               The balls themselves control orientation — drag a ball to set \
+               which direction that child faces when it's born. A 180° rotation \
+               makes cells grow in a line; 90° makes them branch sideways.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::ChildRotationPanel,
+        target_pos: [0.5, 0.5],
+    },
+
+    TutorialStepData {
+        title: "Experiment — Route Children to Different Modes",
+        body: "Select M1 and look at the Child Rotation panel.\n\n\
+               Change Child B's Mode dropdown to M2 (or any other mode). \
+               Scrub the Time Slider — every M1 division now produces one \
+               M1 and one M2. If M2 has a different cell type, you'll see \
+               two distinct cell types in the body.\n\n\
+               Now try dragging the Child B ball to a different orientation. \
+               The M2 cells will be born facing a different direction — \
+               if M2 is a Flagellocyte, the thrust direction changes.\n\n\
+               Try the Circle Sliders panel (the pitch/yaw dials). These \
+               rotate the split axis itself — a small yaw angle makes the \
+               organism curve as it grows, producing spirals or arcs.\n\n\
+               Route Child B to a different mode than Child A to continue.",
+        gate_hint: "Set Child B's Mode to a different mode than Child A on any mode.",
+        gate:       StepGate::AnyChildBDifferentMode,
+        target:     TutorialTarget::ChildRotationPanel,
+        target_pos: [0.75, 0.75],
+    },
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CHAPTER 6 — LIFECYCLE
+    // ════════════════════════════════════════════════════════════════════════
+
+    TutorialStepData {
+        title: "Chapter 6 — Lifecycle and Finite Growth",
+        body: "By default, cells divide forever. Real organisms don't — they \
+               grow to a fixed size and stop, or they reproduce by shedding \
+               offspring.\n\n\
+               Max Splits in the Parent Settings panel limits how many times \
+               a cell can divide. Set it to 2 and the cell divides twice, \
+               then stops permanently. Set it to 0 and the cell never divides \
+               at all — it's a terminal cell.\n\n\
+               After Splits (further down in Parent Settings) lets you define \
+               a second set of child routes that activate once the limit is \
+               reached. The cell gets one final division using these alternate \
+               routes. This is how you build reproduction: the normal splits \
+               grow the body, and the after-splits division sheds a free egg \
+               (Keep Adhesion off) that starts a new lifecycle.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::MaxSplitsSlider,
+        target_pos: [0.5, 0.5],
+    },
+
+    TutorialStepData {
+        title: "Experiment — Limit a Cell's Growth",
+        body: "Select any mode and set Max Splits to a small number — try 2 \
+               or 3. Scrub the Time Slider.\n\n\
+               The cells of that type now stop dividing after hitting the \
+               limit. If it's a structural cell, the body stops growing at \
+               a fixed size. If it's a terminal cell (sensor, swimmer), \
+               set Max Splits to 0 so it never divides at all.\n\n\
+               Now scroll down in Parent Settings to the After Splits section. \
+               Try setting the after-splits Child A to a different mode with \
+               Keep Adhesion off — that mode will be shed as a free egg when \
+               the limit is reached.\n\n\
+               Scrub the Time Slider and watch the egg detach and drift away. \
+               If the egg's mode has adhesion on and the right cell type, it \
+               will grow its own body independently.\n\n\
+               Set Max Splits to any finite value (≥ 0) on any mode to continue.",
+        gate_hint: "Set Max Splits to a finite value on any mode to continue.",
+        gate:       StepGate::AnyFiniteMaxSplits,
+        target:     TutorialTarget::MaxSplitsSlider,
+        target_pos: [0.5, 0.5],
+    },
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CHAPTER 7 — SIGNALS
+    // ════════════════════════════════════════════════════════════════════════
+
+    TutorialStepData {
+        title: "Chapter 7 — The Signal System",
+        body: "Signals are chemical messages that travel through the adhesion \
+               network from cell to cell. They let one part of the body \
+               influence another part's behaviour without any direct wiring.\n\n\
+               There are 16 signal channels (0–15). Channels 0–7 are \
+               oculocyte channels — only Oculocyte cells can emit on them, \
+               but any cell can read them. Channels 8–15 are regulation \
+               channels — any cell type can emit and read.\n\n\
+               An Oculocyte fires a ray and emits a signal on its channel \
+               when it detects something (food, other cells, light, barriers). \
+               That signal propagates through the adhesion bonds to nearby \
+               cells. A Flagellocyte reading that channel can speed up or \
+               slow down based on the signal value — the creature steers \
+               toward food automatically.\n\n\
+               Division and mode-switching can also be gated on signals: \
+               a cell only divides when it receives the right chemical cue. \
+               This is how complex developmental programs work.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::ParentSettingsPanel,
+        target_pos: [0.5, 0.7],
+    },
+
+    TutorialStepData {
+        title: "Experiment — Add a Sensor",
+        body: "Try adding an Oculocyte to your genome.\n\n\
+               Select any mode and set its Type to Oculocyte. In the \
+               Oculocyte Settings section that appears, set Sense Type to \
+               Food and Signal Channel to 0. Set Signal Value to 10 and \
+               Signal Hops to 5.\n\n\
+               Now select a Flagellocyte mode (or set another mode to \
+               Flagellocyte). In its settings, enable Use Signal, set \
+               Signal Channel to 0, Speed A to 0.1 (slow), and Speed B \
+               to 1.0 (fast). Speed B activates when the signal is above \
+               the threshold.\n\n\
+               Scrub the Time Slider. When the Oculocyte detects food, it \
+               emits a signal that travels through the adhesion bonds to the \
+               Flagellocyte, which speeds up. The creature accelerates toward \
+               food automatically — no code, just signal rules.\n\n\
+               This step is optional — click Next to skip if you want to \
+               explore signals on your own later.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::CellTypeDropdown,
+        target_pos: [0.5, 0.5],
+    },
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CHAPTER 8 — GO LIVE
+    // ════════════════════════════════════════════════════════════════════════
+
+    TutorialStepData {
+        title: "Chapter 8 — Release Into the World",
+        body: "The Preview editor is a sandbox — one organism, no competition, \
+               no fluid dynamics. The Live Simulation is the real world.\n\n\
+               When you're ready, click Live Simulation in the top bar or the \
+               Scene Manager panel. The full GPU world loads: up to 200,000 \
+               cells, Navier-Stokes fluid, cave systems, light fields, and \
+               other organisms competing for the same nutrients.\n\n\
+               In the live world, hold Alt to open the radial tool menu. \
+               Select the + Insert tool, then click anywhere in the viewport \
+               to place your creature. It will start growing immediately.\n\n\
+               You can switch back to Preview at any time to edit the genome. \
+               Changes take effect the next time you insert a new organism — \
+               existing cells in the world keep their old genome.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::SceneManagerPanel,
+        target_pos: [0.5, 0.5],
+    },
+
+    TutorialStepData {
+        title: "What to Explore Next",
+        body: "You've seen all the core mechanics. Here are some directions \
+               to explore on your own:\n\n\
+               Vasculocyte networks — add Vasculocyte modes with Outlet \
+               enabled to build nutrient highways through large bodies. \
+               Without them, nutrients can't reach distant cells.\n\n\
+               Signal-gated division — in Parent Settings, set Division \
+               Signal Channel to a regulation channel (8–15) and a threshold. \
+               The cell only divides when it receives that signal. Use this \
+               to synchronise growth across the body.\n\n\
+               Glueocyte — bonds to other organisms or cave walls on contact. \
+               Combine with a Devorocyte (steals nutrients from bonded cells) \
+               for a predatory organism.\n\n\
+               Myocyte — a contractile cell that shortens its adhesion bonds \
+               on a timer or signal. Pairs of Myocytes on opposite sides of \
+               a body create bending waves — peristaltic locomotion.\n\n\
+               🎲 Procedural button — generates a random creature. Study its \
+               genome to see how complex body plans are structured.",
+        gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::None,
         target_pos: [0.5, 0.5],
@@ -476,12 +596,8 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
 /// Persistent tutorial playback state, stored inside [`GlobalUiState`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TutorialState {
-    /// Whether the tutorial dialogue is currently visible.
     pub active: bool,
-    /// Index into [`TUTORIAL_STEPS`] for the current step.
     pub current_step: usize,
-    /// `true` once the tutorial has been started at least once — suppresses
-    /// the automatic first-launch opening on subsequent sessions.
     pub ever_shown: bool,
 }
 
@@ -494,12 +610,10 @@ impl Default for TutorialState {
 impl TutorialState {
     pub fn total_steps() -> usize { TUTORIAL_STEPS.len() }
 
-    /// Data for the current step (clamped so we never go out of bounds).
     pub fn current(&self) -> &TutorialStepData {
         &TUTORIAL_STEPS[self.current_step.min(TUTORIAL_STEPS.len() - 1)]
     }
 
-    /// Advance one step.  Returns `true` when the last step is passed.
     pub fn next(&mut self) -> bool {
         if self.current_step + 1 >= TUTORIAL_STEPS.len() {
             self.active = false;
@@ -526,43 +640,41 @@ impl TutorialState {
 // Visual constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-const TEAL:          egui::Color32 = egui::Color32::from_rgb(0, 220, 175);
-const TEAL_DIM:      egui::Color32 = egui::Color32::from_rgb(0, 100, 80);
-const PANEL_GLOW:    egui::Color32 = egui::Color32::from_rgba_premultiplied(0, 0, 0, 0);
-const GATE_LOCKED:   egui::Color32 = egui::Color32::from_rgb(220, 160, 40);
-const GATE_OPEN:     egui::Color32 = egui::Color32::from_rgb(80, 220, 120);
-const LINE_W:  f32 = 1.5;
-const DOT_R:   f32 = 3.5;
-const ARROW_LEN:  f32 = 11.0;
-const ARROW_HALF: f32 = 5.0;
+const TEAL:        egui::Color32 = egui::Color32::from_rgb(0, 220, 175);
+const TEAL_DIM:    egui::Color32 = egui::Color32::from_rgb(0, 100, 80);
+const PANEL_GLOW:  egui::Color32 = egui::Color32::from_rgba_premultiplied(0, 0, 0, 0);
+const GATE_LOCKED: egui::Color32 = egui::Color32::from_rgb(220, 160, 40);
+const GATE_OPEN:   egui::Color32 = egui::Color32::from_rgb(80, 220, 120);
+const LINE_W:      f32 = 1.5;
+const DOT_R:       f32 = 3.5;
+const ARROW_LEN:   f32 = 11.0;
+const ARROW_HALF:  f32 = 5.0;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public render entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Render the tutorial overlay.
-///
-/// Call once per frame in `UiSystem::end_frame`, **after** the dock area
-/// renders (so panel rects are populated) and **before** `ctx.end_pass()`.
+/// Render the tutorial overlay.  Call once per frame after the dock area
+/// renders (so panel rects are populated) and before `ctx.end_pass()`.
 pub fn render_tutorial(
-    ctx:            &egui::Context,
-    state:          &mut TutorialState,
-    panel_rects:    &HashMap<String, egui::Rect>,
-    genome:         &crate::genome::Genome,
-    selected_mode:  usize,
+    ctx:           &egui::Context,
+    state:         &mut TutorialState,
+    panel_rects:   &HashMap<String, egui::Rect>,
+    genome:        &crate::genome::Genome,
+    selected_mode: usize,
 ) {
     if !state.active { return; }
 
-    let step_index  = state.current_step;
-    let total       = TutorialState::total_steps();
-    // Extract all values we need from the step before any mutable borrows of state.
-    // `target_key` is Option<String> because element-level keys are dynamic (e.g. "mode_row_0").
-    let (gate_ok, has_hint, target_key, target_pos, target_is_element, step_title, step_body, step_gate_hint) = {
+    let step_index = state.current_step;
+    let total      = TutorialState::total_steps();
+
+    let (gate_ok, has_hint, target_key, target_pos, target_is_element,
+         step_title, step_body, step_gate_hint) = {
         let step = state.current();
         (
             step.gate.is_satisfied(genome, selected_mode),
             !step.gate_hint.is_empty(),
-            step.target.panel_key(),   // Option<String>
+            step.target.panel_key(),
             step.target_pos,
             step.target.is_element_level(),
             step.title,
@@ -610,8 +722,6 @@ pub fn render_tutorial(
             color: egui::Color32::from_black_alpha(130),
         });
 
-    // Place the dialogue at the top-left of the viewport, falling back to the
-    // screen origin if the viewport rect hasn't been captured yet.
     let viewport_origin = panel_rects
         .get("Viewport")
         .map(|r| r.min + egui::vec2(10.0, 10.0))
@@ -625,10 +735,6 @@ pub fn render_tutorial(
         .fixed_size([380.0, 0.0])
         .frame(frame)
         .show(ctx, |ui| {
-            // dialogue_rect is captured from the outer response below
-            let _ = ui.max_rect(); // keep borrow happy
-
-            // Title
             ui.label(
                 egui::RichText::new(step_title)
                     .strong()
@@ -639,11 +745,9 @@ pub fn render_tutorial(
             ui.separator();
             ui.add_space(5.0);
 
-            // Body
             ui.label(egui::RichText::new(step_body).size(13.0));
             ui.add_space(10.0);
 
-            // Gate status row (only shown for gated steps)
             if has_hint {
                 ui.separator();
                 ui.add_space(4.0);
@@ -667,7 +771,6 @@ pub fn render_tutorial(
                 ui.add_space(4.0);
             }
 
-            // Progress bar
             let progress = (step_index + 1) as f32 / total as f32;
             ui.add(
                 egui::ProgressBar::new(progress)
@@ -676,22 +779,18 @@ pub fn render_tutorial(
             );
             ui.add_space(8.0);
 
-            // Button row
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(format!("{} / {}", step_index + 1, total))
                         .size(11.0)
                         .color(egui::Color32::GRAY),
                 );
-
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Close
                     if ui.button(egui::RichText::new("✕ Close").size(12.0)).clicked() {
                         close_clicked = true;
                     }
                     ui.add_space(4.0);
 
-                    // Next / Finish  — disabled until gate is satisfied
                     let is_last   = step_index + 1 >= total;
                     let next_text = if is_last { "  Finish ✓  " } else { "  Next ›  " };
                     let next_btn  = egui::Button::new(
@@ -708,7 +807,6 @@ pub fn render_tutorial(
                     }
                     ui.add_space(4.0);
 
-                    // Back (hidden on first step)
                     if step_index > 0
                         && ui.button(egui::RichText::new("‹ Back").size(12.0)).clicked()
                     {
@@ -718,12 +816,10 @@ pub fn render_tutorial(
             });
         });
 
-    // Capture the true outer window rect (includes title bar + frame).
     if let Some(ref r) = win_response {
         dialogue_rect = Some(r.response.rect);
     }
 
-    // ── Apply navigation ─────────────────────────────────────────────────────
     if close_clicked { state.close(); return; }
     if next_clicked  { state.next(); }
     else if prev_clicked { state.prev(); }
@@ -732,16 +828,12 @@ pub fn render_tutorial(
     if let (Some(d_rect), Some(ref key)) = (dialogue_rect, target_key) {
         if let Some(&p_rect) = panel_rects.get(key.as_str()) {
             let tip = if target_is_element {
-                // Element-level target: land at the exact widget position inside the rect.
                 let tp = target_pos;
                 egui::pos2(
                     p_rect.left() + p_rect.width()  * tp[0],
                     p_rect.top()  + p_rect.height() * tp[1],
                 )
             } else {
-                // Panel-level target: land on the border edge of the panel that
-                // faces the dialogue, so the arrow points *at* the panel rather
-                // than into its interior.
                 nearest_edge_midpoint(p_rect, d_rect.center())
             };
             let painter = ctx.layer_painter(egui::LayerId::new(
@@ -756,19 +848,15 @@ pub fn render_tutorial(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Schematic pointer drawing
+// Drawing helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Draw a high-tech schematic pointer from the nearest edge-midpoint of
-/// `d_rect` (dialogue) to the exact `tip` position within the target panel.
-///
-/// Colour shifts: amber when the gate is locked, teal when open/satisfied.
 fn draw_schematic_pointer(
-    painter:  &egui::Painter,
-    d_rect:   egui::Rect,
-    tip:      egui::Pos2,
-    ctx:      &egui::Context,
-    gate_ok:  bool,
+    painter: &egui::Painter,
+    d_rect:  egui::Rect,
+    tip:     egui::Pos2,
+    ctx:     &egui::Context,
+    gate_ok: bool,
 ) {
     let line_color = if gate_ok { TEAL } else { GATE_LOCKED };
     let dim_color  = if gate_ok { TEAL_DIM } else { egui::Color32::from_rgb(100, 70, 0) };
@@ -778,7 +866,6 @@ fn draw_schematic_pointer(
 
     if (end - start).length() < 10.0 { return; }
 
-    // Orthogonal routing: horizontal-first if Δx ≥ Δy, otherwise vertical-first.
     let dx = (end.x - start.x).abs();
     let dy = (end.y - start.y).abs();
     let corner = if dx >= dy {
@@ -790,17 +877,14 @@ fn draw_schematic_pointer(
     let stroke     = egui::Stroke::new(LINE_W, line_color);
     let dim_stroke = egui::Stroke::new(LINE_W * 0.5, dim_color);
 
-    // Segment 1: start → corner
     painter.line_segment([start, corner], stroke);
 
-    // Segment 2: corner → just before arrowhead
     let dir2 = (end - corner).normalized();
     let pre  = end - dir2 * ARROW_LEN;
     if (pre - corner).length() > 1.0 {
         painter.line_segment([corner, pre], stroke);
     }
 
-    // Tick marks along segment 2
     let seg2_len = (pre - corner).length();
     if seg2_len > 40.0 {
         let count = ((seg2_len / 20.0) as usize).max(1).min(14);
@@ -812,16 +896,10 @@ fn draw_schematic_pointer(
         }
     }
 
-    // Arrowhead
     draw_arrowhead(painter, end, dir2, line_color);
-
-    // Corner dot
     painter.circle_filled(corner, DOT_R, line_color);
-
-    // Hollow origin circle
     painter.circle_stroke(start, 4.0, egui::Stroke::new(1.5, line_color));
 
-    // Animated scan dot — colour changes with gate state
     let t      = ctx.input(|i| i.time) as f32;
     let period = 1.8_f32;
     let phase  = (t % period) / period;
@@ -846,33 +924,26 @@ fn draw_schematic_pointer(
     painter.circle_stroke(scan_pos, 4.5, egui::Stroke::new(1.0, scan_ring));
 }
 
-/// Return the midpoint of whichever edge of `rect` faces `toward`.
-///
-/// Compared to a ray-exit approach, this always produces a clean anchor at
-/// the centre of one of the four sides — the arrow never slides around
-/// diagonally as the two rects move relative to each other.
 fn nearest_edge_midpoint(rect: egui::Rect, toward: egui::Pos2) -> egui::Pos2 {
     let c  = rect.center();
     let dx = toward.x - c.x;
     let dy = toward.y - c.y;
 
     if dx.abs() >= dy.abs() {
-        // Left or right edge
         egui::pos2(if dx >= 0.0 { rect.right() } else { rect.left() }, c.y)
     } else {
-        // Top or bottom edge
         egui::pos2(c.x, if dy >= 0.0 { rect.bottom() } else { rect.top() })
     }
 }
 
 fn draw_arrowhead(
     painter: &egui::Painter,
-    tip: egui::Pos2,
-    dir: egui::Vec2,
-    color: egui::Color32,
+    tip:     egui::Pos2,
+    dir:     egui::Vec2,
+    color:   egui::Color32,
 ) {
-    let perp  = egui::Vec2::new(-dir.y, dir.x);
-    let base  = tip - dir * ARROW_LEN;
+    let perp = egui::Vec2::new(-dir.y, dir.x);
+    let base = tip - dir * ARROW_LEN;
     painter.add(egui::Shape::convex_polygon(
         vec![tip, base + perp * ARROW_HALF, base - perp * ARROW_HALF],
         color,

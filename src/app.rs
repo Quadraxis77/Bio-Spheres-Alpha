@@ -70,6 +70,7 @@ enum MenuAction {
     None,
     Play,
     GenomeEditor,
+    Tutorial,
     Settings,
     Credits,
     Exit,
@@ -590,31 +591,7 @@ impl App {
                     self.scene_manager.active_scene_mut().camera_mut().handle_mouse_button(*button, *state);
                 }
 
-                // Right-click: hide cursor while rotating, show on release.
-                // Always handled regardless of egui state so release is never missed.
-                if *button == MouseButton::Right {
-                    if *state == ElementState::Pressed {
-                        let _ = self.window.set_cursor_visible(false);
-                    } else {
-                        let _ = self.window.set_cursor_visible(true);
-                        // Only warp the cursor back to centre if this was a camera drag.
-                        // For a tap (context menu), the cursor should stay where it is so
-                        // the menu appears under the pointer.
-                        let was_drag = self.right_click_start_pos.map_or(true, |(sx, sy)| {
-                            let (mx, my) = self.mouse_position;
-                            let dx = mx - sx;
-                            let dy = my - sy;
-                            dx * dx + dy * dy > 5.0 * 5.0
-                        });
-                        if was_drag {
-                            let size = self.window.inner_size();
-                            let _ = self.window.set_cursor_position(winit::dpi::PhysicalPosition::new(
-                                size.width as f64 / 2.0,
-                                size.height as f64 / 2.0,
-                            ));
-                        }
-                    }
-                }
+                // Right-click camera drag: cursor stays visible and in place the whole time.
 
                 // Always release the camera drag on mouse-up, even if egui now owns the
                 // pointer (e.g. cursor drifted over a panel mid-drag).
@@ -911,6 +888,7 @@ impl App {
             &right_name,
             panel_w,
             panel_h,
+            self.ui.state.tutorial.ever_shown,
         );
 
         let egui_output = self.ui.ctx.end_pass();
@@ -960,6 +938,23 @@ impl App {
                 );
                 self.dock_manager.switch_mode(target);
             }
+            MenuAction::Tutorial => {
+                // Go to Preview mode and start the tutorial from step 0.
+                self.app_phase = AppPhase::InGame;
+                let target = crate::ui::types::SimulationMode::Preview;
+                self.ui.state.current_mode = target;
+                self.scene_manager.switch_mode(
+                    target,
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    self.ui.state.world_diameter,
+                    self.ui.state.world_settings.cell_capacity,
+                    &self.editor_state,
+                );
+                self.dock_manager.switch_mode(target);
+                self.ui.state.tutorial.start();
+            }
             MenuAction::Exit => {
                 // Save persistent state before exiting.
                 self.dock_manager.save_all();
@@ -981,7 +976,7 @@ impl App {
     }
 
     /// Draw the main-menu egui overlay and return the button action (if any).
-    fn render_main_menu_ui(ctx: &egui::Context, left_id: TextureId, right_id: TextureId, left_name: &str, right_name: &str, _panel_w: f32, _panel_h: f32) -> MenuAction {
+    fn render_main_menu_ui(ctx: &egui::Context, left_id: TextureId, right_id: TextureId, left_name: &str, right_name: &str, _panel_w: f32, _panel_h: f32, ever_shown: bool) -> MenuAction {
         use egui::{Align2, Color32, FontId, FontFamily, Pos2, Rect, Stroke, Vec2};
 
         // Background: deep navy blue, darker at edges
@@ -1190,6 +1185,64 @@ impl App {
                 }
                 if btn!("Genome editor", blue_fill, blue_fill_h, blue_border, blue_text).clicked() {
                     action = MenuAction::GenomeEditor;
+                }
+
+                // Tutorial button — always present; highlighted with a pulsing
+                // accent ring on first launch to guide new players.
+                {
+                    let tut_fill   = Color32::from_rgba_premultiplied(0, 180, 140, 22);
+                    let tut_fill_h = Color32::from_rgba_premultiplied(0, 180, 140, 50);
+                    let tut_border = Color32::from_rgb(0, 140, 110);
+                    let tut_text   = Color32::from_rgb(140, 230, 200);
+
+                    let r = egui::Rect::from_center_size(
+                        egui::Pos2::new(cx, y + btn_h * 0.5),
+                        egui::Vec2::new(btn_w, btn_h),
+                    );
+                    let response = ui.put(
+                        r,
+                        egui::Button::new(
+                            egui::RichText::new("Tutorial").color(tut_text).size(15.0),
+                        )
+                        .fill(tut_fill)
+                        .stroke(Stroke::new(1.0, tut_border))
+                        .corner_radius(32.0_f32),
+                    );
+                    if response.hovered() {
+                        ui.painter().rect_filled(r, 32.0, tut_fill_h);
+                        ui.painter().rect_stroke(r, 32.0, Stroke::new(1.0, tut_border), egui::StrokeKind::Outside);
+                    }
+
+                    // First-launch: animated pulsing ring + "New? Start here" label
+                    if !ever_shown {
+                        let t = ctx.input(|i| i.time) as f32;
+                        let pulse = (t * 2.5).sin() * 0.5 + 0.5;
+                        let ring_alpha = (60.0 + pulse * 120.0) as u8;
+                        let expand = 3.0 + pulse * 4.0;
+                        ui.painter().rect_stroke(
+                            r.expand(expand),
+                            32.0,
+                            Stroke::new(1.5, Color32::from_rgba_unmultiplied(0, 220, 175, ring_alpha)),
+                            egui::StrokeKind::Outside,
+                        );
+                        // "New? Start here →" label to the right of the button
+                        let label_x = r.right() + 12.0;
+                        let label_y = r.center().y;
+                        let label_alpha = (140.0 + pulse * 115.0) as u8;
+                        ui.painter().text(
+                            egui::Pos2::new(label_x, label_y),
+                            egui::Align2::LEFT_CENTER,
+                            "← New? Start here",
+                            egui::FontId::new(12.0, egui::FontFamily::Proportional),
+                            Color32::from_rgba_unmultiplied(0, 220, 175, label_alpha),
+                        );
+                        ctx.request_repaint();
+                    }
+
+                    if response.clicked() {
+                        action = MenuAction::Tutorial;
+                    }
+                    y += btn_h + gap;
                 }
 
                 y += 4.0;
