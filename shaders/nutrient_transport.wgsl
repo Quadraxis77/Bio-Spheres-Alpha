@@ -177,7 +177,9 @@ const MIN_CELL_MASS: f32 = 0.5;
 const MIN_NUTRIENTS: f32 = 1.0;  // Death threshold: nutrients < 1.0
 const DANGER_NUTRIENTS: f32 = 10.0;  // Priority boost threshold in nutrients (matches preview)
 const PRIORITY_BOOST: f32 = 10.0;
-const TRANSPORT_RATE: f32 = 30.0;  // Max nutrients/sec total outflow per cell across ALL connections
+const TRANSPORT_RATE: f32 = 100.0;  // Max nutrients/sec total outflow per cell across ALL connections
+                                    // Raised from 30 so non-vascular organisms can diffuse nutrients
+                                    // through the body. Vasculocytes still get 5x (500/sec highway).
 const LERP_SPEED: f32 = 999.0;     // Smoothing factor (per second); lower = smoother, less oscillation
 const BASE_METABOLISM_RATE: f32 = 1.0;  // Base metabolic cost in nutrients/sec for non-auto-gain cells
 const SWIM_CONSUMPTION_RATE: f32 = 2.0;  // 2 nutrients/sec at swim_force=1, 6/sec at swim_force=3
@@ -185,7 +187,7 @@ const DEFER_FRAMES: i32 = 6;  // ~0.1 seconds at 64 FPS = 6 frames
 
 // Vasculocyte transport constants
 const VASCULOCYTE_CELL_TYPE: u32 = 12u;
-const VASCULAR_TRANSPORT_RATE: f32 = 150.0; // 5x normal: vascular-to-vascular highway rate
+const VASCULAR_TRANSPORT_RATE: f32 = 500.0; // 5x normal: vascular-to-vascular highway rate
 const VASCULAR_SEAL_FACTOR: f32 = 0.05;     // Only 5% of normal rate leaks through a sealed vasculocyte
 const PUMP_AMPLIFICATION: f32 = 8.0;        // Compression multiplier for myocyte-driven pumping
 
@@ -534,24 +536,31 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let priority_b = select(mode_b_v1.y, mode_b_v1.y * PRIORITY_BOOST,
                                prioritize_b && nutrients_b < DANGER_NUTRIENTS);
 
-        // --- Myocyte directional pump bias ---
-        // Project the vector to cell_b onto the pump axis. Positive = forward (push);
-        // negative = backward (valve, resists outflow). The bias is added to the raw
-        // pressure difference before clamping, so it can overcome or reinforce the
-        // natural pressure gradient — nutrients flow forward even against backpressure.
-        var pump_pressure_bias: f32 = 0.0;
-        if (cell_a_is_myocyte && myocyte_pump_strength > 0.0) {
-            let pos_b    = positions_in[cell_b_idx].xyz;
-            let dir_to_b = pos_b - pos_a;
-            let dist     = length(dir_to_b);
-            if (dist > 0.001) {
-                let axis_dot = dot(dir_to_b / dist, myocyte_pump_axis);
-                pump_pressure_bias = MYOCYTE_PUMP_FORCE * myocyte_pump_strength * axis_dot;
+        // For embryocyte receivers, bypass the pressure-equilibrium formula entirely.
+        // The embryocyte is a pure sink — the sender should push at the full effective_rate
+        // as long as it has nutrients. The pressure-diff formula caps flow at
+        // nutrients_a / priority_a (e.g. 20/3.5 ≈ 5.7/sec), which is far too slow.
+        // Instead, use effective_rate directly as desired so the sender drains into
+        // the embryocyte as fast as the rate cap allows.
+        var desired: f32;
+        if (cell_b_type == 10u) {
+            // Embryocyte receiver: always push at full effective_rate (A→B)
+            desired = effective_rate;
+        } else {
+            // --- Myocyte directional pump bias ---
+            var pump_pressure_bias: f32 = 0.0;
+            if (cell_a_is_myocyte && myocyte_pump_strength > 0.0) {
+                let pos_b    = positions_in[cell_b_idx].xyz;
+                let dir_to_b = pos_b - pos_a;
+                let dist     = length(dir_to_b);
+                if (dist > 0.001) {
+                    let axis_dot = dot(dir_to_b / dist, myocyte_pump_axis);
+                    pump_pressure_bias = MYOCYTE_PUMP_FORCE * myocyte_pump_strength * axis_dot;
+                }
             }
+            let pressure_diff = nutrients_a_snap / priority_a - nutrients_b / priority_b + pump_pressure_bias;
+            desired = clamp(pressure_diff, -effective_rate, effective_rate);
         }
-
-        let pressure_diff = nutrients_a_snap / priority_a - nutrients_b / priority_b + pump_pressure_bias;
-        let desired = clamp(pressure_diff, -effective_rate, effective_rate);
 
         desired_arr[i] = desired;
         rate_arr[i]    = effective_rate;

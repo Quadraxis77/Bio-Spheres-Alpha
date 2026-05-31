@@ -698,7 +698,10 @@ pub fn check_embryocyte_release_triggers(state: &mut CanonicalState, genome: &Ge
 pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome: &Genome, dt: f32) {
         const PRIORITY_BOOST: f32 = 10.0;
     /// Max nutrients/sec a cell can send OR receive in total across all connections.
-    const TRANSPORT_RATE: f32 = 30.0;
+    /// Raised from 30 to 100 so non-vascular organisms can diffuse nutrients through
+    /// the body without needing vasculocytes. The pressure gradient (nutrient imbalance
+    /// between cells) still drives flow direction; this cap just stops being the bottleneck.
+    const TRANSPORT_RATE: f32 = 100.0;
     /// Lerp factor: how quickly flow tracks the pressure-diff target (per second).
     /// Lower = smoother/slower response, higher = faster but more oscillation risk.
     const LERP_SPEED: f32 = 999.0;
@@ -711,7 +714,8 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         conn_idx: usize,
         cell_a: usize,
         cell_b: usize,
-        desired: f32, // nutrients/sec, uncapped
+        desired: f32,   // nutrients/sec, clamped to rate_cap
+        rate_cap: f32,  // per-connection rate cap (higher for embryocyte connections)
     }
     let mut conn_flows: Vec<ConnFlow> = Vec::new();
 
@@ -737,6 +741,31 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         let nutrients_a = state.nutrients[cell_a];
         let nutrients_b = state.nutrients[cell_b];
 
+        let is_embryo_a_pass1 = mode_a.cell_type == 10;
+        let is_embryo_b_pass1 = mode_b.cell_type == 10;
+
+        // Embryocyte fill rate: scale the rate cap by priority so high-priority
+        // embryocytes can receive faster than the base 30/sec.
+        // Embryocytes are always a pure sink — treat their "pressure" as 0 so the
+        // sender always pushes toward them as long as it has nutrients. The rate cap
+        // (not the pressure diff) is what limits fill speed.
+        let embryo_rate_cap = if is_embryo_b_pass1 {
+            TRANSPORT_RATE * mode_b.nutrient_priority.max(1.0)
+        } else if is_embryo_a_pass1 {
+            TRANSPORT_RATE * mode_a.nutrient_priority.max(1.0)
+        } else {
+            TRANSPORT_RATE
+        };
+
+        // For embryocyte receivers, bypass the pressure-equilibrium formula entirely.
+        // The embryocyte is a pure sink — the sender should push at the full rate cap
+        // as long as it has nutrients. The pressure-diff formula caps flow at
+        // nutrients_a / priority_a (e.g. 20/3.5 ≈ 5.7/sec), which is far too slow.
+        // Instead, use the full embryo_rate_cap as desired so the sender drains into
+        // the embryocyte as fast as the rate cap allows.
+        let effective_nutrients_b = if is_embryo_b_pass1 { 0.0 } else { nutrients_b };
+        let effective_nutrients_a = if is_embryo_a_pass1 { 0.0 } else { nutrients_a };
+
         let priority_a = if mode_a.prioritize_when_low && nutrients_a < 10.0 {
             mode_a.nutrient_priority * PRIORITY_BOOST
         } else {
@@ -748,10 +777,18 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
             mode_b.nutrient_priority
         };
 
-        let pressure_diff = nutrients_a / priority_a - nutrients_b / priority_b;
-        let desired = pressure_diff.clamp(-TRANSPORT_RATE, TRANSPORT_RATE);
+        let desired = if is_embryo_b_pass1 {
+            // Embryocyte receiver: always push at full rate cap (A→B direction)
+            embryo_rate_cap
+        } else if is_embryo_a_pass1 {
+            // Embryocyte sender: will be blocked later, but set negative for direction
+            -embryo_rate_cap
+        } else {
+            let pressure_diff = effective_nutrients_a / priority_a - effective_nutrients_b / priority_b;
+            pressure_diff.clamp(-embryo_rate_cap, embryo_rate_cap)
+        };
 
-        conn_flows.push(ConnFlow { conn_idx: i, cell_a, cell_b, desired });
+        conn_flows.push(ConnFlow { conn_idx: i, cell_a, cell_b, desired, rate_cap: embryo_rate_cap });
     }
 
     // Pass 2: sum total desired outflow per cell to compute scaling factors.
@@ -773,15 +810,15 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         let cell_a = cf.cell_a;
         let cell_b = cf.cell_b;
 
-        // Scale outflow so the sending cell never exceeds TRANSPORT_RATE total.
+        // Scale outflow so the sending cell never exceeds its connection's rate cap total.
         // This proportionally reduces each connection's flow so that the sender's
-        // combined outflow across all connections stays within TRANSPORT_RATE.
+        // combined outflow across all connections stays within the cap.
         // No separate saturation factor is applied — that would double-throttle and
-        // zero out flow entirely when total_out >= TRANSPORT_RATE, starving receivers.
-        let scale = if cf.desired > 0.0 && total_out[cell_a] > TRANSPORT_RATE {
-            TRANSPORT_RATE / total_out[cell_a]
-        } else if cf.desired < 0.0 && total_out[cell_b] > TRANSPORT_RATE {
-            TRANSPORT_RATE / total_out[cell_b]
+        // zero out flow entirely when total_out >= rate_cap, starving receivers.
+        let scale = if cf.desired > 0.0 && total_out[cell_a] > cf.rate_cap {
+            cf.rate_cap / total_out[cell_a]
+        } else if cf.desired < 0.0 && total_out[cell_b] > cf.rate_cap {
+            cf.rate_cap / total_out[cell_b]
         } else {
             1.0
         };
@@ -984,6 +1021,106 @@ pub fn form_glueocyte_contact_bonds(state: &mut CanonicalState, genome: &Genome,
     }
 }
 
+/// Kill any organism that is numerically exploding due to conflicting adhesion constraints.
+///
+/// Detection: after velocity integration + constraint substeps, scan every cell.
+/// A cell is "frantic" if its speed exceeds `FRENZY_SPEED_THRESHOLD`. If the fraction
+/// of frantic cells in a connected organism exceeds `FRENZY_FRACTION_THRESHOLD`, the
+/// entire organism is removed.
+///
+/// Connected components are found via BFS over active adhesion connections — the same
+/// topology the adhesion solver uses, so the kill boundary matches the physical problem.
+///
+/// Isolated single cells are never killed by this check (they can legitimately move fast).
+pub fn kill_frenzied_organisms(state: &mut CanonicalState) {
+    // Speed above which a cell is considered "frantic".
+    // Normal adhesion-driven motion tops out around 20–30 units/sec.
+    // Exploding constraint fights routinely hit 200–1000+.
+    const FRENZY_SPEED_THRESHOLD: f32 = 150.0;
+    // Fraction of an organism's cells that must be frantic before the whole thing dies.
+    // 0.5 = majority vote: avoids killing organisms where one cell briefly spikes.
+    const FRENZY_FRACTION_THRESHOLD: f32 = 0.5;
+    // Minimum organism size to apply the check — don't kill isolated single cells.
+    const MIN_ORGANISM_SIZE: usize = 2;
+
+    let n = state.cell_count;
+    if n == 0 {
+        return;
+    }
+
+    // --- Step 1: mark frantic cells ---
+    let mut is_frantic = vec![false; n];
+    for i in 0..n {
+        if state.velocities[i].length_squared() > FRENZY_SPEED_THRESHOLD * FRENZY_SPEED_THRESHOLD {
+            is_frantic[i] = true;
+        }
+    }
+
+    // Fast-exit: if no frantic cells, nothing to do.
+    if !is_frantic.iter().any(|&f| f) {
+        return;
+    }
+
+    // --- Step 2: BFS connected-component labeling over active adhesions ---
+    // component[i] = root index of cell i's organism (-1 = unvisited)
+    let mut component = vec![usize::MAX; n];
+    // Build adjacency from active adhesion connections (undirected).
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for idx in 0..state.adhesion_connections.is_active.len() {
+        if state.adhesion_connections.is_active[idx] == 0 {
+            continue;
+        }
+        let a = state.adhesion_connections.cell_a_index[idx];
+        let b = state.adhesion_connections.cell_b_index[idx];
+        if a < n && b < n {
+            adj[a].push(b);
+            adj[b].push(a);
+        }
+    }
+
+    let mut organisms: Vec<Vec<usize>> = Vec::new(); // list of components (each = cell indices)
+    let mut queue = std::collections::VecDeque::new();
+
+    for start in 0..n {
+        if component[start] != usize::MAX {
+            continue;
+        }
+        // BFS from `start`
+        let org_id = organisms.len();
+        let mut members = Vec::new();
+        component[start] = org_id;
+        queue.push_back(start);
+        while let Some(cell) = queue.pop_front() {
+            members.push(cell);
+            for &neighbor in &adj[cell] {
+                if component[neighbor] == usize::MAX {
+                    component[neighbor] = org_id;
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        organisms.push(members);
+    }
+
+    // --- Step 3: check each organism and collect cells to kill ---
+    let mut to_kill: Vec<usize> = Vec::new();
+    for members in &organisms {
+        if members.len() < MIN_ORGANISM_SIZE {
+            continue;
+        }
+        let frantic_count = members.iter().filter(|&&i| is_frantic[i]).count();
+        let fraction = frantic_count as f32 / members.len() as f32;
+        if fraction >= FRENZY_FRACTION_THRESHOLD {
+            to_kill.extend_from_slice(members);
+        }
+    }
+
+    if !to_kill.is_empty() {
+        state.remove_cells(&to_kill);
+    }
+}
+
+
 /// Physics step with genome support
 pub fn physics_step_with_genome(
     state: &mut CanonicalState,
@@ -1121,6 +1258,10 @@ pub fn physics_step_with_genome(
     }
 
     update_nutrient_growth(state, genome, dt);
+
+    // Kill organisms that are numerically exploding from conflicting adhesion constraints.
+    // Runs after constraint substeps so velocities reflect the worst-case instability.
+    kill_frenzied_organisms(state);
 
     // Transport nutrients between adhesion-connected cells.
     // Embryocytes: incoming redirected to reserve, outgoing blocked.
