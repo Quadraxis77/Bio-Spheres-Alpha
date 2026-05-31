@@ -4542,6 +4542,7 @@ fn sync_mode_changes_to_others(
 
         // Glueocyte
         if updated.glueocyte_cell_adhesion != snapshot.glueocyte_cell_adhesion { other.glueocyte_cell_adhesion = updated.glueocyte_cell_adhesion; }
+        if updated.glueocyte_self_adhesion != snapshot.glueocyte_self_adhesion { other.glueocyte_self_adhesion = updated.glueocyte_self_adhesion; }
         if updated.glueocyte_env_adhesion != snapshot.glueocyte_env_adhesion { other.glueocyte_env_adhesion = updated.glueocyte_env_adhesion; }
         if updated.glueocyte_boulder_adhesion != snapshot.glueocyte_boulder_adhesion { other.glueocyte_boulder_adhesion = updated.glueocyte_boulder_adhesion; }
         if updated.glueocyte_cell_adhesion_signal_channel != snapshot.glueocyte_cell_adhesion_signal_channel { other.glueocyte_cell_adhesion_signal_channel = updated.glueocyte_cell_adhesion_signal_channel; }

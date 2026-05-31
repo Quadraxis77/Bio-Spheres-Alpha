@@ -926,6 +926,15 @@ pub fn form_glueocyte_contact_bonds(state: &mut CanonicalState, genome: &Genome,
             continue;
         }
 
+        // Skip if either glueocyte has self-adhesion disabled.
+        // In preview mode all cells belong to the same organism, so self-adhesion
+        // off means no cell-to-cell bonding at all in this context.
+        let self_adhesion_a = genome.modes.get(mode_a).map(|m| !is_glue_a || m.glueocyte_self_adhesion).unwrap_or(true);
+        let self_adhesion_b = genome.modes.get(mode_b).map(|m| !is_glue_b || m.glueocyte_self_adhesion).unwrap_or(true);
+        if !self_adhesion_a || !self_adhesion_b {
+            continue;
+        }
+
         let adhesions_a = state.adhesion_manager.count_active_adhesions(idx_a, &state.adhesion_connections);
         let adhesions_b = state.adhesion_manager.count_active_adhesions(idx_b, &state.adhesion_connections);
 
