@@ -19,7 +19,7 @@
 //   glueocyte_cell_adhesion_flags[mode_idx * 4 + 1] = signal_channel
 //                                                      (0xFFFFFFFF = always active)
 //   glueocyte_cell_adhesion_flags[mode_idx * 4 + 2] = signal_threshold (f32 bits)
-//   glueocyte_cell_adhesion_flags[mode_idx * 4 + 3] = padding
+//   glueocyte_cell_adhesion_flags[mode_idx * 4 + 3] = self_adhesion (0 = skip own organism, 1 = bond to own organism)
 //
 // Bond origin flag stored in AdhesionConnection._align_pad.x (offset 24):
 //   BOND_FLAG_GLUEOCYTE = 1u  — created by this shader, released on deactivation
@@ -101,7 +101,7 @@ const BOND_FLAG_GLUEOCYTE: u32 = 1u;
 
 @group(3) @binding(0) var<storage, read> mode_indices: array<u32>;
 @group(3) @binding(1) var<storage, read> mode_cell_types: array<u32>;
-// 4 u32 per mode: [enabled, signal_channel, signal_threshold_bits, padding]
+// 4 u32 per mode: [enabled, signal_channel, signal_threshold_bits, self_adhesion]
 @group(3) @binding(2) var<storage, read> glueocyte_cell_adhesion_flags: array<u32>;
 // Per-cell signal flags (packed u32: bits 0-10 = value, bits 11-15 = hops, bit 16 = source)
 @group(3) @binding(3) var<storage, read> signal_flags: array<u32>;
@@ -109,6 +109,8 @@ const BOND_FLAG_GLUEOCYTE: u32 = 1u;
 @group(3) @binding(4) var<storage, read> genome_orientations: array<vec4<f32>>;
 // Per-cell death flags
 @group(3) @binding(5) var<storage, read> death_flags: array<u32>;
+// Per-cell organism labels (for self-adhesion filtering)
+@group(3) @binding(6) var<storage, read> organism_labels: array<u32>;
 // ---- Helpers ----
 
 fn quat_conjugate(q: vec4<f32>) -> vec4<f32> {
@@ -304,6 +306,17 @@ fn bond_create(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
                     // Already bonded?
                     if (already_connected(cell_idx, other_idx)) { continue; }
+
+                    // Self-adhesion gate: skip same-organism cells unless self_adhesion is enabled.
+                    let flags_base = mode_idx * 4u;
+                    let self_adhesion_flag = glueocyte_cell_adhesion_flags[flags_base + 3u];
+                    if (self_adhesion_flag == 0u) {
+                        let my_org    = organism_labels[cell_idx];
+                        let other_org = organism_labels[other_idx];
+                        if (my_org != 0xFFFFFFFFu && other_org != 0xFFFFFFFFu && my_org == other_org) {
+                            continue;
+                        }
+                    }
 
                     // Other cell adhesion count gate
                     let other_count = count_active_adhesions(other_idx);

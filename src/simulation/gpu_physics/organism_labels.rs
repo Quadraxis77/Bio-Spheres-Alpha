@@ -63,7 +63,6 @@ pub struct OrganismLabelSystem {
     controller_pipeline:     wgpu::ComputePipeline,
     init_pipeline:           wgpu::ComputePipeline,
     hook_pipeline:           wgpu::ComputePipeline,
-    compress_pipeline:       wgpu::ComputePipeline,
     clear_sizes_pipeline:        wgpu::ComputePipeline,
     count_sizes_accumulate_pipeline: wgpu::ComputePipeline,
     count_sizes_broadcast_pipeline:  wgpu::ComputePipeline,
@@ -173,7 +172,6 @@ impl OrganismLabelSystem {
         let controller_pipeline = make_label("label_controller", "Label Controller");
         let init_pipeline       = make_label("init_labels",       "Label Init");
         let hook_pipeline       = make_label("hook_labels",       "Label Hook");
-        let compress_pipeline   = make_label("compress_labels",   "Label Compress");
         let clear_sizes_pipeline                = make_label("clear_organism_sizes",             "Organism Size Clear");
         let count_sizes_accumulate_pipeline     = make_label("count_organism_sizes_accumulate",  "Organism Size Accumulate");
         let count_sizes_broadcast_pipeline      = make_label("count_organism_sizes_broadcast",   "Organism Size Broadcast");
@@ -252,7 +250,6 @@ impl OrganismLabelSystem {
             controller_pipeline,
             init_pipeline,
             hook_pipeline,
-            compress_pipeline,
             clear_sizes_pipeline,
             count_sizes_accumulate_pipeline,
             count_sizes_broadcast_pipeline,
@@ -292,26 +289,27 @@ impl OrganismLabelSystem {
     ///   mesh lags by at most `LABEL_PERIOD` frames — invisible at 60 fps.
     ///
     /// Set `LABEL_PERIOD = 1` to restore every-frame behaviour.
+    /// Returns true if the *next* encode_frame call will be a label reset frame.
+    /// Used by the follow camera to skip CoM updates on frames where labels are
+    /// temporarily reset to each cell's own index.
+    pub fn is_reset_frame(&self) -> bool {
+        const RESET_PERIOD: u32 = 60;
+        (self.debug_frame.wrapping_add(1) % RESET_PERIOD) == 1
+    }
+
     pub fn encode_frame(&mut self, encoder: &mut wgpu::CommandEncoder, cell_slots_used: u32) {
-        // Skip all work when there are no cells.
         if cell_slots_used == 0 {
             return;
         }
 
-        // Throttle: only run the full pipeline every LABEL_PERIOD frames.
-        // The label buffer retains its previous values between runs, so consumers
-        // always have a valid (possibly 1–LABEL_PERIOD frames stale) result.
-        const LABEL_PERIOD: u32 = 60;
-        self.debug_frame = self.debug_frame.wrapping_add(1);
-        let run_this_frame = (self.debug_frame % LABEL_PERIOD) == 0;
-        if !run_this_frame {
-            return;
-        }
-
-        // Dispatch only over the slots that have been allocated, not the full capacity.
-        // Dead cells can sit at any index so we must cover the high-water mark, but we
-        // don't need to touch the empty tail of the buffer.
         let active_workgroups = (cell_slots_used + 255) / 256;
+        self.debug_frame = self.debug_frame.wrapping_add(1);
+
+        // Every RESET_PERIOD frames, reinitialise label[i] = i so stale labels from
+        // dead organisms don't persist indefinitely. Between resets the continuous
+        // single-hop flood fill keeps labels fresh.
+        const RESET_PERIOD: u32 = 60;
+        let is_reset_frame = (self.debug_frame % RESET_PERIOD) == 1;
 
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label:            Some("Organism Label Pass"),
@@ -319,42 +317,24 @@ impl OrganismLabelSystem {
         });
         pass.set_bind_group(0, &self.label_bind_group, &[]);
 
-        // Controller: always sets run_init = run_hc = 1 (recompute every frame).
+        // Controller sets run_hc = 1. run_init was written into the state buffer
+        // by prepare_frame() before this encoder was built.
         pass.set_pipeline(&self.controller_pipeline);
         pass.dispatch_workgroups(1, 1, 1);
 
-        // Init: label[i] = i for live cells, DEAD_LABEL for dead.
-        pass.set_pipeline(&self.init_pipeline);
+        // Periodic reset: reinitialise labels to cell indices.
+        if is_reset_frame {
+            pass.set_pipeline(&self.init_pipeline);
+            pass.dispatch_workgroups(active_workgroups, 1, 1);
+        }
+
+        // Single hook pass per frame: propagate minimum label one hop through bonds.
+        // The flood fill converges over successive frames — no fixed iteration count,
+        // no size limit.
+        pass.set_pipeline(&self.hook_pipeline);
         pass.dispatch_workgroups(active_workgroups, 1, 1);
 
-        // Hook+compress convergence.
-        // Each hook pass propagates the minimum label one adhesion hop further.
-        // A chain of N cells needs ~N hook passes to converge end-to-end.
-        //
-        // 8 hook passes handles organisms up to ~8 cells in diameter (ring-based
-        // creatures from the procedural generator are compact, not long chains).
-        // 6 compress passes flatten the union-find tree after hooking.
-        //
-        // Cost vs old (20 hook + 10 compress, every frame, full capacity):
-        //   Old: 30 dispatches × ceil(capacity/256) workgroups, every frame
-        //   New: 14 dispatches × ceil(slots_used/256) workgroups, every 4 frames
-        //   → ~85% reduction at 10K cells / 200K capacity
-        //
-        // If you have organisms with very long linear chains (>8 cells end-to-end),
-        // increase HOOK_ITERS. Each extra hook pass costs active_workgroups workgroups.
-        const HOOK_ITERS:     u32 = 8;
-        const COMPRESS_ITERS: u32 = 6;
-
-        for _ in 0..HOOK_ITERS {
-            pass.set_pipeline(&self.hook_pipeline);
-            pass.dispatch_workgroups(active_workgroups, 1, 1);
-        }
-        for _ in 0..COMPRESS_ITERS {
-            pass.set_pipeline(&self.compress_pipeline);
-            pass.dispatch_workgroups(active_workgroups, 1, 1);
-        }
-
-        // Recount organism sizes from converged labels.
+        // Recount organism sizes from current labels.
         pass.set_pipeline(&self.clear_sizes_pipeline);
         pass.dispatch_workgroups(active_workgroups, 1, 1);
         pass.set_pipeline(&self.count_sizes_accumulate_pipeline);
@@ -364,27 +344,46 @@ impl OrganismLabelSystem {
 
         drop(pass);
 
-        // Stable ID passes run in a separate compute pass (need label+size results visible).
+        // Stable ID passes (separate compute pass — need label+size results visible).
         {
             let mut stable_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label:            Some("Organism Stable ID Pass"),
                 timestamp_writes: None,
             });
             stable_pass.set_bind_group(0, &self.stable_id_bind_group, &[]);
-
             stable_pass.set_pipeline(&self.assign_stable_ids_pipeline);
             stable_pass.dispatch_workgroups(active_workgroups, 1, 1);
-
             stable_pass.set_pipeline(&self.broadcast_stable_ids_pipeline);
             stable_pass.dispatch_workgroups(active_workgroups, 1, 1);
         }
 
-        // Debug readback every 120 label updates (= 480 frames at LABEL_PERIOD=4).
-        if self.debug_frame % (120 * LABEL_PERIOD) == 0 {
+        // Debug readback every 120 frames.
+        if self.debug_frame % 120 == 0 {
             let copy_size = (32 * 4).min(self.label_buffer.size());
             encoder.copy_buffer_to_buffer(&self.label_buffer, 0, &self.debug_staging, 0, copy_size);
             self.debug_copy_pending = true;
         }
+    }
+
+    /// Write the run_init flag into the label state buffer.
+    /// Must be called with the queue each frame before encode_frame().
+    pub fn prepare_frame(&self, queue: &wgpu::Queue) {
+        // debug_frame hasn't been incremented yet (encode_frame does that), so the
+        // next frame number is debug_frame + 1.
+        const RESET_PERIOD: u32 = 60;
+        let next_frame = self.debug_frame.wrapping_add(1);
+        let is_reset = (next_frame % RESET_PERIOD) == 1;
+
+        // LabelState layout (32 bytes):
+        //   [_pad0(0), _pad1(4), _pad2(8), _pad3(12), run_init(16), run_hc(20), _pad4(24), _pad5(28)]
+        // run_hc is set to 0 here; the controller shader sets it to 1 at pass start.
+        let state = LabelState {
+            _pad0: 0, _pad1: 0, _pad2: 0, _pad3: 0,
+            run_init: if is_reset { 1 } else { 0 },
+            run_hc: 0,
+            _pad4: 0, _pad5: 0,
+        };
+        queue.write_buffer(&self.label_state_buffer, 0, bytemuck::bytes_of(&state));
     }
 
     pub fn poll_debug_readback(&mut self, device: &wgpu::Device) {

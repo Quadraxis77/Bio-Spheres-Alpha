@@ -1780,7 +1780,7 @@ impl GpuPhysicsPipelines {
         // Glueocyte cell-to-cell adhesion bind groups
         let cell_adhesion_adhesion = self.create_cell_adhesion_adhesion_bind_group(device, adhesion_buffers);
         let cell_adhesion_spatial = self.create_cell_adhesion_spatial_bind_group(device, buffers);
-        let cell_adhesion_mode = self.create_cell_adhesion_mode_bind_group(device, buffers, adhesion_buffers);
+        let cell_adhesion_mode = self.create_cell_adhesion_mode_bind_group(device, buffers, adhesion_buffers, organism_label_buffer);
 
         // Signal system bind groups
         let signal_flags = self.create_signal_flags_bind_group(device, adhesion_buffers, buffers);
@@ -5781,7 +5781,7 @@ impl GpuPhysicsPipelines {
         };
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Cell Adhesion Mode Layout"),
-            entries: &[ro(0), ro(1), ro(2), ro(3), ro(4), ro(5)],
+            entries: &[ro(0), ro(1), ro(2), ro(3), ro(4), ro(5), ro(6)],
         })
     }
 
@@ -5826,7 +5826,21 @@ impl GpuPhysicsPipelines {
         device: &wgpu::Device,
         triple_buffers: &GpuTripleBufferSystem,
         adhesion_buffers: &super::AdhesionBuffers,
+        organism_label_buffer: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
+        // Use a dummy buffer if organism labels aren't available yet.
+        let dummy_label_buf;
+        let label_buf = if let Some(buf) = organism_label_buffer {
+            buf
+        } else {
+            dummy_label_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Cell Adhesion Dummy Organism Label Buffer"),
+                size: triple_buffers.capacity as u64 * 4,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            &dummy_label_buf
+        };
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cell Adhesion Mode Bind Group"),
             layout: &self.cell_adhesion_mode_layout,
@@ -5837,6 +5851,7 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry { binding: 3, resource: adhesion_buffers.signal_flags.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: triple_buffers.genome_orientations.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 5, resource: triple_buffers.death_flags.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: label_buf.as_entire_binding() },
             ],
         })
     }

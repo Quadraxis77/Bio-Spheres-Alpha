@@ -132,6 +132,8 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub glueocyte_cell_adhesion: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub glueocyte_self_adhesion: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub glueocyte_env_adhesion: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub glueocyte_boulder_adhesion: Option<bool>,
@@ -437,6 +439,7 @@ fn mode_to_serializable(
         child_a_after_split_keep_adhesion: diff_bool(mode.child_a_after_split_keep_adhesion, default.child_a_after_split_keep_adhesion),
         child_b_after_split_keep_adhesion: diff_bool(mode.child_b_after_split_keep_adhesion, default.child_b_after_split_keep_adhesion),
         glueocyte_cell_adhesion: diff_bool(mode.glueocyte_cell_adhesion, default.glueocyte_cell_adhesion),
+        glueocyte_self_adhesion: diff_bool(mode.glueocyte_self_adhesion, default.glueocyte_self_adhesion),
         glueocyte_env_adhesion: diff_bool(mode.glueocyte_env_adhesion, default.glueocyte_env_adhesion),
         glueocyte_boulder_adhesion: diff_bool(mode.glueocyte_boulder_adhesion, default.glueocyte_boulder_adhesion),
         glueocyte_cell_adhesion_signal_channel: diff_i32(mode.glueocyte_cell_adhesion_signal_channel, default.glueocyte_cell_adhesion_signal_channel),
@@ -541,7 +544,9 @@ impl SerializableModeSettings {
             || self.child_a_after_split_keep_adhesion.is_some()
             || self.child_b_after_split_keep_adhesion.is_some()
             || self.glueocyte_cell_adhesion.is_some()
+            || self.glueocyte_self_adhesion.is_some()
             || self.glueocyte_env_adhesion.is_some()
+            || self.glueocyte_boulder_adhesion.is_some()
             || self.glueocyte_cell_adhesion_signal_channel.is_some()
             || self.glueocyte_cell_adhesion_signal_threshold.is_some()
             || self.swim_force.is_some()
@@ -746,6 +751,7 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
         mode.child_b_after_split_keep_adhesion = keep_adhesion;
     }
     if let Some(v) = ser.glueocyte_cell_adhesion { mode.glueocyte_cell_adhesion = v; }
+    if let Some(v) = ser.glueocyte_self_adhesion  { mode.glueocyte_self_adhesion  = v; }
     if let Some(v) = ser.glueocyte_env_adhesion  { mode.glueocyte_env_adhesion  = v; }
     if let Some(v) = ser.glueocyte_boulder_adhesion { mode.glueocyte_boulder_adhesion = v; }
     if let Some(v) = ser.glueocyte_cell_adhesion_signal_channel {

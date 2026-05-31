@@ -195,10 +195,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let boundary_radius = params.world_size * 0.5;
     let soft_zone = 5.0;
     let soft_zone_start = boundary_radius - soft_zone;
-    let near_boundary = dist_from_center > soft_zone_start;
     
     // Quick check: skip boundary forces if not in soft zone
-    if (!near_boundary) {
+    if (dist_from_center <= soft_zone_start) {
         // Skip boundary collision entirely - no cells nearby
     } else {
         // Cell is in boundary soft zone - apply boundary forces
@@ -285,20 +284,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             atomicAdd(&force_accum_y[cell_idx], i32(force.y * FIXED_POINT_SCALE));
             atomicAdd(&force_accum_z[cell_idx], i32(force.z * FIXED_POINT_SCALE));
         }
-        return;
-    }
-
-    // Velocity early-out: a nearly-stationary cell that isn't near the boundary
-    // cannot tunnel through a neighbor in one step, so collision forces are zero
-    // this frame. Skip the expensive 27-cell neighbor scan.
-    //
-    // Threshold: a cell must be moving faster than 0.5 units/step to potentially
-    // overlap a neighbor (min combined radius ≈ 1.0 unit). At 64 Hz that's
-    // 0.5 * 64 = 32 units/sec — well above the resting drift of a settled cluster.
-    // Cells near the boundary always run the full path regardless of speed.
-    const VELOCITY_THRESHOLD: f32 = 0.5;
-    let speed_sq = dot(vel, vel);
-    if (!near_boundary && speed_sq < VELOCITY_THRESHOLD * VELOCITY_THRESHOLD) {
         return;
     }
 

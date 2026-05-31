@@ -2579,6 +2579,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     child_a_after_split_keep_adhesion: true,
                     child_b_after_split_keep_adhesion: true,
                     glueocyte_cell_adhesion: false,
+                    glueocyte_self_adhesion: false,
                     glueocyte_env_adhesion: true,
                     glueocyte_boulder_adhesion: true,
                     glueocyte_cell_adhesion_signal_channel: -1,
@@ -3268,6 +3269,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 group_container(ui, "Glueocyte Functions", egui::Color32::from_rgb(140, 200, 140), |ui| {
                     ui.checkbox(&mut mode.glueocyte_cell_adhesion, "Cell Adhesion")
                         .on_hover_text("When enabled, this cell will form adhesion bonds with other cells it touches. Bonds are released when the signal gate goes inactive");
+                    ui.checkbox(&mut mode.glueocyte_self_adhesion, "Bond to Own Organism")
+                        .on_hover_text("When enabled, also bonds to cells of the same organism. When disabled (default), only bonds to foreign cells");
                     if mode.glueocyte_cell_adhesion {
                         ui.indent("glue_cell_signal", |ui| {
                             let channel_labels = ["Ch 0", "Ch 1", "Ch 2", "Ch 3", "Ch 4", "Ch 5", "Ch 6", "Ch 7"];
@@ -3305,12 +3308,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     }
                     ui.checkbox(&mut mode.glueocyte_env_adhesion, "Environment Adhesion")
                         .on_hover_text("When enabled, this cell will bond to cave walls and other solid environment surfaces it touches");
-                    if mode.glueocyte_env_adhesion {
-                        ui.indent("glue_boulder", |ui| {
-                            ui.checkbox(&mut mode.glueocyte_boulder_adhesion, "Include Boulders/Mossrocks")
-                                .on_hover_text("Also bond to floating mossrock boulders in addition to cave walls");
-                        });
-                    }
+                    ui.checkbox(&mut mode.glueocyte_boulder_adhesion, "Boulder/Mossrock Adhesion")
+                        .on_hover_text("When enabled, this cell will bond to floating mossrock boulders it touches");
                 });
             } else if mode.cell_type == 1 { // Flagellocyte (cell_type == 1)
                 group_container(ui, "Flagellocyte Functions", egui::Color32::from_rgb(140, 180, 220), |ui| {

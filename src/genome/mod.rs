@@ -119,6 +119,9 @@ pub struct ModeSettings {
     
     // Glueocyte settings
     pub glueocyte_cell_adhesion: bool, // Whether this Glueocyte bonds to other cells on contact
+    /// Whether this Glueocyte bonds to cells of its own organism.
+    /// When false (default), only bonds to foreign cells.
+    pub glueocyte_self_adhesion: bool,
     pub glueocyte_env_adhesion: bool,  // Whether this Glueocyte bonds to the environment on contact
     pub glueocyte_boulder_adhesion: bool, // Whether this Glueocyte bonds to boulders/mossrocks
     /// Signal channel that controls cell-adhesion activation (-1 = always active, 0-7 = oculocyte channel).
@@ -268,6 +271,7 @@ impl Default for ModeSettings {
             child_a_after_split_keep_adhesion: true, // Default: keep adhesion for Child A after max splits
             child_b_after_split_keep_adhesion: true, // Default: keep adhesion for Child B after max splits
             glueocyte_cell_adhesion: false,  // Default: cell adhesion disabled
+            glueocyte_self_adhesion: false,   // Default: don't bond to own organism
             glueocyte_env_adhesion: true,      // Default: environment adhesion enabled
             glueocyte_boulder_adhesion: true,  // Default: boulder adhesion enabled
             glueocyte_cell_adhesion_signal_channel: -1, // Default: always active (no signal gate)

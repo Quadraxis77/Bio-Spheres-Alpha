@@ -1,24 +1,37 @@
 // Organism Label Shader
 //
 // Assigns each live cell a label equal to the minimum cell index in its connected
-// component (determined by active adhesion bonds). Runs as a self-throttled GPU
-// state machine: the controller detects topology changes (cell count or live bond
-// count changes), writes run_init / run_hc flags into label_state, and the
-// subsequent dispatches early-exit when those flags are 0.
+// component (determined by active adhesion bonds).
 //
-// NOTE: Indirect dispatch was intentionally avoided. The command processor reads
-// indirect args before prior storage writes are guaranteed visible. Writing flags
-// into label_state (storage) and reading them in subsequent shaders IS correctly
-// ordered within a single compute pass.
+// ## Algorithm: continuous flood fill (one hop per frame)
 //
-// Algorithm: parallel pointer-jumping union-find
-//   init:     label[i] = i  (dead cells get 0xFFFFFFFF sentinel)
-//   hook:     for each cell, atomicMin with all active neighbours' labels
-//   compress: label[i] = label[label[i]]  (one level of path compression)
+// Each frame, every live cell looks at all its bonded neighbors and adopts the
+// minimum label it sees (including its own). Over successive frames the minimum
+// label floods through the entire connected component, regardless of organism size.
 //
-// Unique within-organism ID (zero extra cost after convergence):
-//   organism_root = label[cell_i]          // same for all cells in organism
-//   local_id      = cell_i - organism_root // unique, non-negative, sparse
+// No fixed iteration count, no convergence detection, no size limit.
+//
+// Correctness properties:
+//   - A freshly-divided cell pair gets the correct shared label within a few frames
+//     as the minimum propagates through the new bond.
+//   - When a cell dies its neighbors stop propagating through it (dead cells hold
+//     DEAD_LABEL). The remaining component re-floods to the new minimum within
+//     a few frames.
+//   - Labels are eventually consistent, not frame-perfect. The throttled period
+//     (currently every 60 frames) means a full reset happens once per second;
+//     between resets the continuous single-hop pass keeps labels fresh.
+//
+// ## Reset pass (init_labels)
+//
+// Periodically (controlled by run_init in LabelState) each cell resets its label
+// to its own index. This clears stale labels from dead organisms and prevents
+// label "fossils" from persisting indefinitely. After a reset, the flood fill
+// re-converges within diameter(organism) frames.
+//
+// ## Size counting
+//
+// After the hook pass, clear/accumulate/broadcast passes compute per-cell organism
+// size for the Kleiber metabolic discount. These run every frame alongside the hook.
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -50,8 +63,8 @@ struct LabelState {
     _pad1: u32,
     _pad2: u32,
     _pad3: u32,
-    run_init: u32,  // always 1
-    run_hc:   u32,  // always 1
+    run_init: u32,  // 1 = reset labels to cell index this frame, 0 = skip reset
+    run_hc:   u32,  // always 1 (hook pass runs every frame)
     _pad4:    u32,
     _pad5:    u32,
 }
@@ -68,21 +81,23 @@ struct LabelState {
 @group(0) @binding(7) var<storage, read_write> organism_size_buffer:     array<atomic<u32>>;
 
 // ── label_controller ─────────────────────────────────────────────────────────
-// Runs every frame unconditionally. Labels are recomputed from scratch each
-// frame so GPU-created bonds (from division) are always reflected immediately.
-// The hook+compress passes are cheap enough to run every frame.
+// Sets run_hc = 1 unconditionally. run_init is set by the Rust side before
+// each periodic reset; the controller preserves it so init_labels can read it.
 
 @compute @workgroup_size(1, 1, 1)
 fn label_controller() {
-    label_state.run_init = 1u;
-    label_state.run_hc   = 1u;
+    label_state.run_hc = 1u;
+    // run_init is written by the Rust side via queue.write_buffer before this pass.
+    // We don't touch it here so init_labels sees the correct value.
 }
 
 // ── init_labels ──────────────────────────────────────────────────────────────
+// Periodic reset: label[i] = i for live cells, DEAD_LABEL for dead.
+// Only runs when run_init == 1 (set by Rust side on the reset frame).
+// After a reset the flood fill re-converges within diameter(organism) frames.
 
 @compute @workgroup_size(256, 1, 1)
 fn init_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
-    // Storage read ordered after controller's write — safe within the same pass.
     if label_state.run_init == 0u { return; }
 
     let i = gid.x;
@@ -96,17 +111,26 @@ fn init_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // ── hook_labels ──────────────────────────────────────────────────────────────
+// Continuous flood fill: each cell adopts the minimum label among itself and
+// all its bonded live neighbors. One dispatch per frame propagates the minimum
+// label one hop further through each connected component.
 
 @compute @workgroup_size(256, 1, 1)
 fn hook_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if label_state.run_hc == 0u { return; }
-
     let i = gid.x;
     if i >= cell_count_buffer[0] { return; }
-    if death_flags[i] != 0u { return; }
+    if death_flags[i] != 0u {
+        // Dead cell: stamp DEAD_LABEL so neighbors stop propagating through it.
+        atomicStore(&label_buffer[i], DEAD_LABEL);
+        return;
+    }
 
     var my_label = atomicLoad(&label_buffer[i]);
-    if my_label == DEAD_LABEL { return; }
+    if my_label == DEAD_LABEL {
+        // Isolated live cell with stale DEAD_LABEL (e.g. just after a reset that
+        // hasn't run init yet). Seed it with its own index so it can participate.
+        my_label = i;
+    }
 
     let base = i * MAX_ADHESIONS_PER_CELL;
 
@@ -119,11 +143,11 @@ fn hook_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         let cell_a = connection.cell_a_index;
         let cell_b = connection.cell_b_index;
-        // Validate this bond actually involves cell i — guards against stale slot indices
-        // left over from a previous cell that occupied this slot.
         if (cell_a != i && cell_b != i) { continue; }
-        // Select the neighbour: if cell_a == i, neighbour is cell_b, else cell_a.
         let nb = select(cell_a, cell_b, cell_a == i);
+
+        // Skip dead neighbors — don't propagate through them.
+        if death_flags[nb] != 0u { continue; }
 
         let nb_label = atomicLoad(&label_buffer[nb]);
         if nb_label != DEAD_LABEL {
@@ -134,30 +158,7 @@ fn hook_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
     atomicMin(&label_buffer[i], my_label);
 }
 
-// ── compress_labels ───────────────────────────────────────────────────────────
-
-@compute @workgroup_size(256, 1, 1)
-fn compress_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if label_state.run_hc == 0u { return; }
-
-    let i = gid.x;
-    if i >= cell_count_buffer[0] { return; }
-
-    let lbl = atomicLoad(&label_buffer[i]);
-    if lbl == DEAD_LABEL { return; }
-
-    if lbl < cell_count_buffer[0] {
-        let parent = atomicLoad(&label_buffer[lbl]);
-        if parent != DEAD_LABEL {
-            atomicStore(&label_buffer[i], parent);
-        }
-    }
-}
-
 // ── clear_organism_sizes ──────────────────────────────────────────────────────
-// Zeroes the organism_size_buffer before the count pass.
-// Must run every frame (not just on topology change) so stale counts from
-// dead organisms are cleared even when labels are not recomputed.
 
 @compute @workgroup_size(256, 1, 1)
 fn clear_organism_sizes(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -167,17 +168,6 @@ fn clear_organism_sizes(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // ── count_organism_sizes ──────────────────────────────────────────────────────
-// Two-pass approach:
-//   Pass A (this shader, first invocation): each live cell atomicAdds 1 into
-//           organism_size_buffer[root_label], accumulating the true organism count.
-//   Pass B (second invocation of same entry, after a barrier — handled by running
-//           the shader twice): each live cell reads organism_size_buffer[root_label]
-//           and writes it to organism_size_buffer[cell_i], so every cell slot holds
-//           its organism's size directly. Consumers can then index by cell_idx with
-//           no label lookup.
-//
-// Because WGSL has no cross-workgroup barrier, we split into two separate entry
-// points dispatched sequentially in the same compute pass.
 
 @compute @workgroup_size(256, 1, 1)
 fn count_organism_sizes_accumulate(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -198,14 +188,11 @@ fn count_organism_sizes_broadcast(@builtin(global_invocation_id) gid: vec3<u32>)
 
     let lbl = atomicLoad(&label_buffer[i]);
     if lbl == DEAD_LABEL {
-        // Dead/isolated cells get size 1 so they still pay full metabolism
         atomicStore(&organism_size_buffer[i], 1u);
         return;
     }
     if lbl >= cell_count_buffer[0] { return; }
 
-    // Read the accumulated count at the root and copy it to this cell's slot.
-    // After this pass, organism_size_buffer[cell_i] == organism size for all live cells.
     let org_size = atomicLoad(&organism_size_buffer[lbl]);
     atomicStore(&organism_size_buffer[i], org_size);
 }

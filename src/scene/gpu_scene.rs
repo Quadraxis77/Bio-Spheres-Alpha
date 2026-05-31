@@ -409,6 +409,11 @@ pub struct GpuScene {
     /// Counts map_async completions (0 = none, 1 = one buffer ready, 2 = both ready).
     /// Written by map_async callbacks; polled each frame.
     follow_map_ready_flag: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    /// True when the label buffer copy in flight was taken on a reset frame.
+    /// On reset frames labels are temporarily set to each cell's own index, so
+    /// the CoM scan would find only 1 cell and produce a jump. We skip the
+    /// target update for that readback and keep the previous follow_target.
+    follow_label_was_reset: bool,
 }
 
 impl GpuScene {
@@ -746,6 +751,7 @@ impl GpuScene {
             follow_copy_submitted: false,
             follow_needs_map: false,
             follow_map_ready_flag: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            follow_label_was_reset: false,
         }
     }
 
@@ -1090,6 +1096,7 @@ impl GpuScene {
                 child_a_after_split_keep_adhesion: false,
                 child_b_after_split_keep_adhesion: false,
                 glueocyte_cell_adhesion: false,
+                glueocyte_self_adhesion: false,
                 glueocyte_env_adhesion: glueocyte_flags[i] != 0,
                 glueocyte_boulder_adhesion: true,
                 glueocyte_cell_adhesion_signal_channel: -1,
@@ -2667,9 +2674,11 @@ impl GpuScene {
     /// Does NOT call map_async — that must happen after queue.submit via
     /// tick_follow_camera_post_submit().
     ///
-    /// Tracks a single cell index (the one the user clicked) rather than computing
-    /// an organism-wide CoM via label matching. This avoids label instability jitter
-    /// caused by the label buffer being out of sync with the position buffer.
+    /// Copies both the position buffer and the label buffer each frame. On readback,
+    /// finds the root label of the followed cell and computes the average position of
+    /// all cells in the same organism. This means the camera follows the organism's
+    /// centre-of-mass rather than a single cell, and survives individual cell death
+    /// as long as any cell in the organism is still alive.
     pub fn tick_follow_camera(
         &mut self,
         device: &wgpu::Device,
@@ -2688,44 +2697,87 @@ impl GpuScene {
         }
 
         // ── Step 1: poll for the previous frame's copy result ─────────────────
+        // Both pos and label buffers are mapped; we wait for both (flag >= 2).
         if self.follow_copy_submitted {
             let _ = device.poll(wgpu::PollType::Poll);
 
             let ready_count = self.follow_map_ready_flag
                 .load(std::sync::atomic::Ordering::Acquire);
-            if ready_count >= 1 {
+            if ready_count >= 2 {
                 self.follow_map_ready_flag
                     .store(0, std::sync::atomic::Ordering::Release);
                 self.follow_copy_submitted = false;
 
-                if let Some(ref pos_buf) = self.follow_pos_staging {
-                    let pos_view = pos_buf.slice(..).get_mapped_range();
-                    let positions: &[[f32; 4]] = bytemuck::cast_slice(&pos_view);
+                // If the label buffer was copied on a reset frame, labels are
+                // temporarily set to each cell's own index — the CoM scan would
+                // find only 1 matching cell and produce a jump. Skip this readback.
+                let skip_update = self.follow_label_was_reset;
+                self.follow_label_was_reset = false;
 
-                    if let Some(p) = positions.get(cell_idx) {
-                        let mass = p[3];
-                        if mass > 0.0 {
-                            // Cell is alive — snap target to its position.
-                            self.follow_target = glam::Vec3::new(p[0], p[1], p[2]);
+                let mut new_target: Option<glam::Vec3> = None;
+                let mut organism_alive = false;
+
+                if !skip_update {
+                    if let (Some(ref pos_buf), Some(ref lbl_buf)) =
+                        (&self.follow_pos_staging, &self.follow_lbl_staging)
+                    {
+                        let pos_view = pos_buf.slice(..).get_mapped_range();
+                        let lbl_view = lbl_buf.slice(..).get_mapped_range();
+                        let positions: &[[f32; 4]] = bytemuck::cast_slice(&pos_view);
+                        let labels: &[u32] = bytemuck::cast_slice(&lbl_view);
+
+                        // Resolve the organism root label from the clicked cell.
+                        let root_label = if let Some(lbl) = labels.get(cell_idx).copied() {
+                            if lbl != 0xFFFF_FFFFu32 { lbl } else { cell_idx as u32 }
                         } else {
-                            // Cell is dead (mass == 0) — stop following.
-                            drop(pos_view);
-                            pos_buf.unmap();
-                            self.follow_pos_staging = None;
-                            self.follow_lbl_staging = None;
-                            self.follow_organism_id = None;
-                            self.follow_needs_map = false;
-                            self.switch_to_freefly();
-                            return;
-                        }
-                    }
+                            cell_idx as u32
+                        };
 
-                    drop(pos_view);
-                    pos_buf.unmap();
+                        // Compute the centre-of-mass of all live cells with this root label.
+                        let mut sum = glam::Vec3::ZERO;
+                        let mut count = 0u32;
+                        let n = positions.len().min(labels.len());
+                        for i in 0..n {
+                            if labels[i] == root_label {
+                                let mass = positions[i][3];
+                                if mass > 0.0 {
+                                    sum += glam::Vec3::new(
+                                        positions[i][0],
+                                        positions[i][1],
+                                        positions[i][2],
+                                    );
+                                    count += 1;
+                                    organism_alive = true;
+                                }
+                            }
+                        }
+
+                        if count > 0 {
+                            new_target = Some(sum / count as f32);
+                            self.follow_organism_id = Some(root_label);
+                        }
+
+                        drop(lbl_view);
+                        drop(pos_view);
+                        lbl_buf.unmap();
+                        pos_buf.unmap();
+                    }
+                } else {
+                    // Reset frame — just unmap without reading.
+                    organism_alive = true; // assume still alive, check next frame
+                    if let Some(ref pos_buf) = self.follow_pos_staging { pos_buf.unmap(); }
+                    if let Some(ref lbl_buf) = self.follow_lbl_staging { lbl_buf.unmap(); }
                 }
-                // lbl_staging is unused now but kept for API compatibility; unmap if present.
-                if let Some(ref lbl_buf) = self.follow_lbl_staging {
-                    lbl_buf.unmap();
+
+                if let Some(target) = new_target {
+                    self.follow_target = target;
+                } else if !organism_alive {
+                    self.follow_pos_staging = None;
+                    self.follow_lbl_staging = None;
+                    self.follow_organism_id = None;
+                    self.follow_needs_map = false;
+                    self.switch_to_freefly();
+                    return;
                 }
             }
         }
@@ -2735,34 +2787,56 @@ impl GpuScene {
         let alpha = 1.0 - (-12.0_f32 * dt).exp();
         self.follow_center = self.follow_center.lerp(self.follow_target, alpha);
 
-        // ── Step 2: encode a fresh position copy for next frame ───────────────
-        // Only copy the single cell's vec4 (16 bytes at offset cell_idx * 16).
-        // No label buffer needed — we track by cell index directly.
+        // ── Step 2: encode fresh copies of position + label buffers ──────────
         if !self.follow_copy_submitted && cell_count > 0 {
             let output_idx = self.gpu_triple_buffers.output_buffer_index();
             let pos_src = &self.gpu_triple_buffers.position_and_mass[output_idx];
-            // Copy the full used range so cell_idx is always within bounds.
             let pos_size = cell_count as u64 * 16;
+            let lbl_size = cell_count as u64 * 4;
 
-            let needs_alloc = self.follow_pos_staging
-                .as_ref()
-                .map(|b| b.size() < pos_size)
-                .unwrap_or(true);
-            if needs_alloc {
+            // Reallocate staging buffers if the cell count grew.
+            let pos_needs_alloc = self.follow_pos_staging
+                .as_ref().map(|b| b.size() < pos_size).unwrap_or(true);
+            if pos_needs_alloc {
                 self.follow_pos_staging = Some(device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("Follow Pos Staging"),
                     size: pos_size,
                     usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }));
-                // lbl_staging no longer used; drop any old allocation.
-                self.follow_lbl_staging = None;
+            }
+
+            let lbl_needs_alloc = self.follow_lbl_staging
+                .as_ref().map(|b| b.size() < lbl_size).unwrap_or(true);
+            if lbl_needs_alloc {
+                self.follow_lbl_staging = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Follow Label Staging"),
+                    size: lbl_size,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
             }
 
             if let Some(ref pos_dst) = self.follow_pos_staging {
                 encoder.copy_buffer_to_buffer(pos_src, 0, pos_dst, 0, pos_size);
-                self.follow_needs_map = true;
             }
+
+            if let (Some(ref lbl_src), Some(ref lbl_dst)) = (
+                self.organism_label_system.as_ref().map(|s| &s.label_buffer),
+                self.follow_lbl_staging.as_ref(),
+            ) {
+                encoder.copy_buffer_to_buffer(lbl_src, 0, lbl_dst, 0, lbl_size);
+            }
+
+            // Record whether this copy was taken on a label reset frame.
+            // On reset frames the label buffer is temporarily set to each cell's own
+            // index, so the CoM scan would find only 1 matching cell and jump.
+            self.follow_label_was_reset = self.organism_label_system
+                .as_ref()
+                .map(|s| s.is_reset_frame())
+                .unwrap_or(false);
+
+            self.follow_needs_map = true;
         }
 
         // ── Step 3: set orbit pivot to the smoothed follow center ────────────
@@ -2778,6 +2852,8 @@ impl GpuScene {
         }
         self.follow_needs_map = false;
 
+        // Both pos and label buffers need to map; the flag counts completions.
+        // Processing happens once both reach 2.
         if let Some(ref pos_dst) = self.follow_pos_staging {
             let flag = self.follow_map_ready_flag.clone();
             pos_dst.slice(..).map_async(wgpu::MapMode::Read, move |r| {
@@ -2786,6 +2862,15 @@ impl GpuScene {
                 }
             });
             self.follow_copy_submitted = true;
+        }
+
+        if let Some(ref lbl_dst) = self.follow_lbl_staging {
+            let flag = self.follow_map_ready_flag.clone();
+            lbl_dst.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                if r.is_ok() {
+                    flag.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                }
+            });
         }
     }
     
@@ -5599,6 +5684,12 @@ impl Scene for GpuScene {
         // On first frame, disable culling since we don't have depth data yet
         if self.first_frame {
             self.instance_builder.set_culling_mode(CullingMode::Disabled);
+        }
+
+        // Prepare organism label system for this frame (writes run_init flag to GPU
+        // before the encoder is built, so the shader sees it in the same submit).
+        if let Some(ref label_system) = self.organism_label_system {
+            label_system.prepare_frame(queue);
         }
 
         // Create single command encoder for all GPU work to avoid multiple queue.submit() calls

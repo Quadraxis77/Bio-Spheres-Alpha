@@ -260,12 +260,33 @@ impl CellTypeVisuals {
                 v.param_c = 0.0; // ring_brightness (0 = off)
                 v.param_d = 0.0;
             }
+            CellType::Flagellocyte => {
+                v.specular_strength = 0.48;
+                v.fresnel_strength = 0.2;
+                v.tail_length = 2.02;
+                v.tail_thickness = 0.226;
+                v.tail_amplitude = 0.17;
+                v.tail_frequency = 1.0;
+                v.tail_taper = 1.0;
+                v.tail_segments = 10.0;
+            }
             CellType::Phagocyte => {
                 // nucleus_radius=0.3, nucleus_darkness=0.4, nucleus_sharpness=0.05
                 v.param_a = 0.3;
                 v.param_b = 0.4;
                 v.param_c = 0.05;
                 v.param_d = 0.0;
+            }
+            CellType::Photocyte => {
+                // Geodesic hex membrane ridges
+                v.specular_strength = 0.17;
+                v.specular_power = 128.0;
+                v.fresnel_strength = 0.2;
+                v.goldberg_scale = 4.0;        // subdivision level
+                v.goldberg_ridge_width = 0.01; // very thin ridges
+                v.goldberg_meander = 0.0;      // clean straight ridges
+                v.goldberg_ridge_strength = 0.5;
+                v.nucleus_scale = 0.9;         // large inner nucleus sphere
             }
             CellType::Lipocyte => {
                 // droplet_scale=3.0, droplet_threshold=0.35, boundary_sharpness=0.15, brightness=1.0
@@ -281,15 +302,90 @@ impl CellTypeVisuals {
                 v.param_c = 1.0;
                 v.param_d = 1.0;
             }
+            CellType::Glueocyte => {
+                // Voronoi slime pattern
+                v.goldberg_scale = 3.0;          // voro_scale
+                v.goldberg_ridge_width = 0.12;   // border_width
+                v.goldberg_meander = 0.08;        // meander
+                v.goldberg_ridge_strength = 0.15; // border_dark
+                v.membrane_noise_speed = 2.85;    // anim_speed
+                v.membrane_noise_scale = 0.0;
+                v.membrane_noise_strength = 0.0;
+                v.specular_strength = 1.0;
+                v.specular_power = 96.0;
+                v.fresnel_strength = 0.7;
+            }
+            CellType::Oculocyte => {
+                // Eye: pupil_size, iris_freq, iris_texture, pupil_dark
+                // goldberg_scale → pupil_size (type_data_0.x)
+                // goldberg_ridge_width → iris_freq (type_data_0.y)
+                // goldberg_meander → iris_texture (type_data_0.z)
+                // goldberg_ridge_strength → pupil_dark (type_data_0.w)
+                v.goldberg_scale = 0.25;          // pupil_size
+                v.goldberg_ridge_width = 8.0;     // iris_freq (striation count)
+                v.goldberg_meander = 0.3;          // iris_texture blend
+                v.goldberg_ridge_strength = 0.85;  // pupil_dark
+                v.specular_strength = 0.5;
+                v.specular_power = 36.0;
+                v.fresnel_strength = 0.3;
+                v.nucleus_scale = 0.6;
+            }
+            CellType::Ciliocyte => {
+                // Cilia rings
+                v.cilia_ring_frequency = 10.0;
+                v.cilia_ring_depth = 0.45;
+                v.cilia_ring_speed = 4.0;
+                v.specular_strength = 0.5;
+                v.specular_power = 36.0;
+                v.fresnel_strength = 0.3;
+            }
+            CellType::Myocyte => {
+                // Muscle fibers: goldberg_scale=line_freq, goldberg_ridge_width=bulge_strength,
+                // goldberg_meander=warp_amt (type_data_0.x/y/z)
+                v.goldberg_scale = 8.0;           // line_freq (fiber count)
+                v.goldberg_ridge_width = 0.55;    // bulge_strength
+                v.goldberg_meander = 0.12;         // warp_amt
+                v.goldberg_ridge_strength = 0.0;   // unused
+                v.specular_strength = 0.45;
+                v.specular_power = 48.0;
+                v.fresnel_strength = 0.25;
+                v.nucleus_scale = 0.6;
+            }
+            CellType::Embryocyte => {
+                // Egg yolk: goldberg_scale=yolk_radius, goldberg_ridge_width=yolk_offset_y,
+                // goldberg_meander=yolk_brightness (type_data_0.x/y/z)
+                // Note: yolk_offset_y is negative in shader (clamped to -0.35..0.0),
+                // stored as positive in UI and negated when packed.
+                v.goldberg_scale = 0.5;           // yolk_radius
+                v.goldberg_ridge_width = 0.15;    // yolk_drop (stored positive, negated in shader)
+                v.goldberg_meander = 1.0;          // yolk_brightness
+                v.goldberg_ridge_strength = 0.0;   // unused
+                v.specular_strength = 0.3;
+                v.specular_power = 32.0;
+                v.fresnel_strength = 0.2;
+                v.nucleus_scale = 0.6;
+            }
             CellType::Devorocyte => {
                 // spike_height=0.75, spike_sharpness=0.985, spike_embed=0.12, tip_fade=1.0
                 v.param_a = 0.75;
                 v.param_b = 0.985;
                 v.param_c = 0.12;
                 v.param_d = 1.0;
+                v.specular_strength = 0.55;
+                v.specular_power = 52.0;
+                v.fresnel_strength = 0.35;
             }
-            _ => {
-                // All other types use goldberg_scale etc. via the existing fields — param_a/b/c/d unused
+            CellType::Vasculocyte => {
+                // Vessel wall cobblestone: goldberg_scale=cell_scale, goldberg_ridge_width=border_width,
+                // goldberg_meander=meander, goldberg_ridge_strength=border_depth (type_data_0.x/y/z/w)
+                v.goldberg_scale = 8.0;           // cell_scale
+                v.goldberg_ridge_width = 0.68;    // border_width
+                v.goldberg_meander = 0.12;         // meander
+                v.goldberg_ridge_strength = 0.09;  // border_depth
+                v.specular_strength = 0.3;
+                v.specular_power = 32.0;
+                v.fresnel_strength = 0.2;
+                v.nucleus_scale = 0.6;
             }
         }
         v

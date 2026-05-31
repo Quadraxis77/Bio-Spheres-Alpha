@@ -576,20 +576,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         instance.type_data_1 = vec4<f32>(0.0, 0.0, f32(params.lod_debug_colors), f32(cell_type));
     } else {
         // Default: pack type-specific params for all remaining cell types.
-        // type_data_0: [goldberg_scale, goldberg_ridge_width, goldberg_meander, goldberg_ridge_strength]
-        //   Test:       [ring_frequency, ring_sharpness, ring_brightness, unused]
-        //   Phagocyte:  [nucleus_radius, nucleus_darkness, nucleus_sharpness, unused]
-        //   Lipocyte:   [droplet_scale, droplet_threshold, boundary_sharpness, brightness]
-        //   Buoyocyte:  [bubble_scale, rotation_speed, wall_brightness, gas_brightness]
-        //   Devorocyte: [spike_height, spike_sharpness, spike_embed, tip_fade]
-        //   Photocyte/Oculocyte/Myocyte/Embryocyte/Vasculocyte: goldberg params (as before)
+        // type_data_0 layout per cell type:
+        //   Test (0):        param_a/b/c/d → [ring_frequency, ring_sharpness, ring_brightness, unused]
+        //   Phagocyte (2):   param_a/b/c/d → [nucleus_radius, nucleus_darkness, nucleus_sharpness, unused]
+        //   Lipocyte (4):    param_a/b/c/d → [droplet_scale, droplet_threshold, boundary_sharpness, brightness]
+        //   Buoyocyte (5):   param_a/b/c/d → [bubble_scale, rotation_speed, wall_brightness, gas_brightness]
+        //   Devorocyte (11): param_a/b/c/d → [spike_height, spike_sharpness, spike_embed, tip_fade]
+        //   Photocyte (3):   goldberg → [subdivision, ridge_width, meander, ridge_strength]
+        //   Glueocyte (6):   goldberg → [voro_scale, border_width, meander, border_dark]
+        //   Oculocyte (7):   goldberg → [pupil_size, iris_freq, iris_texture, pupil_dark]
+        //   Myocyte (9):     goldberg → [line_freq, bulge_strength, warp_amt, unused]
+        //   Embryocyte (10): goldberg → [yolk_radius, -yolk_drop (negated), yolk_brightness, unused]
+        //   Vasculocyte (12):goldberg → [cell_scale, border_width, meander, border_depth]
         // type_data_1: [nucleus_scale, anim_speed, debug_colors, cell_type]
         if (cell_type < params.cell_type_count) {
             let visuals = cell_type_visuals[cell_type];
             // For types with dedicated params (Test=0, Phagocyte=2, Lipocyte=4,
             // Buoyocyte=5, Devorocyte=11), use param_a/b/c/d.
-            // For all others (Photocyte=3, Oculocyte=7, Myocyte=9, Embryocyte=10,
-            // Vasculocyte=12, etc.) use goldberg fields as before.
+            // For all others (Photocyte=3, Glueocyte=6, Oculocyte=7, Myocyte=9,
+            // Embryocyte=10, Vasculocyte=12) use goldberg fields.
             let use_params = (cell_type == 0u || cell_type == 2u || cell_type == 4u
                            || cell_type == 5u || cell_type == 11u);
             if (use_params) {
@@ -598,6 +603,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     visuals.param_b,
                     visuals.param_c,
                     visuals.param_d
+                );
+            } else if (cell_type == 10u) {
+                // Embryocyte: yolk_offset_y must be negative in shader (clamped to -0.35..0.0).
+                // goldberg_ridge_width stores the drop as a positive UI value — negate it here.
+                instance.type_data_0 = vec4<f32>(
+                    visuals.goldberg_scale,
+                    -visuals.goldberg_ridge_width,
+                    visuals.goldberg_meander,
+                    visuals.goldberg_ridge_strength
                 );
             } else {
                 instance.type_data_0 = vec4<f32>(

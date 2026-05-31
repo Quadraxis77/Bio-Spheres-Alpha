@@ -706,10 +706,11 @@ impl GpuTripleBufferSystem {
 
         // Per-mode glueocyte env adhesion flags (one u32 per mode)
         let glueocyte_env_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Glueocyte Env Adhesion Flags");
+        // Per-mode glueocyte boulder adhesion flags (one u32 per mode)
         let glueocyte_boulder_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Glueocyte Boulder Adhesion Flags");
 
         // Per-mode glueocyte cell-adhesion flags: 4 u32 per mode
-        // [0]=enabled, [1]=signal_channel (0xFFFFFFFF=disabled), [2]=signal_threshold bits, [3]=padding
+        // [0]=enabled, [1]=signal_channel (0xFFFFFFFF=always active), [2]=signal_threshold bits, [3]=self_adhesion
         let glueocyte_cell_adhesion_flags = Self::create_storage_buffer(device, max_modes * 16, "Glueocyte Cell Adhesion Flags");
 
         // Per-cell muscle contraction value (one f32 per cell, zero-initialized = relaxed)
@@ -1682,8 +1683,9 @@ impl GpuTripleBufferSystem {
     }
 
     /// Sync glueocyte cell-adhesion flags (4 u32 per mode across all genomes).
-    /// Layout per mode: [enabled(u32), signal_channel(u32), signal_threshold_bits(u32), padding(u32)]
+    /// Layout per mode: [enabled(u32), signal_channel(u32), signal_threshold_bits(u32), self_adhesion(u32)]
     /// signal_channel = 0xFFFFFFFF means "always active" (no signal gate).
+    /// self_adhesion = 1 means the glueocyte bonds to cells of its own organism.
     pub fn sync_glueocyte_cell_adhesion_flags(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
         let data: Vec<u32> = genomes
             .iter()
@@ -1698,7 +1700,8 @@ impl GpuTripleBufferSystem {
                         0xFFFF_FFFFu32 // disabled / always-active
                     };
                     let threshold_bits = mode.glueocyte_cell_adhesion_signal_threshold.to_bits();
-                    [enabled, channel, threshold_bits, 0u32]
+                    let self_adhesion = if mode.glueocyte_self_adhesion { 1u32 } else { 0u32 };
+                    [enabled, channel, threshold_bits, self_adhesion]
                 })
             })
             .collect();

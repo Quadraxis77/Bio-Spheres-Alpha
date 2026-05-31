@@ -268,7 +268,7 @@ fn is_touching_surface(pos: vec3<f32>, contact_threshold: f32, mode_idx: u32) ->
 }
 
 const FIXED_POINT_SCALE: f32 = 1000.0;
-const SPRING_STRENGTH: f32 = 80.0;
+const SPRING_STRENGTH: f32 = 80.0;   // Cave wall / boundary spring strength
 const SPRING_DAMPING: f32 = 8.0;
 const CONTACT_THRESHOLD: f32 = 3.0;
 const GLUEOCYTE_CELL_TYPE: u32 = 6u;
