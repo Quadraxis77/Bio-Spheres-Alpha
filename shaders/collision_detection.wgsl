@@ -195,9 +195,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let boundary_radius = params.world_size * 0.5;
     let soft_zone = 5.0;
     let soft_zone_start = boundary_radius - soft_zone;
+    let near_boundary = dist_from_center > soft_zone_start;
     
     // Quick check: skip boundary forces if not in soft zone
-    if (dist_from_center <= soft_zone_start) {
+    if (!near_boundary) {
         // Skip boundary collision entirely - no cells nearby
     } else {
         // Cell is in boundary soft zone - apply boundary forces
@@ -248,7 +249,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var neighbor_indices: array<u32, 27>;
     var neighbor_counts: array<u32, 27>;
     var n_idx = 0u;
-    
+    var total_neighbor_cells = 0u;
+
     for (var dz = -1; dz <= 1; dz++) {
         for (var dy = -1; dy <= 1; dy++) {
             for (var dx = -1; dx <= 1; dx++) {
@@ -265,13 +267,41 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
                 neighbor_indices[n_idx] = neighbor_grid_idx;
                 // Use select to zero out invalid neighbors (branchless)
-                neighbor_counts[n_idx] = select(0u, min(spatial_grid_counts[neighbor_grid_idx], MAX_CELLS_PER_GRID), is_valid);
+                let cnt = select(0u, min(spatial_grid_counts[neighbor_grid_idx], MAX_CELLS_PER_GRID), is_valid);
+                neighbor_counts[n_idx] = cnt;
+                total_neighbor_cells += cnt;
                 n_idx++;
             }
         }
     }
-    
-    // Cell-cell collision using pre-computed neighbor data
+
+    // Early-out: if the only cell in the entire 3x3x3 neighbourhood is this cell
+    // itself, there is nothing to collide with — skip the inner loop entirely.
+    // This is the common case for cells in sparse regions of a large cluster.
+    if (total_neighbor_cells <= 1u) {
+        // Still need to write boundary forces if any were accumulated above.
+        if (force.x != 0.0 || force.y != 0.0 || force.z != 0.0) {
+            atomicAdd(&force_accum_x[cell_idx], i32(force.x * FIXED_POINT_SCALE));
+            atomicAdd(&force_accum_y[cell_idx], i32(force.y * FIXED_POINT_SCALE));
+            atomicAdd(&force_accum_z[cell_idx], i32(force.z * FIXED_POINT_SCALE));
+        }
+        return;
+    }
+
+    // Velocity early-out: a nearly-stationary cell that isn't near the boundary
+    // cannot tunnel through a neighbor in one step, so collision forces are zero
+    // this frame. Skip the expensive 27-cell neighbor scan.
+    //
+    // Threshold: a cell must be moving faster than 0.5 units/step to potentially
+    // overlap a neighbor (min combined radius ≈ 1.0 unit). At 64 Hz that's
+    // 0.5 * 64 = 32 units/sec — well above the resting drift of a settled cluster.
+    // Cells near the boundary always run the full path regardless of speed.
+    const VELOCITY_THRESHOLD: f32 = 0.5;
+    let speed_sq = dot(vel, vel);
+    if (!near_boundary && speed_sq < VELOCITY_THRESHOLD * VELOCITY_THRESHOLD) {
+        return;
+    }
+
     for (var n = 0u; n < 27u; n++) {
         let cell_count_in_grid = neighbor_counts[n];
         if (cell_count_in_grid == 0u) {

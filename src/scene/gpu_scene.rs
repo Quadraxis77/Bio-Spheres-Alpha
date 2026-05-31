@@ -1489,11 +1489,11 @@ impl GpuScene {
         // lifecycle and the next physics step reads the spatial grid. Removing this
         // saves 3 compute dispatches (clear 128³ grid + assign + insert) per step.
 
-        // Organism label pass: self-throttled GPU union-find.
-        // Controller detects topology changes (cell/bond count), triggers convergence
-        // cycles automatically. Idle frames cost nothing (zero workgroup dispatches).
+        // Organism label pass: GPU union-find for connected-component labeling.
+        // Dispatches are sized to the high-water mark of used cell slots, not the
+        // full buffer capacity, so cost scales with actual cell count.
         if let Some(label_system) = &mut self.organism_label_system {
-            label_system.encode_frame(encoder);
+            label_system.encode_frame(encoder, self.total_cell_slots);
         }
 
         // NOTE: copy_buffers_to_instance_builder is called once per frame in render(),

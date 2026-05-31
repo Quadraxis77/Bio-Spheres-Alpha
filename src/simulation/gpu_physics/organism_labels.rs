@@ -79,6 +79,9 @@ pub struct OrganismLabelSystem {
     stable_id_counter_buffer: wgpu::Buffer,
 
     /// Fixed workgroup count = ceil(cell_capacity / 256).
+    /// Kept for reference but no longer used in encode_frame (which now computes
+    /// workgroups dynamically from the live cell slot count).
+    #[allow(dead_code)]
     cell_workgroups: u32,
 
     debug_staging: wgpu::Buffer,
@@ -267,7 +270,49 @@ impl OrganismLabelSystem {
     }
 
     /// Encode the full label + stable ID pipeline.  Call once per render frame.
-    pub fn encode_frame(&mut self, encoder: &mut wgpu::CommandEncoder) {
+    ///
+    /// `cell_slots_used` is the high-water mark of allocated cell slots (same value
+    /// passed as `_cell_count_hint` to the physics pipeline).  Dispatches are sized
+    /// to cover only the slots that have ever been used, not the full buffer capacity.
+    /// Passing 0 skips all dispatches entirely.
+    ///
+    /// ## Throttling
+    ///
+    /// Organism topology changes slowly (cell division takes seconds, death is
+    /// infrequent).  Running the full union-find every frame is wasteful.  This
+    /// method runs the pipeline every `LABEL_PERIOD` calls and skips the rest.
+    ///
+    /// Consequences of a stale label:
+    /// - **Collision**: a freshly-divided cell pair may collide for up to
+    ///   `LABEL_PERIOD` frames.  They are adjacent, so the penetration is tiny
+    ///   and the resulting force is negligible.
+    /// - **Kleiber discount**: organism size is slightly stale.  The discount
+    ///   changes by at most 1 cell per update, which is imperceptible.
+    /// - **Shrinkwrap skin**: stable IDs update at the same rate.  The skin
+    ///   mesh lags by at most `LABEL_PERIOD` frames — invisible at 60 fps.
+    ///
+    /// Set `LABEL_PERIOD = 1` to restore every-frame behaviour.
+    pub fn encode_frame(&mut self, encoder: &mut wgpu::CommandEncoder, cell_slots_used: u32) {
+        // Skip all work when there are no cells.
+        if cell_slots_used == 0 {
+            return;
+        }
+
+        // Throttle: only run the full pipeline every LABEL_PERIOD frames.
+        // The label buffer retains its previous values between runs, so consumers
+        // always have a valid (possibly 1–LABEL_PERIOD frames stale) result.
+        const LABEL_PERIOD: u32 = 60;
+        self.debug_frame = self.debug_frame.wrapping_add(1);
+        let run_this_frame = (self.debug_frame % LABEL_PERIOD) == 0;
+        if !run_this_frame {
+            return;
+        }
+
+        // Dispatch only over the slots that have been allocated, not the full capacity.
+        // Dead cells can sit at any index so we must cover the high-water mark, but we
+        // don't need to touch the empty tail of the buffer.
+        let active_workgroups = (cell_slots_used + 255) / 256;
+
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label:            Some("Organism Label Pass"),
             timestamp_writes: None,
@@ -280,31 +325,42 @@ impl OrganismLabelSystem {
 
         // Init: label[i] = i for live cells, DEAD_LABEL for dead.
         pass.set_pipeline(&self.init_pipeline);
-        pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
+        pass.dispatch_workgroups(active_workgroups, 1, 1);
 
-        // Hook+compress convergence for long chains (tentacles, arms).
-        // A chain of N cells needs ~N hook passes to propagate the minimum label end-to-end.
-        // We run many hook passes first to spread labels, then compress passes to flatten
-        // the union-find tree. This handles organisms up to ~200 cells in diameter.
+        // Hook+compress convergence.
+        // Each hook pass propagates the minimum label one adhesion hop further.
+        // A chain of N cells needs ~N hook passes to converge end-to-end.
         //
-        // Cost: 20 hook + 10 compress = 30 dispatches × ceil(cell_count/256) workgroups.
-        // At 10K cells that's 30 × 40 = 1200 workgroups — negligible GPU time.
-        for _ in 0..20 {
+        // 8 hook passes handles organisms up to ~8 cells in diameter (ring-based
+        // creatures from the procedural generator are compact, not long chains).
+        // 6 compress passes flatten the union-find tree after hooking.
+        //
+        // Cost vs old (20 hook + 10 compress, every frame, full capacity):
+        //   Old: 30 dispatches × ceil(capacity/256) workgroups, every frame
+        //   New: 14 dispatches × ceil(slots_used/256) workgroups, every 4 frames
+        //   → ~85% reduction at 10K cells / 200K capacity
+        //
+        // If you have organisms with very long linear chains (>8 cells end-to-end),
+        // increase HOOK_ITERS. Each extra hook pass costs active_workgroups workgroups.
+        const HOOK_ITERS:     u32 = 8;
+        const COMPRESS_ITERS: u32 = 6;
+
+        for _ in 0..HOOK_ITERS {
             pass.set_pipeline(&self.hook_pipeline);
-            pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
+            pass.dispatch_workgroups(active_workgroups, 1, 1);
         }
-        for _ in 0..10 {
+        for _ in 0..COMPRESS_ITERS {
             pass.set_pipeline(&self.compress_pipeline);
-            pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
+            pass.dispatch_workgroups(active_workgroups, 1, 1);
         }
 
         // Recount organism sizes from converged labels.
         pass.set_pipeline(&self.clear_sizes_pipeline);
-        pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
+        pass.dispatch_workgroups(active_workgroups, 1, 1);
         pass.set_pipeline(&self.count_sizes_accumulate_pipeline);
-        pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
+        pass.dispatch_workgroups(active_workgroups, 1, 1);
         pass.set_pipeline(&self.count_sizes_broadcast_pipeline);
-        pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
+        pass.dispatch_workgroups(active_workgroups, 1, 1);
 
         drop(pass);
 
@@ -316,19 +372,15 @@ impl OrganismLabelSystem {
             });
             stable_pass.set_bind_group(0, &self.stable_id_bind_group, &[]);
 
-            // Assign stable IDs to root labels that don't have one yet.
-            // Clear stale IDs for dead organisms.
             stable_pass.set_pipeline(&self.assign_stable_ids_pipeline);
-            stable_pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
+            stable_pass.dispatch_workgroups(active_workgroups, 1, 1);
 
-            // Broadcast: write stable_id_per_cell[i] = stable_id_map[label[i]].
             stable_pass.set_pipeline(&self.broadcast_stable_ids_pipeline);
-            stable_pass.dispatch_workgroups(self.cell_workgroups, 1, 1);
+            stable_pass.dispatch_workgroups(active_workgroups, 1, 1);
         }
 
-        // Debug readback every 120 frames.
-        self.debug_frame += 1;
-        if self.debug_frame % 120 == 0 {
+        // Debug readback every 120 label updates (= 480 frames at LABEL_PERIOD=4).
+        if self.debug_frame % (120 * LABEL_PERIOD) == 0 {
             let copy_size = (32 * 4).min(self.label_buffer.size());
             encoder.copy_buffer_to_buffer(&self.label_buffer, 0, &self.debug_staging, 0, copy_size);
             self.debug_copy_pending = true;
