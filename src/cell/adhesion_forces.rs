@@ -25,6 +25,7 @@ pub fn compute_adhesion_forces(
     forces: &mut [Vec3],
     torques: &mut [Vec3],
     current_time: f32,
+    dt: f32,
 ) -> Vec<usize> {
     const BREAK_GRACE_PERIOD: f32 = 0.5;
     let mut bonds_to_break = Vec::new();
@@ -74,6 +75,8 @@ pub fn compute_adhesion_forces(
             settings,
             0.0,
             0.0,
+            dt,
+            (current_time - connections.birth_time[i]).max(0.0),
         );
 
         // Check break condition before applying forces
@@ -112,6 +115,7 @@ pub fn compute_adhesion_forces_parallel(
     torques: &mut [Vec3],
     current_time: f32,
     muscle_contractions: &[f32],
+    dt: f32,
 ) -> Vec<usize> {
     const BREAK_GRACE_PERIOD: f32 = 0.5;
     use rayon::prelude::*;
@@ -163,6 +167,8 @@ pub fn compute_adhesion_forces_parallel(
                 settings,
                 contraction_a,
                 contraction_b,
+                dt,
+                (current_time - connections.birth_time[i]).max(0.0),
             );
 
             // Bond breaks: signal with Some(i), zero forces
@@ -203,12 +209,12 @@ fn compute_adhesion_force_pair(
     vel_a: Vec3,
     rot_a: Quat,
     ang_vel_a: Vec3,
-    _mass_a: f32,
+    mass_a: f32,
     pos_b: Vec3,
     vel_b: Vec3,
     rot_b: Quat,
     ang_vel_b: Vec3,
-    _mass_b: f32,
+    mass_b: f32,
     _genome_rot_a: Quat,
     _genome_rot_b: Quat,
     anchor_dir_a: Vec3,
@@ -218,6 +224,8 @@ fn compute_adhesion_force_pair(
     settings: &AdhesionSettings,
     contraction_a: f32,
     contraction_b: f32,
+    dt: f32,
+    bond_age: f32,
 ) -> (Vec3, Vec3, Vec3, Vec3, f32) {
     let mut force_a = Vec3::ZERO;
     let mut torque_a = Vec3::ZERO;
@@ -251,12 +259,24 @@ fn compute_adhesion_force_pair(
     } else {
         rotate_vector_by_quaternion(anchor_dir_b, rot_b)
     };
-    // Each cell uses its own contracted reach for its anchor
+    // Each cell uses its own contracted reach for its anchor.
+    // Symmetric anchor spring: each cell is pulled toward the position defined by the
+    // OTHER cell's anchor. This naturally enforces both bond length and inter-cell angle,
+    // and is exactly zero at the true equilibrium (dist == rest_length and anchors aligned).
+    //
+    // Settle ramp: newly created bonds start soft and ramp to full stiffness over
+    // SETTLE_DURATION seconds. This lets cells find their natural equilibrium positions
+    // before the geometric spring locks them in place, preventing bonds from fighting
+    // each other during the initial placement phase.
+    const SETTLE_DURATION: f32 = 0.3;
+    let settle_factor = (bond_age / SETTLE_DURATION).clamp(0.0, 1.0);
+    let effective_stiffness = settings.linear_spring_stiffness * settle_factor;
+
     let target_b = pos_a + anchor_a * effective_rest_length;
     let target_a = pos_b + anchor_b * effective_rest_length;
     let error_a = target_a - pos_a;
     let error_b = target_b - pos_b;
-    let geo_force_on_a = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness;
+    let geo_force_on_a = (error_a - error_b) * 0.5 * effective_stiffness;
     let spring_force_mag = geo_force_on_a.length();
 
     // Linear damping: pure velocity-damping along the bond axis.
@@ -322,13 +342,40 @@ fn compute_adhesion_force_pair(
         let angular_vel_b_proj = ang_vel_b.dot(adhesion_axis);
         let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
 
+        // Clamp the damping coefficient to the explicit-integration stability limit.
+        // A relative angular damper applied as ±c·ω_rel is only stable when
+        // c·dt·(1/I_a + 1/I_b) <= 1, otherwise it overshoots and reverses ω_rel,
+        // pumping energy into the structure until it spins out and collapses into a blob.
+        // I = 0.4·m·r² (solid sphere), matching the angular integrator.
+        let damp = stable_twist_damping(settings.twist_constraint_damping, mass_a, mass_b, dt);
+
         let twist_spring = adhesion_axis * twist_error_scalar * settings.twist_constraint_stiffness;
-        let twist_damp = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
+        let twist_damp = adhesion_axis * relative_angular_vel * damp;
         torque_a += -twist_spring - twist_damp;
         torque_b +=  twist_spring + twist_damp;
     }
 
     (force_a, torque_a, force_b, torque_b, spring_force_mag)
+}
+
+/// Clamp a relative angular damping coefficient to the explicit-integration stability
+/// limit. Returns the largest coefficient <= the requested value that keeps the per-step
+/// relative-angular-velocity update non-divergent: c·dt·(1/I_a + 1/I_b) <= 1.
+/// Moment of inertia uses I = 0.4·m·r² with r = clamp(mass, 0.5, 2.0), matching the
+/// angular velocity integrator.
+#[inline]
+fn stable_twist_damping(requested: f32, mass_a: f32, mass_b: f32, dt: f32) -> f32 {
+    if requested <= 0.0 || dt <= 0.0 {
+        return requested.max(0.0);
+    }
+    let inertia = |m: f32| {
+        let r = m.clamp(0.5, 2.0);
+        0.4 * m * r * r
+    };
+    let inv_inertia_sum = 1.0 / inertia(mass_a).max(1e-4) + 1.0 / inertia(mass_b).max(1e-4);
+    // Use 0.9 of the theoretical limit for a safety margin against the spring term.
+    let max_stable = 0.9 / (dt * inv_inertia_sum);
+    requested.min(max_stable)
 }
 
 /// Rotate vector by quaternion (GPU algorithm port)
@@ -419,6 +466,9 @@ pub fn compute_adhesion_substep(
             settings,
             contraction_a,
             contraction_b,
+            masses[cell_a_idx],
+            masses[cell_b_idx],
+            dt,
         );
 
         cell_forces[cell_a_idx] += force_a;
@@ -519,6 +569,9 @@ fn compute_substep_force_pair(
     settings: &AdhesionSettings,
     contraction_a: f32,
     contraction_b: f32,
+    mass_a: f32,
+    mass_b: f32,
+    dt: f32,
 ) -> (Vec3, Vec3, Vec3, Vec3) {
     let mut force_a = Vec3::ZERO;
     let mut torque_a = Vec3::ZERO;
@@ -623,7 +676,7 @@ fn compute_substep_force_pair(
         let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
 
         let twist_spring = adhesion_axis * twist_error_scalar * settings.twist_constraint_stiffness;
-        let twist_damp = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
+        let twist_damp = adhesion_axis * relative_angular_vel * stable_twist_damping(settings.twist_constraint_damping, mass_a, mass_b, dt);
         torque_a += -twist_spring - twist_damp;
         torque_b +=  twist_spring + twist_damp;
     }
@@ -648,6 +701,7 @@ pub fn compute_adhesion_forces_batched(
     forces: &mut [Vec3],
     torques: &mut [Vec3],
     current_time: f32,
+    dt: f32,
 ) {
     const BREAK_GRACE_PERIOD: f32 = 0.5;
     // Batch size tuned for L1 cache (typically 32KB)
@@ -704,6 +758,8 @@ pub fn compute_adhesion_forces_batched(
                 settings,
                 0.0,
                 0.0,
+                dt,
+                (current_time - connections.birth_time[i]).max(0.0),
             );
             
             // Skip bond if it exceeds break force (but not during grace period)

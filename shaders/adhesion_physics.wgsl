@@ -157,6 +157,25 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
     return pow(volume * 3.0 / (4.0 * PI), 1.0 / 3.0);
 }
 
+// Clamp a relative angular damping coefficient to the explicit-integration stability
+// limit. A relative angular damper applied as ±c·ω_rel is only stable when
+// c·dt·(1/I_a + 1/I_b) <= 1, otherwise it overshoots and reverses ω_rel, pumping
+// energy into the structure until it spins out and collapses into a blob.
+// I = 0.4·m·r² with r = clamp(mass, 0.5, 2.0), matching the angular velocity integrator
+// in velocity_update.wgsl.
+fn stable_twist_damping(requested: f32, mass_a: f32, mass_b: f32, dt: f32) -> f32 {
+    if (requested <= 0.0 || dt <= 0.0) {
+        return max(requested, 0.0);
+    }
+    let ra = clamp(mass_a, 0.5, 2.0);
+    let rb = clamp(mass_b, 0.5, 2.0);
+    let ia = max(0.4 * mass_a * ra * ra, 1e-4);
+    let ib = max(0.4 * mass_b * rb * rb, 1e-4);
+    let inv_inertia_sum = 1.0 / ia + 1.0 / ib;
+    let max_stable = 0.9 / (dt * inv_inertia_sum);
+    return min(requested, max_stable);
+}
+
 // Quaternion multiplication
 fn quat_multiply(q1: vec4<f32>, q2: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(
@@ -237,6 +256,9 @@ fn compute_adhesion_forces_for_cell(
     is_cell_a: bool,
     contraction_a: f32,
     contraction_b: f32,
+    mass_a: f32,
+    mass_b: f32,
+    bond_age: f32,
     spring_force_mag_out: ptr<function, f32>,
 ) -> array<vec3<f32>, 2> {
     var force = vec3<f32>(0.0);
@@ -258,13 +280,9 @@ fn compute_adhesion_forces_for_cell(
     // Two myocytes at full contraction shorten it to zero.
     let effective_rest_length = rest_length * max(1.0 - contraction_a * 0.5 - contraction_b * 0.5, 0.0);
     
-    // Transform anchor directions to world space using GENOME orientations.
-    // genome_orientations is synced from rotations each frame in velocity_update.wgsl,
-    // so it tracks the creature's actual orientation. Using it here (rather than rotations
-    // directly) keeps the geometric spring target consistent with the orientation spring.
-    let genome_rot_a = genome_orientations[connection.cell_a_index];
-    let genome_rot_b = genome_orientations[connection.cell_b_index];
-
+    // Transform anchor directions to world space using physics rotations.
+    // Both the geometric spring and orientation spring use the same (current) rotation
+    // so they can't fight each other across frames. Matches the CPU path exactly.
     var anchor_a: vec3<f32>;
     var anchor_b: vec3<f32>;
 
@@ -272,16 +290,26 @@ fn compute_adhesion_forces_for_cell(
         anchor_a = vec3<f32>(1.0, 0.0, 0.0);
         anchor_b = vec3<f32>(-1.0, 0.0, 0.0);
     } else {
-        anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, genome_rot_a);
-        anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, genome_rot_b);
+        anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
+        anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
     }
     // The geometric correction is what enforces the genome-defined angle between bonded cells.
-    // Applying it at full stiffness (not a reduced fraction) is what gives organisms rigid shape.
+    // Symmetric anchor spring: each cell is pulled toward the position defined by the OTHER
+    // cell's anchor. This enforces both bond length and inter-cell angle, and is exactly zero
+    // at the true equilibrium (dist == rest_length and anchors aligned).
+    //
+    // Settle ramp: newly created bonds start soft and ramp to full stiffness over
+    // SETTLE_DURATION seconds. This lets cells find their natural equilibrium positions
+    // before the geometric spring locks them in place, preventing bonds from fighting
+    // each other during the initial placement phase.
+    let settle_factor = clamp(bond_age / 0.3, 0.0, 1.0);
+    let effective_stiffness = settings.linear_spring_stiffness * settle_factor;
+
     let target_b = pos_a + anchor_a * effective_rest_length;
     let target_a = pos_b + anchor_b * effective_rest_length;
     let error_a = target_a - pos_a;
     let error_b = target_b - pos_b;
-    let geo_force_on_a = (error_a - error_b) * 0.5 * settings.linear_spring_stiffness;
+    let geo_force_on_a = (error_a - error_b) * 0.5 * effective_stiffness;
     *spring_force_mag_out = length(geo_force_on_a);
     
     // Linear damping: pure velocity-damping along the bond axis.
@@ -302,22 +330,10 @@ fn compute_adhesion_forces_for_cell(
     var torque_a = vec3<f32>(0.0);
     var torque_b = vec3<f32>(0.0);
 
-    // Physics-based anchors for orientation/twist springs — use actual physics rotations
-    // so the spring detects and corrects angular drift relative to the genome target.
-    var phys_anchor_a: vec3<f32>;
-    var phys_anchor_b: vec3<f32>;
-    if (length(connection.anchor_direction_a.xyz) < 0.001 && length(connection.anchor_direction_b.xyz) < 0.001) {
-        phys_anchor_a = vec3<f32>(1.0, 0.0, 0.0);
-        phys_anchor_b = vec3<f32>(-1.0, 0.0, 0.0);
-    } else {
-        phys_anchor_a = rotate_vector_by_quat(connection.anchor_direction_a.xyz, rot_a);
-        phys_anchor_b = rotate_vector_by_quat(connection.anchor_direction_b.xyz, rot_b);
-    }
-
     // Orientation spring for cell A - aligns anchor toward bonded neighbor
-    let axis_a = cross(phys_anchor_a, adhesion_dir);
+    let axis_a = cross(anchor_a, adhesion_dir);
     let sin_a = length(axis_a);
-    let cos_a = dot(phys_anchor_a, adhesion_dir);
+    let cos_a = dot(anchor_a, adhesion_dir);
     let angle_a = atan2(sin_a, cos_a);
     if (sin_a > 0.0001) {
         let norm_axis_a = normalize(axis_a);
@@ -331,9 +347,9 @@ fn compute_adhesion_forces_for_cell(
     torque_a -= adhesion_dir * dot(ang_vel_a, adhesion_dir) * settings.orientation_spring_damping * 0.5;
     
     // Orientation spring for cell B
-    let axis_b = cross(phys_anchor_b, -adhesion_dir);
+    let axis_b = cross(anchor_b, -adhesion_dir);
     let sin_b = length(axis_b);
-    let cos_b = dot(phys_anchor_b, -adhesion_dir);
+    let cos_b = dot(anchor_b, -adhesion_dir);
     let angle_b = atan2(sin_b, cos_b);
     if (sin_b > 0.0001) {
         let norm_axis_b = normalize(axis_b);
@@ -369,9 +385,13 @@ fn compute_adhesion_forces_for_cell(
         let angular_vel_b_proj = dot(ang_vel_b, adhesion_axis);
         let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
 
-        // Equal and opposite torques to resist relative twist
+        // Equal and opposite torques to resist relative twist.
+        // Clamp the damping coefficient to the explicit-integration stability limit so
+        // high twist_constraint_damping values can't overshoot and pump energy into the
+        // structure (which spins it out and collapses it into a blob).
+        let twist_damp_coeff = stable_twist_damping(settings.twist_constraint_damping, mass_a, mass_b, params.delta_time);
         let twist_spring = adhesion_axis * twist_error_scalar * settings.twist_constraint_stiffness;
-        let twist_damp = adhesion_axis * relative_angular_vel * settings.twist_constraint_damping;
+        let twist_damp = adhesion_axis * relative_angular_vel * twist_damp_coeff;
         torque_a += -twist_spring - twist_damp;
         torque_b +=  twist_spring + twist_damp;
     }
@@ -528,6 +548,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Read per-cell muscle contraction values
         let contraction_cell_a = muscle_contraction[connection.cell_a_index];
         let contraction_cell_b = muscle_contraction[connection.cell_b_index];
+
+        // Masses ordered as cell A, cell B (same swap convention as pos/vel/rot)
+        let mass_a = select(other_mass, my_mass, is_cell_a);
+        let mass_b = select(my_mass, other_mass, is_cell_a);
+
+        let bond_age = max(params.current_time - connection.birth_time, 0.0);
         
         let result = compute_adhesion_forces_for_cell(
             cell_idx,
@@ -539,6 +565,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             is_cell_a,
             contraction_cell_a,
             contraction_cell_b,
+            mass_a,
+            mass_b,
+            bond_age,
             &spring_force_mag
         );
 

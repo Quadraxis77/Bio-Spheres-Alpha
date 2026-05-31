@@ -1038,6 +1038,7 @@ pub fn physics_step_with_genome(
             &mut state.torques[..state.cell_count],
             current_time,
             &state.muscle_contractions[..state.cell_count],
+            dt,
         );
         for conn_idx in bonds_to_break {
             state.adhesion_manager.remove_adhesion(&mut state.adhesion_connections, conn_idx);

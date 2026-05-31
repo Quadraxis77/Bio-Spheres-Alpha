@@ -57,11 +57,6 @@ var<storage, read_write> angular_velocities: array<vec4<f32>>;
 @group(1) @binding(4)
 var<storage, read_write> rotations: array<vec4<f32>>;
 
-// Genome orientations — synced from rotations each frame so the geometric spring
-// target tracks the creature's actual orientation rather than its birth orientation.
-@group(1) @binding(5)
-var<storage, read_write> genome_orientations: array<vec4<f32>>;
-
 const PI: f32 = 3.14159265359;
 const FIXED_POINT_SCALE: f32 = 1000.0;
 
@@ -154,9 +149,4 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Normalize to prevent drift
         rotations[cell_idx] = normalize(new_rot);
     }
-
-    // Sync genome_orientations from rotations so the adhesion geometric spring
-    // target tracks the creature's actual orientation. Without this, genome_orientations
-    // stays frozen at birth and the spring locks the creature to its spawn orientation.
-    genome_orientations[cell_idx] = rotations[cell_idx];
 }
