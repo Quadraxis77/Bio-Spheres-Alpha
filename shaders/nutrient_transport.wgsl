@@ -494,6 +494,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // 3. Vascular outlet (cell_a) to non-vascular: normal rate.
         // 4. Non-vascular to vascular (cell_b): normal rate (vasculocytes absorb freely).
         // 5. Non-vascular to non-vascular: normal rate.
+        // 6. Embryocyte receiver: rate scaled by nutrient_priority so high-priority
+        //    embryocytes fill their reserve much faster than the base 30/sec.
         var effective_rate: f32 = TRANSPORT_RATE;
         if (cell_a_is_vascular) {
             if (cell_b_is_vascular) {
@@ -504,6 +506,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // outlet to non-vascular: keep TRANSPORT_RATE
         }
         // Non-vascular sending to vasculocyte: no restriction (TRANSPORT_RATE unchanged).
+
+        // Embryocyte receivers: scale rate by their nutrient_priority so the setting
+        // actually controls how fast the reserve fills. Priority 4.0 → 4× base rate.
+        let cell_b_is_embryocyte_check = cell_b_type == 10u;
+        if (cell_b_is_embryocyte_check && mode_b_idx < arrayLength(&mode_properties_v1)) {
+            let embryo_priority = mode_properties_v1[mode_b_idx].y;
+            effective_rate *= max(embryo_priority, 1.0);
+        }
 
         // --- Compression-driven pump boost ---
         // Apply the cell-level pump multiplier derived from the pre-scan.

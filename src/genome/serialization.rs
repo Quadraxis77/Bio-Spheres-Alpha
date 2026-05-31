@@ -347,11 +347,18 @@ impl Genome {
 
     /// Convert to serializable format, only including modified modes.
     fn to_serializable(&self) -> SerializableGenome {
-        // Use a single-mode default as the diff baseline for each mode.
-        let default_mode = ModeSettings::default();
         let mut modified_modes = Vec::new();
 
         for (i, mode) in self.modes.iter().enumerate() {
+            // Build a per-mode default that matches the load baseline exactly:
+            // child_a and child_b default to self-referencing (mode_number = i).
+            // This ensures child mode numbers are written correctly even when they
+            // point to mode 0 (which would otherwise match the global default and
+            // be silently omitted, then revert to self-referencing on load).
+            let mut default_mode = ModeSettings::default();
+            default_mode.child_a.mode_number = i as i32;
+            default_mode.child_b.mode_number = i as i32;
+
             if let Some(serializable) = mode_to_serializable(mode, &default_mode, i) {
                 modified_modes.push(serializable);
             }
@@ -375,9 +382,26 @@ impl Genome {
         let target_count = ser.mode_count.min(MAX_MODES).max(1);
 
         // Build a genome with the right number of modes.
-        // We use new_with_mode_count so each mode gets a deterministic color and
-        // self-referencing children — the same baseline the old default() used.
-        let mut genome = super::Genome::new_with_mode_count(target_count);
+        // The baseline for each mode is ModeSettings::default() (cell_type = 0, Test cell)
+        // because that is the same baseline used by mode_to_serializable when writing the file.
+        // Using any other baseline (e.g. cell_type = 2 from new_with_mode_count) would cause
+        // modes whose cell_type matches the write baseline to load with the wrong type.
+        let mut genome = super::Genome {
+            name: String::new(),
+            initial_mode: 0,
+            initial_orientation: glam::Quat::IDENTITY,
+            modes: (0..target_count).map(|i| {
+                let mode_name = format!("M {}", i + 1);
+                let mut mode = super::ModeSettings {
+                    name: mode_name.clone(),
+                    default_name: mode_name,
+                    ..super::ModeSettings::default()
+                };
+                mode.child_a.mode_number = i as i32;
+                mode.child_b.mode_number = i as i32;
+                mode
+            }).collect(),
+        };
         genome.name = ser.name;
         genome.initial_mode = ser.initial_mode;
         genome.initial_orientation = array_to_quat(ser.initial_orientation);
@@ -395,8 +419,7 @@ impl Genome {
                 let mut mode = super::ModeSettings {
                     name: mode_name.clone(),
                     default_name: mode_name,
-                    cell_type: 2, // Phagocyte — all modes after the first default to Phagocyte
-                    ..Default::default()
+                    ..super::ModeSettings::default()
                 };
                 mode.child_a.mode_number = idx as i32;
                 mode.child_b.mode_number = idx as i32;
