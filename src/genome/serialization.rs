@@ -142,6 +142,8 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub glueocyte_cell_adhesion_signal_threshold: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub glueocyte_signal_gate_invert: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub swim_force: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flagellocyte_use_signal: Option<bool>,
@@ -444,6 +446,7 @@ fn mode_to_serializable(
         glueocyte_boulder_adhesion: diff_bool(mode.glueocyte_boulder_adhesion, default.glueocyte_boulder_adhesion),
         glueocyte_cell_adhesion_signal_channel: diff_i32(mode.glueocyte_cell_adhesion_signal_channel, default.glueocyte_cell_adhesion_signal_channel),
         glueocyte_cell_adhesion_signal_threshold: diff_f32(mode.glueocyte_cell_adhesion_signal_threshold, default.glueocyte_cell_adhesion_signal_threshold),
+        glueocyte_signal_gate_invert: diff_bool(mode.glueocyte_signal_gate_invert, default.glueocyte_signal_gate_invert),
         swim_force: diff_f32(mode.swim_force, default.swim_force),
         flagellocyte_use_signal: diff_bool(mode.flagellocyte_use_signal, default.flagellocyte_use_signal),
         flagellocyte_signal_channel: diff_i32(mode.flagellocyte_signal_channel, default.flagellocyte_signal_channel),
@@ -549,6 +552,7 @@ impl SerializableModeSettings {
             || self.glueocyte_boulder_adhesion.is_some()
             || self.glueocyte_cell_adhesion_signal_channel.is_some()
             || self.glueocyte_cell_adhesion_signal_threshold.is_some()
+            || self.glueocyte_signal_gate_invert.is_some()
             || self.swim_force.is_some()
             || self.flagellocyte_use_signal.is_some()
             || self.flagellocyte_signal_channel.is_some()
@@ -760,6 +764,7 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.glueocyte_cell_adhesion_signal_threshold {
         mode.glueocyte_cell_adhesion_signal_threshold = v;
     }
+    if let Some(v) = ser.glueocyte_signal_gate_invert { mode.glueocyte_signal_gate_invert = v; }
     if let Some(swim_force) = ser.swim_force {
         mode.swim_force = swim_force;
     }

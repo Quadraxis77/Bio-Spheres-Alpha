@@ -1101,6 +1101,7 @@ impl GpuScene {
                 glueocyte_boulder_adhesion: true,
                 glueocyte_cell_adhesion_signal_channel: -1,
                 glueocyte_cell_adhesion_signal_threshold: 1.0,
+                glueocyte_signal_gate_invert: false,
                 swim_force: props[6],
                 flagellocyte_use_signal: props[14] > 0.5,
                 flagellocyte_signal_channel: props[10] as i32,

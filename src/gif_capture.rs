@@ -131,6 +131,8 @@ impl GifCaptureState {
         let capture_window = {
             let mut scan_scene = crate::scene::PreviewScene::new(device, queue, &panel_config);
             scan_scene.update_genome(genome);
+            // Reset to t=0 with the correct genome's initial state before scanning.
+            scan_scene.state.reset_to_initial();
 
             let g = scan_scene.genome.clone();
             let c = scan_scene.config.clone();
@@ -204,6 +206,10 @@ impl GifCaptureState {
             visible: false, ..Default::default()
         });
         scene.update_genome(genome);
+        // Reset to t=0 with the correct genome's initial state so step_forward
+        // starts from the right initial cell configuration, not the random genome
+        // that PreviewScene::new() initializes with.
+        scene.state.reset_to_initial();
 
         // Extract the yaw angle from the saved camera rotation so the orbit
         // starts at the same horizontal angle the user was looking from.

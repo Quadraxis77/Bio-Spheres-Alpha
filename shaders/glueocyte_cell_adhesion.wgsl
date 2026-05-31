@@ -19,7 +19,9 @@
 //   glueocyte_cell_adhesion_flags[mode_idx * 4 + 1] = signal_channel
 //                                                      (0xFFFFFFFF = always active)
 //   glueocyte_cell_adhesion_flags[mode_idx * 4 + 2] = signal_threshold (f32 bits)
-//   glueocyte_cell_adhesion_flags[mode_idx * 4 + 3] = self_adhesion (0 = skip own organism, 1 = bond to own organism)
+//   glueocyte_cell_adhesion_flags[mode_idx * 4 + 3] = flags:
+//       bit 0 = self_adhesion (0 = skip own organism, 1 = bond to own organism)
+//       bit 1 = invert gate   (0 = active when sig >= threshold, 1 = active when sig < threshold)
 //
 // Bond origin flag stored in AdhesionConnection._align_pad.x (offset 24):
 //   BOND_FLAG_GLUEOCYTE = 1u  — created by this shader, released on deactivation
@@ -101,7 +103,7 @@ const BOND_FLAG_GLUEOCYTE: u32 = 1u;
 
 @group(3) @binding(0) var<storage, read> mode_indices: array<u32>;
 @group(3) @binding(1) var<storage, read> mode_cell_types: array<u32>;
-// 4 u32 per mode: [enabled, signal_channel, signal_threshold_bits, self_adhesion]
+// 4 u32 per mode: [enabled, signal_channel, signal_threshold_bits, flags(bit0=self_adhesion, bit1=invert)]
 @group(3) @binding(2) var<storage, read> glueocyte_cell_adhesion_flags: array<u32>;
 // Per-cell signal flags (packed u32: bits 0-10 = value, bits 11-15 = hops, bit 16 = source)
 @group(3) @binding(3) var<storage, read> signal_flags: array<u32>;
@@ -212,7 +214,8 @@ fn read_signal(cell_idx: u32, channel: u32) -> f32 {
 // Determine whether a glueocyte is currently "active" (should form/keep bonds).
 // Returns true when:
 //   - cell adhesion is enabled for this mode, AND
-//   - either no signal gate is configured, OR the signal is >= threshold.
+//   - either no signal gate is configured, OR the signal condition is met.
+// The condition is sig >= threshold normally, or sig < threshold when invert is set.
 fn is_glueocyte_active(mode_idx: u32, cell_idx: u32) -> bool {
     let base = mode_idx * 4u;
     if (base + 3u >= arrayLength(&glueocyte_cell_adhesion_flags)) { return false; }
@@ -229,7 +232,9 @@ fn is_glueocyte_active(mode_idx: u32, cell_idx: u32) -> bool {
     let threshold_bits = glueocyte_cell_adhesion_flags[base + 2u];
     let threshold = bitcast<f32>(threshold_bits);
     let sig = read_signal(cell_idx, clamp(channel, 0u, 7u));
-    return sig >= threshold;
+    let flags = glueocyte_cell_adhesion_flags[base + 3u];
+    let invert = (flags & 2u) != 0u;
+    return select(sig >= threshold, sig < threshold, invert);
 }
 
 // ---- Entry point 1: bond_create ----
@@ -408,7 +413,10 @@ fn bond_release(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let threshold_bits = glueocyte_cell_adhesion_flags[base + 2u];
     let threshold = bitcast<f32>(threshold_bits);
     let sig = read_signal(cell_idx, clamp(channel, 0u, 7u));
-    if (sig >= threshold) { return; } // still active — don't release
+    let flags = glueocyte_cell_adhesion_flags[base + 3u];
+    let invert = (flags & 2u) != 0u;
+    let still_active = select(sig >= threshold, sig < threshold, invert);
+    if (still_active) { return; } // still active — don't release
 
     // Glueocyte is inactive: release all bonds it created
     let adh_base = cell_idx * MAX_ADHESIONS_PER_CELL;

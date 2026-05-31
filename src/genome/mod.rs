@@ -129,6 +129,9 @@ pub struct ModeSettings {
     /// and releases all glueocyte-created bonds when the signal drops below the threshold.
     pub glueocyte_cell_adhesion_signal_channel: i32,
     pub glueocyte_cell_adhesion_signal_threshold: f32,
+    /// When true, the gate logic is inverted: active (bonds) when signal < threshold,
+    /// releases when signal >= threshold. "Disconnect when signal" instead of "disconnect when no signal".
+    pub glueocyte_signal_gate_invert: bool,
 
     // Flagellocyte settings
     pub swim_force: f32, // Forward thrust force (0.0 to 1.0, for Flagellocyte cells)
@@ -276,6 +279,7 @@ impl Default for ModeSettings {
             glueocyte_boulder_adhesion: true,  // Default: boulder adhesion enabled
             glueocyte_cell_adhesion_signal_channel: -1, // Default: always active (no signal gate)
             glueocyte_cell_adhesion_signal_threshold: 1.0,
+            glueocyte_signal_gate_invert: false, // Default: active when signal >= threshold
             swim_force: 0.5, // Default swim force for flagellocytes
             flagellocyte_use_signal: false, // Default: fixed speed mode
             flagellocyte_signal_channel: 0, // Default: channel 0

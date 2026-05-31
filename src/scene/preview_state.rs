@@ -239,6 +239,7 @@ impl PreviewState {
             mode.glueocyte_boulder_adhesion.hash(&mut hasher);
             mode.glueocyte_cell_adhesion_signal_channel.hash(&mut hasher);
             mode.glueocyte_cell_adhesion_signal_threshold.to_bits().hash(&mut hasher);
+            mode.glueocyte_signal_gate_invert.hash(&mut hasher);
             // Hash child settings
             mode.child_a.mode_number.hash(&mut hasher);
             mode.child_b.mode_number.hash(&mut hasher);
@@ -410,6 +411,20 @@ impl PreviewState {
     /// Update initial state when genome changes
     pub fn update_initial_state(&mut self, genome: &Genome, physics_config: &crate::simulation::physics_config::PhysicsConfig) {
         self.initial_state = InitialState::from_genome(genome, self.work_state.capacity, physics_config);
+    }
+
+    /// Reset simulation to t=0 using the current initial_state.
+    /// Call after update_initial_state to ensure work_state and display_state
+    /// reflect the new genome from the very first step.
+    pub fn reset_to_initial(&mut self) {
+        let state = self.initial_state.to_canonical_state();
+        self.work_state = state.clone();
+        self.display_state = state;
+        self.work_time = 0.0;
+        self.display_time = 0.0;
+        self.target_time = None;
+        self.is_resimulating = false;
+        self.checkpoints.clear();
     }
     
     /// Run incremental resimulation toward target time.

@@ -1701,7 +1701,8 @@ impl GpuTripleBufferSystem {
                     };
                     let threshold_bits = mode.glueocyte_cell_adhesion_signal_threshold.to_bits();
                     let self_adhesion = if mode.glueocyte_self_adhesion { 1u32 } else { 0u32 };
-                    [enabled, channel, threshold_bits, self_adhesion]
+                    let invert = if mode.glueocyte_signal_gate_invert { 2u32 } else { 0u32 };
+                    [enabled, channel, threshold_bits, self_adhesion | invert]
                 })
             })
             .collect();

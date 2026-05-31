@@ -131,6 +131,12 @@ struct GpuBoulder {
 @group(2) @binding(1) var<storage, read> mode_cell_types: array<u32>;
 @group(2) @binding(2) var<storage, read> glueocyte_env_adhesion_flags: array<u32>;
 @group(2) @binding(3) var<storage, read> glueocyte_boulder_adhesion_flags: array<u32>;
+// Signal gate (shared with cell adhesion shader): 4 u32 per mode
+// [0]=cell_adhesion_enabled, [1]=signal_channel (0xFFFFFFFF=always active), [2]=threshold bits, [3]=self_adhesion
+// The signal gate (channel + threshold) applies to ALL glueocyte adhesion types.
+@group(2) @binding(4) var<storage, read> glueocyte_cell_adhesion_flags: array<u32>;
+// Per-cell signal values: 16 u32 per cell (lower 11 bits = value)
+@group(2) @binding(5) var<storage, read> signal_flags: array<u32>;
 
 // Group 3: Cave params for SDF sampling
 @group(3) @binding(0) var<uniform> cave_params: CaveParams;
@@ -273,9 +279,28 @@ const SPRING_DAMPING: f32 = 8.0;
 const CONTACT_THRESHOLD: f32 = 3.0;
 const GLUEOCYTE_CELL_TYPE: u32 = 6u;
 const BREAK_FORCE: f32 = 500.0;
+const SIGNAL_CHANNELS: u32 = 16u;
 
 fn float_to_fixed(v: f32) -> i32 {
     return i32(v * FIXED_POINT_SCALE);
+}
+
+// Returns true when the glueocyte's signal gate is satisfied (i.e. it is "active").
+// Uses the same flag buffer as the cell adhesion shader.
+// If no signal gate is configured (channel == 0xFFFFFFFF), always returns true.
+// Bit 1 of flags slot [3] = invert: when set, active when sig < threshold.
+fn is_signal_gate_active(mode_idx: u32, cell_idx: u32) -> bool {
+    let base = mode_idx * 4u;
+    if (base + 2u >= arrayLength(&glueocyte_cell_adhesion_flags)) { return true; }
+    let channel = glueocyte_cell_adhesion_flags[base + 1u];
+    if (channel == 0xFFFFFFFFu) { return true; } // no gate — always active
+    let threshold_bits = glueocyte_cell_adhesion_flags[base + 2u];
+    let threshold = bitcast<f32>(threshold_bits);
+    let raw = signal_flags[cell_idx * SIGNAL_CHANNELS + clamp(channel, 0u, 7u)];
+    let sig = f32(raw & 0x7FFu);
+    let flags = glueocyte_cell_adhesion_flags[base + 3u];
+    let invert = (flags & 2u) != 0u;
+    return select(sig >= threshold, sig < threshold, invert);
 }
 
 @compute @workgroup_size(256)
@@ -307,6 +332,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let vel = velocities_in[cell_idx].xyz;
     let anchor = env_anchors[cell_idx];
     let is_active = anchor.w > 0.5;
+
+    // Signal gate: if the gate is inactive, release any existing anchor and skip.
+    if (!is_signal_gate_active(mode_idx, cell_idx)) {
+        env_anchors[cell_idx].w = 0.0;
+        return;
+    }
 
     // Acquire anchor on first surface contact
     if (!is_active && is_touching_surface(pos, CONTACT_THRESHOLD, mode_idx)) {
