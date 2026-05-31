@@ -136,10 +136,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Black background
     var color = vec3<f32>(0.0);
 
-    // Three layers: dense dim background, medium, sparse bright
-    color += stars(dir, 12.0, params.star_density * 0.25, camera.time);
-    color += stars(dir,  7.0, params.star_density * 0.18, camera.time);
-    color += stars(dir,  4.0, params.star_density * 0.10, camera.time);
+    // Single star layer — the 3×3×3 neighbor search is expensive per pixel,
+    // so one layer at moderate density gives a good starfield without tanking FPS.
+    color += stars(dir, 8.0, params.star_density * 0.3, camera.time);
 
     return vec4<f32>(color, 1.0);
 }

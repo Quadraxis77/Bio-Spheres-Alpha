@@ -191,23 +191,6 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
     return clamp(mass, 0.5, 2.0);
 }
 
-// Clamp a relative angular damping coefficient to the explicit-integration stability
-// limit: c·dt·(1/I_a + 1/I_b) <= 1. Above this the damper overshoots and reverses the
-// relative angular velocity each step, pumping energy in until the structure collapses
-// into a blob. I = 0.4·m·r² with r = clamp(mass, 0.5, 2.0), matching the integrator.
-fn stable_twist_damping(requested: f32, mass_a: f32, mass_b: f32, dt: f32) -> f32 {
-    if (requested <= 0.0 || dt <= 0.0) {
-        return max(requested, 0.0);
-    }
-    let ra = clamp(mass_a, 0.5, 2.0);
-    let rb = clamp(mass_b, 0.5, 2.0);
-    let ia = max(0.4 * mass_a * ra * ra, 1e-4);
-    let ib = max(0.4 * mass_b * rb * rb, 1e-4);
-    let inv_inertia_sum = 1.0 / ia + 1.0 / ib;
-    let max_stable = 0.9 / (dt * inv_inertia_sum);
-    return min(requested, max_stable);
-}
-
 // Reconstruct AdhesionSettings from the 3 split sub-buffers for a given mode index.
 fn load_adhesion_settings(mode_idx: u32) -> AdhesionSettings {
     let v0 = adhesion_settings_v0[mode_idx];
@@ -245,8 +228,6 @@ fn compute_substep_forces(
     is_cell_a: bool,
     contraction_a: f32,
     contraction_b: f32,
-    mass_a: f32,
-    mass_b: f32,
     bond_age: f32,
 ) -> array<vec3<f32>, 2> {
     var force = vec3<f32>(0.0);
@@ -277,7 +258,7 @@ fn compute_substep_forces(
 
     // Symmetric anchor spring with settle ramp (matching adhesion_physics.wgsl exactly).
     // Newly created bonds start soft and ramp to full stiffness over 0.3s.
-    let settle_factor = clamp(bond_age / 0.3, 0.0, 1.0);
+    let settle_factor = clamp(bond_age * 3.3333, 0.0, 1.0);  // 1.0/0.3 = 3.3333
     let effective_stiffness = settings.linear_spring_stiffness * settle_factor;
 
     let target_b = pos_a + anchor_a * effective_rest_length;
@@ -347,8 +328,9 @@ fn compute_substep_forces(
         let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
 
         // Equal and opposite torques to resist relative twist.
-        // Clamp damping to the explicit-integration stability limit (see helper).
-        let twist_damp_coeff = stable_twist_damping(settings.twist_constraint_damping, mass_a, mass_b, params.delta_time);
+        // Clamp damping to the explicit-integration stability limit (conservative worst-case).
+        let max_twist_damp = 0.9 / (params.delta_time * 40.0);
+        let twist_damp_coeff = min(settings.twist_constraint_damping, max_twist_damp);
         let twist_spring = adhesion_axis * twist_error_scalar * settings.twist_constraint_stiffness;
         let twist_damp = adhesion_axis * relative_angular_vel * twist_damp_coeff;
         torque_a += -twist_spring - twist_damp;
@@ -428,7 +410,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Read other cell from OUTPUT buffers (Jacobi: may read stale data within one dispatch)
         let other_pos = positions_out[other_idx].xyz;
-        let other_mass = positions_out[other_idx].w;
         let other_vel = velocities_out[other_idx].xyz;
         let other_rot = rotations_out[other_idx];
         let other_ang_vel = angular_velocities_out[other_idx].xyz;
@@ -460,16 +441,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let contraction_cell_a = muscle_contraction[connection.cell_a_index];
         let contraction_cell_b = muscle_contraction[connection.cell_b_index];
 
-        // Masses ordered as cell A, cell B (same swap convention as pos/vel/rot)
-        let mass_a = select(other_mass, my_mass, is_cell_a);
-        let mass_b = select(my_mass, other_mass, is_cell_a);
-
         let result = compute_substep_forces(
             pos_a, pos_b, vel_a, vel_b,
             rot_a, rot_b, ang_vel_a, ang_vel_b,
             connection, settings, is_cell_a,
             contraction_cell_a, contraction_cell_b,
-            mass_a, mass_b,
             max(params.current_time - connection.birth_time, 0.0)
         );
 

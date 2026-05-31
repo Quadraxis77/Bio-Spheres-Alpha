@@ -291,8 +291,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let cell_type = mode_cell_types[mode_idx];
     if (cell_type != GLUEOCYTE_CELL_TYPE) {
-        // Clear stale anchor if no longer a Glueocyte
-        env_anchors[cell_idx].w = 0.0;
         return;
     }
 

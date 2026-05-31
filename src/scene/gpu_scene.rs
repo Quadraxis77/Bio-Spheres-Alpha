@@ -1445,11 +1445,7 @@ impl GpuScene {
             self.cave_renderer.as_ref(),
             self.cave_physics_bind_groups.as_ref(),
             &self.adhesion_buffers,
-            // Use max(1) so the first cell is processed even before the async readback
-            // (which lags 1-3 frames) has reported total_cell_slots > 0.
-            // The shaders read cell_count_buffer[0] internally, so 1 extra workgroup
-            // when truly empty is harmless — threads early-exit immediately.
-            self.total_cell_slots.max(1),
+            self.total_cell_slots,
             self.constraint_iterations,
             self.solo_metabolism_multiplier,
             self.boulder_system.as_ref().map(|bs| bs.active_count()).unwrap_or(0),

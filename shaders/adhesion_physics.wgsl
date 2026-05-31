@@ -157,25 +157,6 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
     return pow(volume * 3.0 / (4.0 * PI), 1.0 / 3.0);
 }
 
-// Clamp a relative angular damping coefficient to the explicit-integration stability
-// limit. A relative angular damper applied as ±c·ω_rel is only stable when
-// c·dt·(1/I_a + 1/I_b) <= 1, otherwise it overshoots and reverses ω_rel, pumping
-// energy into the structure until it spins out and collapses into a blob.
-// I = 0.4·m·r² with r = clamp(mass, 0.5, 2.0), matching the angular velocity integrator
-// in velocity_update.wgsl.
-fn stable_twist_damping(requested: f32, mass_a: f32, mass_b: f32, dt: f32) -> f32 {
-    if (requested <= 0.0 || dt <= 0.0) {
-        return max(requested, 0.0);
-    }
-    let ra = clamp(mass_a, 0.5, 2.0);
-    let rb = clamp(mass_b, 0.5, 2.0);
-    let ia = max(0.4 * mass_a * ra * ra, 1e-4);
-    let ib = max(0.4 * mass_b * rb * rb, 1e-4);
-    let inv_inertia_sum = 1.0 / ia + 1.0 / ib;
-    let max_stable = 0.9 / (dt * inv_inertia_sum);
-    return min(requested, max_stable);
-}
-
 // Quaternion multiplication
 fn quat_multiply(q1: vec4<f32>, q2: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(
@@ -256,8 +237,6 @@ fn compute_adhesion_forces_for_cell(
     is_cell_a: bool,
     contraction_a: f32,
     contraction_b: f32,
-    mass_a: f32,
-    mass_b: f32,
     bond_age: f32,
     spring_force_mag_out: ptr<function, f32>,
 ) -> array<vec3<f32>, 2> {
@@ -302,7 +281,7 @@ fn compute_adhesion_forces_for_cell(
     // SETTLE_DURATION seconds. This lets cells find their natural equilibrium positions
     // before the geometric spring locks them in place, preventing bonds from fighting
     // each other during the initial placement phase.
-    let settle_factor = clamp(bond_age / 0.3, 0.0, 1.0);
+    let settle_factor = clamp(bond_age * 3.3333, 0.0, 1.0);  // 1.0/0.3 = 3.3333
     let effective_stiffness = settings.linear_spring_stiffness * settle_factor;
 
     let target_b = pos_a + anchor_a * effective_rest_length;
@@ -386,10 +365,9 @@ fn compute_adhesion_forces_for_cell(
         let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
 
         // Equal and opposite torques to resist relative twist.
-        // Clamp the damping coefficient to the explicit-integration stability limit so
-        // high twist_constraint_damping values can't overshoot and pump energy into the
-        // structure (which spins it out and collapses it into a blob).
-        let twist_damp_coeff = stable_twist_damping(settings.twist_constraint_damping, mass_a, mass_b, params.delta_time);
+        // Clamp damping to the explicit-integration stability limit (conservative worst-case).
+        let max_twist_damp = 0.9 / (params.delta_time * 40.0);
+        let twist_damp_coeff = min(settings.twist_constraint_damping, max_twist_damp);
         let twist_spring = adhesion_axis * twist_error_scalar * settings.twist_constraint_stiffness;
         let twist_damp = adhesion_axis * relative_angular_vel * twist_damp_coeff;
         torque_a += -twist_spring - twist_damp;
@@ -504,7 +482,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         
         // Load other cell's data
         let other_pos = positions_in[other_idx].xyz;
-        let other_mass = positions_in[other_idx].w;
         let other_vel = velocities_in[other_idx].xyz;
         let other_rot = rotations_in[other_idx];
         let other_ang_vel = angular_velocities_in[other_idx].xyz;
@@ -549,10 +526,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let contraction_cell_a = muscle_contraction[connection.cell_a_index];
         let contraction_cell_b = muscle_contraction[connection.cell_b_index];
 
-        // Masses ordered as cell A, cell B (same swap convention as pos/vel/rot)
-        let mass_a = select(other_mass, my_mass, is_cell_a);
-        let mass_b = select(my_mass, other_mass, is_cell_a);
-
         let bond_age = max(params.current_time - connection.birth_time, 0.0);
         
         let result = compute_adhesion_forces_for_cell(
@@ -565,8 +538,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             is_cell_a,
             contraction_cell_a,
             contraction_cell_b,
-            mass_a,
-            mass_b,
             bond_age,
             &spring_force_mag
         );
@@ -575,13 +546,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Skip break check during grace period after bond creation (0.5s)
         // Also skip if either cell recently mode-switched (1.5s grace) — prevents transient
         // force spikes from maturation-triggered mode switches breaking ring bonds.
-        let bond_grace    = (params.current_time - connection.birth_time) < 0.5;
-        let switch_grace_a = (params.current_time - mode_switch_time[connection.cell_a_index]) < 1.5;
-        let switch_grace_b = (params.current_time - mode_switch_time[connection.cell_b_index]) < 1.5;
-        let in_grace = bond_grace || switch_grace_a || switch_grace_b;
-        if (settings.can_break != 0 && !in_grace && spring_force_mag > settings.break_force && is_cell_a) {
-            adhesion_connections[adhesion_idx].is_active = 0u;
-            continue;
+        // PERF: mode_switch_time reads are deferred inside the can_break check to avoid
+        // two random buffer accesses per bond unconditionally (major cache thrash at 100k cells).
+        if (settings.can_break != 0 && spring_force_mag > settings.break_force && is_cell_a) {
+            let bond_grace = (params.current_time - connection.birth_time) < 0.5;
+            let switch_grace_a = (params.current_time - mode_switch_time[connection.cell_a_index]) < 1.5;
+            let switch_grace_b = (params.current_time - mode_switch_time[connection.cell_b_index]) < 1.5;
+            if (!bond_grace && !switch_grace_a && !switch_grace_b) {
+                adhesion_connections[adhesion_idx].is_active = 0u;
+                continue;
+            }
         }
 
         total_force += result[0];
