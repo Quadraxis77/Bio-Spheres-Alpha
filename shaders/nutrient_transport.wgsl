@@ -349,13 +349,40 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let reserve_burned = min(loss_fixed, cur_reserve);
             atomicSub(&embryocyte_reserves[cell_idx], reserve_burned);
             remaining_loss = max(nutrient_loss - f32(reserve_burned) / FIXED_POINT_SCALE, 0.0);
+
+            // Also convert reserve into the nutrient pool when nutrients are below the
+            // split threshold. This lets cells with inherited reserve actually grow and
+            // divide, not just survive longer. Convert at up to 20/sec, capped by
+            // how much space is left below the split threshold.
+            const RESERVE_TO_NUTRIENT_RATE: f32 = 20.0;
+            let split_threshold = min(split_nutrient_thresholds[cell_idx], 200.0);
+            let nutrient_headroom = max(split_threshold - current_nutrients, 0.0);
+            let updated_reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
+            if (nutrient_headroom > 0.0 && updated_reserve > 0u) {
+                let convert_amount = min(RESERVE_TO_NUTRIENT_RATE * params.delta_time, nutrient_headroom);
+                let convert_fixed = u32(float_to_fixed(convert_amount));
+                let actual_convert = min(convert_fixed, updated_reserve);
+                atomicSub(&embryocyte_reserves[cell_idx], actual_convert);
+                // Add converted nutrients (net of remaining metabolic loss)
+                let nutrients_gained = f32(actual_convert) / FIXED_POINT_SCALE;
+                let net_gain = nutrients_gained - remaining_loss;
+                if (net_gain > 0.0) {
+                    atomicAdd(&nutrients_buffer[cell_idx], float_to_fixed(net_gain));
+                } else {
+                    let safe_loss = min(-net_gain, max(current_nutrients, 0.0));
+                    atomicAdd(&nutrients_buffer[cell_idx], -float_to_fixed(safe_loss));
+                }
+                remaining_loss = 0.0; // already handled above
+            }
         }
 
         // Apply nutrient consumption as an atomic delta (NOT atomicStore!)
         // atomicStore here would race with atomicAdd from neighbor transport threads,
         // overwriting any nutrients transferred to this cell during the same dispatch.
-        let safe_loss = min(remaining_loss, max(current_nutrients, 0.0));
-        atomicAdd(&nutrients_buffer[cell_idx], -float_to_fixed(safe_loss));
+        if (remaining_loss > 0.0) {
+            let safe_loss = min(remaining_loss, max(current_nutrients, 0.0));
+            atomicAdd(&nutrients_buffer[cell_idx], -float_to_fixed(safe_loss));
+        }
     }
     
     // NOTE: No early death check here - we must let transport happen first

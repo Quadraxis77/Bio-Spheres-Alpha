@@ -553,15 +553,42 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
                     state.reserves[i] = reserve.saturating_sub(reserve_burned);
                     let covered = reserve_burned as f32 / 1000.0;
                     let remaining_loss = (total_loss - covered).max(0.0);
-                    let new_nutrients = (current_nutrients - remaining_loss).max(0.0);
-                    if new_nutrients != current_nutrients {
-                        state.nutrients[i] = new_nutrients;
-                        let new_mass = 1.0 + new_nutrients / 100.0;
-                        state.masses[i] = new_mass;
-                        let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
-                        if new_radius != state.radii[i] {
-                            state.radii[i] = new_radius;
-                            state.masses_changed = true;
+
+                    // Also convert reserve into the nutrient pool when nutrients are low.
+                    // This lets cells with inherited reserve actually grow and divide,
+                    // not just survive longer. Convert at up to 20/sec, capped by
+                    // how much space is left below the split threshold.
+                    const RESERVE_TO_NUTRIENT_RATE: f32 = 20.0;
+                    let split_threshold = state.split_nutrient_thresholds[i].min(200.0);
+                    let nutrient_headroom = (split_threshold - current_nutrients).max(0.0);
+                    if nutrient_headroom > 0.0 && state.reserves[i] > 0 {
+                        let convert_amount = (RESERVE_TO_NUTRIENT_RATE * dt).min(nutrient_headroom);
+                        let convert_fixed = (convert_amount * 1000.0) as u32;
+                        let actual_convert = convert_fixed.min(state.reserves[i]);
+                        state.reserves[i] = state.reserves[i].saturating_sub(actual_convert);
+                        let nutrients_gained = actual_convert as f32 / 1000.0;
+                        let new_nutrients = (current_nutrients + nutrients_gained - remaining_loss).max(0.0);
+                        if new_nutrients != current_nutrients {
+                            state.nutrients[i] = new_nutrients;
+                            let new_mass = 1.0 + new_nutrients / 100.0;
+                            state.masses[i] = new_mass;
+                            let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
+                            if new_radius != state.radii[i] {
+                                state.radii[i] = new_radius;
+                                state.masses_changed = true;
+                            }
+                        }
+                    } else {
+                        let new_nutrients = (current_nutrients - remaining_loss).max(0.0);
+                        if new_nutrients != current_nutrients {
+                            state.nutrients[i] = new_nutrients;
+                            let new_mass = 1.0 + new_nutrients / 100.0;
+                            state.masses[i] = new_mass;
+                            let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
+                            if new_radius != state.radii[i] {
+                                state.radii[i] = new_radius;
+                                state.masses_changed = true;
+                            }
                         }
                     }
                 } else {
