@@ -33,6 +33,8 @@ const OCULOCYTE_TYPE: i32 = 7;
 const COGNOCYTE_TYPE: i32 = 14;
 /// Memorocyte cell type index
 const MEMOROCYTE_TYPE: i32 = 15;
+/// Vasculocyte cell type index
+const VASCULOCYTE_TYPE: i32 = 12;
 
 /// Clear all signal channels and flow tracking.
 pub fn clear_all_signals(state: &mut CanonicalState) {
@@ -173,14 +175,34 @@ fn sense_barrier_ray(
     t > 0.0 && t <= ray_length
 }
 
-/// Propagate signal emissions through adhesion connections using hop-level wave propagation.
+/// Compute the outgoing signal strength when a cell forwards to its neighbors.
 ///
-/// Processes one hop-level at a time so that attenuation is applied uniformly at every
-/// hop (SIGNAL_ATTENUATION_PER_HOP^N at distance N). Cells reachable via multiple
-/// equal-length paths accumulate signal additively from all of those paths — "electricity
-/// through wires" behaviour. Cells already reached by a shorter path are not revisited
-/// at greater attenuation. Relay cells (oculocytes, regulation emitters) carry the wave
-/// forward without accumulating signal themselves.
+/// Signal-transport vasculocytes route losslessly, capped at their node-level
+/// throughput capacity. This prevents fan-in amplification at junctions: no matter
+/// how many upstream paths converge, the forwarded value is at most `capacity`.
+///
+/// All other cells apply the standard 50% attenuation per hop.
+fn routing_outgoing(genome: &Genome, mode_idx: usize, incoming: f32) -> f32 {
+    if let Some(mode) = genome.modes.get(mode_idx) {
+        if mode.cell_type == VASCULOCYTE_TYPE && mode.vascular_signal_transport {
+            // Lossless routing, node-level throughput cap.
+            return incoming.min(mode.vascular_signal_capacity.max(0.0));
+        }
+    }
+    incoming * SIGNAL_ATTENUATION_PER_HOP
+}
+
+/// Propagate signal emissions through adhesion connections using BFS wave propagation.
+///
+/// Each cell tracks its own signal strength independently (per-cell, not per-hop-level).
+/// When expanding, the outgoing strength depends on the *source* cell type:
+///   - Normal cells: 50% attenuation per hop (SIGNAL_ATTENUATION_PER_HOP)
+///   - Signal-transport vasculocytes: lossless routing, capped at node capacity
+///
+/// Every edge traversal consumes exactly 1 hop regardless of cell type.
+/// This preserves spatial distance, timing gradients, and circuit depth.
+/// Fan-in amplification is prevented by taking max (not sum) for equal-length paths,
+/// and by the per-node capacity cap on vasculocyte forwarding.
 pub fn propagate_signals(
     state: &mut CanonicalState,
     genome: &Genome,
@@ -193,9 +215,8 @@ pub fn propagate_signals(
     let cell_count = state.cell_count;
 
     // Per-emission scratch buffers, reused across emissions to avoid allocation.
-    // min_hop_distance[i]: shortest hop distance from the current emitter to cell i
-    //   (-1 = not yet reached by this emission's wave).
-    // signal_contribution[i]: total signal accumulated from all equal-shortest-length paths.
+    // min_hop_distance[i]: shortest hop distance from emitter to cell i (-1 = unreached).
+    // signal_contribution[i]: strongest signal reaching cell i across all equal-length paths.
     let mut min_hop_distance = vec![-1i32; cell_count];
     let mut signal_contribution = vec![0.0f32; cell_count];
     let mut current_frontier: Vec<usize> = Vec::new();
@@ -217,57 +238,44 @@ pub fn propagate_signals(
         for v in min_hop_distance[..cell_count].iter_mut() { *v = -1; }
         for v in signal_contribution[..cell_count].iter_mut() { *v = 0.0; }
         min_hop_distance[emission.source_cell] = 0;
+        // Seed source contribution so routing_outgoing can read it for hop 1.
+        signal_contribution[emission.source_cell] = emission.value;
 
         current_frontier.clear();
         current_frontier.push(emission.source_cell);
 
-        // Process one hop-level at a time.
-        // Hop 1 is full strength (same as the source). Attenuation begins at hop 2:
-        //   hop 1 → emission.value
-        //   hop 2 → emission.value * SIGNAL_ATTENUATION_PER_HOP
-        //   hop N → emission.value * SIGNAL_ATTENUATION_PER_HOP^(N-1)
-        let mut signal_at_hop = emission.value;
         for hop in 0..emission.hops {
             let hop_number = (hop + 1) as i32;
 
             next_frontier.clear();
             for &cell_idx in &current_frontier {
+                // Per-cell outgoing: vasculocytes route losslessly (capped), others attenuate.
+                let mode_idx = state.mode_indices.get(cell_idx).copied().unwrap_or(0);
+                let outgoing = routing_outgoing(genome, mode_idx, signal_contribution[cell_idx]);
+
                 let neighbors = get_adhesion_neighbors(state, cell_idx);
                 for neighbor in neighbors {
                     if neighbor >= cell_count { continue; }
                     if min_hop_distance[neighbor] == -1 {
-                        // First path to reach this cell — record distance and seed signal.
+                        // First path to reach this cell.
                         min_hop_distance[neighbor] = hop_number;
-                        signal_contribution[neighbor] = signal_at_hop;
+                        signal_contribution[neighbor] = outgoing;
                         next_frontier.push(neighbor);
-                        // Record the adhesion edge the signal actually travelled along.
                         state.signal_flow_tracker.add_flow(cell_idx, neighbor);
                     } else if min_hop_distance[neighbor] == hop_number {
-                        // Another equal-length path — take the max, not the sum.
-                        // Summing would let branching topology amplify signals indefinitely
-                        // (a binary tree has 2^(N-1) paths of length N, each contributing
-                        // v * 0.5^(N-1), summing to v regardless of distance).
-                        // Max gives voltage-like behaviour: signal strength depends only on
-                        // hop distance, not on how many wires run in parallel.
-                        if signal_at_hop > signal_contribution[neighbor] {
-                            signal_contribution[neighbor] = signal_at_hop;
+                        // Equal-length path: take max to prevent topology-based amplification.
+                        if outgoing > signal_contribution[neighbor] {
+                            signal_contribution[neighbor] = outgoing;
                         }
-                        // Record this parallel path's edge too.
                         state.signal_flow_tracker.add_flow(cell_idx, neighbor);
                     }
-                    // min_hop_distance < hop_number: shorter path already won —
-                    // signal does not flow backward, so don't record this edge.
+                    // Shorter path already won — signal does not flow backward.
                 }
             }
             std::mem::swap(&mut current_frontier, &mut next_frontier);
-            // Attenuate for the *next* hop. This keeps hop 1 at full strength
-            // and reduces by SIGNAL_ATTENUATION_PER_HOP for each subsequent hop.
-            signal_at_hop *= SIGNAL_ATTENUATION_PER_HOP;
         }
 
-        // Write accumulated contributions to signal channels.
-        // Skip the source (already written above) and relay cells (oculocytes /
-        // regulation emitters carry the wave but do not receive it).
+        // Write contributions. Skip source (written above) and relay cells.
         for cell_idx in 0..cell_count {
             if cell_idx == emission.source_cell { continue; }
             if min_hop_distance[cell_idx] < 0 { continue; }
@@ -473,18 +481,17 @@ pub fn process_memorocytes(
         }
 
         let in_ch  = mode.memorocyte_input_channel.clamp(0, 15) as usize;
-        let decay  = mode.memorocyte_decay.clamp(0.0, 1.0);
-        let gain   = mode.memorocyte_gain.clamp(0.0, 10.0);
+        let rate   = mode.memorocyte_rate.clamp(0.0, 1.0);
         let out_ch = mode.memorocyte_output_channel.clamp(0, 15) as usize;
         let hops   = mode.memorocyte_output_hops.clamp(1, 20) as usize;
 
-        // Integrate input if present.
-        if let Some(input) = read_channel(state, cell_idx, in_ch) {
-            state.memo_state[cell_idx] += input * gain * dt;
-        }
+        // Frame-rate-independent EMA: fraction of gap closed this frame.
+        // effective_rate = 1 - (1 - rate)^dt
+        let effective_rate = 1.0 - (1.0 - rate).powf(dt);
 
-        // Frame-rate-independent exponential decay.
-        state.memo_state[cell_idx] *= decay.powf(dt);
+        // Target is input if present, 0.0 if channel is silent (memory decays toward zero).
+        let target = read_channel(state, cell_idx, in_ch).unwrap_or(0.0);
+        state.memo_state[cell_idx] += (target - state.memo_state[cell_idx]) * effective_rate;
 
         let value = state.memo_state[cell_idx];
         if value.abs() > 1e-6 {

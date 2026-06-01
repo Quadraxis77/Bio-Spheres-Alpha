@@ -263,11 +263,13 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vascular_outlet: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub vascular_signal_transport: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vascular_signal_capacity: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub gametocyte_merge_range: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub memorocyte_decay: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub memorocyte_gain: Option<f32>,
+    pub memorocyte_rate: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memorocyte_input_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -551,9 +553,10 @@ fn mode_to_serializable(
         devorocyte_consume_range: diff_f32(mode.devorocyte_consume_range, default.devorocyte_consume_range),
         devorocyte_consume_rate: diff_f32(mode.devorocyte_consume_rate, default.devorocyte_consume_rate),
         vascular_outlet: diff_bool(mode.vascular_outlet, default.vascular_outlet),
+        vascular_signal_transport: diff_bool(mode.vascular_signal_transport, default.vascular_signal_transport),
+        vascular_signal_capacity: diff_f32(mode.vascular_signal_capacity, default.vascular_signal_capacity),
         gametocyte_merge_range: diff_f32(mode.gametocyte_merge_range, default.gametocyte_merge_range),
-        memorocyte_decay: diff_f32(mode.memorocyte_decay, default.memorocyte_decay),
-        memorocyte_gain: diff_f32(mode.memorocyte_gain, default.memorocyte_gain),
+        memorocyte_rate: diff_f32(mode.memorocyte_rate, default.memorocyte_rate),
         memorocyte_input_channel: diff_i32(mode.memorocyte_input_channel, default.memorocyte_input_channel),
         memorocyte_output_channel: diff_i32(mode.memorocyte_output_channel, default.memorocyte_output_channel),
         memorocyte_output_hops: diff_i32(mode.memorocyte_output_hops, default.memorocyte_output_hops),
@@ -668,9 +671,10 @@ impl SerializableModeSettings {
             || self.devorocyte_consume_range.is_some()
             || self.devorocyte_consume_rate.is_some()
             || self.vascular_outlet.is_some()
+            || self.vascular_signal_transport.is_some()
+            || self.vascular_signal_capacity.is_some()
             || self.gametocyte_merge_range.is_some()
-            || self.memorocyte_decay.is_some()
-            || self.memorocyte_gain.is_some()
+            || self.memorocyte_rate.is_some()
             || self.memorocyte_input_channel.is_some()
             || self.memorocyte_output_channel.is_some()
             || self.memorocyte_output_hops.is_some()
@@ -1012,8 +1016,9 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.gametocyte_merge_range {
         mode.gametocyte_merge_range = v;
     }
-    if let Some(v) = ser.memorocyte_decay           { mode.memorocyte_decay = v; }
-    if let Some(v) = ser.memorocyte_gain           { mode.memorocyte_gain = v; }
+    if let Some(v) = ser.vascular_signal_transport { mode.vascular_signal_transport = v; }
+    if let Some(v) = ser.vascular_signal_capacity { mode.vascular_signal_capacity = v; }
+    if let Some(v) = ser.memorocyte_rate           { mode.memorocyte_rate = v; }
     if let Some(v) = ser.memorocyte_input_channel  { mode.memorocyte_input_channel = v; }
     if let Some(v) = ser.memorocyte_output_channel { mode.memorocyte_output_channel = v; }
     if let Some(v) = ser.memorocyte_output_hops    { mode.memorocyte_output_hops = v; }
@@ -1036,139 +1041,4 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
         apply_child_settings(&mut mode.child_a, child_a);
     }
     if let Some(ref child_b) = ser.child_b {
-        apply_child_settings(&mut mode.child_b, child_b);
-    }
-    if let Some(ref adhesion) = ser.adhesion_settings {
-        apply_adhesion_settings(&mut mode.adhesion_settings, adhesion);
-    }
-}
-
-fn apply_child_settings(child: &mut ChildSettings, ser: &SerializableChildSettings) {
-    if let Some(mode_number) = ser.mode_number {
-        child.mode_number = mode_number;
-    }
-    if let Some(orientation) = ser.orientation {
-        child.orientation = array_to_quat(orientation);
-    }
-    if let Some(keep_adhesion) = ser.keep_adhesion {
-        child.keep_adhesion = keep_adhesion;
-    }
-    if let Some(enable) = ser.enable_angle_snapping {
-        child.enable_angle_snapping = enable;
-    }
-}
-
-fn apply_adhesion_settings(adhesion: &mut AdhesionSettings, ser: &SerializableAdhesionSettings) {
-    if let Some(can_break) = ser.can_break {
-        adhesion.can_break = can_break;
-    }
-    if let Some(break_force) = ser.break_force {
-        adhesion.break_force = break_force;
-    }
-    if let Some(rest_length) = ser.rest_length {
-        adhesion.rest_length = rest_length;
-    }
-    if let Some(stiffness) = ser.linear_spring_stiffness {
-        adhesion.linear_spring_stiffness = stiffness;
-    }
-    if let Some(damping) = ser.linear_spring_damping {
-        adhesion.linear_spring_damping = damping;
-    }
-    if let Some(stiffness) = ser.orientation_spring_stiffness {
-        adhesion.orientation_spring_stiffness = stiffness;
-    }
-    if let Some(damping) = ser.orientation_spring_damping {
-        adhesion.orientation_spring_damping = damping;
-    }
-    if let Some(max_angular) = ser.max_angular_deviation {
-        adhesion.max_angular_deviation = max_angular;
-    }
-    if let Some(stiffness) = ser.twist_constraint_stiffness {
-        adhesion.twist_constraint_stiffness = stiffness;
-    }
-    if let Some(damping) = ser.twist_constraint_damping {
-        adhesion.twist_constraint_damping = damping;
-    }
-    if let Some(enable) = ser.enable_twist_constraint {
-        adhesion.enable_twist_constraint = enable;
-    }
-}
-
-
-// ============================================================================
-// Helper functions for diffing values
-// ============================================================================
-
-fn diff_option(value: &String, default: &String) -> Option<String> {
-    if value != default {
-        Some(value.clone())
-    } else {
-        None
-    }
-}
-
-fn diff_f32(value: f32, default: f32) -> Option<f32> {
-    if (value - default).abs() > 0.0001 {
-        Some(value)
-    } else {
-        None
-    }
-}
-
-fn diff_i32(value: i32, default: i32) -> Option<i32> {
-    if value != default {
-        Some(value)
-    } else {
-        None
-    }
-}
-
-fn diff_u32(value: u32, default: u32) -> Option<u32> {
-    if value != default {
-        Some(value)
-    } else {
-        None
-    }
-}
-
-fn diff_bool(value: bool, default: bool) -> Option<bool> {
-    if value != default {
-        Some(value)
-    } else {
-        None
-    }
-}
-
-fn diff_vec2(value: &Vec2, default: &Vec2) -> Option<[f32; 2]> {
-    if (*value - *default).length() > 0.0001 {
-        Some(value.to_array())
-    } else {
-        None
-    }
-}
-
-fn diff_vec3(value: &Vec3, default: &Vec3) -> Option<[f32; 3]> {
-    if (*value - *default).length() > 0.0001 {
-        Some(value.to_array())
-    } else {
-        None
-    }
-}
-
-fn diff_quat(value: &Quat, default: &Quat) -> Option<[f32; 4]> {
-    // Compare quaternions - they're equal if dot product is ~1 or ~-1
-    let dot = value.dot(*default).abs();
-    if dot < 0.9999 {
-        Some(quat_to_array(*value))
-    } else {
-        None
-    }
-}
-
-fn quat_to_array(q: Quat) -> [f32; 4] {
-    [q.x, q.y, q.z, q.w]
-}
-
-fn array_to_quat(arr: [f32; 4]) -> Quat {
-    Quat::from_xyzw(arr[0], arr[1], arr[2], arr[3])
-}
+        apply_child_setti

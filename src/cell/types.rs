@@ -1013,6 +1013,8 @@ impl CellType {
                 mode.split_mass = 2.5;
                 // Sealed by default — outlets must be explicitly enabled
                 mode.vascular_outlet = false;
+                mode.vascular_signal_transport = false;
+                mode.vascular_signal_capacity = 10.0;
             }
             CellType::Gametocyte => {
                 // Gametocytes behave like Embryocytes: nutrients go into reserve,
@@ -1045,8 +1047,7 @@ impl CellType {
                 mode.nutrient_priority = 2.0;
                 mode.max_cell_size = 2.0;
                 mode.split_mass = 3.1;
-                mode.memorocyte_decay = 0.95;
-                mode.memorocyte_gain = 1.0;
+                mode.memorocyte_rate = 0.1;
                 mode.memorocyte_input_channel = 0;
                 mode.memorocyte_output_channel = 9;
                 mode.memorocyte_output_hops = 5;

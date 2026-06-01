@@ -2662,9 +2662,10 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     devorocyte_consume_range: 0.5,
                     devorocyte_consume_rate: 30.0,
                     vascular_outlet: false,
+                    vascular_signal_transport: false,
+                    vascular_signal_capacity: 10.0,
                     gametocyte_merge_range: 0.5,
-                    memorocyte_decay: 0.95,
-                    memorocyte_gain: 1.0,
+                    memorocyte_rate: 0.1,
                     memorocyte_input_channel: 0,
                     memorocyte_output_channel: 9,
                     memorocyte_output_hops: 5,
@@ -3859,26 +3860,42 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
             } else if mode.cell_type == 12 { // Vasculocyte (cell_type == 12)
                 group_container(ui, "Vasculocyte Functions", egui::Color32::from_rgb(60, 160, 200), |ui| {
-                    ui.label("Forms high-throughput nutrient conduits through the organism.");
-                    ui.label("Vascular-to-vascular transport is 5× faster than normal.");
+                    ui.label("Forms high-throughput conduits through the organism. Can carry nutrients, signals, or both.");
                     ui.label("Physical compression (e.g. from Myocytes) boosts transport rate.");
                     ui.separator();
 
+                    // Transport mode checkboxes
+                    ui.label("Transport:");
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut mode.vascular_outlet, "Outlet")
-                            .on_hover_text("Outlet open: nutrients flow out to adjacent non-vascular cells. Sealed: acts as a pure transport pipe — nutrients pass through but are not released to neighbors. Every non-vascular cell must have an outlet somewhere in its parent chain");
-                        ui.label("Release nutrients to non-vascular neighbors.");
+                        ui.checkbox(&mut mode.vascular_outlet, "Nutrients")
+                            .on_hover_text("When enabled, nutrients flow out to adjacent non-vascular cells. When disabled, acts as a sealed pipe — nutrients pass through but are not released to neighbors");
+                        ui.checkbox(&mut mode.vascular_signal_transport, "Signals")
+                            .on_hover_text("When enabled, signals pass through this vasculocyte with zero attenuation (instead of the normal 50% per hop). Every hop still consumes 1 unit of the signal's hop budget. Output is capped at the Signal Capacity to prevent fan-in amplification");
                     });
-                    if mode.vascular_outlet {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(120, 220, 255),
-                            "  ▸ Outlet open — nutrients flow to adjacent cells.",
-                        );
+
+                    if mode.vascular_outlet && mode.vascular_signal_transport {
+                        ui.colored_label(egui::Color32::from_rgb(120, 220, 255), "  ▸ Dual transport — nutrients and signals.");
+                    } else if mode.vascular_outlet {
+                        ui.colored_label(egui::Color32::from_rgb(120, 220, 255), "  ▸ Nutrient transport only.");
+                    } else if mode.vascular_signal_transport {
+                        ui.colored_label(egui::Color32::from_rgb(120, 255, 180), "  ▸ Signal highway only — nutrients sealed.");
                     } else {
-                        ui.colored_label(
-                            egui::Color32::GRAY,
-                            "  ▸ Sealed — acts as a pure transport pipe.",
-                        );
+                        ui.colored_label(egui::Color32::GRAY, "  ▸ Structural only — no transport.");
+                    }
+
+                    // Signal capacity (only relevant when signal transport is on)
+                    if mode.vascular_signal_transport {
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.label("Signal Capacity:")
+                            .on_hover_text("Maximum signal value this node forwards per tick. Caps the output regardless of how many upstream paths converge here, preventing junction amplification. Set higher for a main trunk, lower for branches");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.vascular_signal_capacity, 0.1..=100.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.vascular_signal_capacity).speed(0.1).range(0.1..=100.0));
+                        });
                     }
                 });
             } else if mode.cell_type == 11 { // Devorocyte (cell_type == 11)
@@ -3988,26 +4005,15 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Accumulates incoming signals over time and slowly forgets them. Useful for smoothing sensors, building timers, and adding hysteresis to decision circuits.");
                     ui.separator();
 
-                    // Decay
-                    ui.label("Decay:")
-                        .on_hover_text("Fraction of memory retained per second (0 = instant forget, 1 = perfect memory). Values like 0.90–0.99 give a slow fade. Applied frame-rate independently");
+                    // Rate
+                    ui.label("Rate:")
+                        .on_hover_text("Fraction of the gap between memory and input closed per second. 0 = never tracks (holds state forever), 1 = instant snap (no memory). Output always converges toward input — never amplifies beyond it");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.memorocyte_decay, 0.0..=1.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.memorocyte_decay).speed(0.005).range(0.0..=1.0));
-                    });
-
-                    // Gain
-                    ui.label("Gain:")
-                        .on_hover_text("How much of the incoming signal is added to memory each second. 1.0 = add the raw signal, 2.0 = double it, 0.1 = integrate slowly");
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.memorocyte_gain, 0.0..=10.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.memorocyte_gain).speed(0.05).range(0.0..=10.0));
+                        ui.add(egui::Slider::new(&mut mode.memorocyte_rate, 0.0..=1.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.memorocyte_rate).speed(0.005).range(0.0..=1.0));
                     });
 
                     ui.separator();
@@ -6699,385 +6705,4 @@ fn render_preview_help(ui: &mut Ui, _context: &mut PanelContext) {
                 ("Enter", "Confirm rename (empty = default name)"),
                 ("Escape", "Cancel rename"),
                 ("Click Away", "Cancel rename without saving"),
-                ("Right Click Mode", "Change mode color"),
-                ("Radio Button", "Set as initial mode"),
-                ("Copy Into", "Copy settings between modes"),
-                ("Reset Button", "Restore mode to defaults"),
-            ]);
-        });
-    
-    // Quaternion ball controls
-    egui::CollapsingHeader::new("🎯 Rotation Controls")
-        .default_open(false)
-        .show(ui, |ui| {
-            help_section(ui, &[
-                ("Drag Center", "Pitch/Yaw rotation"),
-                ("Drag Edge", "Roll rotation"),
-                ("Grid Snapping", "Enable for 15° increments"),
-                ("Axis Lock", "Automatic based on drag start"),
-                ("Red Line", "X-axis direction"),
-                ("Green Line", "Y-axis direction"),
-                ("Blue Line", "Z-axis direction"),
-            ]);
-        });
-    
-    // Time controls
-    egui::CollapsingHeader::new("⏱️ Time Controls")
-        .default_open(false)
-        .show(ui, |ui| {
-            help_section(ui, &[
-                ("Time Slider", "Scrub through preview timeline"),
-                ("Play/Pause", "Control simulation playback"),
-                ("Speed Control", "Adjust playback speed"),
-                ("Reset Time", "Return to start of timeline"),
-            ]);
-        });
-    
-    // Mode graph controls
-    egui::CollapsingHeader::new("🕸️ Mode Graph")
-        .default_open(false)
-        .show(ui, |ui| {
-            help_section(ui, &[
-                ("Add Node", "Add mode to graph visualization"),
-                ("Drag Node", "Move node position"),
-                ("Connect Pins", "Drag from output to input pin"),
-                ("Right Click Node", "Remove node from graph"),
-                ("Mouse Wheel", "Zoom graph view"),
-                ("Drag Background", "Pan graph view"),
-                ("Child A/B", "Output pins for mode transitions"),
-            ]);
-        });
-}
-
-/// Render help content specific to GPU mode (large-scale simulation).
-fn render_gpu_help(ui: &mut Ui, _context: &mut PanelContext) {
-    ui.heading("⚡ GPU Mode - Large-Scale Simulation");
-    ui.add_space(4.0);
-    
-    // Viewport controls
-    egui::CollapsingHeader::new("🎥 Viewport Controls")
-        .default_open(true)
-        .show(ui, |ui| {
-            help_section(ui, &[
-                ("Tab", "Toggle between Orbit and FreeFly camera modes"),
-                ("Right Mouse + Drag", "Rotate camera (Orbit mode)"),
-                ("Right Mouse + Drag", "Rotate camera (FreeFly mode)"),
-                ("Mouse Wheel", "Zoom in/out (Orbit mode only)"),
-                ("WASD", "Move camera (FreeFly mode only)"),
-                ("Space", "Move up (FreeFly mode only)"),
-                ("C", "Move down (FreeFly mode only)"),
-                ("Q/E", "Roll left/right (FreeFly mode only)"),
-                ("Shift + WASD", "Fast movement (FreeFly mode)"),
-            ]);
-        });
-    
-    // Simulation controls
-    egui::CollapsingHeader::new("🧪 Simulation Controls")
-        .default_open(true)
-        .show(ui, |ui| {
-            help_section(ui, &[
-                ("Space", "Play/pause simulation"),
-                ("R", "Reset simulation to initial state"),
-                ("T", "Single step simulation"),
-                ("1-9", "Set simulation speed multiplier"),
-                ("F", "Toggle fullscreen"),
-                ("Tab", "Toggle UI visibility"),
-            ]);
-        });
-    
-    // Tool controls
-    egui::CollapsingHeader::new("🛠️ Tool Controls")
-        .default_open(true)
-        .show(ui, |ui| {
-            help_section(ui, &[
-                ("Hold Alt", "Open radial tool menu"),
-                ("Left Click (Menu Open)", "Select tool"),
-                ("Left Click (Insert Tool)", "Add cell at cursor"),
-                ("Left Click (Remove Tool)", "Delete cell at cursor"),
-                ("Left Click (Boost Tool)", "Give cell maximum nutrients"),
-                ("Left Click (Inspect Tool)", "Select cell for inspection"),
-                ("Left Click + Drag (Drag Tool)", "Move cell in 3D space"),
-            ]);
-        });
-    
-    // Performance monitoring
-    egui::CollapsingHeader::new("📊 Performance Monitoring")
-        .default_open(false)
-        .show(ui, |ui| {
-            help_section(ui, &[
-                ("FPS Counter", "Frames per second display"),
-                ("Cell Count", "Active simulation entities"),
-                ("GPU Memory", "VRAM usage monitoring"),
-                ("Compute Time", "Physics calculation timing"),
-                ("Render Time", "Frame rendering timing"),
-            ]);
-        });
-    
-    // Rendering controls
-    egui::CollapsingHeader::new("🎨 Rendering Controls")
-        .default_open(false)
-        .show(ui, |ui| {
-            help_section(ui, &[
-                ("Fog Toggle", "Enable/disable volumetric fog"),
-                ("Bloom", "Post-processing glow effect"),
-                ("Skybox", "Background environment"),
-                ("Cell Opacity", "Transparency settings"),
-                ("Adhesion Lines", "Connection visualization"),
-                ("Debug Overlays", "Development information"),
-            ]);
-        });
-}
-
-/// Render general help content available in all modes.
-fn render_general_help(ui: &mut Ui) {
-    ui.heading("⚙️ General Controls");
-    ui.add_space(4.0);
-    
-    // Panel management
-    egui::CollapsingHeader::new("📋 Panel Management")
-        .default_open(true)
-        .show(ui, |ui| {
-            help_section(ui, &[
-                ("Drag Tab", "Move panel to different location"),
-                ("Right Click Tab", "Panel context menu"),
-                ("X Button", "Close panel (if not locked)"),
-                ("Double Click Tab", "Maximize/restore panel"),
-                ("Drag to Edge", "Dock panel to window edge"),
-                ("Drag to Center", "Create tabbed panel group"),
-            ]);
-        });
-    
-    // Application controls
-    egui::CollapsingHeader::new("🖥️ Application")
-        .default_open(false)
-        .show(ui, |ui| {
-            help_section(ui, &[
-                ("Ctrl + S", "Save current genome/scene"),
-                ("Ctrl + O", "Open genome/scene file"),
-                ("Ctrl + N", "New genome/scene"),
-                ("Ctrl + Z", "Undo last action"),
-                ("Ctrl + Y", "Redo last action"),
-                ("F11", "Toggle fullscreen"),
-                ("Alt + F4", "Exit application"),
-                ("Ctrl + ,", "Open preferences"),
-            ]);
-        });
-    
-    // Theme and UI
-    egui::CollapsingHeader::new("🎨 Theme & UI")
-        .default_open(false)
-        .show(ui, |ui| {
-            help_section(ui, &[
-                ("Theme Editor", "Customize UI colors and fonts"),
-                ("Panel Locking", "Prevent accidental panel closure"),
-                ("Layout Reset", "Restore default panel layout"),
-                ("UI Scale", "Adjust interface size"),
-                ("Dark/Light Mode", "Toggle theme brightness"),
-            ]);
-        });
-    
-    ui.add_space(8.0);
-    ui.separator();
-    ui.small("💡 Tip: This help panel shows different controls based on your current simulation mode.");
-}
-
-/// Helper function to render a help section with key-value pairs.
-fn help_section(ui: &mut Ui, items: &[(&str, &str)]) {
-    egui::Grid::new("help_grid")
-        .num_columns(2)
-        .spacing([8.0, 4.0])
-        .show(ui, |ui| {
-            for (key, description) in items {
-                ui.label(egui::RichText::new(*key).strong().color(egui::Color32::from_rgb(150, 200, 255)));
-                ui.label(*description);
-                ui.end_row();
-            }
-        });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::genome::Genome;
-    use crate::ui::panel_context::SceneModeRequest;
-
-    #[test]
-    fn test_panel_title() {
-        // Verify panel titles are generated correctly
-        assert_eq!(Panel::Viewport.display_name(), "Viewport");
-        assert_eq!(Panel::SceneManager.display_name(), "Scene Manager");
-        assert_eq!(Panel::CellInspector.display_name(), "Cell Inspector");
-    }
-
-    #[test]
-    fn test_viewport_is_special() {
-        assert!(Panel::Viewport.is_viewport());
-        assert!(Panel::Viewport.is_closeable()); // All panels are closeable by default
-        assert!(Panel::Viewport.allowed_in_windows());
-    }
-
-    #[test]
-    fn test_regular_panels_are_closeable() {
-        assert!(Panel::CellInspector.is_closeable());
-        assert!(Panel::SceneManager.is_closeable());
-        assert!(Panel::PerformanceMonitor.is_closeable());
-    }
-
-    #[test]
-    fn test_genome_loading_reads_from_cpu_storage() {
-        // Test that genome loading reads from gpu_scene.genomes array, not GPU buffers
-        // This verifies Requirements 5.1, 5.2, 5.3
-        
-        // Create a test genome using the default constructor
-        let mut test_genome = Genome::default();
-        test_genome.name = "TestGenome".to_string();
-        
-        // Create a mock GPU scene with the genome
-        let mut mock_gpu_scene = MockGpuScene::new();
-        mock_gpu_scene.genomes.push(test_genome.clone());
-        
-        // Verify the genome is accessible from CPU-side storage
-        assert_eq!(mock_gpu_scene.genomes.len(), 1);
-        assert_eq!(mock_gpu_scene.genomes[0].name, "TestGenome");
-        assert_eq!(mock_gpu_scene.genomes[0].modes.len(), 40); // Default genome has 40 modes
-        
-        // Verify genome loading would read from CPU storage, not GPU buffers
-        let genome_id = 0u32;
-        assert!(genome_id < mock_gpu_scene.genomes.len() as u32);
-        let loaded_genome = mock_gpu_scene.genomes[genome_id as usize].clone();
-        assert_eq!(loaded_genome.name, test_genome.name);
-        assert_eq!(loaded_genome.modes.len(), test_genome.modes.len());
-    }
-
-    #[test]
-    fn test_genome_loading_isolation() {
-        // Test that genome loading is the only legitimate CPU readback operation
-        // This verifies Requirements 5.4, 5.5, 5.6
-        
-        let mut mock_gpu_scene = MockGpuScene::new();
-        
-        // Add multiple genomes to test selection
-        let mut genome1 = Genome::default();
-        genome1.name = "Genome1".to_string();
-        let mut genome2 = Genome::default();
-        genome2.name = "Genome2".to_string();
-        mock_gpu_scene.genomes.push(genome1);
-        mock_gpu_scene.genomes.push(genome2);
-        
-        // Test that genome loading accesses CPU-side storage only
-        let genome_id = 1u32;
-        assert!(genome_id < mock_gpu_scene.genomes.len() as u32);
-        
-        // This operation should only read from CPU memory (genomes Vec)
-        let loaded_genome = &mock_gpu_scene.genomes[genome_id as usize];
-        assert_eq!(loaded_genome.name, "Genome2");
-        
-        // Verify no GPU buffer access is needed for genome loading
-        // (This is implicit in the design - genomes are stored in CPU Vec)
-        assert_eq!(mock_gpu_scene.genomes.len(), 2);
-    }
-
-    #[test]
-    fn test_scene_mode_request_for_genome_loading() {
-        // Test that genome loading triggers preview mode request
-        // This verifies the workflow: genome loading → editor → preview mode
-        
-        // Simulate the genome loading button click behavior
-        // (This would normally happen in the UI code)
-        let scene_request = SceneModeRequest::SwitchToPreview;
-        
-        // Verify the request is properly set
-        assert!(scene_request.is_requested());
-        assert_eq!(scene_request.target_mode(), Some(crate::ui::types::SimulationMode::Preview));
-        
-        // Verify this is a legitimate scene switch request
-        match scene_request {
-            SceneModeRequest::SwitchToPreview => {
-                // This is the expected behavior for genome loading
-                assert!(true);
-            }
-            _ => {
-                panic!("Expected SwitchToPreview request for genome loading");
-            }
-        }
-    }
-
-    #[test]
-    fn test_complete_genome_loading_workflow() {
-        // Test the complete genome loading workflow from GPU scene to editor
-        // This verifies Requirements 5.1, 5.2, 5.3, 5.4, 5.5, 5.6
-        
-        // Create a mock GPU scene with test genomes
-        let mut mock_gpu_scene = MockGpuScene::new();
-        
-        // Add test genomes with different names
-        let mut genome1 = Genome::default();
-        genome1.name = "TestGenome1".to_string();
-        let mut genome2 = Genome::default();
-        genome2.name = "TestGenome2".to_string();
-        
-        mock_gpu_scene.genomes.push(genome1.clone());
-        mock_gpu_scene.genomes.push(genome2.clone());
-        
-        // Simulate cell inspector data with genome_id
-        let genome_id = 1u32; // Select second genome
-        
-        // Verify genome is available for loading
-        assert!(genome_id < mock_gpu_scene.genomes.len() as u32);
-        
-        // Simulate the genome loading process (what happens in UI)
-        let genome_to_load = mock_gpu_scene.genomes[genome_id as usize].clone();
-        
-        // Verify the loaded genome is correct
-        assert_eq!(genome_to_load.name, "TestGenome2");
-        assert_eq!(genome_to_load.modes.len(), 40); // Default genome has 40 modes
-        
-        // Verify this is a CPU-only operation (no GPU buffer access)
-        // The genome comes from the CPU-side Vec, not GPU buffers
-        assert_eq!(genome_to_load.name, genome2.name);
-        
-        // Verify scene mode request would be triggered
-        let scene_request = SceneModeRequest::SwitchToPreview;
-        
-        assert!(scene_request.is_requested());
-        assert_eq!(scene_request.target_mode(), Some(crate::ui::types::SimulationMode::Preview));
-    }
-
-    #[test]
-    fn test_genome_loading_bounds_checking() {
-        // Test that genome loading properly checks bounds
-        // This verifies safe access to the genomes array
-        
-        let mut mock_gpu_scene = MockGpuScene::new();
-        
-        // Add only one genome
-        let mut genome = Genome::default();
-        genome.name = "OnlyGenome".to_string();
-        mock_gpu_scene.genomes.push(genome);
-        
-        // Test valid genome_id
-        let valid_genome_id = 0u32;
-        assert!(valid_genome_id < mock_gpu_scene.genomes.len() as u32);
-        
-        // Test invalid genome_id (would be caught by UI bounds check)
-        let invalid_genome_id = 5u32;
-        assert!(invalid_genome_id >= mock_gpu_scene.genomes.len() as u32);
-        
-        // The UI should only show the Load Genome button when genome_id is valid
-        // This test verifies the bounds checking logic
-        assert_eq!(mock_gpu_scene.genomes.len(), 1);
-    }
-
-    // Mock GPU scene for testing (minimal implementation)
-    struct MockGpuScene {
-        genomes: Vec<Genome>,
-    }
-
-    impl MockGpuScene {
-        fn new() -> Self {
-            Self {
-                genomes: Vec::new(),
-            }
-        }
-    }
-}
+                ("Right Click Mode", "Change mode c
