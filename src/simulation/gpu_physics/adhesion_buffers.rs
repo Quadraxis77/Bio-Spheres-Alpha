@@ -93,7 +93,7 @@ pub struct AdhesionBuffers {
     /// Whether buffers need sync to GPU
     needs_sync: bool,
 
-    /// Per-cell signal channels: 16 u32 per cell (channels 0-7 oculocyte, 8-15 regulation)
+    /// Per-cell signal channels: 16 u32 per cell (channels 0-7 sensory, 8-15 developmental/regulation)
     /// Each u32 encodes: bits 16+ = direction flag, bits 11-15 = hops, bits 0-10 = signal value
     /// Size: cell_capacity * 16 * 4 bytes
     pub signal_flags: wgpu::Buffer,

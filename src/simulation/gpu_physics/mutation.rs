@@ -1043,7 +1043,7 @@ impl MutationSystem {
                 weight: 0.5, min_delta: 0.0, max_delta: 0.0,
                 min_value: 0.0, max_value: 1.0, data_type: data_type::BOOLEAN,
             },
-            // flagellocyte_signal_channel [0, 7]: nudge by 1–3
+            // flagellocyte_signal_channel [0, 7]: nudge by 1–3 (sensory channels)
             MutationParamEntry {
                 buffer_id: buffer_id::MODE_PROPERTIES, element_offset: 10,
                 weight: 0.7, min_delta: 1.0, max_delta: 3.0,
@@ -1071,7 +1071,7 @@ impl MutationSystem {
                 weight: 0.7, min_delta: 1.0, max_delta: 3.0,
                 min_value: 1.0, max_value: 20.0, data_type: data_type::INTEGER,
             },
-            // oculocyte_signal_channel [0, 7]: nudge by 1–2 (oculocyte channels only)
+            // oculocyte_signal_channel [0, 7]: nudge by 1–2 (sensory channels)
             MutationParamEntry {
                 buffer_id: buffer_id::OCULOCYTE_PARAMS, element_offset: 3,
                 weight: 0.7, min_delta: 1.0, max_delta: 2.0,
@@ -1080,7 +1080,7 @@ impl MutationSystem {
 
             // --- Regulation emission ---
 
-            // regulation_emit_channel [8, 15]: nudge by 1–2 (regulation channels only)
+            // regulation_emit_channel [8, 15]: nudge by 1–2 (developmental/regulation channels)
             // Note: 0xFFFFFFFF = disabled, but mutation only nudges within [8, 15]
             MutationParamEntry {
                 buffer_id: buffer_id::REGULATION_PARAMS, element_offset: 0,
@@ -1299,7 +1299,8 @@ impl MutationSystem {
             // element_offset encodes sub-buffer (offset / 4) and component (offset % 4).
             //
             // Channel ranges use min_value=7.0 so nudging from -1 (disabled) jumps
-            // directly to 8+ (valid regulation channels), skipping the useless 0-7 range.
+            // directly to 8+ (developmental/regulation channels); 0-7 are sensory channels
+            // and are not used for division/apoptosis/mode-switch gating.
             // Individual channel weights are low (0.3) since SIGNAL_WIRE handles bootstrapping.
 
             // division_signal_channel [7, 15]: nudge by 1–3 (v0.x, element_offset 0)

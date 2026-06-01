@@ -29,6 +29,10 @@ pub const SENSE_MOSSROCK: u32 = 1 << 5; // bit 5
 
 /// Oculocyte cell type index
 const OCULOCYTE_TYPE: i32 = 7;
+/// Photocyte cell type index
+const PHOTOCYTE_TYPE: i32 = 3;
+/// Lipocyte cell type index
+const LIPOCYTE_TYPE: i32 = 4;
 /// Cognocyte cell type index
 const COGNOCYTE_TYPE: i32 = 14;
 /// Memorocyte cell type index
@@ -82,7 +86,7 @@ pub fn sense_oculocytes(
         }
 
         let sense_mask = mode.oculocyte_sense_type;
-        let channel = mode.oculocyte_signal_channel.clamp(0, 7) as usize; // Oculocyte channels 0-7 only
+        let channel = mode.oculocyte_signal_channel.clamp(0, 7) as usize; // Sensory channels 0-7
         let signal_value = mode.oculocyte_signal_value.clamp(-100.0, 100.0);
         let hops = mode.oculocyte_signal_hops.clamp(1, 20) as usize;
         let ray_length = mode.oculocyte_ray_length.clamp(1.0, 100.0);
@@ -507,9 +511,97 @@ pub fn process_memorocytes(
     emissions
 }
 
+/// Emit signals from Photocyte cells.
+///
+/// In the preview scene there is no light field, so photocytes emit unconditionally
+/// whenever their output channel is enabled. In the GPU scene the actual light check
+/// is handled by the photocyte_light shader; this path only applies to the CPU preview.
+pub fn process_photocytes(
+    state: &CanonicalState,
+    genome: &Genome,
+) -> Vec<SignalEmission> {
+    let mut emissions = Vec::new();
+
+    for cell_idx in 0..state.cell_count {
+        let mode_idx = state.mode_indices[cell_idx];
+        let mode = match genome.modes.get(mode_idx) {
+            Some(m) => m,
+            None => continue,
+        };
+
+        if mode.cell_type != PHOTOCYTE_TYPE {
+            continue;
+        }
+        if !mode.photocyte_emit_enabled {
+            continue;
+        }
+
+        let ch   = mode.photocyte_emit_channel.clamp(0, 15) as usize;
+        let hops = mode.photocyte_emit_hops.clamp(1, 20) as usize;
+
+        emissions.push(SignalEmission {
+            source_cell: cell_idx,
+            channel: ch,
+            value: mode.photocyte_emit_value,
+            hops,
+        });
+    }
+
+    emissions
+}
+
+/// Emit signals from Lipocyte cells based on their storage level vs threshold.
+///
+/// Lipocytes store up to 200 nutrients. The storage fraction (0.0–1.0) is compared
+/// against `lipocyte_emit_threshold`. emit_mode 0 = emit when above, 1 = emit when below.
+pub fn process_lipocytes(
+    state: &CanonicalState,
+    genome: &Genome,
+) -> Vec<SignalEmission> {
+    let mut emissions = Vec::new();
+
+    for cell_idx in 0..state.cell_count {
+        let mode_idx = state.mode_indices[cell_idx];
+        let mode = match genome.modes.get(mode_idx) {
+            Some(m) => m,
+            None => continue,
+        };
+
+        if mode.cell_type != LIPOCYTE_TYPE {
+            continue;
+        }
+        if !mode.lipocyte_emit_enabled {
+            continue;
+        }
+
+        let nutrients = state.nutrients.get(cell_idx).copied().unwrap_or(0.0);
+        let fraction  = (nutrients / 200.0).clamp(0.0, 1.0);
+        let threshold = mode.lipocyte_emit_threshold.clamp(0.0, 1.0);
+        let above     = fraction >= threshold;
+        let should_emit = if mode.lipocyte_emit_mode == 1 { !above } else { above };
+
+        if !should_emit {
+            continue;
+        }
+
+        let ch   = mode.lipocyte_emit_channel.clamp(0, 15) as usize;
+        let hops = mode.lipocyte_emit_hops.clamp(1, 20) as usize;
+
+        emissions.push(SignalEmission {
+            source_cell: cell_idx,
+            channel: ch,
+            value: mode.lipocyte_emit_value,
+            hops,
+        });
+    }
+
+    emissions
+}
+
 /// Run the complete signal system for one frame:
 /// 1. Clear all signals
 /// 2. Run oculocyte sensing (channels 0-7) + regulation signals (channels 8-15)
+///    + photocyte/lipocyte conditional emissions
 /// 3. Propagate sensor/regulation signals
 /// 4. Cognocytes compute on propagated signals and re-emit
 /// 5. Memorocytes update leaky-integrator state and emit
@@ -521,10 +613,14 @@ pub fn run_signal_system(
 ) {
     clear_all_signals(state);
 
-    // Phase 1: sensors and unconditional emitters populate input channels.
+    // Phase 1: sensors and unconditional/conditional emitters populate input channels.
     let mut emissions = sense_oculocytes(state, genome, boundary_radius);
     let regulation_emissions = emit_regulation_signals(state, genome);
     emissions.extend(regulation_emissions);
+    let photocyte_emissions = process_photocytes(state, genome);
+    emissions.extend(photocyte_emissions);
+    let lipocyte_emissions = process_lipocytes(state, genome);
+    emissions.extend(lipocyte_emissions);
 
     // Phase 2: propagate sensor/regulation signals so Cognocytes can read them.
     propagate_signals(state, genome, &emissions);

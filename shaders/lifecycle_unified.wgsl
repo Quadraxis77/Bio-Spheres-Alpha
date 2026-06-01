@@ -344,7 +344,15 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
     
-    let should_die = is_dead || apoptosis_triggered;
+    // Out-of-bounds kill: if a cell has escaped the boundary sphere by more than
+    // 20% of the world radius it is unrecoverable — kill it immediately.
+    // This catches runaway blobs that exploit spring force accumulation to
+    // accelerate through the boundary wall.
+    let boundary_radius = params.world_size * 0.5;
+    let cell_pos = positions_out[cell_idx].xyz;
+    let escaped = length(cell_pos) > boundary_radius * 1.2;
+
+    let should_die = is_dead || apoptosis_triggered || escaped;
     
     if (should_die && !was_dead) {
         // Newly dead cell - push slot to ring buffer for recycling

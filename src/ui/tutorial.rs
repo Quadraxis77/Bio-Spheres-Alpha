@@ -240,15 +240,14 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
     },
 
     TutorialStepData {
-        title: "Try It — Scrub Through Time",
-        body: "Drag the Time Slider to the right.\n\n\
-               Cells appear and divide. The default genome has 10 Phagocyte \
-               modes — each one divides and routes its children back to \
-               itself by default.\n\n\
-               The genome can start from any mode and any cell type — there \
-               is no required starting cell.\n\n\
-               Drag the slider back to zero. The simulation rewinds — the \
-               same genome always produces the same result.",
+        title: "The Time Slider",
+        body: "Drag the Time Slider to the right and watch the organism grow. \
+               Drag it back to zero — everything rewinds. The same genome \
+               always produces the same result.\n\n\
+               Try scrubbing back and forth a few times. Notice that changes \
+               you make to the genome take effect immediately when you \
+               re-scrub. The slider is your main tool for seeing what a \
+               change actually does.",
         gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::TimeSliderPanel,
@@ -279,19 +278,20 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
     },
 
     TutorialStepData {
-        title: "Experiment — Change the Division Speed",
-        body: "In the Parent Settings panel, try dragging Split Interval \
-               to a high value (5–10 seconds), then scrub the Time Slider. \
-               Notice how much slower the colony grows — each cell waits \
-               longer before dividing.\n\n\
-               Now try the minimum (1 second). The colony grows as fast as \
-               nutrients allow.\n\n\
-               Try the same with Split Nutrients — higher values mean cells need \
-               more food before they can split, so growth slows down even if \
-               the interval is short.\n\n\
-               Change Split Interval or Split Nutrients on any mode to continue.",
-        gate_hint: "Change Split Interval or Split Nutrients on any mode to continue.",
-        gate:       StepGate::AnySplitIntervalChanged,
+        title: "Division Timing — Try It",
+        body: "Pick any mode and move Split Interval or Split Nutrients, \
+               then re-scrub. Higher interval means that cell type waits \
+               longer between divisions. Higher split nutrients means it \
+               needs more food first. Either one slows growth for that mode, \
+               but the overall organism speed also depends on how many modes \
+               are active, what cell types they are, and how much food is \
+               available — so the effect you see will vary based on what \
+               you've already set up.\n\n\
+               Try pushing the sliders to their extremes and re-scrubbing \
+               each time. The goal is to feel how these two numbers relate \
+               to colony density, not to hit any specific target.",
+        gate_hint: "",
+        gate:       StepGate::None,
         target:     TutorialTarget::ParentSettingsPanel,
         target_pos: [0.5, 0.3],
     },
@@ -319,16 +319,18 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
     },
 
     TutorialStepData {
-        title: "Experiment — Give a Cell a Job",
-        body: "Select any mode in the Modes panel and change its Type to \
-               something other than Test.\n\n\
-               You can mix types across modes — a Phagocyte mode and a \
-               Flagellocyte mode together already give you a creature that \
-               feeds and swims. The genome doesn't care which mode you \
-               change — experiment freely.\n\n\
-               Change at least one mode's Type to continue.",
-        gate_hint: "Change at least one mode's Type to something other than Test.",
-        gate:       StepGate::AnyCellTypeChanged,
+        title: "Cell Types — Try It",
+        body: "Select any mode and change its Type. Re-scrub and observe \
+               what's different. The effect depends on what else is in \
+               the genome — a Flagellocyte in a body with adhesion will \
+               push the whole structure, but without adhesion it just \
+               propels itself away. A Phagocyte needs to be near food \
+               to show anything useful.\n\n\
+               Types interact with each other. What any one type does in \
+               isolation may look very different once other modes, adhesion, \
+               and routing are involved.",
+        gate_hint: "",
+        gate:       StepGate::None,
         target:     TutorialTarget::CellTypeDropdown,
         target_pos: [0.5, 0.5],
     },
@@ -343,9 +345,10 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                body. Without it, every division produces two cells that \
                immediately drift apart — you get a cloud of individuals, \
                not an organism.\n\n\
-               The Make Adhesion checkbox controls whether a cell creates a \
-               spring bond between its two children when it divides. It is \
-               off by default — siblings scatter freely unless you enable it.\n\n\
+               The Make Adhesion checkbox on each mode controls whether that \
+               mode creates a spring bond between its two children when it \
+               divides. When it's off, siblings scatter freely. When it's on, \
+               they stay connected.\n\n\
                The Adhesion Settings panel controls the physics of that \
                spring: stiffness, damping, break force, and twist constraints. \
                The defaults work well for most creatures.",
@@ -356,19 +359,75 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
     },
 
     TutorialStepData {
-        title: "Experiment — Bonds On and Off",
-        body: "Select any mode and tick Make Adhesion on. Scrub the Time Slider.\n\n\
-               The two children produced by each division are now bonded \
-               together — they form a connected body instead of drifting apart.\n\n\
-               Untick it again and the siblings scatter on every division.\n\n\
-               Adhesion is per-mode. You can have some modes bonded and others \
-               free. A mode with adhesion off produces free cells that drift \
-               away and start their own independent lifecycle — this is how \
-               reproduction works.\n\n\
-               Enable Make Adhesion on any mode to continue.",
-        gate_hint: "Enable Make Adhesion on any mode to continue.",
-        gate:       StepGate::AnyAdhesionEnabled,
+        title: "Adhesion — Try It",
+        body: "Toggle Make Adhesion on a mode and re-scrub each time. \
+               Turning it on will bond that mode's children together on \
+               each division — if the rest of the genome also has adhesion \
+               on, this contributes to a connected body. Turning it off \
+               means that mode's children scatter freely on every split, \
+               regardless of what other modes do.\n\n\
+               The overall structure you see is the combined result of \
+               every mode's adhesion setting. A single mode with adhesion \
+               off in an otherwise bonded genome will shed loose cells \
+               from that point in the lineage.",
+        gate_hint: "",
+        gate:       StepGate::None,
         target:     TutorialTarget::MakeAdhesionCheckbox,
+        target_pos: [0.5, 0.5],
+    },
+
+    TutorialStepData {
+        title: "Adhesion Zones — Blue Side and Green Side",
+        body: "One thing to understand before zones make sense: when a cell \
+               divides, the parent ceases to exist and is replaced by two \
+               clone children. Child A is a clone that takes the parent's \
+               place — it spawns at the parent's position and inherits the \
+               parent's bonds on its side. Child B is cloned and pushed out \
+               in the split direction.\n\n\
+               If you route Child A back to M1 and Child B to M2, each \
+               division replaces the M1 cell in place with a new M1 clone \
+               and pushes a fresh M2 outward. The M1 position in the body \
+               stays stable while M2 cells accumulate around it.\n\n\
+               When a cell divides, the split is visualised as a ring around \
+               the cell. The ring is half blue and half green:\n\n\
+               Blue side = Child A (the in-place clone).\n\
+               Green side = Child B (the outward clone).\n\n\
+               Every existing bond the parent had is classified by which side \
+               of that ring it sits on:\n\n\
+               Zone B (blue side) — inherited by Child A.\n\
+               Zone A (green side) — inherited by Child B.\n\
+               Zone C (equator) — inherited by both.\n\n\
+               Child A naturally inherits the bonds on the blue side — the \
+               ones pointing away from where Child B is being pushed.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::ChildRotationPanel,
+        target_pos: [0.5, 0.5],
+    },
+
+    TutorialStepData {
+        title: "Keep Adhesion and What It Actually Means",
+        body: "Each child has a Keep Adhesion checkbox. It controls whether \
+               that child participates in zone inheritance at all.\n\n\
+               Keep Adhesion ON — the child inherits the bonds in its zone \
+               (blue side for Child A, green side for Child B).\n\n\
+               Keep Adhesion OFF — the child is born completely free of all \
+               inherited bonds, regardless of what bonds the parent had.\n\n\
+               Crucially: Keep Adhesion only governs inherited bonds. It does \
+               nothing to the sibling bond created by Make Adhesion — that bond \
+               is always formed between the two new children when Make Adhesion \
+               is on, independently of Keep Adhesion.\n\n\
+               A common pattern: a stem cell (M1) has Make Adhesion ON and \
+               routes Child B to a terminal cell (M2). M1 keeps dividing, \
+               growing a chain. M2 has Make Adhesion OFF. When M2 divides, \
+               its single bond to the chain sits entirely on one side of its \
+               split ring, so one child inherits it and the other is born \
+               loose. To keep M2 cells from detaching their offspring, either \
+               enable Make Adhesion on M2 (to bond siblings together) or set \
+               Max Splits to 0 so M2 never divides.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::ChildAKeepAdhesion,
         target_pos: [0.5, 0.5],
     },
 
@@ -378,14 +437,21 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
 
     TutorialStepData {
         title: "Chapter 5 — Body Shape",
-        body: "So far every cell divides into two copies of itself. To build \
-               a body with different cell types in different positions, you \
-               need to route children to different modes.\n\n\
+        body: "Unless you've already changed it, each mode routes both \
+               children back to itself — every division produces two \
+               identical cells. To build a body with different cell types \
+               in different positions, route children to different modes.\n\n\
                The Child Rotation panel has two 3D balls: Child A and Child B. \
                Below each ball:\n\n\
                Mode — which blueprint this child uses after the split. \
                Change Child B's Mode to M2 and every division produces one \
                M1 cell and one M2 cell instead of two M1 cells.\n\n\
+               Remember: Child A is a clone that replaces the parent in place — \
+               it spawns where the parent was and inherits its bonds on that \
+               side. Child B is cloned and pushed outward. So routing Child A \
+               back to M1 means a new M1 clone takes the parent's spot each \
+               division. Routing Child B to M2 means a fresh M2 is pushed \
+               outward each time.\n\n\
                Keep Adhesion — whether this child stays bonded to the parent. \
                Untick it and that child floats away freely.\n\n\
                The balls themselves control orientation — drag a ball to set \
@@ -398,21 +464,22 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
     },
 
     TutorialStepData {
-        title: "Experiment — Route Children to Different Modes",
-        body: "Select M1 and look at the Child Rotation panel.\n\n\
-               Change Child B's Mode dropdown to M2 (or any other mode). \
-               Scrub the Time Slider — every M1 division now produces one \
-               M1 and one M2. If M2 has a different cell type, you'll see \
-               two distinct cell types in the body.\n\n\
-               Now try dragging the Child B ball to a different orientation. \
-               The M2 cells will be born facing a different direction — \
-               if M2 is a Flagellocyte, the thrust direction changes.\n\n\
-               Try the Circle Sliders panel (the pitch/yaw dials). These \
-               rotate the split axis itself — a small yaw angle makes the \
-               organism curve as it grows, producing spirals or arcs.\n\n\
-               Route Child B to a different mode than Child A to continue.",
-        gate_hint: "Set Child B's Mode to a different mode than Child A on any mode.",
-        gate:       StepGate::AnyChildBDifferentMode,
+        title: "Body Shape — Try It",
+        body: "Pick a mode and change Child B's Mode dropdown to something \
+               different, then re-scrub. Each division of that mode will \
+               now produce two different cell types. What you see depends \
+               on the types involved, whether adhesion is on, and how far \
+               into the simulation you scrub.\n\n\
+               Try dragging the Child B orientation ball and re-scrubbing. \
+               The born direction of Child B shifts — this affects physical \
+               position in the body, not just facing angle. The same change \
+               looks very different depending on whether other modes in the \
+               lineage also have curved or offset splits.\n\n\
+               The Circle Sliders panel rotates the split axis. A small \
+               offset curves growth; a large one branches it. The cumulative \
+               effect builds up over many generations.",
+        gate_hint: "",
+        gate:       StepGate::None,
         target:     TutorialTarget::ChildRotationPanel,
         target_pos: [0.75, 0.75],
     },
@@ -423,9 +490,9 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
 
     TutorialStepData {
         title: "Chapter 6 — Lifecycle and Finite Growth",
-        body: "By default, cells divide forever. Real organisms don't — they \
-               grow to a fixed size and stop, or they reproduce by shedding \
-               offspring.\n\n\
+        body: "Unless Max Splits has been set, cells divide indefinitely. \
+               Limiting splits lets you define a fixed growth budget — the \
+               body reaches a size and stops.\n\n\
                Max Splits in the Parent Settings panel limits how many times \
                a cell can divide. Set it to 2 and the cell divides twice, \
                then stops permanently. Set it to 0 and the cell never divides \
@@ -433,11 +500,27 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                After Splits (further down in Parent Settings) lets you define \
                a second set of child routes that activate once the limit is \
                reached. The cell gets one final division using these alternate \
-               routes. This is how you build reproduction: the normal splits \
+               routes. This is one way to build reproduction: the normal splits \
                grow the body, and the after-splits division sheds a free egg \
                (Keep Adhesion off) that starts a new lifecycle.\n\n\
-               Setting an after-splits child to a self-referential mode \
-               is the same as leaving it at None.",
+               But After Splits is not the only way to release offspring. \
+               You have several options depending on your design:\n\n\
+               Disable Make Adhesion on a mode — every division from that \
+               mode scatters both children freely, so the mode continuously \
+               releases offspring throughout its lifetime rather than only at \
+               the end.\n\n\
+               Disable Keep Adhesion on Child B — Child B will not inherit \
+               any of the parent's existing bonds. However, this only works \
+               as a detach if Make Adhesion is also off. If Make Adhesion is \
+               on, a fresh sibling bond is always created between Child A and \
+               Child B at the moment of division, regardless of Keep Adhesion \
+               — so Child B ends up tethered to Child A anyway. Keep Adhesion \
+               controls inherited bonds only; Make Adhesion controls the new \
+               sibling bond. To truly shed Child B free you need Make Adhesion \
+               off, or Keep Adhesion off with Make Adhesion also off.\n\n\
+               After Splits is best when you want the body to grow first and \
+               reproduce only once at the end. Make/Keep Adhesion off is best \
+               when you want continuous or early shedding.",
         gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::ParentSettingsPanel,
@@ -445,23 +528,19 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
     },
 
     TutorialStepData {
-        title: "Experiment — Limit a Cell's Growth",
-        body: "Select any mode and set Max Splits to a small number — try 2 \
-               or 3. Scrub the Time Slider.\n\n\
-               The cells of that type now stop dividing after hitting the \
-               limit. If it's a structural cell, the body stops growing at \
-               a fixed size. If it's a terminal cell (sensor, swimmer), \
-               set Max Splits to 0 so it never divides at all.\n\n\
-               Now scroll down in Parent Settings to the After Splits section. \
-               Try setting the after-splits Child A to a different mode with \
-               Keep Adhesion off — that mode will be shed as a free egg when \
-               the limit is reached.\n\n\
-               Scrub the Time Slider and watch the egg detach and drift away. \
-               If the egg's mode has adhesion on and the right cell type, it \
-               will grow its own body independently.\n\n\
-               Set Max Splits to any finite value (≥ 0) on any mode to continue.",
-        gate_hint: "Set Max Splits to a finite value on any mode to continue.",
-        gate:       StepGate::AnyFiniteMaxSplits,
+        title: "Lifecycle — Try It",
+        body: "Set Max Splits on any mode and re-scrub. That mode stops \
+               dividing once the count is reached. The exact effect on \
+               the organism depends on which modes are still dividing — \
+               limiting one mode while others continue can stop one part \
+               of the body growing while the rest carries on.\n\n\
+               Scroll to After Splits and change a child route there. \
+               That route only fires on the final division of that mode. \
+               Whether the child detaches depends on its mode's adhesion \
+               settings and whether Keep Adhesion is on — the after-splits \
+               route follows the same inheritance rules as any other split.",
+        gate_hint: "",
+        gate:       StepGate::None,
         target:     TutorialTarget::ParentSettingsPanel,
         target_pos: [0.5, 0.3],
     },
@@ -471,22 +550,23 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
     // ════════════════════════════════════════════════════════════════════════
 
     TutorialStepData {
-        title: "Chapter 7 — The Signal System",
-        body: "Signals are chemical messages that travel through the adhesion \
-               network from cell to cell. They let one part of the body \
-               influence another part's behaviour without any direct wiring.\n\n\
-               There are 16 signal channels (0–15). Channels 0–7 are \
-               oculocyte channels — only Oculocyte cells can emit on them, \
-               but any cell can read them. Channels 8–15 are regulation \
-               channels — any cell type can emit and read.\n\n\
-               An Oculocyte fires a ray and emits a signal on its channel \
-               when it detects something (food, other cells, light, barriers). \
-               That signal propagates through the adhesion bonds to nearby \
-               cells. A Flagellocyte reading that channel can speed up or \
-               slow down based on the signal value.\n\n\
-               Division and mode-switching can also be gated on signals: \
-               a cell only divides when it receives the right chemical cue. \
-               This is how complex developmental programs work.",
+        title: "Chapter 7 — Signals (Optional)",
+        body: "The signal system is the most complex part of Bio-Spheres. \
+               You do not need it to build a functional organism — many \
+               strong creatures use no signals at all. Skip this chapter \
+               if you want to go live first and come back to it later.\n\n\
+               Signals are messages that travel through adhesion bonds from \
+               cell to cell. They let one part of the body influence another \
+               part's behaviour without any direct wiring — a sensor at the \
+               front can change the speed of a swimmer at the back.\n\n\
+               There are 16 channels (0–15). Channels 0–7 are sensory \
+               channels — used for detection signals from oculocytes, \
+               photocytes, lipocytes, and similar. Locomotion cells \
+               (flagellocyte, ciliocyte, myocyte) read from these. \
+               Channels 8–15 are developmental/regulation channels — any \
+               cell type can emit and read them, and they can gate \
+               division, apoptosis, and mode switching. A signal is just \
+               a number; what it does depends on what is listening.",
         gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::ParentSettingsPanel,
@@ -494,23 +574,60 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
     },
 
     TutorialStepData {
-        title: "Experiment — Add a Sensor",
-        body: "Try adding an Oculocyte to your genome.\n\n\
-               Select any mode and set its Type to Oculocyte. In the \
-               Oculocyte Settings section that appears, set Sense Type to \
-               Food and Signal Channel to 0. Set Signal Value to 10 and \
-               Signal Hops to 5.\n\n\
-               Now select a Flagellocyte mode (or set another mode to \
-               Flagellocyte). In its settings, enable Use Signal, set \
-               Signal Channel to 0, Speed A to 0.1 (slow), and Speed B \
-               to 1.0 (fast). Speed B activates when the signal is above \
-               the threshold.\n\n\
-               Scrub the Time Slider. When the Oculocyte detects food, it \
-               emits a signal that travels through the adhesion bonds to the \
-               Flagellocyte, which speeds up. The creature accelerates toward \
-               food automatically.\n\n\
-               This step is optional — click Next to skip if you want to \
-               explore signals on your own later.",
+        title: "Emitting a Signal",
+        body: "An Oculocyte fires a ray in the direction it faces and emits \
+               a signal when it detects something — food, other cells, \
+               light, or a wall. Set its Sense Type and Signal Channel to \
+               control what triggers it and which channel it broadcasts on.\n\n\
+               Signal Value sets how strong the emission is. Signal Hops \
+               sets how many adhesion bonds the signal can travel before \
+               it fades out. A signal with 3 hops can reach any cell \
+               within 3 bond-steps of the emitter.\n\n\
+               Other cell types can also emit on sensory channels — \
+               Lipocytes and Photocytes can emit on 0–7 based on storage \
+               or light level. Any mode can emit unconditionally on \
+               developmental channels 8–15. Cognocytes and memorocytes \
+               can read from and write to any channel.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::CellTypeDropdown,
+        target_pos: [0.5, 0.5],
+    },
+
+    TutorialStepData {
+        title: "Seeing Signals Propagate",
+        body: "When signals are active, the adhesion bonds between cells \
+               light up as the signal passes through them. This is the \
+               easiest way to confirm a signal is actually reaching its \
+               destination.\n\n\
+               If your organism is tightly packed and the bonds are hard \
+               to see, use the Adhesion Expansion button in the viewport \
+               toolbar. It stretches all bonds to their maximum length so \
+               the network is visible and spread out. The signal lighting \
+               still works in this mode.\n\n\
+               If a bond is not lighting up, the signal is not reaching \
+               that cell — either the hops ran out, the channel numbers \
+               don't match, or there is no adhesion path between the \
+               emitter and receiver.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::AdhesionSettingsPanel,
+        target_pos: [0.5, 0.5],
+    },
+
+    TutorialStepData {
+        title: "Receiving and Reacting",
+        body: "Any cell that reads a signal channel compares the incoming \
+               value against a threshold and changes its behaviour \
+               accordingly. A Flagellocyte can switch between two speeds \
+               depending on whether the signal is above or below the \
+               threshold. Division and mode-switching can be gated the \
+               same way — a cell only divides when it receives the cue.\n\n\
+               The receiver and emitter must share the same channel number \
+               and be connected by an unbroken chain of adhesion bonds \
+               within the hops limit. If any of those three conditions \
+               isn't met, the receiver sees nothing regardless of what \
+               the emitter does.",
         gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::CellTypeDropdown,

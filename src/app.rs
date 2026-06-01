@@ -1691,16 +1691,29 @@ impl App {
                                 .unwrap_or("Unknown"))
                             .unwrap_or("Unknown");
                         let cell_type_idx = mode.map(|m| m.cell_type).unwrap_or(0);
-                        let is_oculocyte = cell_type_idx == 7;
+                        let is_oculocyte  = cell_type_idx == 7;
+                        let is_photocyte  = cell_type_idx == 3;
+                        let is_lipocyte_s = cell_type_idx == 4; // lipocyte as signal sender
+                        let can_send_test_signal = is_oculocyte
+                            || (is_photocyte  && mode.map(|m| m.photocyte_emit_enabled).unwrap_or(false))
+                            || (is_lipocyte_s && mode.map(|m| m.lipocyte_emit_enabled).unwrap_or(false));
                         let _mass = display_state.masses.get(cell_idx).copied().unwrap_or(0.0);
                         let nutrients = display_state.nutrients.get(cell_idx).copied().unwrap_or(0.0);
-                        let signal_channel = mode
-                            .map(|m| m.oculocyte_signal_channel.clamp(0, 7) as usize)
-                            .unwrap_or(0);
-                        let signal_value = mode.map(|m| m.oculocyte_signal_value).unwrap_or(10.0);
-                        let signal_hops = mode
-                            .map(|m| m.oculocyte_signal_hops.clamp(1, 20) as usize)
-                            .unwrap_or(3);
+                        let signal_channel = mode.map(|m| {
+                            if is_photocyte  { m.photocyte_emit_channel.clamp(0, 15) as usize }
+                            else if is_lipocyte_s { m.lipocyte_emit_channel.clamp(0, 15) as usize }
+                            else { m.oculocyte_signal_channel.clamp(0, 7) as usize }
+                        }).unwrap_or(0);
+                        let signal_value = mode.map(|m| {
+                            if is_photocyte  { m.photocyte_emit_value }
+                            else if is_lipocyte_s { m.lipocyte_emit_value }
+                            else { m.oculocyte_signal_value }
+                        }).unwrap_or(10.0);
+                        let signal_hops = mode.map(|m| {
+                            if is_photocyte  { m.photocyte_emit_hops.clamp(1, 20) as usize }
+                            else if is_lipocyte_s { m.lipocyte_emit_hops.clamp(1, 20) as usize }
+                            else { m.oculocyte_signal_hops.clamp(1, 20) as usize }
+                        }).unwrap_or(3);
 
                         // Compute metabolism rates (nutrients/sec)
                         // Matches preview_physics.rs logic
@@ -1955,7 +1968,7 @@ impl App {
                                         });
                                     ui.separator();
 
-                                    if is_oculocyte {
+                                    if can_send_test_signal {
                                         // Check if this cell already has an active test signal
                                         let has_active_signal = self.test_signal_emissions.iter()
                                             .any(|emission| emission.source_cell == cell_idx);

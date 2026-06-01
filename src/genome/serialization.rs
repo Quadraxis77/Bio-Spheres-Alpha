@@ -158,6 +158,30 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buoyancy_force: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub photocyte_emit_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub photocyte_emit_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub photocyte_emit_hops: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub photocyte_emit_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub photocyte_emit_mode: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub photocyte_emit_value: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lipocyte_emit_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lipocyte_emit_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lipocyte_emit_hops: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lipocyte_emit_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lipocyte_emit_mode: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lipocyte_emit_value: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub oculocyte_sense_type: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oculocyte_signal_channel: Option<i32>,
@@ -501,6 +525,18 @@ fn mode_to_serializable(
         flagellocyte_speed_b: diff_f32(mode.flagellocyte_speed_b, default.flagellocyte_speed_b),
         flagellocyte_threshold_c: diff_f32(mode.flagellocyte_threshold_c, default.flagellocyte_threshold_c),
         buoyancy_force: diff_f32(mode.buoyancy_force, default.buoyancy_force),
+        photocyte_emit_enabled: diff_bool(mode.photocyte_emit_enabled, default.photocyte_emit_enabled),
+        photocyte_emit_channel: diff_i32(mode.photocyte_emit_channel, default.photocyte_emit_channel),
+        photocyte_emit_hops: diff_i32(mode.photocyte_emit_hops, default.photocyte_emit_hops),
+        photocyte_emit_threshold: diff_f32(mode.photocyte_emit_threshold, default.photocyte_emit_threshold),
+        photocyte_emit_mode: diff_i32(mode.photocyte_emit_mode, default.photocyte_emit_mode),
+        photocyte_emit_value: diff_f32(mode.photocyte_emit_value, default.photocyte_emit_value),
+        lipocyte_emit_enabled: diff_bool(mode.lipocyte_emit_enabled, default.lipocyte_emit_enabled),
+        lipocyte_emit_channel: diff_i32(mode.lipocyte_emit_channel, default.lipocyte_emit_channel),
+        lipocyte_emit_hops: diff_i32(mode.lipocyte_emit_hops, default.lipocyte_emit_hops),
+        lipocyte_emit_threshold: diff_f32(mode.lipocyte_emit_threshold, default.lipocyte_emit_threshold),
+        lipocyte_emit_mode: diff_i32(mode.lipocyte_emit_mode, default.lipocyte_emit_mode),
+        lipocyte_emit_value: diff_f32(mode.lipocyte_emit_value, default.lipocyte_emit_value),
         oculocyte_sense_type: diff_u32(mode.oculocyte_sense_type, default.oculocyte_sense_type),
         oculocyte_signal_channel: diff_i32(mode.oculocyte_signal_channel, default.oculocyte_signal_channel),
         oculocyte_signal_value: diff_f32(mode.oculocyte_signal_value, default.oculocyte_signal_value),
@@ -619,6 +655,18 @@ impl SerializableModeSettings {
             || self.flagellocyte_speed_b.is_some()
             || self.flagellocyte_threshold_c.is_some()
             || self.buoyancy_force.is_some()
+            || self.photocyte_emit_enabled.is_some()
+            || self.photocyte_emit_channel.is_some()
+            || self.photocyte_emit_hops.is_some()
+            || self.photocyte_emit_threshold.is_some()
+            || self.photocyte_emit_mode.is_some()
+            || self.photocyte_emit_value.is_some()
+            || self.lipocyte_emit_enabled.is_some()
+            || self.lipocyte_emit_channel.is_some()
+            || self.lipocyte_emit_hops.is_some()
+            || self.lipocyte_emit_threshold.is_some()
+            || self.lipocyte_emit_mode.is_some()
+            || self.lipocyte_emit_value.is_some()
             || self.oculocyte_sense_type.is_some()
             || self.oculocyte_signal_channel.is_some()
             || self.oculocyte_signal_value.is_some()
@@ -1016,6 +1064,18 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.gametocyte_merge_range {
         mode.gametocyte_merge_range = v;
     }
+    if let Some(v) = ser.photocyte_emit_enabled    { mode.photocyte_emit_enabled = v; }
+    if let Some(v) = ser.photocyte_emit_channel   { mode.photocyte_emit_channel = v; }
+    if let Some(v) = ser.photocyte_emit_hops       { mode.photocyte_emit_hops = v; }
+    if let Some(v) = ser.photocyte_emit_threshold  { mode.photocyte_emit_threshold = v; }
+    if let Some(v) = ser.photocyte_emit_mode       { mode.photocyte_emit_mode = v; }
+    if let Some(v) = ser.photocyte_emit_value      { mode.photocyte_emit_value = v; }
+    if let Some(v) = ser.lipocyte_emit_enabled      { mode.lipocyte_emit_enabled = v; }
+    if let Some(v) = ser.lipocyte_emit_channel     { mode.lipocyte_emit_channel = v; }
+    if let Some(v) = ser.lipocyte_emit_hops        { mode.lipocyte_emit_hops = v; }
+    if let Some(v) = ser.lipocyte_emit_threshold   { mode.lipocyte_emit_threshold = v; }
+    if let Some(v) = ser.lipocyte_emit_mode        { mode.lipocyte_emit_mode = v; }
+    if let Some(v) = ser.lipocyte_emit_value       { mode.lipocyte_emit_value = v; }
     if let Some(v) = ser.vascular_signal_transport { mode.vascular_signal_transport = v; }
     if let Some(v) = ser.vascular_signal_capacity { mode.vascular_signal_capacity = v; }
     if let Some(v) = ser.memorocyte_rate           { mode.memorocyte_rate = v; }
@@ -1041,4 +1101,139 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
         apply_child_settings(&mut mode.child_a, child_a);
     }
     if let Some(ref child_b) = ser.child_b {
-        apply_child_setti
+        apply_child_settings(&mut mode.child_b, child_b);
+    }
+    if let Some(ref adhesion) = ser.adhesion_settings {
+        apply_adhesion_settings(&mut mode.adhesion_settings, adhesion);
+    }
+}
+
+fn apply_child_settings(child: &mut ChildSettings, ser: &SerializableChildSettings) {
+    if let Some(mode_number) = ser.mode_number {
+        child.mode_number = mode_number;
+    }
+    if let Some(orientation) = ser.orientation {
+        child.orientation = array_to_quat(orientation);
+    }
+    if let Some(keep_adhesion) = ser.keep_adhesion {
+        child.keep_adhesion = keep_adhesion;
+    }
+    if let Some(enable) = ser.enable_angle_snapping {
+        child.enable_angle_snapping = enable;
+    }
+}
+
+fn apply_adhesion_settings(adhesion: &mut AdhesionSettings, ser: &SerializableAdhesionSettings) {
+    if let Some(can_break) = ser.can_break {
+        adhesion.can_break = can_break;
+    }
+    if let Some(break_force) = ser.break_force {
+        adhesion.break_force = break_force;
+    }
+    if let Some(rest_length) = ser.rest_length {
+        adhesion.rest_length = rest_length;
+    }
+    if let Some(stiffness) = ser.linear_spring_stiffness {
+        adhesion.linear_spring_stiffness = stiffness;
+    }
+    if let Some(damping) = ser.linear_spring_damping {
+        adhesion.linear_spring_damping = damping;
+    }
+    if let Some(stiffness) = ser.orientation_spring_stiffness {
+        adhesion.orientation_spring_stiffness = stiffness;
+    }
+    if let Some(damping) = ser.orientation_spring_damping {
+        adhesion.orientation_spring_damping = damping;
+    }
+    if let Some(max_angular) = ser.max_angular_deviation {
+        adhesion.max_angular_deviation = max_angular;
+    }
+    if let Some(stiffness) = ser.twist_constraint_stiffness {
+        adhesion.twist_constraint_stiffness = stiffness;
+    }
+    if let Some(damping) = ser.twist_constraint_damping {
+        adhesion.twist_constraint_damping = damping;
+    }
+    if let Some(enable) = ser.enable_twist_constraint {
+        adhesion.enable_twist_constraint = enable;
+    }
+}
+
+
+// ============================================================================
+// Helper functions for diffing values
+// ============================================================================
+
+fn diff_option(value: &String, default: &String) -> Option<String> {
+    if value != default {
+        Some(value.clone())
+    } else {
+        None
+    }
+}
+
+fn diff_f32(value: f32, default: f32) -> Option<f32> {
+    if (value - default).abs() > 0.0001 {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn diff_i32(value: i32, default: i32) -> Option<i32> {
+    if value != default {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn diff_u32(value: u32, default: u32) -> Option<u32> {
+    if value != default {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn diff_bool(value: bool, default: bool) -> Option<bool> {
+    if value != default {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn diff_vec2(value: &Vec2, default: &Vec2) -> Option<[f32; 2]> {
+    if (*value - *default).length() > 0.0001 {
+        Some(value.to_array())
+    } else {
+        None
+    }
+}
+
+fn diff_vec3(value: &Vec3, default: &Vec3) -> Option<[f32; 3]> {
+    if (*value - *default).length() > 0.0001 {
+        Some(value.to_array())
+    } else {
+        None
+    }
+}
+
+fn diff_quat(value: &Quat, default: &Quat) -> Option<[f32; 4]> {
+    // Compare quaternions - they're equal if dot product is ~1 or ~-1
+    let dot = value.dot(*default).abs();
+    if dot < 0.9999 {
+        Some(quat_to_array(*value))
+    } else {
+        None
+    }
+}
+
+fn quat_to_array(q: Quat) -> [f32; 4] {
+    [q.x, q.y, q.z, q.w]
+}
+
+fn array_to_quat(arr: [f32; 4]) -> Quat {
+    Quat::from_xyzw(arr[0], arr[1], arr[2], arr[3])
+}

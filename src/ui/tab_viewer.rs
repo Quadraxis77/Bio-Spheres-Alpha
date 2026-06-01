@@ -2632,6 +2632,18 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     embryocyte_signal_channel: 0,
                     embryocyte_signal_value: 1.0,
                     buoyancy_force: 0.5,
+                    photocyte_emit_enabled: false,
+                    photocyte_emit_channel: 0,
+                    photocyte_emit_hops: 5,
+                    photocyte_emit_threshold: 0.5,
+                    photocyte_emit_mode: 0,
+                    photocyte_emit_value: 10.0,
+                    lipocyte_emit_enabled: false,
+                    lipocyte_emit_channel: 0,
+                    lipocyte_emit_hops: 5,
+                    lipocyte_emit_threshold: 0.8,
+                    lipocyte_emit_mode: 1,
+                    lipocyte_emit_value: 10.0,
                     oculocyte_sense_type: 1, // bit0 = Cell
                     oculocyte_signal_channel: 0,
                     oculocyte_signal_value: 10.0,
@@ -3295,6 +3307,124 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::DragValue::new(&mut mode.nutrient_gain_rate).speed(0.01).range(0.0..=20.0).suffix("/s"));
                     });
                 });
+            } else if mode.cell_type == 3 { // Photocyte (cell_type == 3)
+                group_container(ui, "Photocyte Functions", egui::Color32::from_rgb(255, 200, 60), |ui| {
+                    ui.label("Converts light into nutrients. Can emit a signal when light level crosses a threshold.");
+                    ui.label("Use the right-click menu to send a test signal in the preview.");
+                    ui.separator();
+
+                    ui.checkbox(&mut mode.photocyte_emit_enabled, "Emit Signal")
+                        .on_hover_text("When enabled, emits a signal on the configured channel when the light condition is met");
+
+                    if mode.photocyte_emit_enabled {
+                        ui.label("Signal Channel:")
+                            .on_hover_text("Channel (0-15) to emit on when the light threshold condition is met");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.photocyte_emit_channel, 0..=15).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.photocyte_emit_channel).speed(0.1).range(0..=15));
+                        });
+
+                        ui.label("Signal Value:")
+                            .on_hover_text("Value emitted on the channel when the condition is met");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.photocyte_emit_value, -100.0..=100.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.photocyte_emit_value).speed(0.1).range(-100.0..=100.0));
+                        });
+
+                        ui.label("Signal Hops:")
+                            .on_hover_text("How many adhesion hops the signal propagates");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.photocyte_emit_hops, 1..=20).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.photocyte_emit_hops).speed(0.1).range(1..=20));
+                        });
+
+                        ui.separator();
+                        let mode_names = ["Above", "Below"];
+                        egui::ComboBox::from_id_salt("photocyte_emit_mode")
+                            .selected_text(mode_names[mode.photocyte_emit_mode.clamp(0, 1) as usize])
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut mode.photocyte_emit_mode, 0, "Above");
+                                ui.selectable_value(&mut mode.photocyte_emit_mode, 1, "Below");
+                            });
+                        ui.label("Threshold:")
+                            .on_hover_text("Light level (0.0-1.0) that triggers emission");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.photocyte_emit_threshold, 0.0..=1.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.photocyte_emit_threshold).speed(0.01).range(0.0..=1.0));
+                        });
+                    }
+                });
+            } else if mode.cell_type == 4 { // Lipocyte (cell_type == 4)
+                group_container(ui, "Lipocyte Functions", egui::Color32::from_rgb(220, 180, 100), |ui| {
+                    ui.label("Stores surplus nutrients as fat reserves. Can emit a signal based on storage level.");
+                    ui.label("Use the right-click menu to send a test signal in the preview.");
+                    ui.separator();
+
+                    ui.checkbox(&mut mode.lipocyte_emit_enabled, "Emit Signal")
+                        .on_hover_text("When enabled, emits a signal on the configured channel when the storage condition is met");
+
+                    if mode.lipocyte_emit_enabled {
+                        ui.label("Signal Channel:")
+                            .on_hover_text("Channel (0-15) to emit on when the storage threshold condition is met");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.lipocyte_emit_channel, 0..=15).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.lipocyte_emit_channel).speed(0.1).range(0..=15));
+                        });
+
+                        ui.label("Signal Value:")
+                            .on_hover_text("Value emitted on the channel when the condition is met");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.lipocyte_emit_value, -100.0..=100.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.lipocyte_emit_value).speed(0.1).range(-100.0..=100.0));
+                        });
+
+                        ui.label("Signal Hops:")
+                            .on_hover_text("How many adhesion hops the signal propagates");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.lipocyte_emit_hops, 1..=20).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.lipocyte_emit_hops).speed(0.1).range(1..=20));
+                        });
+
+                        ui.separator();
+                        let mode_names = ["Above", "Below"];
+                        egui::ComboBox::from_id_salt("lipocyte_emit_mode")
+                            .selected_text(mode_names[mode.lipocyte_emit_mode.clamp(0, 1) as usize])
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut mode.lipocyte_emit_mode, 0, "Above");
+                                ui.selectable_value(&mut mode.lipocyte_emit_mode, 1, "Below");
+                            });
+                        ui.label("Threshold:")
+                            .on_hover_text("Storage fraction (0.0-1.0) that triggers emission. 1.0 = completely full");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.lipocyte_emit_threshold, 0.0..=1.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.lipocyte_emit_threshold).speed(0.01).range(0.0..=1.0));
+                        });
+                    }
+                });
             } else if mode.cell_type == 6 { // Glueocyte (cell_type == 6)
                 group_container(ui, "Glueocyte Functions", egui::Color32::from_rgb(140, 200, 140), |ui| {
                     ui.checkbox(&mut mode.glueocyte_cell_adhesion, "Cell Adhesion")
@@ -3318,7 +3448,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             && mode.glueocyte_cell_adhesion_signal_channel <= 7;
                         ui.horizontal(|ui| {
                             ui.label("Signal Gate:")
-                                .on_hover_text("Always On: bonds whenever touching a surface. Signal: only bonds when the chosen oculocyte channel (0–7) is above the threshold. Applies to all adhesion types");
+                                .on_hover_text("Always On: bonds whenever touching a surface. Signal: only bonds when the chosen sensory channel (0–7) is above the threshold. Applies to all adhesion types");
                             if ui.selectable_label(!has_gate, "Always On").clicked() {
                                 mode.glueocyte_cell_adhesion_signal_channel = -1;
                             }
@@ -3359,7 +3489,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     // Mode toggle
                     ui.horizontal(|ui| {
                         ui.label("Speed Mode:")
-                            .on_hover_text("Fixed: constant thrust force. Signal: switches between two thrust levels based on an oculocyte channel reading (0–7)");
+                            .on_hover_text("Fixed: constant thrust force. Signal: switches between two thrust levels based on a sensory channel reading (0–7)");
                         if ui.selectable_label(!mode.flagellocyte_use_signal, "Fixed").clicked() {
                             mode.flagellocyte_use_signal = false;
                         }
@@ -3388,7 +3518,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             let flag_ch_idx = (mode.flagellocyte_signal_channel as usize).min(7);
                             ui.horizontal(|ui| {
                                 ui.label("Channel:")
-                                    .on_hover_text("Oculocyte channel (0–7) to read. Speed A is used when the channel is below Threshold C; Speed B is used when at or above it");
+                                    .on_hover_text("Sensory channel (0–7) to read. Speed A is used when the channel is below Threshold C; Speed B is used when at or above it");
                                 egui::ComboBox::from_id_salt("flag_signal_channel")
                                     .selected_text(flag_ch_labels[flag_ch_idx])
                                     .show_ui(ui, |ui| {
@@ -3468,9 +3598,9 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         }
                     });
 
-                    // Signal Channel (oculocyte: 0-7 only)
+                    // Signal Channel (sensory: 0-7)
                     ui.label("Signal Channel:")
-                        .on_hover_text("Which oculocyte channel (0–7) to emit on when the ray detects its target. These channels can only drive behavioral fields (flagellocyte speed, myocyte contraction) — they cannot gate division or mode switching");
+                        .on_hover_text("Which sensory channel (0–7) to emit on when the ray detects its target. Sensory channels drive behavioural responses (locomotion speed, contraction) — use developmental channels 8–15 to gate division or mode switching");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3517,7 +3647,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     // Mode toggle
                     ui.horizontal(|ui| {
                         ui.label("Speed Mode:")
-                            .on_hover_text("Fixed: cilia beat at a constant speed. Signal: speed switches between two values based on an oculocyte channel reading");
+                            .on_hover_text("Fixed: cilia beat at a constant speed. Signal: speed switches between two values based on a sensory channel reading (0–7)");
                         if ui.selectable_label(!mode.cilia_use_signal, "Fixed").clicked() {
                             mode.cilia_use_signal = false;
                         }
@@ -3546,7 +3676,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             let cilia_ch_idx = (mode.cilia_signal_channel as usize).min(7);
                             ui.horizontal(|ui| {
                                 ui.label("Channel:")
-                                    .on_hover_text("Oculocyte channel (0–7) to read. The cilia speed switches between Speed Below and Speed Above based on whether this channel exceeds the threshold");
+                                    .on_hover_text("Sensory channel (0–7) to read. The cilia speed switches between Speed Below and Speed Above based on whether this channel exceeds the threshold");
                                 egui::ComboBox::from_id_salt("cilia_signal_channel")
                                     .selected_text(cilia_ch_labels[cilia_ch_idx])
                                     .show_ui(ui, |ui| {
@@ -3659,7 +3789,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             let myo_ch_idx = (mode.myocyte_signal_channel as usize).min(15);
                             ui.horizontal(|ui| {
                                 ui.label("Channel:")
-                                    .on_hover_text("Signal channel to read. Channels 0–7 are oculocyte channels (for sensor-driven steering); 8–15 are regulation channels");
+                                    .on_hover_text("Signal channel to read. Channels 0–7 are sensory channels (detection-driven behaviour); 8–15 are developmental/regulation channels");
                                 egui::ComboBox::from_id_salt("myocyte_signal_channel")
                                     .selected_text(myo_ch_labels[myo_ch_idx])
                                     .show_ui(ui, |ui| {
@@ -3758,7 +3888,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let emb_ch_idx = (mode.embryocyte_signal_channel as usize).min(15);
                         ui.horizontal(|ui| {
                             ui.label("Channel:")
-                                .on_hover_text("Signal channel to monitor. Channels 0–7 are oculocyte channels; 8–15 are regulation channels. Use a regulation channel for maturation/feeding gates");
+                                .on_hover_text("Signal channel to monitor. Channels 0–7 are sensory channels; 8–15 are developmental/regulation channels. Use a regulation channel for maturation/feeding gates");
                             egui::ComboBox::from_id_salt("embryocyte_signal_channel")
                                 .selected_text(emb_ch_labels[emb_ch_idx])
                                 .show_ui(ui, |ui| {
@@ -3949,9 +4079,22 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     ui.separator();
 
+                    let input_a_label = match mode.cognocyte_operation {
+                        13 => "Condition Channel:",
+                        10 | 11 | 12 => "Input A - Boolean Channel:",
+                        7 | 8 | 9 => "Input A - Test Channel:",
+                        _ => "Input A - Channel:",
+                    };
+                    let input_a_tooltip = match mode.cognocyte_operation {
+                        13 => "Signal channel (0-15) used as the selector. If A > 0, the Cognocyte outputs B; otherwise it outputs 0. Missing A means no output",
+                        10 | 11 | 12 => "Signal channel (0-15) read as a boolean. Values greater than 0 are true. Missing A means no output",
+                        7 | 8 | 9 => "Signal channel (0-15) read as the value being compared. Missing A means no output",
+                        _ => "Signal channel (0-15) read as the left operand. Missing A means no output",
+                    };
+
                     // Input Channel A
-                    ui.label("Input A — Channel:")
-                        .on_hover_text("Signal channel (0–15) to read as the left operand. Falls back to Constant if this channel has no signal");
+                    ui.label(input_a_label)
+                        .on_hover_text(input_a_tooltip);
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -3960,27 +4103,41 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::DragValue::new(&mut mode.cognocyte_input_channel_a).speed(0.1).range(0..=15));
                     });
 
-                    // Input Channel B — greyed label when NOT is selected
-                    let b_label = if mode.cognocyte_operation == 12 {
-                        "Input B — Channel: (unused for NOT)"
+                    if mode.cognocyte_operation != 12 {
+                        let input_b_label = match mode.cognocyte_operation {
+                            13 => "Value Channel:",
+                            10 | 11 => "Input B - Boolean Channel:",
+                            7 | 8 | 9 => "Input B - Reference Channel:",
+                            _ => "Input B - Channel:",
+                        };
+                        let input_b_tooltip = match mode.cognocyte_operation {
+                            13 => "Signal channel (0-15) emitted when the condition channel is true. Missing B means no output",
+                            10 | 11 => "Signal channel (0-15) read as a boolean. Values greater than 0 are true. Missing B means no output",
+                            7 => "Signal channel (0-15) used as the comparison threshold. Outputs 1.0 when A > B, otherwise 0.0. Missing B means no output",
+                            8 => "Signal channel (0-15) used as the comparison threshold. Outputs 1.0 when A < B, otherwise 0.0. Missing B means no output",
+                            9 => "Signal channel (0-15) used as the equality reference. Outputs 1.0 when A and B are nearly equal, otherwise 0.0. Missing B means no output",
+                            3 => "Signal channel (0-15) read as the divisor. Missing B means no output. If B is zero, Divide emits 0.0",
+                            _ => "Signal channel (0-15) read as the right operand. Missing B means no output",
+                        };
+
+                        ui.label(input_b_label)
+                            .on_hover_text(input_b_tooltip);
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.cognocyte_input_channel_b, 0..=15).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.cognocyte_input_channel_b).speed(0.1).range(0..=15));
+                        });
                     } else {
-                        "Input B — Channel:"
-                    };
-                    ui.label(b_label)
-                        .on_hover_text("Signal channel (0–15) to read as the right operand. Falls back to Constant if this channel has no signal. Ignored by NOT");
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.cognocyte_input_channel_b, 0..=15).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.cognocyte_input_channel_b).speed(0.1).range(0..=15));
-                    });
+                        ui.label(egui::RichText::new("Input B unused for NOT").small());
+                    }
 
                     ui.separator();
 
                     // Output Channel
                     ui.label("Output Channel:")
-                        .on_hover_text("Signal channel (0–15) the result is emitted on. Channels 0–7 are oculocyte channels; 8–15 are regulation channels that can gate division, apoptosis, and mode switching");
+                        .on_hover_text("Signal channel (0–15) the result is emitted on. Channels 0–7 are sensory channels; 8–15 are developmental/regulation channels that can gate division, apoptosis, and mode switching");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -4031,7 +4188,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     // Output Channel
                     ui.label("Output Channel:")
-                        .on_hover_text("Signal channel (0–15) the memory value is emitted on every frame. Channels 8–15 can gate division, apoptosis, and mode switching");
+                        .on_hover_text("Signal channel (0–15) the memory value is emitted on every frame. Channels 0–7 reach sensory readers (locomotion, contraction); channels 8–15 can gate division, apoptosis, and mode switching");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -4126,14 +4283,14 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
             });
 
-            // Regulation Emit Group (Teal) — any cell type can emit on channels 8-15
+            // Developmental/Regulation Emit Group (Teal) — any cell type can emit on channels 8-15
             group_container(ui, "Regulation Emit", egui::Color32::from_rgb(80, 180, 170), |ui| {
                 let reg_channel_labels = ["Disabled", "Ch 8", "Ch 9", "Ch 10", "Ch 11", "Ch 12", "Ch 13", "Ch 14", "Ch 15"];
                 // Map regulation_emit_channel: -1 = Disabled (index 0), 8 = index 1, 9 = index 2, etc.
                 let reg_ch_idx = if mode.regulation_emit_channel < 8 { 0usize } else { (mode.regulation_emit_channel - 7).clamp(0, 8) as usize };
                 
                 ui.label("Emit Channel:")
-                    .on_hover_text("Regulation channel (8–15) to broadcast a signal on. Any cell type can emit on these channels. Use them to gate division, mode switching, and apoptosis in other cells. Channels 0–7 are reserved for oculocytes");
+                    .on_hover_text("Developmental/regulation channel (8–15) to broadcast a signal on. Any cell type can emit on these channels. Use them to gate division, mode switching, and apoptosis. Channels 0–7 are sensory channels (oculocyte, photocyte, lipocyte, etc.)");
                 egui::ComboBox::from_id_salt("reg_emit_channel")
                     .selected_text(reg_channel_labels[reg_ch_idx])
                     .show_ui(ui, |ui| {
@@ -4169,7 +4326,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
             // Signal-Conditional Settings Group (Purple)
             group_container(ui, "Signal Conditions", egui::Color32::from_rgb(160, 120, 200), |ui| {
                 let mode_count = mode_info_for_dropdowns.len();
-                // Signal conditionals only read from regulation channels 8-15
+                // Signal conditionals only read from developmental/regulation channels 8-15
                 let channel_labels = ["Disabled", "Ch 8", "Ch 9", "Ch 10", "Ch 11", "Ch 12", "Ch 13", "Ch 14", "Ch 15"];
                 // Map dropdown index to channel value: 0 → -1 (disabled), 1 → 8, 2 → 9, ...
                 let idx_to_channel = |idx: usize| -> i32 { if idx == 0 { -1 } else { idx as i32 + 7 } };
@@ -4178,7 +4335,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                 // --- Division Gating ---
                 ui.label("Division Gating:")
-                    .on_hover_text("Gate cell division on a regulation channel (8–15). The cell only divides when the signal condition is met. ⚠ Channels 0–7 silently disable this gate — always use 8–15 here");
+                    .on_hover_text("Gate cell division on a developmental channel (8–15). The cell only divides when the signal condition is met. ⚠ Only channels 8–15 work here — sensory channels 0–7 will silently disable this gate");
                 let div_ch_idx = channel_to_idx(mode.division_signal_channel);
                 egui::ComboBox::from_id_salt("div_signal_channel")
                     .selected_text(channel_labels[div_ch_idx])
@@ -4205,7 +4362,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                 // --- Apoptosis ---
                 ui.label("Apoptosis (Signal Death):")
-                    .on_hover_text("Trigger programmed cell death based on a regulation channel (8–15). The cell dies when the signal condition is met. ⚠ Channels 0–7 silently disable this — always use 8–15");
+                    .on_hover_text("Trigger programmed cell death based on a developmental channel (8–15). The cell dies when the signal condition is met. ⚠ Only channels 8–15 work here — sensory channels 0–7 silently disable this");
                 let apo_ch_idx = channel_to_idx(mode.apoptosis_signal_channel);
                 egui::ComboBox::from_id_salt("apo_signal_channel")
                     .selected_text(channel_labels[apo_ch_idx])
@@ -4232,7 +4389,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                 // --- Signal-Conditional Child A Mode ---
                 ui.label("Child A Signal Routing:")
-                    .on_hover_text("Override which mode Child A is born as, based on a regulation channel (8–15). When the signal is above the threshold, Child A uses the 'Above' mode; otherwise it uses the 'Below' mode. Disabled = always use the default Child A mode");
+                    .on_hover_text("Override which mode Child A is born as, based on a developmental channel (8–15). When the signal is above the threshold, Child A uses the 'Above' mode; otherwise it uses the 'Below' mode. Disabled = always use the default Child A mode");
                 let ch_a_idx = channel_to_idx(mode.signal_child_a_channel);
                 egui::ComboBox::from_id_salt("sig_child_a_channel")
                     .selected_text(channel_labels[ch_a_idx])
@@ -4308,7 +4465,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                 // --- Signal-Conditional Child B Mode ---
                 ui.label("Child B Signal Routing:")
-                    .on_hover_text("Override which mode Child B is born as, based on a regulation channel (8–15). When the signal is above the threshold, Child B uses the 'Above' mode; otherwise it uses the 'Below' mode. Disabled = always use the default Child B mode");
+                    .on_hover_text("Override which mode Child B is born as, based on a developmental channel (8–15). When the signal is above the threshold, Child B uses the 'Above' mode; otherwise it uses the 'Below' mode. Disabled = always use the default Child B mode");
                 let ch_b_idx = channel_to_idx(mode.signal_child_b_channel);
                 egui::ComboBox::from_id_salt("sig_child_b_channel")
                     .selected_text(channel_labels[ch_b_idx])
@@ -4384,7 +4541,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                 // --- Mode Switching ---
                 ui.label("Mode Switch (No Division):")
-                    .on_hover_text("Switch this cell to a different mode without dividing, triggered by a regulation channel (8–15). The cell changes its behavior in-place. ⚠ Channels 0–7 silently disable this — always use 8–15");
+                    .on_hover_text("Switch this cell to a different mode without dividing, triggered by a developmental channel (8–15). The cell changes its behavior in-place. ⚠ Only channels 8–15 work here — sensory channels 0–7 silently disable this");
                 let ms_ch_idx = channel_to_idx(mode.mode_switch_signal_channel);
                 egui::ComboBox::from_id_salt("mode_switch_channel")
                     .selected_text(channel_labels[ms_ch_idx])
@@ -6650,59 +6807,8 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 }
 
 /// Render the Help panel showing context-specific controls and shortcuts.
-fn render_help(ui: &mut Ui, context: &mut PanelContext, _state: &GlobalUiState) {
-    ui.heading("Help & Controls");
-    ui.separator();
-    
-    // Show current simulation mode
-    ui.horizontal(|ui| {
-        ui.label("Current Mode:");
-        ui.colored_label(
-            egui::Color32::from_rgb(100, 150, 255),
-            format!("{:?}", context.current_mode)
-        );
-    });
+fn render_help(ui: &mut Ui, _context: &mut PanelContext, _state: &mut GlobalUiState) {
+    ui.heading("Help");
     ui.add_space(8.0);
-    
-    // Show context-specific controls based on simulation mode
-    match context.current_mode {
-        SimulationMode::Preview => render_preview_help(ui, context),
-        SimulationMode::Gpu => render_gpu_help(ui, context),
-    }
-    
-    ui.separator();
-    render_general_help(ui);
+    ui.label("Select a panel to see context-specific controls and shortcuts.");
 }
-
-/// Render help content specific to Preview mode (genome editing).
-fn render_preview_help(ui: &mut Ui, _context: &mut PanelContext) {
-    ui.heading("🧬 Preview Mode - Genome Editing");
-    ui.add_space(4.0);
-    
-    // Viewport controls
-    egui::CollapsingHeader::new("🎥 Viewport Controls")
-        .default_open(true)
-        .show(ui, |ui| {
-            help_section(ui, &[
-                ("Tab", "Toggle between Orbit and FreeFly camera modes"),
-                ("Right Mouse + Drag", "Rotate camera (Orbit mode)"),
-                ("Right Mouse + Drag", "Rotate camera (FreeFly mode)"),
-                ("Mouse Wheel", "Zoom in/out (Orbit mode only)"),
-                ("WASD", "Move camera (FreeFly mode only)"),
-                ("Space", "Move up (FreeFly mode only)"),
-                ("C", "Move down (FreeFly mode only)"),
-                ("Q/E", "Roll left/right (FreeFly mode only)"),
-                ("Shift + WASD", "Fast movement (FreeFly mode)"),
-            ]);
-        });
-    
-    // Mode editing controls
-    egui::CollapsingHeader::new("🎛️ Mode Editing")
-        .default_open(true)
-        .show(ui, |ui| {
-            help_section(ui, &[
-                ("Double Click Mode", "Rename mode inline"),
-                ("Enter", "Confirm rename (empty = default name)"),
-                ("Escape", "Cancel rename"),
-                ("Click Away", "Cancel rename without saving"),
-                ("Right Click Mode", "Change mode c

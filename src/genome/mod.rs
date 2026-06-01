@@ -129,7 +129,7 @@ pub struct ModeSettings {
     pub glueocyte_self_adhesion: bool,
     pub glueocyte_env_adhesion: bool,  // Whether this Glueocyte bonds to the environment on contact
     pub glueocyte_boulder_adhesion: bool, // Whether this Glueocyte bonds to boulders/mossrocks
-    /// Signal channel that controls cell-adhesion activation (-1 = always active, 0-7 = oculocyte channel).
+    /// Signal channel that controls cell-adhesion activation (-1 = always active, 0-15 = any sensory or regulation channel).
     /// When set, the glueocyte only forms new bonds when the signal is above the threshold,
     /// and releases all glueocyte-created bonds when the signal drops below the threshold.
     pub glueocyte_cell_adhesion_signal_channel: i32,
@@ -141,17 +141,33 @@ pub struct ModeSettings {
     // Flagellocyte settings
     pub swim_force: f32, // Forward thrust force (0.0 to 1.0, for Flagellocyte cells)
     pub flagellocyte_use_signal: bool, // If true, use signal-based speed; if false, use fixed swim_force
-    pub flagellocyte_signal_channel: i32, // Which signal channel to read (0-7, oculocyte channels only)
+    pub flagellocyte_signal_channel: i32, // Which signal channel to read (0-7, sensory channels)
     pub flagellocyte_speed_a: f32, // Swim speed when signal < threshold_c
     pub flagellocyte_speed_b: f32, // Swim speed when signal >= threshold_c
     pub flagellocyte_threshold_c: f32, // Signal threshold for speed switching
     
     // Buoyocyte settings
     pub buoyancy_force: f32, // Upward buoyancy force (0.0 to 1.0, for Buoyocyte cells)
+
+    // Photocyte signal emission
+    pub photocyte_emit_enabled: bool,   // Whether signal emission is active
+    pub photocyte_emit_channel: i32,    // 0-15 = channel to emit on
+    pub photocyte_emit_hops: i32,       // How many adhesion hops (1-20)
+    pub photocyte_emit_threshold: f32,  // Light level threshold (0.0-1.0)
+    pub photocyte_emit_mode: i32,       // 0 = above threshold, 1 = below threshold
+    pub photocyte_emit_value: f32,      // Signal value to emit (-100.0 to 100.0)
+
+    // Lipocyte signal emission
+    pub lipocyte_emit_enabled: bool,    // Whether signal emission is active
+    pub lipocyte_emit_channel: i32,     // 0-15 = channel to emit on
+    pub lipocyte_emit_hops: i32,        // How many adhesion hops (1-20)
+    pub lipocyte_emit_threshold: f32,   // Storage fraction threshold (0.0-1.0)
+    pub lipocyte_emit_mode: i32,        // 0 = above threshold, 1 = below threshold
+    pub lipocyte_emit_value: f32,       // Signal value to emit (-100.0 to 100.0)
     
     // Oculocyte settings
     pub oculocyte_sense_type: u32, // Bitmask: bit0=Cell, bit1=Food, bit2=Light, bit3=Barrier, bit4=Self, bit5=Mossrock
-    pub oculocyte_signal_channel: i32, // Which channel to send on (0-7, oculocyte-only range)
+    pub oculocyte_signal_channel: i32, // Which channel to send on (0-7, sensory channel range)
     pub oculocyte_signal_value: f32, // Signal value to send when target detected (-50.0 to 50.0)
     pub oculocyte_signal_hops: i32, // How many adhesion hops the signal propagates (1-20)
     pub oculocyte_ray_length: f32, // How far ahead the oculocyte ray reaches (1.0 to 100.0)
@@ -160,7 +176,7 @@ pub struct ModeSettings {
     pub cilia_speed: f32, // Cilia force magnitude (-1.0 to +1.0, for Ciliocyte cells)
     pub cilia_push_bonded: bool, // Whether to push same-organism cells
     pub cilia_use_signal: bool, // If true, use signal-based speed; if false, use fixed cilia_speed
-    pub cilia_signal_channel: i32, // Which signal channel to read (0-7, oculocyte channels only)
+    pub cilia_signal_channel: i32, // Which signal channel to read (0-7, sensory channels)
     pub cilia_speed_below: f32, // Cilia speed when signal < threshold
     pub cilia_speed_above: f32, // Cilia speed when signal >= threshold
     pub cilia_threshold: f32, // Signal threshold for speed switching
@@ -189,8 +205,8 @@ pub struct ModeSettings {
     pub embryocyte_signal_channel: i32,   // Signal channel to monitor (0-15)
     pub embryocyte_signal_value: f32,     // Minimum signal value required for trigger
 
-    // Regulation signal emission: any cell mode can emit a signal on channels 8-15
-    pub regulation_emit_channel: i32, // Channel to emit on (-1 = disabled, 8-15 = regulation channel)
+    // Developmental/regulation signal emission: any cell mode can emit on channels 8-15
+    pub regulation_emit_channel: i32, // Channel to emit on (-1 = disabled, 8-15 = regulation/developmental channel)
     pub regulation_emit_value: f32, // Signal value to emit (0.0 to 2047.0)
     pub regulation_emit_hops: i32, // How many adhesion hops the signal propagates (1-20)
 
@@ -227,22 +243,16 @@ pub struct ModeSettings {
 
     // Vasculocyte settings
     pub vascular_outlet: bool, // When true, releases nutrients to non-vascular neighbors; when false, sealed (pipe only)
-    /// When true, this vasculocyte routes signals losslessly (zero attenuation per hop).
-    /// Still costs 1 hop per edge traversal. Output capped at vascular_signal_capacity.
-    pub vascular_signal_transport: bool,
-    /// Maximum signal value this node will forward per tick (node-level throughput cap).
-    /// Prevents fan-in amplification at junctions. Only applies when vascular_signal_transport = true.
-    pub vascular_signal_capacity: f32,
+    pub vascular_signal_transport: bool, // Routes signals losslessly (zero attenuation per hop)
+    pub vascular_signal_capacity: f32,   // Node-level throughput cap prevents fan-in amplification
 
     // Gametocyte settings
     pub gametocyte_merge_range: f32, // Extra contact range for merge detection beyond cell radii (0.0 to 2.0)
 
     // Memorocyte settings
-    /// Fraction of the gap between current memory and input closed per second (0.0–1.0).
-    /// 0.0 = never tracks input (holds state forever), 1.0 = instant snap to input (no memory).
-    /// Steady-state output always converges to input — never amplifies.
+    /// Fraction of the gap between current memory and input closed per second (0.0-1.0).
+    /// 0.0 = never tracks input, 1.0 = instant snap. Steady-state converges to input - never amplifies.
     pub memorocyte_rate: f32,
-    /// Signal channel (0–15) to read as input. If absent, memory converges toward 0.
     pub memorocyte_input_channel: i32,
     /// Channel to emit the current memory value on (0–15).
     pub memorocyte_output_channel: i32,
@@ -381,6 +391,18 @@ impl Default for ModeSettings {
             devorocyte_consume_range: 0.5,
             devorocyte_consume_rate: 30.0,
             vascular_outlet: false,
+            photocyte_emit_enabled: false,
+            photocyte_emit_channel: 0,
+            photocyte_emit_hops: 5,
+            photocyte_emit_threshold: 0.5,
+            photocyte_emit_mode: 0,
+            photocyte_emit_value: 10.0,
+            lipocyte_emit_enabled: false,
+            lipocyte_emit_channel: 0,
+            lipocyte_emit_hops: 5,
+            lipocyte_emit_threshold: 0.8,
+            lipocyte_emit_mode: 1,
+            lipocyte_emit_value: 10.0,
             vascular_signal_transport: false,
             vascular_signal_capacity: 10.0,
             gametocyte_merge_range: 0.5,
@@ -853,8 +875,8 @@ impl Genome {
         // ══════════════════════════════════════════════════════════════════════
         // STEP 3: SIGNAL CHANNEL ASSIGNMENTS
         //
-        // Channels 8–15 are regulation (any cell can emit/receive).
-        // Channels 0–7 are oculocyte sensing only.
+        // Channels 8–15 are developmental/regulation (any cell can emit/receive).
+        // Channels 0–7 are sensory (detection signals: oculocyte, photocyte, lipocyte, etc.).
         //
         // Shuffled so different creatures use different channels for the same
         // roles — prevents cross-talk when multiple creatures share a world.
@@ -870,7 +892,7 @@ impl Genome {
         let ch_maturity: i32 = ch_pool[3]; // emitted by gonad, triggers grow→adult
         let _ch_repro:   i32 = ch_pool[4]; // reserved for future egg-shedding gate
 
-        // Oculocyte sensing channel (0–7): sensor fires on this, loco reads it
+        // Sensory channel (0–7): detection cells emit here, locomotion cells read it
         let ch_sense: i32 = rng.i32_range(0, 8);
 
         // ══════════════════════════════════════════════════════════════════════
@@ -1391,4 +1413,170 @@ impl Genome {
         }
 
         // ── ANCHOR (optional) ─────────────────────────────────────────────────
-        // Glueocyte. Present in sessile creatures (no l
+        // Glueocyte. Present in sessile creatures (no locomotion). Struct_b
+        // switches to this on ch_maturity, anchoring branch tips to the
+        // environment. Bonding is gated on ch_maturity so the creature finishes
+        // growing before locking itself in place.
+        if let Some(idx) = r_anchor {
+            let m = &mut genome.modes[idx];
+            m.name                             = "Anchor".to_string();
+            m.cell_type                        = 6; // Glueocyte
+            m.max_cell_size                    = spec_size;
+            m.nutrient_priority                = 1.5;
+            m.split_mass                       = spec_mass;
+            m.split_interval                   = spec_ivl;
+            m.parent_make_adhesion             = false;
+            m.parent_split_direction           = Vec2::ZERO;
+            m.max_splits                       = 0; // terminal
+            m.enable_parent_angle_snapping     = false;
+            m.membrane_stiffness               = membrane * 1.2;
+            m.glueocyte_env_adhesion           = true;
+            m.glueocyte_cell_adhesion          = false;
+            // Only bond after maturity signal arrives — prevents premature anchoring
+            m.glueocyte_cell_adhesion_signal_channel   = ch_maturity;
+            m.glueocyte_cell_adhesion_signal_threshold = 1.0;
+            apply_adhesion(m, adh_rest, adh_lin * 1.2, adh_ang * 1.2, false); // always rigid
+            m.child_a.mode_number              = idx as i32;
+            m.child_b.mode_number              = idx as i32;
+            m.mode_a_after_splits              = idx as i32;
+            m.mode_b_after_splits              = idx as i32;
+            // Redirect struct_b's maturity switch to anchor
+            genome.modes[r_struct_b].mode_switch_target = idx as i32;
+        }
+
+        genome
+    }
+
+    /// Compute a similarity score [0.0, 1.0] between two genomes based on their mode sequences.
+    ///
+    /// The score is the product of two factors:
+    /// 1. **Mode-count alignment**: `min(len_a, len_b) / max(len_a, len_b)` — penalises very
+    ///    different genome sizes (a genome with 4 modes vs one with 16 scores only 0.25 here).
+    /// 2. **Cell-type match fraction**: for the overlapping prefix of modes (up to `min(len_a, len_b)`),
+    ///    the proportion of positions where both genomes have the same cell_type.
+    ///
+    /// A genome compared with itself always returns 1.0.
+    /// Returns 0.0 if either genome has no modes.
+    pub fn similarity(a: &Genome, b: &Genome) -> f32 {
+        let len_a = a.modes.len();
+        let len_b = b.modes.len();
+        if len_a == 0 || len_b == 0 {
+            return 0.0;
+        }
+
+        let max_len = len_a.max(len_b) as f32;
+        let min_len = len_a.min(len_b) as f32;
+        let count_alignment = min_len / max_len;  // 1.0 when equal, drops toward 0 as sizes diverge
+
+        let compare_len = len_a.min(len_b);
+        let matching = (0..compare_len)
+            .filter(|&i| a.modes[i].cell_type == b.modes[i].cell_type)
+            .count();
+        let type_match = matching as f32 / compare_len as f32;
+
+        count_alignment * type_match
+    }
+
+    /// Create a hybrid offspring genome by crossing over two parent genomes.
+    ///
+    /// Each mode in the offspring is independently drawn from either parent_a or parent_b
+    /// with equal probability (per-mode uniform crossover). The offspring genome's mode
+    /// count matches parent_a's. Child mode references are remapped to stay within the
+    /// offspring's valid range. The initial_mode is taken from parent_a.
+    ///
+    /// This mirrors biological sexual reproduction: the offspring inherits a random mix
+    /// of traits from both parents, enabling exploration of the combined trait space.
+    ///
+    /// # Arguments
+    /// * `parent_a` - First parent genome (determines mode count and initial_mode)
+    /// * `parent_b` - Second parent genome
+    /// * `rng_seed` - Seed for crossover RNG (e.g. frame number XOR'd with cell IDs)
+    pub fn crossover(parent_a: &Genome, parent_b: &Genome, rng_seed: u64) -> Genome {
+        let a_count = parent_a.modes.len();
+        let b_count = parent_b.modes.len();
+        // Use the longer parent's length so dormant tail modes from either parent
+        // are preserved in the offspring rather than silently dropped.
+        let mode_count = a_count.max(b_count).max(1);
+
+        // Simple LCG for per-mode coin flips
+        let mut rng = rng_seed.wrapping_add(0x9e3779b97f4a7c15);
+        let mut next_bit = || -> bool {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (rng >> 63) == 1
+        };
+
+        let mut modes = Vec::with_capacity(mode_count);
+        for i in 0..mode_count {
+            let have_a = i < a_count;
+            let have_b = i < b_count;
+
+            // Pick mode source based on what's available:
+            // - Both present: coin flip
+            // - Only one present: take it directly (preserves tail experiments)
+            let pick_b = match (have_a, have_b) {
+                (true,  true)  => next_bit(),
+                (false, true)  => true,
+                (true,  false) => false,
+                (false, false) => unreachable!(),
+            };
+
+            let mut mode = if pick_b {
+                parent_b.modes[i].clone()
+            } else {
+                parent_a.modes[i].clone()
+            };
+
+            // Remap child mode indices to stay within [0, mode_count)
+            let clamp_mode = |idx: i32| -> i32 {
+                if idx < 0 { idx } else { idx.min(mode_count as i32 - 1) }
+            };
+            mode.child_a.mode_number = clamp_mode(mode.child_a.mode_number);
+            mode.child_b.mode_number = clamp_mode(mode.child_b.mode_number);
+            mode.mode_a_after_splits = clamp_mode(mode.mode_a_after_splits);
+            mode.mode_b_after_splits = clamp_mode(mode.mode_b_after_splits);
+            mode.mode_switch_target  = clamp_mode(mode.mode_switch_target);
+
+            // Blend color from both parents at shared positions; tail modes keep their own color
+            if have_a && have_b {
+                mode.color = (parent_a.modes[i].color + parent_b.modes[i].color) * 0.5;
+            }
+
+            modes.push(mode);
+        }
+
+        let name = format!("{} × {}", parent_a.name, parent_b.name);
+        let initial_mode = parent_a.initial_mode.min(mode_count as i32 - 1).max(0);
+
+        Genome {
+            name,
+            initial_mode,
+            initial_orientation: parent_a.initial_orientation,
+            modes,
+        }
+    }
+}
+
+// Helper function to convert HSV hue to RGB
+fn hue_to_rgb(hue: f32) -> (u8, u8, u8) {
+    let h = hue / 60.0;
+    let c = 1.0;
+    let x = 1.0 - (h % 2.0 - 1.0).abs();
+
+    let (r, g, b) = if h < 1.0 {
+        (c, x, 0.0)
+    } else if h < 2.0 {
+        (x, c, 0.0)
+    } else if h < 3.0 {
+        (0.0, c, x)
+    } else if h < 4.0 {
+        (0.0, x, c)
+    } else if h < 5.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+
+    // Scale to 100-255 range for better visibility
+    let scale = |v: f32| ((v * 155.0) + 100.0) as u8;
+    (scale(r), scale(g), scale(b))
+}

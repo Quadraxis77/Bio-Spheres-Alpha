@@ -337,6 +337,39 @@ impl PreviewState {
 
             // Hash gametocyte settings
             mode.gametocyte_merge_range.to_bits().hash(&mut hasher);
+
+            // Hash vasculocyte signal transport
+            mode.vascular_signal_transport.hash(&mut hasher);
+            mode.vascular_signal_capacity.to_bits().hash(&mut hasher);
+
+            // Hash photocyte signal emission settings
+            mode.photocyte_emit_enabled.hash(&mut hasher);
+            mode.photocyte_emit_channel.hash(&mut hasher);
+            mode.photocyte_emit_hops.hash(&mut hasher);
+            mode.photocyte_emit_threshold.to_bits().hash(&mut hasher);
+            mode.photocyte_emit_mode.hash(&mut hasher);
+            mode.photocyte_emit_value.to_bits().hash(&mut hasher);
+
+            // Hash lipocyte signal emission settings
+            mode.lipocyte_emit_enabled.hash(&mut hasher);
+            mode.lipocyte_emit_channel.hash(&mut hasher);
+            mode.lipocyte_emit_hops.hash(&mut hasher);
+            mode.lipocyte_emit_threshold.to_bits().hash(&mut hasher);
+            mode.lipocyte_emit_mode.hash(&mut hasher);
+            mode.lipocyte_emit_value.to_bits().hash(&mut hasher);
+
+            // Hash memorocyte settings
+            mode.memorocyte_rate.to_bits().hash(&mut hasher);
+            mode.memorocyte_input_channel.hash(&mut hasher);
+            mode.memorocyte_output_channel.hash(&mut hasher);
+            mode.memorocyte_output_hops.hash(&mut hasher);
+
+            // Hash cognocyte settings
+            mode.cognocyte_operation.hash(&mut hasher);
+            mode.cognocyte_input_channel_a.hash(&mut hasher);
+            mode.cognocyte_input_channel_b.hash(&mut hasher);
+            mode.cognocyte_output_channel.hash(&mut hasher);
+            mode.cognocyte_output_hops.hash(&mut hasher);
         }
         
         hasher.finish()
