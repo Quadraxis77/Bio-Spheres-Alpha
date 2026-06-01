@@ -480,6 +480,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (child_b_slot >= params.cell_capacity) {
         return; // Invalid slot, skip division
     }
+
+    // Clear stale lifecycle flags on the child B slot immediately.
+    // The recycled slot may have belonged to a cell that had division_flags=1 set
+    // (it was about to divide when it died). If left stale, division_scan would
+    // see division_flags[child_b_slot]==1 on the very next frame and try to
+    // allocate another slot for the newborn child — before it has any nutrients —
+    // producing a phantom grandchild that flickers for one frame then dies.
+    // Clearing here (before any child B writes) is safe: this thread owns child_b_slot
+    // exclusively because division_scan already popped it from the free-slot ring.
+    division_flags[child_b_slot] = 0u;
     
     // Parent state - read from OUTPUT buffer (physics results)
     let parent_pos = positions_out[cell_idx].xyz;

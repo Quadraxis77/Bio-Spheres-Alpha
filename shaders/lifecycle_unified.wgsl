@@ -96,7 +96,7 @@ var<storage, read> split_nutrient_thresholds: array<f32>;
 var<storage, read> split_counts: array<u32>;
 
 @group(2) @binding(4)
-var<storage, read> split_ready_frame: array<i32>;
+var<storage, read_write> split_ready_frame: array<i32>;
 
 @group(2) @binding(5)
 var<storage, read> max_splits: array<u32>;
@@ -695,8 +695,12 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
     
-    // If we should defer, don't divide this frame
+    // If we should defer, don't divide this frame.
+    // Mark split_ready_frame so the transport shader freezes this cell's nutrients
+    // (same as a cell that just divided), preventing asymmetric nutrient flow
+    // between this cell and its neighbor that divides first.
     if (should_defer) {
+        split_ready_frame[cell_idx] = params.current_frame;
         division_flags[cell_idx] = 0u;
         return;
     }

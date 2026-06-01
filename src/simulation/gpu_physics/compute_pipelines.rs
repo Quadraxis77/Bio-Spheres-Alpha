@@ -2570,12 +2570,13 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Split ready frame (for nutrient transfer delay)
+                    // Split ready frame (for nutrient transfer delay) — read_write so
+                    // division_scan can mark deferred cells to freeze their nutrients
                     wgpu::BindGroupLayoutEntry {
                         binding: 4,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },

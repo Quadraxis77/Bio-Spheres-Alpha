@@ -1772,17 +1772,18 @@ impl GpuScene {
         // For cell insertion, we write to ALL 3 buffer sets, so any buffer index works
         // For physics output, we use output_buffer_index which is where physics wrote
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
-        // Copy only the used portion of the buffer (up to the high-water mark).
-        // Divided cells land at recycled slot indices scattered throughout the buffer,
-        // so we must cover all slots up to total_cell_slots, not just the live count.
-        // However, slots beyond total_cell_slots have never been written and the
-        // instance builder shader reads cell_count_buffer[0] for its upper bound,
-        // so those slots are never accessed — no need to copy them.
-        // At 2K cells with 200K capacity this reduces from 9.6 MB to ~96 KB per frame.
-        let used_slots = self.total_cell_slots.max(1).min(self.gpu_triple_buffers.capacity as u32) as usize;
-        let vec4_copy_size = (used_slots * 16) as u64; // Vec4<f32> = 16 bytes
-        let u32_copy_size = (used_slots * 4) as u64; // u32 = 4 bytes
-        
+        // Always copy full capacity so that child B slots created by division are
+        // included even when the GPU-side high-water mark (cell_count_buffer[0]) has
+        // advanced beyond total_cell_slots (which lags 1-3 frames behind the async
+        // readback). If we truncated to total_cell_slots, a new child B at a higher
+        // slot index would not be copied and the instance builder would render stale
+        // data from the previous occupant — causing garbage cells to flicker.
+        // The instance builder shader uses cell_count_buffer[0] (always current) for
+        // its own bounds check, so bytes beyond the true high-water mark are never read.
+        let copy_slots = self.gpu_triple_buffers.capacity as usize;
+        let vec4_copy_size = (copy_slots * 16) as u64; // Vec4<f32> = 16 bytes
+        let u32_copy_size = (copy_slots * 4) as u64; // u32 = 4 bytes
+
         // Copy positions (Vec4: x, y, z, mass)
         encoder.copy_buffer_to_buffer(
             &self.gpu_triple_buffers.position_and_mass[output_idx],

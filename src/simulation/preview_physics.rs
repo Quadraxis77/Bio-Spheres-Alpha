@@ -830,6 +830,9 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
     }
 
     // Pass 3: apply lerped, scaled transfers with transport-rate-adjusted pressure.
+    // Snapshot all nutrient values before applying any transfers so the order of
+    // connection processing doesn't affect the result (matches GPU single-snapshot semantics).
+    let nutrients_snap: Vec<f32> = state.nutrients[..n].to_vec();
     let mut nutrient_deltas = vec![0.0f32; n];
     let lerp_t = (LERP_SPEED * dt).min(1.0);
 
@@ -838,10 +841,6 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         let cell_b = cf.cell_b;
 
         // Scale outflow so the sending cell never exceeds its connection's rate cap total.
-        // This proportionally reduces each connection's flow so that the sender's
-        // combined outflow across all connections stays within the cap.
-        // No separate saturation factor is applied — that would double-throttle and
-        // zero out flow entirely when total_out >= rate_cap, starving receivers.
         let scale = if cf.desired > 0.0 && total_out[cell_a] > cf.rate_cap {
             cf.rate_cap / total_out[cell_a]
         } else if cf.desired < 0.0 && total_out[cell_b] > cf.rate_cap {
@@ -859,18 +858,12 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         let mode_b = genome.modes.get(state.mode_indices[cell_b]).unwrap();
         let min_a = if mode_a.prioritize_when_low { 10.0 } else { 0.0 };
         let min_b = if mode_b.prioritize_when_low { 10.0 } else { 0.0 };
-        // Cap at 200 before doubling so the "never split" sentinel doesn't inflate the cap.
         let max_a = state.split_nutrient_thresholds[cell_a].min(200.0) * 2.0;
         let max_b = state.split_nutrient_thresholds[cell_b].min(200.0) * 2.0;
 
-        // Embryocyte rules:
-        //   - An Embryocyte NEVER sends nutrients out (block outgoing).
-        //   - An Embryocyte ALWAYS redirects incoming nutrients to its reserve.
         let is_embryo_a = mode_a.cell_type == 10;
         let is_embryo_b = mode_b.cell_type == 10;
 
-        // transfer > 0 means A→B, transfer < 0 means B→A.
-        // Block transfers where the sender is an Embryocyte.
         let transfer_blocked = (transfer > 0.0 && is_embryo_a)
                             || (transfer < 0.0 && is_embryo_b);
         if transfer_blocked {
@@ -880,24 +873,26 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
             continue;
         }
 
+        // Use snapshotted nutrients for can_give/can_recv so connection order doesn't matter
+        let snap_a = nutrients_snap[cell_a];
+        let snap_b = nutrients_snap[cell_b];
+
         let actual = if transfer > 0.0 {
-            let can_give = (state.nutrients[cell_a] - min_a).max(0.0);
+            let can_give = (snap_a - min_a).max(0.0);
             let can_recv = if is_embryo_b {
-                // Receiver is an Embryocyte: capacity = space left in reserve (×1000 fixed-point)
                 let reserve_space = 65_535_000u32.saturating_sub(state.reserves[cell_b]) as f32 / 1000.0;
                 reserve_space
             } else {
-                (max_b - state.nutrients[cell_b]).max(0.0)
+                (max_b - snap_b).max(0.0)
             };
             transfer.min(can_give).min(can_recv)
         } else {
-            let can_give = (state.nutrients[cell_b] - min_b).max(0.0);
+            let can_give = (snap_b - min_b).max(0.0);
             let can_recv = if is_embryo_a {
-                // Receiver (negative direction) is an Embryocyte (×1000 fixed-point)
                 let reserve_space = 65_535_000u32.saturating_sub(state.reserves[cell_a]) as f32 / 1000.0;
                 reserve_space
             } else {
-                (max_a - state.nutrients[cell_a]).max(0.0)
+                (max_a - snap_a).max(0.0)
             };
             transfer.max(-(can_give.min(can_recv)))
         };

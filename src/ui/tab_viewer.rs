@@ -2402,6 +2402,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         let cell_types = crate::cell::types::CellType::all();
 
         // Type dropdown — full width
+        let type_before = context.genome.modes[selected_index].cell_type;
         let combo_resp = egui::ComboBox::from_id_salt("modes_panel_cell_type")
             .selected_text(
                 egui::RichText::new(cell_types[context.genome.modes[selected_index].cell_type as usize].name())
@@ -2418,6 +2419,17 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     ).on_hover_text(ct.tooltip());
                 }
             });
+        // Propagate cell type change to all selected modes.
+        // Don't rely on combo_resp.response.changed() — it reflects the button widget,
+        // not the inner selectable_value. Compare before/after instead.
+        let type_after = context.genome.modes[selected_index].cell_type;
+        if type_after != type_before {
+            for &idx in &context.editor_state.selected_mode_indices {
+                if idx < context.genome.modes.len() {
+                    context.genome.modes[idx].cell_type = type_after;
+                }
+            }
+        }
         context.editor_state.panel_rects.insert(
             "cell_type_dropdown".to_string(), combo_resp.response.rect,
         );
@@ -2439,7 +2451,12 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                 .corner_radius(egui::CornerRadius::same(3)),
         );
         if adh_resp.clicked() {
-            context.genome.modes[selected_index].parent_make_adhesion = !on;
+            let new_val = !on;
+            for &idx in &context.editor_state.selected_mode_indices {
+                if idx < context.genome.modes.len() {
+                    context.genome.modes[idx].parent_make_adhesion = new_val;
+                }
+            }
         }
         context.editor_state.panel_rects.insert(
             "make_adhesion_checkbox".to_string(), adh_resp.rect,

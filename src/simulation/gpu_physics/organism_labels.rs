@@ -293,7 +293,7 @@ impl OrganismLabelSystem {
     /// Used by the follow camera to skip CoM updates on frames where labels are
     /// temporarily reset to each cell's own index.
     pub fn is_reset_frame(&self) -> bool {
-        const RESET_PERIOD: u32 = 60;
+        const RESET_PERIOD: u32 = 300;
         (self.debug_frame.wrapping_add(1) % RESET_PERIOD) == 1
     }
 
@@ -308,7 +308,9 @@ impl OrganismLabelSystem {
         // Every RESET_PERIOD frames, reinitialise label[i] = i so stale labels from
         // dead organisms don't persist indefinitely. Between resets the continuous
         // single-hop flood fill keeps labels fresh.
-        const RESET_PERIOD: u32 = 60;
+        // 300 frames (~5 seconds at 60fps) — infrequent enough to avoid visible
+        // disruption, frequent enough to clear dead organism label fossils.
+        const RESET_PERIOD: u32 = 300;
         let is_reset_frame = (self.debug_frame % RESET_PERIOD) == 1;
 
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -335,12 +337,18 @@ impl OrganismLabelSystem {
         pass.dispatch_workgroups(active_workgroups, 1, 1);
 
         // Recount organism sizes from current labels.
-        pass.set_pipeline(&self.clear_sizes_pipeline);
-        pass.dispatch_workgroups(active_workgroups, 1, 1);
-        pass.set_pipeline(&self.count_sizes_accumulate_pipeline);
-        pass.dispatch_workgroups(active_workgroups, 1, 1);
-        pass.set_pipeline(&self.count_sizes_broadcast_pipeline);
-        pass.dispatch_workgroups(active_workgroups, 1, 1);
+        // Skip on reset frames — labels were just reset to cell indices so sizes
+        // would read as 1 for every cell, causing a violent Kleiber metabolic spike.
+        // The previous frame's sizes remain valid; they'll catch up over the next
+        // few frames as labels reconverge through the flood fill.
+        if !is_reset_frame {
+            pass.set_pipeline(&self.clear_sizes_pipeline);
+            pass.dispatch_workgroups(active_workgroups, 1, 1);
+            pass.set_pipeline(&self.count_sizes_accumulate_pipeline);
+            pass.dispatch_workgroups(active_workgroups, 1, 1);
+            pass.set_pipeline(&self.count_sizes_broadcast_pipeline);
+            pass.dispatch_workgroups(active_workgroups, 1, 1);
+        }
 
         drop(pass);
 
@@ -370,7 +378,7 @@ impl OrganismLabelSystem {
     pub fn prepare_frame(&self, queue: &wgpu::Queue) {
         // debug_frame hasn't been incremented yet (encode_frame does that), so the
         // next frame number is debug_frame + 1.
-        const RESET_PERIOD: u32 = 60;
+        const RESET_PERIOD: u32 = 300;
         let next_frame = self.debug_frame.wrapping_add(1);
         let is_reset = (next_frame % RESET_PERIOD) == 1;
 

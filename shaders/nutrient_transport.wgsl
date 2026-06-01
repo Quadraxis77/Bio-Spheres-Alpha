@@ -510,6 +510,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
 
+        // Also skip if cell_b is split-deferred — don't let nutrients flow into a cell
+        // that is about to divide, so both cells in a deferred pair freeze at the same
+        // nutrient level and divide with symmetric children.
+        if (is_cell_blocked_from_nutrients(cell_b_idx)) {
+            continue;
+        }
+
         // Determine if cell_b is a vasculocyte.
         var cell_b_type = 0xFFFFFFFFu;
         if (mode_b_idx < arrayLength(&mode_cell_types)) {
