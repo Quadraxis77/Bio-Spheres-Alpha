@@ -83,6 +83,7 @@
 
 pub mod devorocyte;
 pub mod vasculocyte;
+pub mod gametocyte;
 pub mod flagellocyte;
 pub mod test_cell;
 pub mod myocyte;
@@ -352,5 +353,6 @@ pub fn create_behavior(cell_type: crate::cell::CellType) -> Box<dyn CellBehavior
         crate::cell::CellType::Embryocyte => Box::new(embryocyte::EmbryocyteBehavior),
         crate::cell::CellType::Devorocyte => Box::new(devorocyte::DevorocyteBehavior),
         crate::cell::CellType::Vasculocyte => Box::new(vasculocyte::VasculocyteBehavior),
+        crate::cell::CellType::Gametocyte => Box::new(gametocyte::GametocyteBehavior),
     }
 }

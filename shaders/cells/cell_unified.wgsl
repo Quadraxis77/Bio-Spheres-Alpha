@@ -512,6 +512,33 @@ fn internals_embryocyte(p: vec3<f32>, r: f32, type_data_0: vec4<f32>) -> vec3<f3
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
+// Type 13: Gametocyte — Translucent reproductive cell with a glowing central nucleus.
+// A bright pulsing nucleus is visible deep inside a lightly pigmented, softly-lit cytoplasm.
+// type_data_0: x=merge_range (unused for visuals), y=unused, z=unused, w=unused
+// Visual parameters come from CellTypeVisuals (param_a=pulse_speed, param_b=nucleus_glow).
+fn internals_gametocyte(p: vec3<f32>, r: f32, current_time: f32) -> vec3<f32> {
+    // Half-circle nucleus: radial mask clipped to the +Y hemisphere
+    let nuc_dist = length(p);
+    let radial_mask = smoothstep(0.38, 0.20, nuc_dist);
+
+    // Clip to half: smooth fade across the equator so the flat edge isn't a hard seam
+    let half_mask = smoothstep(-0.06, 0.06, p.y);
+
+    let nuc_mask = radial_mask * half_mask;
+
+    // Slow pulsing glow
+    let pulse = 0.7 + 0.3 * sin(current_time * 1.5);
+    let nuc_brightness = nuc_mask * pulse * 1.4;
+
+    // Faint second ring for depth effect (also clipped to half)
+    let ring = smoothstep(0.55, 0.48, nuc_dist) * smoothstep(0.20, 0.30, nuc_dist) * half_mask * 0.18;
+
+    let pattern = nuc_brightness + ring;
+    let color_shift = nuc_mask * 0.25;
+
+    return vec3<f32>(pattern, color_shift, 0.0);
+}
+
 // Type 7: Oculocyte — handled inline in fs_main (needs surface direction, not interior pos).
 
 // Type 1: Flagellocyte — Same as test cell (tail is rendered separately).
@@ -762,6 +789,7 @@ fn get_internals(cell_type: u32, p: vec3<f32>, r: f32, cell_index: u32, type_dat
         case 8u: { return vec3<f32>(0.0); } // Ciliocyte: handled inline in fs_main
         case 9u: { return internals_myocyte(p, r); } // Peripheral nuclei; surface pattern handled inline
         case 10u: { return internals_embryocyte(p, r, type_data_0); }
+        case 13u: { return internals_gametocyte(p, r, camera.time); }
         default: { return internals_test(p, r, type_data_0); }
     }
 }
@@ -845,6 +873,12 @@ fn get_membrane_params(cell_type: u32) -> MembraneParams {
             m.opacity = 0.65;
             m.rim_power = 3.5;
             m.color_darken = 0.35;
+        }
+        case 13u: { // Gametocyte — thin, translucent membrane with strong fresnel rim
+            m.thickness = 0.04;
+            m.opacity = 0.35;
+            m.rim_power = 1.8;
+            m.color_darken = 0.15;
         }
         default: {
             m.thickness = 0.06;

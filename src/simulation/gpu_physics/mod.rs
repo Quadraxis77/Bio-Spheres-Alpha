@@ -3,6 +3,7 @@
 //! Contains the GPU compute physics pipeline for Bio-Spheres simulation.
 
 pub mod devorocyte_consumption;
+pub mod gametocyte_merge;
 pub mod adhesion;
 pub mod adhesion_buffers;
 pub mod adhesion_integration;
@@ -40,6 +41,7 @@ pub use organism_labels::OrganismLabelSystem;
 pub use boulder_buffers::{BoulderBuffers, BoulderSpawnRequest, GpuBoulder, MAX_BOULDERS};
 pub use boulder_system::BoulderSystem;
 pub use devorocyte_consumption::DevorocyteConsumptionSystem;
+pub use gametocyte_merge::{GametocyteMergeSystem, GameteMergeEvent};
 pub use phagocyte_consumption::PhagocyteConsumptionSystem;
 pub use moss::MossSystem;
 pub use triple_buffer::GpuTripleBufferSystem;

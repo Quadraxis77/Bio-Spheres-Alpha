@@ -1238,12 +1238,105 @@ fn apply_mutation(
             regulation_params_buf[mode_abs] = p;
         }
 
+        // buffer_id 14: structural genome mutations (MODE_APPEND = 10, MODE_TRIM = 11)
+        // These operate on the tail of the genome rather than a randomly-selected mode.
+        // mode_abs is unused here — we always act on the last mode slot.
+        case 14u: {
+            if (entry.data_type == 10u) {
+                // MODE_APPEND: add a dormant mode at the end of the genome.
+                //
+                // The new mode inherits the last mode's cell_type and basic physics
+                // params, then points both children at itself (self-referential = dormant).
+                // Nothing in the existing graph points to it yet. Future CHAIN_EXTEND /
+                // LOOP_BRANCH mutations can wire it in; if they never do, MODE_TRIM removes it.
+                if (mode_count >= mutation_params.max_modes_per_genome) { return; }
+
+                let last_abs  = dst_base + mode_count - 1u;
+                let new_abs   = dst_base + mode_count;
+                let new_abs_i = i32(new_abs);
+
+                // Inherit cell type and basic physics from last mode
+                mode_cell_types[new_abs] = mode_cell_types[last_abs];
+                mode_properties_v0[new_abs] = mode_properties_v0[last_abs];
+                mode_properties_v1[new_abs] = mode_properties_v1[last_abs];
+                // Zero out the remaining sub-buffers (safe defaults)
+                mode_properties_v2[new_abs] = vec4<f32>(0.0, 0.5, -1.0, 0.5);   // max_splits=-1, split_ratio=0.5
+                mode_properties_v3[new_abs] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+                mode_properties_v4[new_abs] = vec4<f32>(20.0, -1.0, -1.0, 0.0); // max_adhesions=20
+
+                // Self-referencing children (dormant)
+                child_mode_indices_buf[new_abs] = vec2<i32>(new_abs_i, new_abs_i);
+
+                // Inherit adhesion settings from last mode
+                adhesion_settings_v0[new_abs] = adhesion_settings_v0[last_abs];
+                adhesion_settings_v1[new_abs] = adhesion_settings_v1[last_abs];
+                adhesion_settings_v2[new_abs] = adhesion_settings_v2[last_abs];
+
+                // Inherit orientation data from last mode
+                genome_mode_data_v0[new_abs] = genome_mode_data_v0[last_abs];
+                genome_mode_data_v1[new_abs] = genome_mode_data_v1[last_abs];
+                genome_mode_data_v2[new_abs] = genome_mode_data_v2[last_abs];
+                genome_mode_data_v3[new_abs] = genome_mode_data_v3[last_abs];
+                genome_mode_data_v4[new_abs] = genome_mode_data_v4[last_abs];
+
+                // No adhesion flags (new mode starts unconnected)
+                parent_make_adhesion_flags[new_abs]  = 0u;
+                child_a_keep_adhesion_flags[new_abs] = 1u;
+                child_b_keep_adhesion_flags[new_abs] = 1u;
+
+                // Inherit color from last mode with a small random tint
+                var c = mode_colors[last_abs];
+                c[0] = clamp(c[0] + (rng_f32(cell_id, salt_base + 900u) - 0.5) * 0.15, 0.0, 1.0);
+                c[1] = clamp(c[1] + (rng_f32(cell_id, salt_base + 901u) - 0.5) * 0.15, 0.0, 1.0);
+                c[2] = clamp(c[2] + (rng_f32(cell_id, salt_base + 902u) - 0.5) * 0.15, 0.0, 1.0);
+                mode_colors[new_abs] = c;
+                mode_emissive[new_abs] = mode_emissive[last_abs];
+
+                // Zero out signal/regulation settings (no signal wiring on new mode)
+                signal_settings_v0[new_abs] = vec4<f32>(-1.0, 1.0, 0.0, -1.0);
+                signal_settings_v1[new_abs] = vec4<f32>(1.0, 0.0, -1.0, 1.0);
+                signal_settings_v2[new_abs] = vec4<f32>(-1.0, -1.0, -1.0, 1.0);
+                signal_settings_v3[new_abs] = vec4<f32>(-1.0, -1.0, -1.0, 1.0);
+                signal_settings_v4[new_abs] = vec4<f32>(-1.0, 0.0, 0.0, 0.0);
+                regulation_params_buf[new_abs] = vec4<u32>(0xFFFFFFFFu, 0u, 1u, 0u); // disabled
+                glueocyte_env_adhesion_flags[new_abs] = 0u;
+                oculocyte_params_buf[new_abs] = vec4<u32>(1u, 0u, 0u, 0u);
+
+                // Commit: increment mode_count in genome_meta
+                genome_meta[new_genome_id].x = mode_count + 1u;
+
+            } else if (entry.data_type == 11u) {
+                // MODE_TRIM: remove the last mode if no other mode references it.
+                //
+                // We scan child_mode_indices for all modes except the last.
+                // If any child_a or child_b points to the last mode, abort.
+                // Also abort if a live cell is currently in the last mode — that check
+                // is deferred to CPU (rare; the cell will simply find mode_count shrunk).
+                if (mode_count <= 1u) { return; }
+
+                let last_local = mode_count - 1u;
+                let last_abs_i = i32(dst_base + last_local);
+
+                // Check if the initial_mode points to the last mode
+                if (genome_meta[new_genome_id].z == last_local) { return; }
+
+                // Scan all modes except last for references
+                for (var m = 0u; m < last_local; m++) {
+                    let idx = child_mode_indices_buf[dst_base + m];
+                    if (idx.x == last_abs_i || idx.y == last_abs_i) { return; }
+                }
+
+                // Unreferenced — safe to trim
+                genome_meta[new_genome_id].x = last_local;
+            }
+        }
+
         default: {}
     }
 
     // Always re-roll the color of the mutated mode so every mutation is visually distinct.
-    // Skip if the mutation was already a color mutation (buffer_id 9) to avoid redundancy.
-    if (entry.buffer_id != 9u) {
+    // Skip if the mutation was already a color mutation (buffer_id 9) or structural (buffer_id 14).
+    if (entry.buffer_id != 9u && entry.buffer_id != 14u) {
         var c = mode_colors[mode_abs];
         if (mutation_params.subtle_color_mutation != 0u) {
             // Subtle: small nudge per channel

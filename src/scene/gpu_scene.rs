@@ -8,7 +8,7 @@ use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, DeathParti
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
-use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, execute_signal_system, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem, DevorocyteConsumptionSystem, MossSystem, BoulderSystem};
+use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, execute_signal_system, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem, DevorocyteConsumptionSystem, MossSystem, BoulderSystem, GametocyteMergeSystem, GameteMergeEvent};
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
@@ -117,7 +117,9 @@ pub struct GpuScene {
     /// Pending boost tool result (temporary until GPU spatial queries are integrated)
     pending_boost_result: Option<usize>,
     /// Pending cell insertion (genome, world position)
-    pending_cell_insertion: Option<(glam::Vec3, Genome)>,
+    /// Pending cell insertion: (position, genome, initial_reserve_override, initial_nutrients_override).
+    /// Both are ×1000 fixed-point; 0 means "use cell_type default".
+    pending_cell_insertion: Option<(glam::Vec3, Genome, u32, u32)>,
     /// Pending tool query position and type for GPU spatial query
     pending_query_position: Option<(f32, f32, ToolQueryType)>,  // (screen_x, screen_y, query_type)
     /// Active query type waiting for GPU result
@@ -275,6 +277,19 @@ pub struct GpuScene {
     devorocyte_spatial_bind_group: Option<wgpu::BindGroup>,
     /// Cached devorocyte physics bind groups (one per triple buffer index)
     devorocyte_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
+
+    /// Gametocyte merge detection system
+    gametocyte_merge_system: Option<GametocyteMergeSystem>,
+    /// Cached gametocyte cell data bind group (shared across frames, recreated on organism system change)
+    gametocyte_cell_data_bind_group: Option<wgpu::BindGroup>,
+    /// Cached gametocyte spatial bind group
+    gametocyte_spatial_bind_group: Option<wgpu::BindGroup>,
+    /// Cached gametocyte physics bind groups (one per triple buffer index)
+    gametocyte_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
+    /// Pending gamete merge events waiting to be processed (decoded from staging buffer)
+    pending_gamete_merges: Vec<GameteMergeEvent>,
+    /// Tracks whether a staging readback is in flight for gamete events
+    gamete_readback_in_flight: bool,
     /// Moss system for cave wall vegetation (growth, erosion, consumption)
     pub moss_system: Option<MossSystem>,
     /// Whether to show moss on cave walls
@@ -698,6 +713,12 @@ impl GpuScene {
             devorocyte_cell_data_bind_group: None,
             devorocyte_spatial_bind_group: None,
             devorocyte_physics_bind_groups: None,
+            gametocyte_merge_system: None,
+            gametocyte_cell_data_bind_group: None,
+            gametocyte_spatial_bind_group: None,
+            gametocyte_physics_bind_groups: None,
+            pending_gamete_merges: Vec::new(),
+            gamete_readback_in_flight: false,
             moss_system: None,
             show_moss: true,
             moss_needs_clear: false,
@@ -1165,6 +1186,7 @@ impl GpuScene {
                 devorocyte_consume_range: 0.5,
                 devorocyte_consume_rate: 30.0,
                 vascular_outlet: false,
+                gametocyte_merge_range: 0.5,
                 child_a: crate::genome::ChildSettings {
                     mode_number: child_a_local,
                     orientation: qa,
@@ -1394,6 +1416,8 @@ impl GpuScene {
         // We run it here (before the main physics step) using the grid from the previous frame,
         // which is a one-frame lag but avoids a second grid build pass.
         self.run_devorocyte_consumption(device, encoder);
+        // Run gametocyte merge detection — detects contact between gametes from different organisms
+        self.run_gametocyte_merge(device, encoder, queue);
         // Run moss consumption (phagocytes eating moss) alongside nutrient consumption
         self.run_moss_consumption(device, encoder, queue);
         // Run photocyte light consumption each physics step (reads pre-computed light field)
@@ -2020,6 +2044,8 @@ impl GpuScene {
         self.gpu_triple_buffers.incremental_sync_devorocyte_mode_properties(queue, &genome, global_start_index);
         // Update vasculocyte mode properties for this genome's modes only
         self.gpu_triple_buffers.incremental_sync_vasculocyte_mode_properties(queue, &genome, global_start_index);
+        // Update gametocyte mode properties for this genome's modes only
+        self.gpu_triple_buffers.incremental_sync_gametocyte_mode_properties(queue, &genome, global_start_index);
 
         // Update child mode indices for this genome's modes only
         self.gpu_triple_buffers.incremental_sync_child_mode_indices(device, genome_id, global_start_index, mode_count);
@@ -2246,6 +2272,8 @@ impl GpuScene {
         self.gpu_triple_buffers.sync_devorocyte_mode_properties(queue, &self.genomes);
         // Sync vasculocyte mode properties (v12)
         self.gpu_triple_buffers.sync_vasculocyte_mode_properties(queue, &self.genomes);
+        // Sync gametocyte mode properties (v13)
+        self.gpu_triple_buffers.sync_gametocyte_mode_properties(queue, &self.genomes);
 
         // Sync mode cell types lookup table (for deriving cell_type from mode_index)
         self.gpu_triple_buffers.sync_mode_cell_types(queue, &self.genomes);
@@ -2321,7 +2349,7 @@ impl GpuScene {
     /// Queue a cell insertion to be processed during the next render frame.
     /// This allows cell insertion to be initiated from input handling without needing device/encoder/queue.
     pub fn queue_cell_insertion(&mut self, world_position: glam::Vec3, genome: Genome) {
-        self.pending_cell_insertion = Some((world_position, genome));
+        self.pending_cell_insertion = Some((world_position, genome, 0, 0));
     }
     
     /// Process any pending cell insertion during render frame when device/encoder/queue are available.
@@ -2332,8 +2360,8 @@ impl GpuScene {
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
     ) -> bool {
-        if let Some((world_position, genome)) = self.pending_cell_insertion.take() {
-            self.insert_cell_from_genome(device, encoder, queue, world_position, &genome).is_some()
+        if let Some((world_position, genome, initial_reserve, initial_nutrients)) = self.pending_cell_insertion.take() {
+            self.insert_cell_from_genome(device, encoder, queue, world_position, &genome, initial_reserve, initial_nutrients).is_some()
         } else {
             false
         }
@@ -2349,6 +2377,8 @@ impl GpuScene {
         queue: &wgpu::Queue,
         world_position: glam::Vec3,
         genome: &Genome,
+        initial_reserve: u32,
+        initial_nutrients: u32,
     ) -> Option<usize> {
         // Note: We don't block insertion based on current_cell_count because:
         // 1. current_cell_count is the "high water mark" - it never decreases when cells die
@@ -2404,6 +2434,8 @@ impl GpuScene {
                 self.current_time,                   // birth_time
                 self.next_cell_id,                   // cell_id
                 &self.genomes,
+                if initial_reserve != 0 { Some(initial_reserve) } else { None },
+                if initial_nutrients != 0 { Some(initial_nutrients) } else { None },
             );
             
             // Update local tracking
@@ -4285,6 +4317,9 @@ impl GpuScene {
         // Initialize devorocyte consumption system
         self.initialize_devorocyte_consumption(device);
 
+        // Initialize gametocyte merge system
+        self.initialize_gametocyte_merge(device);
+
         // Initialize moss system for cave wall vegetation
         self.initialize_moss_system(device);
 
@@ -4402,6 +4437,202 @@ impl GpuScene {
         ) {
             // Dispatch at full capacity — the shader reads cell_count_buffer[0] internally.
             system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, self.gpu_triple_buffers.capacity);
+        }
+    }
+
+    fn initialize_gametocyte_merge(&mut self, device: &wgpu::Device) {
+        if self.gametocyte_merge_system.is_some() {
+            return;
+        }
+        self.gametocyte_merge_system = Some(GametocyteMergeSystem::new(device));
+        log::info!("Gametocyte merge system initialized");
+    }
+
+    /// Run gametocyte merge detection: clear events, dispatch shader, schedule readback.
+    fn run_gametocyte_merge(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
+        let system = match &self.gametocyte_merge_system {
+            Some(s) => s,
+            None => return,
+        };
+
+        // Clear event counter at the start of each frame
+        system.clear_events(queue);
+
+        // Cache physics bind groups (one per triple buffer index)
+        if self.gametocyte_physics_bind_groups.is_none() {
+            let bufs = &self.gpu_triple_buffers;
+            self.gametocyte_physics_bind_groups = Some([
+                system.create_physics_bind_group(device, &bufs.physics_params, &bufs.position_and_mass[0], &bufs.velocity[0], &bufs.position_and_mass[0], &bufs.velocity[0], &bufs.cell_count_buffer),
+                system.create_physics_bind_group(device, &bufs.physics_params, &bufs.position_and_mass[1], &bufs.velocity[1], &bufs.position_and_mass[1], &bufs.velocity[1], &bufs.cell_count_buffer),
+                system.create_physics_bind_group(device, &bufs.physics_params, &bufs.position_and_mass[2], &bufs.velocity[2], &bufs.position_and_mass[2], &bufs.velocity[2], &bufs.cell_count_buffer),
+            ]);
+        }
+
+        // Cache cell data bind group (depends on organism_label_system)
+        if self.gametocyte_cell_data_bind_group.is_none() {
+            let bufs = &self.gpu_triple_buffers;
+            if let Some(org_system) = self.organism_label_system.as_ref() {
+                self.gametocyte_cell_data_bind_group = Some(system.create_cell_data_bind_group(
+                    device,
+                    &bufs.cell_types,
+                    &bufs.death_flags,
+                    &org_system.label_buffer,
+                    &bufs.genome_ids,
+                    &bufs.mode_indices,
+                    &bufs.mode_properties_v13,
+                    &bufs.embryocyte_reserve_buffer,
+                ));
+            }
+        }
+
+        // Cache spatial bind group
+        if self.gametocyte_spatial_bind_group.is_none() {
+            let bufs = &self.gpu_triple_buffers;
+            self.gametocyte_spatial_bind_group = Some(system.create_spatial_bind_group(
+                device,
+                &bufs.spatial_grid_counts,
+                &bufs.spatial_grid_cells,
+                &bufs.cell_grid_indices,
+            ));
+        }
+
+        let output_idx = self.gpu_triple_buffers.output_buffer_index();
+        if let (Some(ref physics_bgs), Some(ref cell_bg), Some(ref spatial_bg)) = (
+            &self.gametocyte_physics_bind_groups,
+            &self.gametocyte_cell_data_bind_group,
+            &self.gametocyte_spatial_bind_group,
+        ) {
+            system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, self.gpu_triple_buffers.capacity as usize);
+            // Schedule async readback of events after dispatch
+            if !self.gamete_readback_in_flight {
+                system.schedule_readback(encoder);
+                self.gamete_readback_in_flight = true;
+            }
+        }
+    }
+
+    /// Poll the gamete events staging buffer and process any completed merges.
+    /// Uses a non-blocking poll — if the staging buffer isn't mapped yet, waits until next frame.
+    fn poll_gamete_merge_events(&mut self, device: &wgpu::Device, _queue: &wgpu::Queue) {
+        if !self.gamete_readback_in_flight {
+            return;
+        }
+        if self.gametocyte_merge_system.is_none() {
+            return;
+        }
+
+        // Try to non-blockingly map the staging buffer and read events into a local Vec.
+        // We scope the borrow on `gametocyte_merge_system` tightly so that `self` can be
+        // mutated afterward without a live borrow conflict.
+        let maybe_events: Option<Vec<GameteMergeEvent>> = {
+            let system = self.gametocyte_merge_system.as_ref().unwrap();
+            let buffer_slice = system.staging_buffer.slice(..);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            buffer_slice.map_async(wgpu::MapMode::Read, move |r| { let _ = sender.send(r); });
+            device.poll(wgpu::PollType::Poll);
+            if let Ok(Ok(())) = receiver.try_recv() {
+                let data = buffer_slice.get_mapped_range();
+                let evs = GametocyteMergeSystem::parse_events(&data);
+                drop(data);
+                system.staging_buffer.unmap();
+                Some(evs)
+            } else {
+                None
+            }
+        }; // borrow of gametocyte_merge_system ends here
+
+        if let Some(new_events) = maybe_events {
+            self.gamete_readback_in_flight = false;
+            self.pending_gamete_merges.extend(new_events);
+        }
+
+        self.process_gamete_merge_events();
+    }
+
+    /// Perform genome crossover for pending gamete merge events and spawn offspring.
+    fn process_gamete_merge_events(&mut self) {
+        if self.pending_gamete_merges.is_empty() {
+            return;
+        }
+        let events: Vec<GameteMergeEvent> = std::mem::take(&mut self.pending_gamete_merges);
+        let current_frame = self.current_frame as u64;
+
+        for (i, event) in events.iter().enumerate() {
+            let genome_a_id = event.genome_a_id as usize;
+            let genome_b_id = event.genome_b_id as usize;
+
+            if genome_a_id >= self.genomes.len() || genome_b_id >= self.genomes.len() {
+                log::warn!("Gamete merge: out-of-range genome ids {} / {}", genome_a_id, genome_b_id);
+                continue;
+            }
+
+            // --- Similarity gate ---
+            // Compute genome similarity: mode-count alignment × cell-type match fraction.
+            let similarity = crate::genome::Genome::similarity(
+                &self.genomes[genome_a_id],
+                &self.genomes[genome_b_id],
+            );
+
+            if similarity < crate::genome::GAMETOCYTE_MIN_SIMILARITY {
+                log::debug!(
+                    "Gamete merge rejected: '{}' × '{}' similarity {:.2} < {:.2}",
+                    self.genomes[genome_a_id].name,
+                    self.genomes[genome_b_id].name,
+                    similarity,
+                    crate::genome::GAMETOCYTE_MIN_SIMILARITY,
+                );
+                continue; // Incompatible — both cells already died, no offspring spawned
+            }
+
+            // --- Crossover ---
+            let rng_seed = current_frame
+                .wrapping_add((event.cell_a_idx as u64).wrapping_mul(0x9e3779b97f4a7c15))
+                .wrapping_add(event.cell_b_idx as u64)
+                .wrapping_add(i as u64);
+
+            let offspring_genome = crate::genome::Genome::crossover(
+                &self.genomes[genome_a_id],
+                &self.genomes[genome_b_id],
+                rng_seed,
+            );
+
+            // Determine the initial cell type from the crossover genome.
+            // The gametes become whatever the offspring genome's initial mode specifies —
+            // no forced override. The combined reserve is only meaningful for Embryocyte
+            // initial cells (cell_type == 10); for all other types the reserve is discarded
+            // and the cell starts with normal full nutrients instead.
+            let initial_idx = offspring_genome.initial_mode as usize;
+            let initial_cell_type = offspring_genome
+                .modes
+                .get(initial_idx)
+                .map(|m| m.cell_type)
+                .unwrap_or(0);
+
+            let is_embryocyte = initial_cell_type == crate::cell::CellType::Embryocyte as i32;
+
+            // Pass combined reserve only when the initial cell is an Embryocyte.
+            // For any other cell type: convert the reserve 1:1 into nutrients (same ×1000
+            // fixed-point scale), capped at 100000 (= 100.0, a full nutrient pool).
+            // The reserve itself is discarded for non-storage cells.
+            let initial_reserve = if is_embryocyte { event.combined_reserve } else { 0 };
+            let initial_nutrients = if is_embryocyte { 0 } else {
+                event.combined_reserve.min(100_000)
+            };
+
+            log::info!(
+                "Gamete merge: '{}' × '{}' → '{}' cell_type={} (similarity {:.2}, reserve {})",
+                self.genomes[genome_a_id].name,
+                self.genomes[genome_b_id].name,
+                offspring_genome.name,
+                initial_cell_type,
+                similarity,
+                event.combined_reserve / 1000,
+            );
+
+            let spawn_pos = glam::Vec3::new(event.spawn_x, event.spawn_y, event.spawn_z);
+            if self.pending_cell_insertion.is_none() {
+                self.pending_cell_insertion = Some((spawn_pos, offspring_genome, initial_reserve, initial_nutrients));
+            }
         }
     }
 
@@ -5739,6 +5970,9 @@ impl Scene for GpuScene {
                 self.extract_nutrient_particles(&mut encoder, device, queue, dt);
             }
         }
+
+        // Poll gamete merge events from the staging buffer and process crossovers
+        self.poll_gamete_merge_events(device, queue);
 
         // Process any pending cell insertion from input handling
         let cell_inserted = self.process_pending_insertion(device, &mut encoder, queue);

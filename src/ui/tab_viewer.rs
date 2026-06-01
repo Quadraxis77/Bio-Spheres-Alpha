@@ -2662,6 +2662,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     devorocyte_consume_range: 0.5,
                     devorocyte_consume_rate: 30.0,
                     vascular_outlet: false,
+                    gametocyte_merge_range: 0.5,
                     child_a: crate::genome::ChildSettings {
                         mode_number: idx as i32,
                         ..Default::default()
@@ -3773,6 +3774,79 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.colored_label(palette().status_warn, "⚠ No triggers enabled — cell will never release.");
                     }
                 });
+            } else if mode.cell_type == 13 { // Gametocyte (cell_type == 13)
+                group_container(ui, "Gametocyte Functions", egui::Color32::from_rgb(200, 120, 200), |ui| {
+                    ui.label("Accumulates reserve while attached. When release triggers fire, it detaches and seeks a compatible partner. On contact, both gametes die and their combined reserve seeds a new Embryocyte with a crossover genome.");
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label("Merge Range:");
+                        ui.add(egui::Slider::new(&mut mode.gametocyte_merge_range, 0.0..=2.0)
+                            .text("u")
+                            .step_by(0.05))
+                            .on_hover_text("Extra contact distance beyond cell radii that triggers a merge (0 = must physically touch).");
+                    });
+                    ui.colored_label(egui::Color32::from_rgb(180, 140, 180),
+                        "  ▸ Only merges with genomes of similar cell-type structure.");
+                    ui.separator();
+
+                    // Release triggers — identical to Embryocyte
+                    ui.label("Release triggers (detach from organism when ALL enabled are satisfied):");
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut mode.embryocyte_use_timer, "Timer")
+                            .on_hover_text("Release after being attached this many seconds.");
+                    });
+                    if mode.embryocyte_use_timer {
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            ui.style_mut().spacing.slider_width = (available - 70.0).max(50.0);
+                            ui.add(egui::Slider::new(&mut mode.embryocyte_release_timer, 0.1..=300.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.embryocyte_release_timer).speed(0.1).range(0.1..=300.0));
+                        });
+                    }
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut mode.embryocyte_use_threshold, "Reserve Threshold")
+                            .on_hover_text("Release only once reserve reaches this level. Max is 65535.");
+                    });
+                    if mode.embryocyte_use_threshold {
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            ui.style_mut().spacing.slider_width = (available - 70.0).max(50.0);
+                            let mut threshold_f32 = mode.embryocyte_threshold_value as f32;
+                            ui.add(egui::Slider::new(&mut threshold_f32, 0.0_f32..=65535.0_f32).show_value(false));
+                            ui.add(egui::DragValue::new(&mut threshold_f32).speed(10.0).range(0.0_f32..=65535.0_f32));
+                            mode.embryocyte_threshold_value = threshold_f32 as u32;
+                        });
+                    }
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut mode.embryocyte_use_signal, "Signal")
+                            .on_hover_text("Release when the parent sends a specific signal.");
+                    });
+                    if mode.embryocyte_use_signal {
+                        let ch_labels = ["Ch 0","Ch 1","Ch 2","Ch 3","Ch 4","Ch 5","Ch 6","Ch 7",
+                                         "Ch 8","Ch 9","Ch 10","Ch 11","Ch 12","Ch 13","Ch 14","Ch 15"];
+                        let ch_idx = (mode.embryocyte_signal_channel as usize).min(15);
+                        ui.horizontal(|ui| {
+                            ui.label("Channel:");
+                            egui::ComboBox::from_id_salt("gametocyte_signal_channel")
+                                .selected_text(ch_labels[ch_idx])
+                                .show_ui(ui, |ui| {
+                                    for (i, label) in ch_labels.iter().enumerate() {
+                                        ui.selectable_value(&mut mode.embryocyte_signal_channel, i as i32, *label);
+                                    }
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            ui.style_mut().spacing.slider_width = (available - 70.0).max(50.0);
+                            ui.add(egui::Slider::new(&mut mode.embryocyte_signal_value, 0.0..=2047.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.embryocyte_signal_value).speed(1.0).range(0.0..=2047.0));
+                        });
+                    }
+                    if !mode.embryocyte_use_timer && !mode.embryocyte_use_threshold && !mode.embryocyte_use_signal {
+                        ui.separator();
+                        ui.colored_label(palette().status_warn, "⚠ No triggers — gamete will never detach.");
+                    }
+                });
             } else if mode.cell_type == 12 { // Vasculocyte (cell_type == 12)
                 group_container(ui, "Vasculocyte Functions", egui::Color32::from_rgb(60, 160, 200), |ui| {
                     ui.label("Forms high-throughput nutrient conduits through the organism.");
@@ -4664,6 +4738,9 @@ fn sync_mode_changes_to_others(
 
         // Vasculocyte
         if updated.vascular_outlet != snapshot.vascular_outlet { other.vascular_outlet = updated.vascular_outlet; }
+
+        // Gametocyte
+        if (updated.gametocyte_merge_range - snapshot.gametocyte_merge_range).abs() > f32::EPSILON { other.gametocyte_merge_range = updated.gametocyte_merge_range; }
     }
 }
 

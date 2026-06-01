@@ -314,20 +314,20 @@ impl GpuCellInsertion {
             max_splits,
             cell_id: 0, // Let shader generate new cell ID
             cell_type,
-            _pad2: 0,
-            _pad3: 0,
+            initial_reserve: if cell_type == 10 { 65535000 } else { 0 },
+            initial_nutrients: 0,
             _pad4: 0,
         };
-        
+
         // Upload parameters to GPU
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
-        
+
         // Dispatch compute shader (single workgroup as per requirements)
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Cell Insertion Pass"),
             timestamp_writes: None,
         });
-        
+
         compute_pass.set_pipeline(&self.pipeline);
         compute_pass.set_bind_group(0, &self.physics_bind_group, &[]);
         compute_pass.set_bind_group(1, &self.params_bind_group, &[]);
@@ -353,6 +353,14 @@ impl GpuCellInsertion {
         birth_time: f32,
         cell_id: u32,
         genomes: &[Genome],
+        // Initial embryocyte reserve (×1000 fixed-point). Pass 0 for normal cells;
+        // the shader will use 65535000 for Embryocyte cell_type if this is 0.
+        // Pass a non-zero value to override (e.g. combined gamete reserve).
+        initial_reserve_override: Option<u32>,
+        // Initial nutrients (×1000 fixed-point). Pass 0 for default (100000 = full).
+        // Pass a non-zero value to cap starting nutrients (e.g. gamete merge where
+        // the combined reserve doesn't cover a full nutrient pool).
+        initial_nutrients_override: Option<u32>,
     ) {
         // Get parameters from genome mode
         let (split_interval, split_mass, stiffness, nutrient_gain_rate, max_cell_size, max_splits, cell_type) = 
@@ -417,10 +425,12 @@ impl GpuCellInsertion {
             nutrient_gain_rate,
             max_cell_size,
             max_splits,
-            cell_id, // Use provided cell ID
+            cell_id,
             cell_type,
-            _pad2: 0,
-            _pad3: 0,
+            initial_reserve: initial_reserve_override.unwrap_or_else(|| {
+                if cell_type == 10 { 65535000 } else { 0 }
+            }),
+            initial_nutrients: initial_nutrients_override.unwrap_or(0),
             _pad4: 0,
         };
         

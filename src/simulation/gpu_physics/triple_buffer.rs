@@ -374,6 +374,10 @@ pub struct GpuTripleBufferSystem {
     /// v12: [vascular_outlet as f32, 0.0, 0.0, 0.0]
     pub mode_properties_v12: wgpu::Buffer,
 
+    /// Mode properties v13 for Gametocyte parameters (16 bytes per mode each)
+    /// v13: [merge_range, 0.0, 0.0, 0.0]
+    pub mode_properties_v13: wgpu::Buffer,
+
     /// Per-cell Embryocyte reserve buffer (one u32 per cell).
     /// Embryocytes: sole energy source; burns at 10 units/sec when free.
     /// Non-Embryocytes: provides extended life; burns before normal nutrients.
@@ -682,6 +686,9 @@ impl GpuTripleBufferSystem {
         // Mode properties v12 for Vasculocyte parameters (16 bytes per mode each)
         let mode_properties_v12 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V12");
 
+        // Mode properties v13 for Gametocyte parameters (16 bytes per mode each)
+        let mode_properties_v13 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V13");
+
         // Per-cell Embryocyte reserve buffer (one u32 per cell, zero-initialized)
         let embryocyte_reserve_buffer = Self::create_zero_initialized_storage_buffer(
             device,
@@ -808,6 +815,7 @@ impl GpuTripleBufferSystem {
             mode_properties_v10,
             mode_properties_v11,
             mode_properties_v12,
+            mode_properties_v13,
             embryocyte_reserve_buffer,
             mode_cell_types,
             behavior_flags,
@@ -1629,6 +1637,31 @@ impl GpuTripleBufferSystem {
         if !v12.is_empty() {
             let offset = (global_start_index * 16) as u64;
             queue.write_buffer(&self.mode_properties_v12, offset, bytemuck::cast_slice(&v12));
+        }
+    }
+
+    /// Sync Gametocyte mode properties.
+    /// v13: [merge_range, 0.0, 0.0, 0.0]
+    pub fn sync_gametocyte_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let mut v13: Vec<[f32; 4]> = Vec::new();
+        for genome in genomes {
+            for mode in &genome.modes {
+                v13.push([mode.gametocyte_merge_range, 0.0, 0.0, 0.0]);
+            }
+        }
+        if !v13.is_empty() {
+            queue.write_buffer(&self.mode_properties_v13, 0, bytemuck::cast_slice(&v13));
+        }
+    }
+
+    /// Incremental sync of Gametocyte mode properties for a single genome.
+    pub fn incremental_sync_gametocyte_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
+        let v13: Vec<[f32; 4]> = genome.modes.iter()
+            .map(|mode| [mode.gametocyte_merge_range, 0.0, 0.0, 0.0])
+            .collect();
+        if !v13.is_empty() {
+            let offset = (global_start_index * 16) as u64;
+            queue.write_buffer(&self.mode_properties_v13, offset, bytemuck::cast_slice(&v13));
         }
     }
 

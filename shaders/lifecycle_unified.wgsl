@@ -400,7 +400,11 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Embryocytes never divide normally. When free (no active adhesions) they burn
     // their reserve at 10 units/sec. When attached, AND-logic release triggers fire
     // division_flags = 2u which signals division_execute to drop all adhesions.
-    if (cell_type == 10u) {
+    // Gametocytes (13) share the full Embryocyte lifecycle: reserve storage, release
+    // triggers, and free-cell reserve burn. The only difference is that a free Gametocyte
+    // should never self-hatch — split_interval is set to the >59 sentinel at default time,
+    // so the "free → divide" branch fires only when the user has configured it explicitly.
+    if (cell_type == 10u || cell_type == 13u) {
         // Count active adhesions
         let emb_adh_base = cell_idx * MAX_ADHESIONS_PER_CELL;
         var emb_adh_count = 0u;

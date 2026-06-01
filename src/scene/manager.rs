@@ -351,7 +351,7 @@ impl SceneManager {
         match self.current_mode {
             crate::ui::SimulationMode::Gpu => {
                 if let Some(gpu_scene) = self.gpu_scene.as_mut() {
-                    gpu_scene.insert_cell_from_genome(device, encoder, queue, world_position, genome)
+                    gpu_scene.insert_cell_from_genome(device, encoder, queue, world_position, genome, 0, 0)
                 } else {
                     None
                 }

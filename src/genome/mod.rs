@@ -6,6 +6,11 @@ use glam::{Vec2, Vec3, Quat};
 
 pub use serialization::{GenomeDeserializeError, GenomeSerializeError};
 
+/// Minimum genome similarity [0.0, 1.0] required for two Gametocytes to merge.
+/// Computed as: mode-count alignment × cell-type match fraction across the shared mode prefix.
+/// At 0.5, organisms must share at least half their cell-type sequence (weighted by size alignment).
+pub const GAMETOCYTE_MIN_SIMILARITY: f32 = 0.5;
+
 /// Maximum number of modes a genome can have.
 /// Raised from 80 to 128 to give more room for complex creatures.
 pub const MAX_MODES: usize = 128;
@@ -223,6 +228,9 @@ pub struct ModeSettings {
     // Vasculocyte settings
     pub vascular_outlet: bool, // When true, releases nutrients to non-vascular neighbors; when false, sealed (pipe only)
 
+    // Gametocyte settings
+    pub gametocyte_merge_range: f32, // Extra contact range for merge detection beyond cell radii (0.0 to 2.0)
+
     // Child settings
     pub child_a: ChildSettings,
     pub child_b: ChildSettings,
@@ -340,6 +348,7 @@ impl Default for ModeSettings {
             devorocyte_consume_range: 0.5,
             devorocyte_consume_rate: 30.0,
             vascular_outlet: false,
+            gametocyte_merge_range: 0.5,
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),
             adhesion_settings: AdhesionSettings::default(),
@@ -1370,6 +1379,114 @@ impl Genome {
         }
 
         genome
+    }
+
+    /// Compute a similarity score [0.0, 1.0] between two genomes based on their mode sequences.
+    ///
+    /// The score is the product of two factors:
+    /// 1. **Mode-count alignment**: `min(len_a, len_b) / max(len_a, len_b)` — penalises very
+    ///    different genome sizes (a genome with 4 modes vs one with 16 scores only 0.25 here).
+    /// 2. **Cell-type match fraction**: for the overlapping prefix of modes (up to `min(len_a, len_b)`),
+    ///    the proportion of positions where both genomes have the same cell_type.
+    ///
+    /// A genome compared with itself always returns 1.0.
+    /// Returns 0.0 if either genome has no modes.
+    pub fn similarity(a: &Genome, b: &Genome) -> f32 {
+        let len_a = a.modes.len();
+        let len_b = b.modes.len();
+        if len_a == 0 || len_b == 0 {
+            return 0.0;
+        }
+
+        let max_len = len_a.max(len_b) as f32;
+        let min_len = len_a.min(len_b) as f32;
+        let count_alignment = min_len / max_len;  // 1.0 when equal, drops toward 0 as sizes diverge
+
+        let compare_len = len_a.min(len_b);
+        let matching = (0..compare_len)
+            .filter(|&i| a.modes[i].cell_type == b.modes[i].cell_type)
+            .count();
+        let type_match = matching as f32 / compare_len as f32;
+
+        count_alignment * type_match
+    }
+
+    /// Create a hybrid offspring genome by crossing over two parent genomes.
+    ///
+    /// Each mode in the offspring is independently drawn from either parent_a or parent_b
+    /// with equal probability (per-mode uniform crossover). The offspring genome's mode
+    /// count matches parent_a's. Child mode references are remapped to stay within the
+    /// offspring's valid range. The initial_mode is taken from parent_a.
+    ///
+    /// This mirrors biological sexual reproduction: the offspring inherits a random mix
+    /// of traits from both parents, enabling exploration of the combined trait space.
+    ///
+    /// # Arguments
+    /// * `parent_a` - First parent genome (determines mode count and initial_mode)
+    /// * `parent_b` - Second parent genome
+    /// * `rng_seed` - Seed for crossover RNG (e.g. frame number XOR'd with cell IDs)
+    pub fn crossover(parent_a: &Genome, parent_b: &Genome, rng_seed: u64) -> Genome {
+        let a_count = parent_a.modes.len();
+        let b_count = parent_b.modes.len();
+        // Use the longer parent's length so dormant tail modes from either parent
+        // are preserved in the offspring rather than silently dropped.
+        let mode_count = a_count.max(b_count).max(1);
+
+        // Simple LCG for per-mode coin flips
+        let mut rng = rng_seed.wrapping_add(0x9e3779b97f4a7c15);
+        let mut next_bit = || -> bool {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (rng >> 63) == 1
+        };
+
+        let mut modes = Vec::with_capacity(mode_count);
+        for i in 0..mode_count {
+            let have_a = i < a_count;
+            let have_b = i < b_count;
+
+            // Pick mode source based on what's available:
+            // - Both present: coin flip
+            // - Only one present: take it directly (preserves tail experiments)
+            let pick_b = match (have_a, have_b) {
+                (true,  true)  => next_bit(),
+                (false, true)  => true,
+                (true,  false) => false,
+                (false, false) => unreachable!(),
+            };
+
+            let mut mode = if pick_b {
+                parent_b.modes[i].clone()
+            } else {
+                parent_a.modes[i].clone()
+            };
+
+            // Remap child mode indices to stay within [0, mode_count)
+            let clamp_mode = |idx: i32| -> i32 {
+                if idx < 0 { idx } else { idx.min(mode_count as i32 - 1) }
+            };
+            mode.child_a.mode_number = clamp_mode(mode.child_a.mode_number);
+            mode.child_b.mode_number = clamp_mode(mode.child_b.mode_number);
+            mode.mode_a_after_splits = clamp_mode(mode.mode_a_after_splits);
+            mode.mode_b_after_splits = clamp_mode(mode.mode_b_after_splits);
+            mode.mode_switch_target  = clamp_mode(mode.mode_switch_target);
+
+            // Blend color from both parents at shared positions; tail modes keep their own color
+            if have_a && have_b {
+                mode.color = (parent_a.modes[i].color + parent_b.modes[i].color) * 0.5;
+            }
+
+            modes.push(mode);
+        }
+
+        let name = format!("{} × {}", parent_a.name, parent_b.name);
+        let initial_mode = parent_a.initial_mode.min(mode_count as i32 - 1).max(0);
+
+        Genome {
+            name,
+            initial_mode,
+            initial_orientation: parent_a.initial_orientation,
+            modes,
+        }
     }
 }
 

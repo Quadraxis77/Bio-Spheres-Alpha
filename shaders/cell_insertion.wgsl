@@ -60,10 +60,14 @@ struct CellInsertionParams {
     max_splits: u32,
     cell_id: u32,
     
-    // Cell type (16 bytes with padding)
+    // Cell type + initial reserve + initial nutrients (16 bytes)
     cell_type: u32,
-    _pad2: u32,
-    _pad3: u32,
+    // Initial embryocyte reserve (×1000 fixed-point).
+    // 0 means "use default for cell_type" (65535000 for Embryocyte/Gametocyte, 0 otherwise).
+    initial_reserve: u32,
+    // Initial nutrients (×1000 fixed-point).
+    // 0 means "use default" (100000 = full). Non-zero caps starting nutrients.
+    initial_nutrients: u32,
     _pad4: u32,
 }
 
@@ -320,21 +324,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     death_flags[slot] = 0u; // Alive
     division_flags[slot] = 0u; // Not dividing
     
-    // Initialize nutrients to 100.0 (full) = 100000 in fixed-point scale
-    atomicStore(&nutrients_buffer[slot], 100000i);
+    // Initialize nutrients.
+    // If initial_nutrients is non-zero, use it directly (e.g. gamete merge where the
+    // combined reserve doesn't cover a full nutrient pool).
+    // Otherwise default to 100.0 full = 100000 in fixed-point.
+    let nutrient_value = select(100000i, i32(insertion_params.initial_nutrients), insertion_params.initial_nutrients != 0u);
+    atomicStore(&nutrients_buffer[slot], nutrient_value);
     
     // Initialize cell type (0 = Test, 1 = Flagellocyte, etc.)
     cell_types[slot] = insertion_params.cell_type;
     
-    // Initialize reserve: Embryocytes (cell_type == 10) start with a full reserve
-    // (65535 whole units, stored ×1000 fixed-point = 65535000). All others start at 0.
-    // Writing here ensures the correct slot always gets the right value, regardless
-    // of what current_cell_count the CPU thinks is current.
-    if (insertion_params.cell_type == 10u) {
-        atomicStore(&embryocyte_reserves[slot], 65535000u);
-    } else {
-        atomicStore(&embryocyte_reserves[slot], 0u);
-    }
+    // Initialize reserve.
+    // If insertion_params.initial_reserve is non-zero, use it directly (e.g. gamete merge).
+    // Otherwise fall back to cell-type default: Embryocytes and Gametocytes start full,
+    // all other types start at 0.
+    let is_storage = (insertion_params.cell_type == 10u || insertion_params.cell_type == 13u);
+    let default_reserve = select(0u, 65535000u, is_storage);
+    let reserve_value = select(default_reserve, insertion_params.initial_reserve, insertion_params.initial_reserve != 0u);
+    atomicStore(&embryocyte_reserves[slot], reserve_value);
 
     // Update live cell count - always increment by 1
     // Whether we used a recycled slot or a new slot, we're adding one live cell

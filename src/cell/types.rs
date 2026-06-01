@@ -387,6 +387,23 @@ impl CellTypeVisuals {
                 v.fresnel_strength = 0.2;
                 v.nucleus_scale = 0.6;
             }
+            CellType::Gametocyte => {
+                // Soft, semi-translucent membrane with a glowing central nucleus.
+                // param_a = pulse_speed (pulsing glow animation rate)
+                // param_b = nucleus_glow (brightness of inner nucleus)
+                // param_c = membrane_translucency (0=opaque, 1=translucent)
+                v.param_a = 1.5;  // pulse_speed
+                v.param_b = 1.2;  // nucleus_glow
+                v.param_c = 0.6;  // membrane_translucency
+                v.param_d = 0.0;
+                v.specular_strength = 0.6;
+                v.specular_power = 24.0;
+                v.fresnel_strength = 0.5;
+                v.nucleus_scale = 0.55;
+                v.membrane_noise_scale = 2.5;
+                v.membrane_noise_strength = 0.08;
+                v.membrane_noise_speed = 1.5;
+            }
         }
         v
     }
@@ -535,11 +552,12 @@ pub enum CellType {
     Embryocyte = 10,
     Devorocyte = 11,
     Vasculocyte = 12,
+    Gametocyte = 13,
 }
 
 impl CellType {
     /// Number of registered cell types. Update when adding new types.
-    pub const COUNT: usize = 13;
+    pub const COUNT: usize = 14;
 
     /// Maximum number of cell types supported by GPU buffers.
     pub const MAX_TYPES: usize = 30;
@@ -560,6 +578,7 @@ impl CellType {
             CellType::Embryocyte,
             CellType::Devorocyte,
             CellType::Vasculocyte,
+            CellType::Gametocyte,
         ]
     }
 
@@ -584,12 +603,13 @@ impl CellType {
             CellType::Embryocyte => "Embryocyte",
             CellType::Devorocyte => "Devorocyte",
             CellType::Vasculocyte => "Vasculocyte",
+            CellType::Gametocyte => "Gametocyte",
         }
     }
 
     /// Get all cell type names as a slice.
     pub const fn names() -> &'static [&'static str] {
-        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte", "Buoyocyte", "Glueocyte", "Oculocyte", "Ciliocyte", "Myocyte", "Embryocyte", "Devorocyte", "Vasculocyte"]
+        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte", "Buoyocyte", "Glueocyte", "Oculocyte", "Ciliocyte", "Myocyte", "Embryocyte", "Devorocyte", "Vasculocyte", "Gametocyte"]
     }
 
     /// Convert from integer index to cell type.
@@ -608,6 +628,7 @@ impl CellType {
             10 => Some(CellType::Embryocyte),
             11 => Some(CellType::Devorocyte),
             12 => Some(CellType::Vasculocyte),
+            13 => Some(CellType::Gametocyte),
             _ => None,
         }
     }
@@ -678,6 +699,11 @@ impl CellType {
                 "Efficiently transports nutrients through the organism body along \
                  adhesion pathways. Acts as a sealed pipe by default; set Outlet to \
                  release nutrients to non-vascular neighbours.",
+
+            CellType::Gametocyte =>
+                "A reproductive gamete cell. When two Gametocytes from different \
+                 organisms come into contact, their genomes are crossed over and a \
+                 new hybrid offspring organism is spawned. Both Gametocytes then die.",
         }
     }
 
@@ -848,6 +874,18 @@ impl CellType {
                 applies_muscle_contraction: 0,
                 _padding: [0; 7],
             },
+            CellType::Gametocyte => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 0,
+                applies_swim_force: 0,
+                uses_texture_atlas: 0,
+                has_procedural_tail: 0,
+                gains_mass_from_light: 0,
+                is_storage_cell: 1, // Nutrients go into reserve, same as Embryocyte
+                applies_buoyancy: 0,
+                applies_cilia_force: 0,
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
+            },
         }
     }
 
@@ -910,6 +948,23 @@ impl CellType {
                 mode.split_mass = 2.5;
                 // Sealed by default — outlets must be explicitly enabled
                 mode.vascular_outlet = false;
+            }
+            CellType::Gametocyte => {
+                // Gametocytes behave like Embryocytes: nutrients go into reserve,
+                // release triggers control when they detach and seek a partner.
+                mode.nutrient_priority = 2.0;
+                mode.max_cell_size = 2.0;
+                mode.split_mass = 99.0; // Very high — Gametocytes never split on their own
+                mode.split_interval = 60.0; // Sentinel: never self-divide when free
+                mode.gametocyte_merge_range = 0.5;
+                // Release trigger: detach after accumulating enough reserve
+                mode.embryocyte_use_timer = false;
+                mode.embryocyte_release_timer = 15.0;
+                mode.embryocyte_use_threshold = true;
+                mode.embryocyte_threshold_value = 16384; // Half reserve = ready to mate
+                mode.embryocyte_use_signal = false;
+                mode.embryocyte_signal_channel = 0;
+                mode.embryocyte_signal_value = 1.0;
             }
             _ => {}
         }

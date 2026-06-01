@@ -71,6 +71,14 @@ pub mod data_type {
     /// T.child_b → L. This cross-connects two separate loop structures, making them
     /// share a convergence point and creating the branching interconnected topology.
     pub const LOOP_MERGE: u32 = 7;
+    /// Append a dormant mode to the tail of the genome.
+    /// The new mode inherits cell type and basic params from the last mode and is
+    /// self-referencing (dormant). Future CHAIN_EXTEND/LOOP_BRANCH mutations wire it in.
+    pub const MODE_APPEND: u32 = 10;
+    /// Remove the last mode from the genome if no other mode references it.
+    /// If the last mode is wired into the developmental graph, the operation is a no-op.
+    pub const MODE_TRIM: u32 = 11;
+
     /// Signal-wire: correlated mutation that solves the signal bootstrapping problem.
     /// In a single mutation event:
     ///   1. Picks a regulation channel (8-15)
@@ -107,6 +115,9 @@ pub mod buffer_id {
     pub const ADHESION_SETTINGS: u32 = 11;
     pub const SIGNAL_SETTINGS: u32 = 12;
     pub const REGULATION_PARAMS: u32 = 13;
+    /// Structural genome mutations: MODE_APPEND (data_type 10) and MODE_TRIM (data_type 11).
+    /// element_offset is unused for both.
+    pub const GENOME_STRUCTURE: u32 = 14;
 }
 
 /// Uniform params matching the WGSL MutationParams struct
@@ -1436,6 +1447,23 @@ impl MutationSystem {
                 buffer_id: buffer_id::SIGNAL_SETTINGS, element_offset: 4,
                 weight: 0.8, min_delta: 0.0, max_delta: 0.0,
                 min_value: 8.0, max_value: 15.0, data_type: data_type::SIGNAL_WIRE,
+            },
+
+            // ── Structural mutations: MODE_APPEND and MODE_TRIM ───────────────────
+            // Equal weight so genome length is a random walk, naturally selected by
+            // whether appended modes ever get wired into the developmental graph.
+            // Combined weight (~0.4 each) is ~5× rarer than typical parameter mutations
+            // (most params have weight 1.0–2.0) to keep structural change gradual.
+            // element_offset and delta fields are unused for these operations.
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_STRUCTURE, element_offset: 0,
+                weight: 0.4, min_delta: 0.0, max_delta: 0.0,
+                min_value: 0.0, max_value: 0.0, data_type: data_type::MODE_APPEND,
+            },
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_STRUCTURE, element_offset: 0,
+                weight: 0.4, min_delta: 0.0, max_delta: 0.0,
+                min_value: 0.0, max_value: 0.0, data_type: data_type::MODE_TRIM,
             },
         ]
     }
