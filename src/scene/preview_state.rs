@@ -334,6 +334,9 @@ impl PreviewState {
 
             // Hash vasculocyte settings
             mode.vascular_outlet.hash(&mut hasher);
+
+            // Hash gametocyte settings
+            mode.gametocyte_merge_range.to_bits().hash(&mut hasher);
         }
         
         hasher.finish()

@@ -29,6 +29,10 @@ pub const SENSE_MOSSROCK: u32 = 1 << 5; // bit 5
 
 /// Oculocyte cell type index
 const OCULOCYTE_TYPE: i32 = 7;
+/// Cognocyte cell type index
+const COGNOCYTE_TYPE: i32 = 14;
+/// Memorocyte cell type index
+const MEMOROCYTE_TYPE: i32 = 15;
 
 /// Clear all signal channels and flow tracking.
 pub fn clear_all_signals(state: &mut CanonicalState) {
@@ -377,21 +381,155 @@ pub fn adhesion_has_signal(state: &CanonicalState, cell_a: usize, cell_b: usize)
     false
 }
 
+/// Read a single signal channel value for a specific cell.
+/// Returns `None` if the channel has no signal.
+fn read_channel(state: &CanonicalState, cell_idx: usize, channel: usize) -> Option<f32> {
+    let idx = cell_idx * SIGNAL_CHANNELS + channel;
+    if idx < state.signal_channels.len() {
+        state.signal_channels[idx]
+    } else {
+        None
+    }
+}
+
+/// Read input channels for all Cognocyte cells, evaluate their operation,
+/// and return a list of signal emissions. Runs after an initial propagation
+/// pass so upstream sensor/regulation signals are already visible.
+///
+/// If a required input channel has no signal the cell emits nothing —
+/// misconfigured circuits go dark visibly rather than silently misbehave.
+pub fn process_cognocytes(
+    state: &CanonicalState,
+    genome: &Genome,
+) -> Vec<SignalEmission> {
+    let mut emissions = Vec::new();
+
+    for cell_idx in 0..state.cell_count {
+        let mode_idx = state.mode_indices[cell_idx];
+        let mode = match genome.modes.get(mode_idx) {
+            Some(m) => m,
+            None => continue,
+        };
+
+        if mode.cell_type != COGNOCYTE_TYPE {
+            continue;
+        }
+
+        let ch_a = mode.cognocyte_input_channel_a.clamp(0, 15) as usize;
+        let ch_b = mode.cognocyte_input_channel_b.clamp(0, 15) as usize;
+        let op   = mode.cognocyte_operation;
+
+        // NOT is unary — only A required.
+        let a = match read_channel(state, cell_idx, ch_a) {
+            Some(v) => v,
+            None => continue,
+        };
+        let b = if op == crate::cell::behaviors::cognocyte::OP_NOT {
+            0.0
+        } else {
+            match read_channel(state, cell_idx, ch_b) {
+                Some(v) => v,
+                None => continue,
+            }
+        };
+
+        let result = crate::cell::behaviors::cognocyte::evaluate(op, a, b);
+
+        let out_ch = mode.cognocyte_output_channel.clamp(0, 15) as usize;
+        let hops   = mode.cognocyte_output_hops.clamp(1, 20) as usize;
+
+        emissions.push(SignalEmission {
+            source_cell: cell_idx,
+            channel: out_ch,
+            value: result,
+            hops,
+        });
+    }
+
+    emissions
+}
+
+/// Update all Memorocyte leaky-integrator states and return their emissions.
+///
+/// Each tick: memory = memory * decay^dt + input * gain * dt
+/// The memory is always emitted (even while decaying) so downstream cells
+/// see the gradual fade rather than a hard cut-off.
+pub fn process_memorocytes(
+    state: &mut CanonicalState,
+    genome: &Genome,
+    dt: f32,
+) -> Vec<SignalEmission> {
+    let mut emissions = Vec::new();
+
+    for cell_idx in 0..state.cell_count {
+        let mode_idx = state.mode_indices[cell_idx];
+        let mode = match genome.modes.get(mode_idx) {
+            Some(m) => m,
+            None => continue,
+        };
+
+        if mode.cell_type != MEMOROCYTE_TYPE {
+            continue;
+        }
+
+        let in_ch  = mode.memorocyte_input_channel.clamp(0, 15) as usize;
+        let decay  = mode.memorocyte_decay.clamp(0.0, 1.0);
+        let gain   = mode.memorocyte_gain.clamp(0.0, 10.0);
+        let out_ch = mode.memorocyte_output_channel.clamp(0, 15) as usize;
+        let hops   = mode.memorocyte_output_hops.clamp(1, 20) as usize;
+
+        // Integrate input if present.
+        if let Some(input) = read_channel(state, cell_idx, in_ch) {
+            state.memo_state[cell_idx] += input * gain * dt;
+        }
+
+        // Frame-rate-independent exponential decay.
+        state.memo_state[cell_idx] *= decay.powf(dt);
+
+        let value = state.memo_state[cell_idx];
+        if value.abs() > 1e-6 {
+            emissions.push(SignalEmission {
+                source_cell: cell_idx,
+                channel: out_ch,
+                value,
+                hops,
+            });
+        }
+    }
+
+    emissions
+}
+
 /// Run the complete signal system for one frame:
 /// 1. Clear all signals
-/// 2. Run oculocyte sensing (channels 0-7)
-/// 3. Emit regulation signals (channels 8-15)
-/// 4. Propagate all signals via BFS
+/// 2. Run oculocyte sensing (channels 0-7) + regulation signals (channels 8-15)
+/// 3. Propagate sensor/regulation signals
+/// 4. Cognocytes compute on propagated signals and re-emit
+/// 5. Memorocytes update leaky-integrator state and emit
 pub fn run_signal_system(
     state: &mut CanonicalState,
     genome: &Genome,
     boundary_radius: f32,
+    dt: f32,
 ) {
     clear_all_signals(state);
+
+    // Phase 1: sensors and unconditional emitters populate input channels.
     let mut emissions = sense_oculocytes(state, genome, boundary_radius);
     let regulation_emissions = emit_regulation_signals(state, genome);
     emissions.extend(regulation_emissions);
+
+    // Phase 2: propagate sensor/regulation signals so Cognocytes can read them.
     propagate_signals(state, genome, &emissions);
+
+    // Phase 3: Cognocytes compute on the propagated signals and re-emit.
+    let cogno_emissions = process_cognocytes(state, genome);
+    propagate_signals(state, genome, &cogno_emissions);
+
+    // Phase 4: Memorocytes update their leaky-integrator state and emit.
+    // Runs after Cognocytes so they can integrate computed signals.
+    let memo_emissions = process_memorocytes(state, genome, dt);
+    propagate_signals(state, genome, &memo_emissions);
 }
 
 /// Emit regulation signals for all cells whose mode has regulation_emit_channel >= 8.

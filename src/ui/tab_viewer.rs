@@ -2663,6 +2663,16 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     devorocyte_consume_rate: 30.0,
                     vascular_outlet: false,
                     gametocyte_merge_range: 0.5,
+                    memorocyte_decay: 0.95,
+                    memorocyte_gain: 1.0,
+                    memorocyte_input_channel: 0,
+                    memorocyte_output_channel: 9,
+                    memorocyte_output_hops: 5,
+                    cognocyte_operation: 0,
+                    cognocyte_input_channel_a: 0,
+                    cognocyte_input_channel_b: 1,
+                    cognocyte_output_channel: 8,
+                    cognocyte_output_hops: 5,
                     child_a: crate::genome::ChildSettings {
                         mode_number: idx as i32,
                         ..Default::default()
@@ -3895,6 +3905,144 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.style_mut().spacing.slider_width = slider_width;
                         ui.add(egui::Slider::new(&mut mode.devorocyte_consume_rate, 0.0..=200.0).show_value(false));
                         ui.add(egui::DragValue::new(&mut mode.devorocyte_consume_rate).speed(1.0).range(0.0..=200.0).suffix("/s"));
+                    });
+                });
+            } else if mode.cell_type == 14 { // Cognocyte (cell_type == 14)
+                group_container(ui, "Cognocyte Functions", egui::Color32::from_rgb(80, 180, 210), |ui| {
+                    ui.label("Reads signals from two input channels, applies an operation, and emits the result. Chain multiple Cognocytes to build logic circuits.");
+                    ui.separator();
+
+                    // Operation dropdown
+                    let op_names = [
+                        "Add", "Subtract", "Multiply", "Divide",
+                        "Min", "Max", "Average",
+                        "Greater Than", "Less Than", "Equal",
+                        "AND", "OR", "NOT", "Select",
+                    ];
+                    let current_op = mode.cognocyte_operation.clamp(0, 13) as usize;
+                    ui.label("Operation:")
+                        .on_hover_text("Arithmetic: result = A op B.  Comparison: outputs 1.0 (true) or 0.0 (false).  Boolean: treats any value > 0 as true, outputs 1.0 or 0.0.  NOT uses only Input A.  Select: if A > 0 outputs B, otherwise outputs 0.0.  Emits nothing if a required input channel has no signal");
+                    egui::ComboBox::from_id_salt("cognocyte_op")
+                        .selected_text(op_names[current_op])
+                        .show_ui(ui, |ui| {
+                            for (i, name) in op_names.iter().enumerate() {
+                                ui.selectable_value(&mut mode.cognocyte_operation, i as i32, *name);
+                            }
+                        });
+
+                    ui.separator();
+
+                    // Input Channel A
+                    ui.label("Input A — Channel:")
+                        .on_hover_text("Signal channel (0–15) to read as the left operand. Falls back to Constant if this channel has no signal");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.cognocyte_input_channel_a, 0..=15).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.cognocyte_input_channel_a).speed(0.1).range(0..=15));
+                    });
+
+                    // Input Channel B — greyed label when NOT is selected
+                    let b_label = if mode.cognocyte_operation == 12 {
+                        "Input B — Channel: (unused for NOT)"
+                    } else {
+                        "Input B — Channel:"
+                    };
+                    ui.label(b_label)
+                        .on_hover_text("Signal channel (0–15) to read as the right operand. Falls back to Constant if this channel has no signal. Ignored by NOT");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.cognocyte_input_channel_b, 0..=15).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.cognocyte_input_channel_b).speed(0.1).range(0..=15));
+                    });
+
+                    ui.separator();
+
+                    // Output Channel
+                    ui.label("Output Channel:")
+                        .on_hover_text("Signal channel (0–15) the result is emitted on. Channels 0–7 are oculocyte channels; 8–15 are regulation channels that can gate division, apoptosis, and mode switching");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.cognocyte_output_channel, 0..=15).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.cognocyte_output_channel).speed(0.1).range(0..=15));
+                    });
+
+                    // Output Hops
+                    ui.label("Output Hops:")
+                        .on_hover_text("How many adhesion bonds the result signal propagates. Signal halves in strength each hop beyond the first");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.cognocyte_output_hops, 1..=20).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.cognocyte_output_hops).speed(0.1).range(1..=20));
+                    });
+                });
+            } else if mode.cell_type == 15 { // Memorocyte (cell_type == 15)
+                group_container(ui, "Memorocyte Functions", egui::Color32::from_rgb(180, 140, 220), |ui| {
+                    ui.label("Accumulates incoming signals over time and slowly forgets them. Useful for smoothing sensors, building timers, and adding hysteresis to decision circuits.");
+                    ui.separator();
+
+                    // Decay
+                    ui.label("Decay:")
+                        .on_hover_text("Fraction of memory retained per second (0 = instant forget, 1 = perfect memory). Values like 0.90–0.99 give a slow fade. Applied frame-rate independently");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.memorocyte_decay, 0.0..=1.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.memorocyte_decay).speed(0.005).range(0.0..=1.0));
+                    });
+
+                    // Gain
+                    ui.label("Gain:")
+                        .on_hover_text("How much of the incoming signal is added to memory each second. 1.0 = add the raw signal, 2.0 = double it, 0.1 = integrate slowly");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.memorocyte_gain, 0.0..=10.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.memorocyte_gain).speed(0.05).range(0.0..=10.0));
+                    });
+
+                    ui.separator();
+
+                    // Input Channel
+                    ui.label("Input Channel:")
+                        .on_hover_text("Signal channel (0–15) to integrate. If no signal is present on this channel, the memory simply decays");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.memorocyte_input_channel, 0..=15).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.memorocyte_input_channel).speed(0.1).range(0..=15));
+                    });
+
+                    // Output Channel
+                    ui.label("Output Channel:")
+                        .on_hover_text("Signal channel (0–15) the memory value is emitted on every frame. Channels 8–15 can gate division, apoptosis, and mode switching");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.memorocyte_output_channel, 0..=15).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.memorocyte_output_channel).speed(0.1).range(0..=15));
+                    });
+
+                    // Output Hops
+                    ui.label("Output Hops:")
+                        .on_hover_text("How many adhesion bonds the memory signal propagates. Signal halves in strength each hop beyond the first");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.memorocyte_output_hops, 1..=20).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.memorocyte_output_hops).speed(0.1).range(1..=20));
                     });
                 });
             }

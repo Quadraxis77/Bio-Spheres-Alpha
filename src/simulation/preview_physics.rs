@@ -1332,7 +1332,7 @@ pub fn physics_step_with_genome(
 
     // Run signal system (oculocyte sensing + BFS propagation)
     let boundary_radius = config.sphere_radius;
-    crate::simulation::signal_system::run_signal_system(state, genome, boundary_radius);
+    crate::simulation::signal_system::run_signal_system(state, genome, boundary_radius, dt);
 
     // Apply persistent test signals (if any) after normal signal system.
     // Do NOT clear signals first — regulation signals (channels 8-15) must remain intact.

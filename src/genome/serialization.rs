@@ -265,6 +265,26 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gametocyte_merge_range: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub memorocyte_decay: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memorocyte_gain: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memorocyte_input_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memorocyte_output_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memorocyte_output_hops: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cognocyte_operation: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cognocyte_input_channel_a: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cognocyte_input_channel_b: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cognocyte_output_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cognocyte_output_hops: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_b: Option<SerializableChildSettings>,
@@ -532,6 +552,16 @@ fn mode_to_serializable(
         devorocyte_consume_rate: diff_f32(mode.devorocyte_consume_rate, default.devorocyte_consume_rate),
         vascular_outlet: diff_bool(mode.vascular_outlet, default.vascular_outlet),
         gametocyte_merge_range: diff_f32(mode.gametocyte_merge_range, default.gametocyte_merge_range),
+        memorocyte_decay: diff_f32(mode.memorocyte_decay, default.memorocyte_decay),
+        memorocyte_gain: diff_f32(mode.memorocyte_gain, default.memorocyte_gain),
+        memorocyte_input_channel: diff_i32(mode.memorocyte_input_channel, default.memorocyte_input_channel),
+        memorocyte_output_channel: diff_i32(mode.memorocyte_output_channel, default.memorocyte_output_channel),
+        memorocyte_output_hops: diff_i32(mode.memorocyte_output_hops, default.memorocyte_output_hops),
+        cognocyte_operation: diff_i32(mode.cognocyte_operation, default.cognocyte_operation),
+        cognocyte_input_channel_a: diff_i32(mode.cognocyte_input_channel_a, default.cognocyte_input_channel_a),
+        cognocyte_input_channel_b: diff_i32(mode.cognocyte_input_channel_b, default.cognocyte_input_channel_b),
+        cognocyte_output_channel: diff_i32(mode.cognocyte_output_channel, default.cognocyte_output_channel),
+        cognocyte_output_hops: diff_i32(mode.cognocyte_output_hops, default.cognocyte_output_hops),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(&mode.adhesion_settings, &default.adhesion_settings),
@@ -639,6 +669,16 @@ impl SerializableModeSettings {
             || self.devorocyte_consume_rate.is_some()
             || self.vascular_outlet.is_some()
             || self.gametocyte_merge_range.is_some()
+            || self.memorocyte_decay.is_some()
+            || self.memorocyte_gain.is_some()
+            || self.memorocyte_input_channel.is_some()
+            || self.memorocyte_output_channel.is_some()
+            || self.memorocyte_output_hops.is_some()
+            || self.cognocyte_operation.is_some()
+            || self.cognocyte_input_channel_a.is_some()
+            || self.cognocyte_input_channel_b.is_some()
+            || self.cognocyte_output_channel.is_some()
+            || self.cognocyte_output_hops.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -971,6 +1011,26 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.gametocyte_merge_range {
         mode.gametocyte_merge_range = v;
+    }
+    if let Some(v) = ser.memorocyte_decay           { mode.memorocyte_decay = v; }
+    if let Some(v) = ser.memorocyte_gain           { mode.memorocyte_gain = v; }
+    if let Some(v) = ser.memorocyte_input_channel  { mode.memorocyte_input_channel = v; }
+    if let Some(v) = ser.memorocyte_output_channel { mode.memorocyte_output_channel = v; }
+    if let Some(v) = ser.memorocyte_output_hops    { mode.memorocyte_output_hops = v; }
+    if let Some(v) = ser.cognocyte_operation {
+        mode.cognocyte_operation = v;
+    }
+    if let Some(v) = ser.cognocyte_input_channel_a {
+        mode.cognocyte_input_channel_a = v;
+    }
+    if let Some(v) = ser.cognocyte_input_channel_b {
+        mode.cognocyte_input_channel_b = v;
+    }
+    if let Some(v) = ser.cognocyte_output_channel {
+        mode.cognocyte_output_channel = v;
+    }
+    if let Some(v) = ser.cognocyte_output_hops {
+        mode.cognocyte_output_hops = v;
     }
     if let Some(ref child_a) = ser.child_a {
         apply_child_settings(&mut mode.child_a, child_a);

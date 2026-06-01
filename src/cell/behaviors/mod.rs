@@ -84,6 +84,8 @@
 pub mod devorocyte;
 pub mod vasculocyte;
 pub mod gametocyte;
+pub mod cognocyte;
+pub mod memorocyte;
 pub mod flagellocyte;
 pub mod test_cell;
 pub mod myocyte;
@@ -284,7 +286,7 @@ impl TypeSpecificInstanceData {
 ///         // Extract swim_force from mode settings to control flagella animation
 ///         let flagella_speed = mode_settings.swim_force;
 ///         let flagella_angle = 0.0; // Would be updated by physics simulation
-///         
+///
 ///         TypeSpecificInstanceData::flagellocyte(flagella_angle, flagella_speed)
 ///     }
 /// }
@@ -354,5 +356,7 @@ pub fn create_behavior(cell_type: crate::cell::CellType) -> Box<dyn CellBehavior
         crate::cell::CellType::Devorocyte => Box::new(devorocyte::DevorocyteBehavior),
         crate::cell::CellType::Vasculocyte => Box::new(vasculocyte::VasculocyteBehavior),
         crate::cell::CellType::Gametocyte => Box::new(gametocyte::GametocyteBehavior),
+        crate::cell::CellType::Cognocyte => Box::new(cognocyte::CognocyteBehavior),
+        crate::cell::CellType::Memorocyte => Box::new(memorocyte::MemoryocyteBehavior),
     }
 }

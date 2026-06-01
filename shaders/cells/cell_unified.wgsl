@@ -539,6 +539,78 @@ fn internals_gametocyte(p: vec3<f32>, r: f32, current_time: f32) -> vec3<f32> {
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
+// Type 15: Memorocyte — Leaky-integrator memory cell.
+// Concentric rings drift inward (memory charging) and fade (decaying).
+// A dim ambient glow pulses slowly to suggest an analogue charge level.
+fn internals_memorocyte(p: vec3<f32>, r: f32, current_time: f32) -> vec3<f32> {
+    let dist = length(p);
+
+    let ring_width = 0.06;
+    let ring_speed = 0.35;
+    let anim = fract(current_time * ring_speed);
+
+    var ring_total = 0.0;
+    for (var i = 0u; i < 4u; i++) {
+        let base_r = 0.75 - f32(i) * 0.155;
+        let ring_r = base_r - anim * 0.12 * (1.0 + f32(i) * 0.3);
+        let ring_mask = smoothstep(ring_width, 0.0, abs(dist - ring_r));
+        let brightness = 0.55 + f32(i) * 0.12;
+        ring_total += ring_mask * brightness;
+    }
+
+    let charge_pulse = 0.3 + 0.15 * sin(current_time * 0.7);
+    let ambient_glow = smoothstep(0.75, 0.0, dist) * charge_pulse;
+    let pattern = clamp(ring_total + ambient_glow, 0.0, 1.4);
+    let color_shift = ring_total * 0.12 + ambient_glow * 0.08;
+    return vec3<f32>(pattern, color_shift, 0.0);
+}
+
+// Type 14: Cognocyte — Signal-processing cell with a pulsing computational core
+// and three pairs of radiating signal traces (one per axis).
+// The traces pulse with 120-degree phase offsets suggesting active signal routing.
+fn internals_cognocyte(p: vec3<f32>, r: f32, current_time: f32) -> vec3<f32> {
+    let core_dist = length(p);
+    let core_mask = smoothstep(0.24, 0.10, core_dist);
+
+    let fast = sin(current_time * 6.2);
+    let slow = 0.55 + 0.45 * sin(current_time * 1.9 + 0.4);
+    let core_pulse = slow * (0.65 + 0.35 * fast);
+    let core_bright = core_mask * core_pulse * 2.0;
+
+    let tw      = 0.07;
+    let start_r = 0.22;
+    let end_r   = 0.82;
+
+    let dist_from_x_axis = length(p.yz);
+    let along_x          = abs(p.x);
+    let trace_x = smoothstep(tw, tw * 0.2, dist_from_x_axis)
+                * smoothstep(start_r, start_r + 0.08, along_x)
+                * smoothstep(end_r,   end_r   - 0.10, along_x);
+
+    let dist_from_y_axis = length(p.xz);
+    let along_y          = abs(p.y);
+    let trace_y = smoothstep(tw, tw * 0.2, dist_from_y_axis)
+                * smoothstep(start_r, start_r + 0.08, along_y)
+                * smoothstep(end_r,   end_r   - 0.10, along_y);
+
+    let dist_from_z_axis = length(p.xy);
+    let along_z          = abs(p.z);
+    let trace_z = smoothstep(tw, tw * 0.2, dist_from_z_axis)
+                * smoothstep(start_r, start_r + 0.08, along_z)
+                * smoothstep(end_r,   end_r   - 0.10, along_z);
+
+    let t    = current_time * 3.8;
+    let p120 = 2.09439510;
+    let px = 0.50 + 0.50 * sin(t);
+    let py = 0.50 + 0.50 * sin(t + p120);
+    let pz = 0.50 + 0.50 * sin(t + 2.0 * p120);
+
+    let traces = trace_x * px + trace_y * py + trace_z * pz;
+    let pattern     = clamp(core_bright + traces * 0.80, 0.0, 1.5);
+    let color_shift = core_mask * 0.50 + traces * 0.20;
+    return vec3<f32>(pattern, color_shift, 0.0);
+}
+
 // Type 7: Oculocyte — handled inline in fs_main (needs surface direction, not interior pos).
 
 // Type 1: Flagellocyte — Same as test cell (tail is rendered separately).
@@ -790,6 +862,8 @@ fn get_internals(cell_type: u32, p: vec3<f32>, r: f32, cell_index: u32, type_dat
         case 9u: { return internals_myocyte(p, r); } // Peripheral nuclei; surface pattern handled inline
         case 10u: { return internals_embryocyte(p, r, type_data_0); }
         case 13u: { return internals_gametocyte(p, r, camera.time); }
+        case 14u: { return internals_cognocyte(p, r, camera.time); }
+        case 15u: { return internals_memorocyte(p, r, camera.time); }
         default: { return internals_test(p, r, type_data_0); }
     }
 }
@@ -879,6 +953,18 @@ fn get_membrane_params(cell_type: u32) -> MembraneParams {
             m.opacity = 0.35;
             m.rim_power = 1.8;
             m.color_darken = 0.15;
+        }
+        case 14u: { // Cognocyte — moderately translucent to reveal internal traces
+            m.thickness = 0.055;
+            m.opacity = 0.40;
+            m.rim_power = 3.2;
+            m.color_darken = 0.28;
+        }
+        case 15u: { // Memorocyte — very translucent glassy shell, rings visible within
+            m.thickness = 0.04;
+            m.opacity = 0.28;
+            m.rim_power = 2.0;
+            m.color_darken = 0.12;
         }
         default: {
             m.thickness = 0.06;
@@ -1276,6 +1362,46 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         );
         let tangent_world = quat_rotate(in.rotation, tangent_local);
         perturbed_normal = normalize(perturbed_normal + tangent_world * fiber_slope * bulge_str * 0.10);
+    }
+
+    // ====================================================================
+    // Cognocyte (type 14): Angular circuit-board surface facets (LOD >= 1)
+    // ====================================================================
+    if (cell_type == 14u && lod >= 1u) {
+        let surf_local = normalize(quat_rotate_inverse(in.rotation,
+            in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
+
+        let lat = acos(clamp(surf_local.z, -1.0, 1.0));
+        let lon = atan2(surf_local.y, surf_local.x);
+
+        let lat_bands = 6.0;
+        let lon_segs  = 8.0;
+        let lat_cell  = floor(lat / 3.14159265 * lat_bands);
+        let lon_cell  = floor((lon + 3.14159265) / 6.28318530 * lon_segs);
+
+        let lat_frac = fract(lat / 3.14159265 * lat_bands);
+        let lon_frac = fract((lon + 3.14159265) / 6.28318530 * lon_segs);
+
+        let edge_w    = 0.065;
+        let lat_edge  = smoothstep(edge_w, 0.0, lat_frac) + smoothstep(1.0 - edge_w, 1.0, lat_frac);
+        let lon_edge  = smoothstep(edge_w, 0.0, lon_frac) + smoothstep(1.0 - edge_w, 1.0, lon_frac);
+        let edge_mask = clamp(lat_edge + lon_edge, 0.0, 1.0);
+
+        let facet_id  = lat_cell * lon_segs + lon_cell;
+        let facet_h   = fract(facet_id * 0.61803398 + 0.41421356);
+        let facet_dim = 0.82 + 0.18 * facet_h;
+
+        let t_pulse  = camera.time * 3.8;
+        let ring_lat = fract(t_pulse / 6.28318530) * 3.14159265;
+        let ring_mask = smoothstep(0.18, 0.0, abs(lat - ring_lat)) * 0.45;
+
+        let edge_color  = base_color * 1.55;
+        let facet_color = interior_result * facet_dim;
+        let ring_color  = base_color * 1.8;
+
+        var cogno_surf = mix(facet_color, edge_color, edge_mask * 0.70);
+        cogno_surf     = mix(cogno_surf,  ring_color,  ring_mask);
+        interior_result = cogno_surf;
     }
 
     // Composite membrane over interior

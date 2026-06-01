@@ -1187,6 +1187,16 @@ impl GpuScene {
                 devorocyte_consume_rate: 30.0,
                 vascular_outlet: false,
                 gametocyte_merge_range: 0.5,
+                memorocyte_decay: 0.95,
+                memorocyte_gain: 1.0,
+                memorocyte_input_channel: 0,
+                memorocyte_output_channel: 9,
+                memorocyte_output_hops: 5,
+                cognocyte_operation: 0,
+                cognocyte_input_channel_a: 0,
+                cognocyte_input_channel_b: 1,
+                cognocyte_output_channel: 8,
+                cognocyte_output_hops: 5,
                 child_a: crate::genome::ChildSettings {
                     mode_number: child_a_local,
                     orientation: qa,
@@ -4529,7 +4539,7 @@ impl GpuScene {
             let buffer_slice = system.staging_buffer.slice(..);
             let (sender, receiver) = std::sync::mpsc::channel();
             buffer_slice.map_async(wgpu::MapMode::Read, move |r| { let _ = sender.send(r); });
-            device.poll(wgpu::PollType::Poll);
+            let _ = device.poll(wgpu::PollType::Poll);
             if let Ok(Ok(())) = receiver.try_recv() {
                 let data = buffer_slice.get_mapped_range();
                 let evs = GametocyteMergeSystem::parse_events(&data);

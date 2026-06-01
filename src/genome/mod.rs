@@ -231,6 +231,35 @@ pub struct ModeSettings {
     // Gametocyte settings
     pub gametocyte_merge_range: f32, // Extra contact range for merge detection beyond cell radii (0.0 to 2.0)
 
+    // Memorocyte settings
+    /// Fraction of the current memory retained each simulation tick (0.0–1.0).
+    /// 1.0 = perfect memory, 0.0 = instant forget. Typically close to 1.0 (e.g. 0.95).
+    pub memorocyte_decay: f32,
+    /// How much of the incoming signal is added to the memory each tick (0.0–10.0).
+    /// Higher values charge the memory faster.
+    pub memorocyte_gain: f32,
+    /// Signal channel (0–15) to read as input. If no signal, memory simply decays.
+    pub memorocyte_input_channel: i32,
+    /// Channel to emit the current memory value on (0–15).
+    pub memorocyte_output_channel: i32,
+    /// How many adhesion hops the emitted memory propagates (1–20).
+    pub memorocyte_output_hops: i32,
+
+    // Cognocyte settings
+    /// Which arithmetic/logic operation to perform on the two input signals.
+    /// 0=Add, 1=Subtract, 2=Multiply, 3=Divide, 4=Min, 5=Max, 6=Average,
+    /// 7=GreaterThan, 8=LessThan, 9=Equal, 10=AND, 11=OR, 12=NOT, 13=Select
+    pub cognocyte_operation: i32,
+    /// First input signal channel (0-15). Emits nothing if channel has no signal.
+    pub cognocyte_input_channel_a: i32,
+    /// Second input signal channel (0-15). Emits nothing if channel has no signal.
+    /// Unused for NOT (which only uses A).
+    pub cognocyte_input_channel_b: i32,
+    /// Channel to emit the result on (0-15).
+    pub cognocyte_output_channel: i32,
+    /// How many adhesion hops the result signal propagates (1-20).
+    pub cognocyte_output_hops: i32,
+
     // Child settings
     pub child_a: ChildSettings,
     pub child_b: ChildSettings,
@@ -349,6 +378,16 @@ impl Default for ModeSettings {
             devorocyte_consume_rate: 30.0,
             vascular_outlet: false,
             gametocyte_merge_range: 0.5,
+            memorocyte_decay: 0.95,
+            memorocyte_gain: 1.0,
+            memorocyte_input_channel: 0,
+            memorocyte_output_channel: 9,
+            memorocyte_output_hops: 5,
+            cognocyte_operation: 0,    // Add
+            cognocyte_input_channel_a: 0,
+            cognocyte_input_channel_b: 1,
+            cognocyte_output_channel: 8,
+            cognocyte_output_hops: 5,
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),
             adhesion_settings: AdhesionSettings::default(),

@@ -404,6 +404,27 @@ impl CellTypeVisuals {
                 v.membrane_noise_strength = 0.08;
                 v.membrane_noise_speed = 1.5;
             }
+            CellType::Cognocyte => {
+                // Clean, geometric look: tight Goldberg tessellation to evoke a circuit-like surface.
+                v.goldberg_scale = 12.0;
+                v.goldberg_ridge_width = 0.55;
+                v.goldberg_meander = 0.05;
+                v.goldberg_ridge_strength = 0.12;
+                v.specular_strength = 0.5;
+                v.specular_power = 48.0;
+                v.fresnel_strength = 0.3;
+                v.nucleus_scale = 0.4;
+            }
+            CellType::Memorocyte => {
+                // Glassy, semi-translucent with concentric ring layering.
+                v.specular_strength = 0.6;
+                v.specular_power = 32.0;
+                v.fresnel_strength = 0.55;
+                v.nucleus_scale = 0.5;
+                v.membrane_noise_scale = 3.0;
+                v.membrane_noise_strength = 0.04;
+                v.membrane_noise_speed = 0.3;
+            }
         }
         v
     }
@@ -553,11 +574,13 @@ pub enum CellType {
     Devorocyte = 11,
     Vasculocyte = 12,
     Gametocyte = 13,
+    Cognocyte = 14,
+    Memorocyte = 15,
 }
 
 impl CellType {
     /// Number of registered cell types. Update when adding new types.
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 16;
 
     /// Maximum number of cell types supported by GPU buffers.
     pub const MAX_TYPES: usize = 30;
@@ -579,6 +602,8 @@ impl CellType {
             CellType::Devorocyte,
             CellType::Vasculocyte,
             CellType::Gametocyte,
+            CellType::Cognocyte,
+            CellType::Memorocyte,
         ]
     }
 
@@ -604,12 +629,14 @@ impl CellType {
             CellType::Devorocyte => "Devorocyte",
             CellType::Vasculocyte => "Vasculocyte",
             CellType::Gametocyte => "Gametocyte",
+            CellType::Cognocyte => "Cognocyte",
+            CellType::Memorocyte => "Memorocyte",
         }
     }
 
     /// Get all cell type names as a slice.
     pub const fn names() -> &'static [&'static str] {
-        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte", "Buoyocyte", "Glueocyte", "Oculocyte", "Ciliocyte", "Myocyte", "Embryocyte", "Devorocyte", "Vasculocyte", "Gametocyte"]
+        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte", "Buoyocyte", "Glueocyte", "Oculocyte", "Ciliocyte", "Myocyte", "Embryocyte", "Devorocyte", "Vasculocyte", "Gametocyte", "Cognocyte", "Memorocyte"]
     }
 
     /// Convert from integer index to cell type.
@@ -629,6 +656,8 @@ impl CellType {
             11 => Some(CellType::Devorocyte),
             12 => Some(CellType::Vasculocyte),
             13 => Some(CellType::Gametocyte),
+            14 => Some(CellType::Cognocyte),
+            15 => Some(CellType::Memorocyte),
             _ => None,
         }
     }
@@ -704,6 +733,18 @@ impl CellType {
                 "A reproductive gamete cell. When two Gametocytes from different \
                  organisms come into contact, their genomes are crossed over and a \
                  new hybrid offspring organism is spawned. Both Gametocytes then die.",
+
+            CellType::Cognocyte =>
+                "A signal-processing cell. Reads signals from two input channels, \
+                 applies an arithmetic, comparison, or boolean operation, and emits \
+                 the result on an output channel. Composable into arbitrarily complex \
+                 decision-making circuits within an organism.",
+
+            CellType::Memorocyte =>
+                "A leaky-integrator memory cell. Accumulates incoming signals over \
+                 time and slowly forgets them. Decay and gain are independently \
+                 configurable. Useful for smoothing noisy sensors, building timers, \
+                 and creating hysteresis in decision circuits.",
         }
     }
 
@@ -886,6 +927,30 @@ impl CellType {
                 applies_muscle_contraction: 0,
                 _padding: [0; 7],
             },
+            CellType::Cognocyte => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 0,
+                applies_swim_force: 0,
+                uses_texture_atlas: 0,
+                has_procedural_tail: 0,
+                gains_mass_from_light: 0,
+                is_storage_cell: 0,
+                applies_buoyancy: 0,
+                applies_cilia_force: 0,
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
+            },
+            CellType::Memorocyte => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 0,
+                applies_swim_force: 0,
+                uses_texture_atlas: 0,
+                has_procedural_tail: 0,
+                gains_mass_from_light: 0,
+                is_storage_cell: 0,
+                applies_buoyancy: 0,
+                applies_cilia_force: 0,
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
+            },
         }
     }
 
@@ -965,6 +1030,26 @@ impl CellType {
                 mode.embryocyte_use_signal = false;
                 mode.embryocyte_signal_channel = 0;
                 mode.embryocyte_signal_value = 1.0;
+            }
+            CellType::Cognocyte => {
+                mode.nutrient_priority = 2.0;
+                mode.max_cell_size = 2.0;
+                mode.split_mass = 3.1;
+                mode.cognocyte_operation = 0; // Add
+                mode.cognocyte_input_channel_a = 0;
+                mode.cognocyte_input_channel_b = 1;
+                mode.cognocyte_output_channel = 8;
+                mode.cognocyte_output_hops = 5;
+            }
+            CellType::Memorocyte => {
+                mode.nutrient_priority = 2.0;
+                mode.max_cell_size = 2.0;
+                mode.split_mass = 3.1;
+                mode.memorocyte_decay = 0.95;
+                mode.memorocyte_gain = 1.0;
+                mode.memorocyte_input_channel = 0;
+                mode.memorocyte_output_channel = 9;
+                mode.memorocyte_output_hops = 5;
             }
             _ => {}
         }
