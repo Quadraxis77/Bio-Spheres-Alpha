@@ -1,43 +1,43 @@
 //! # Application Core - wgpu Setup and Event Loop
-//! 
+//!
 //! This module contains the main [`App`] struct that coordinates the entire Bio-Spheres application.
 //! It handles wgpu initialization, window events, scene management, and the render loop.
-//! 
+//!
 //! ## Architecture Overview
-//! 
+//!
 //! The [`App`] struct serves as the central coordinator that:
 //! - Manages wgpu resources (device, queue, surface)
 //! - Handles window events and input routing
 //! - Coordinates between simulation scenes and UI
 //! - Orchestrates the render pipeline (3D scene -> egui UI -> present)
-//! 
+//!
 //! ## Event Flow
-//! 
+//!
 //! ```text
 //! Window Event -> egui Input Check -> Scene Input -> Camera Update -> Render
 //! ```
-//! 
+//!
 //! 1. **Input Routing**: Events are first offered to egui, then to scene/camera if not consumed
 //! 2. **Scene Updates**: Physics simulation and camera movement are updated each frame
 //! 3. **Rendering**: 3D scene renders first, then egui UI is composited on top
-//! 
+//!
 //! ## Scene Management
-//! 
+//!
 //! The app manages two simulation modes through [`SceneManager`]:
 //! - **Preview Mode**: CPU physics for genome editing and small simulations
 //! - **GPU Mode**: GPU compute for large-scale simulations with interactive tools
-//! 
+//!
 //! ## Tool System (GPU Mode)
-//! 
+//!
 //! In GPU mode, the app provides interactive tools via a radial menu:
 //! - **Insert**: Add cells from the current genome
 //! - **Remove**: Delete cells by clicking
 //! - **Boost**: Give cells maximum nutrients for immediate division
 //! - **Inspect**: Select cells for detailed information
 //! - **Drag**: Move cells in 3D space
-//! 
+//!
 //! ## Performance Monitoring
-//! 
+//!
 //! The app tracks:
 //! - Frame rate and render times
 //! - Culling statistics (frustum and occlusion)
@@ -96,7 +96,9 @@ enum DeferredAction {
     /// Capture a GIF thumbnail. The `save_path` is the `.genome` file path so
     /// the GIF is saved alongside it with the correct name, regardless of what
     /// `genome.name` contains at capture time.
-    CaptureGif { save_path: std::path::PathBuf },
+    CaptureGif {
+        save_path: std::path::PathBuf,
+    },
 }
 
 pub struct App {
@@ -162,8 +164,7 @@ impl App {
     ) -> Self {
         // Build the main menu scene before moving `ui` into the struct so we
         // can access `ui.renderer` mutably without fighting the borrow checker.
-        let main_menu_scene =
-            MainMenuScene::new(&device, &queue, &config, &mut ui.renderer);
+        let main_menu_scene = MainMenuScene::new(&device, &queue, &config, &mut ui.renderer);
 
         Self {
             window,
@@ -194,15 +195,15 @@ impl App {
             main_menu_scene: Some(main_menu_scene),
         }
     }
-    
+
     pub fn window(&self) -> &Window {
         &self.window
     }
-    
+
     pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
         // First, let egui handle the event
         let _egui_response = self.ui.handle_event(&self.window, event);
-        
+
         match event {
             WindowEvent::CloseRequested => {
                 log::info!("Close requested");
@@ -216,7 +217,7 @@ impl App {
                 self.editor_state.save_fluid_settings();
                 self.editor_state.save_fluid_render_settings();
                 self.editor_state.save_light_settings();
-                
+
                 // Wait for GPU to finish all work before surface cleanup
                 // This prevents SurfaceAcquireSemaphores panic on exit
                 log::info!("Waiting for GPU to finish before exit...");
@@ -224,7 +225,7 @@ impl App {
                     submission_index: None,
                     timeout: None,
                 });
-                
+
                 return false;
             }
             WindowEvent::Resized(physical_size) => {
@@ -233,9 +234,18 @@ impl App {
                     self.config.width = physical_size.width;
                     self.config.height = physical_size.height;
                     self.surface.configure(&self.device, &self.config);
-                    self.scene_manager.resize(&self.device, physical_size.width, physical_size.height);
+                    self.scene_manager.resize(
+                        &self.device,
+                        physical_size.width,
+                        physical_size.height,
+                    );
                     if let Some(menu) = &mut self.main_menu_scene {
-                        menu.resize(&self.device, &mut self.ui.renderer, physical_size.width, physical_size.height);
+                        menu.resize(
+                            &self.device,
+                            &mut self.ui.renderer,
+                            physical_size.width,
+                            physical_size.height,
+                        );
                     }
                 }
             }
@@ -272,7 +282,8 @@ impl App {
                             ndc_x * aspect * tan_half_fov,
                             ndc_y * tan_half_fov,
                             -1.0,
-                        ).normalize();
+                        )
+                        .normalize();
                         let ray_dir = cam_rot * ray_dir_cam;
 
                         // Ray-sphere intersection against all cells
@@ -291,7 +302,8 @@ impl App {
                                 let t = -b - disc.sqrt();
                                 if t > 0.001 && t < best_t {
                                     best_t = t;
-                                    hit_mode = Some(preview_scene.state.display_state.mode_indices[i]);
+                                    hit_mode =
+                                        Some(preview_scene.state.display_state.mode_indices[i]);
                                 }
                             }
                         }
@@ -302,7 +314,8 @@ impl App {
 
                             // Ensure selected_mode_indices is consistent before modifying
                             if self.editor_state.selected_mode_indices.is_empty() {
-                                self.editor_state.selected_mode_indices = vec![self.editor_state.selected_mode_index];
+                                self.editor_state.selected_mode_indices =
+                                    vec![self.editor_state.selected_mode_index];
                             }
 
                             if ctrl_held {
@@ -310,14 +323,21 @@ impl App {
                                 if self.editor_state.selected_mode_indices.contains(&mode_idx) {
                                     // Don't deselect if it's the only one selected
                                     if self.editor_state.selected_mode_indices.len() > 1 {
-                                        self.editor_state.selected_mode_indices.retain(|&i| i != mode_idx);
+                                        self.editor_state
+                                            .selected_mode_indices
+                                            .retain(|&i| i != mode_idx);
                                         // If we removed the primary, promote the first remaining
                                         if self.editor_state.selected_mode_index == mode_idx {
-                                            let new_primary = self.editor_state.selected_mode_indices[0];
+                                            let new_primary =
+                                                self.editor_state.selected_mode_indices[0];
                                             self.editor_state.selected_mode_index = new_primary;
-                                            if let Some(mode) = self.working_genome.modes.get(new_primary) {
-                                                self.editor_state.child_a_orientation = mode.child_a.orientation;
-                                                self.editor_state.child_b_orientation = mode.child_b.orientation;
+                                            if let Some(mode) =
+                                                self.working_genome.modes.get(new_primary)
+                                            {
+                                                self.editor_state.child_a_orientation =
+                                                    mode.child_a.orientation;
+                                                self.editor_state.child_b_orientation =
+                                                    mode.child_b.orientation;
                                             }
                                         }
                                     }
@@ -325,7 +345,10 @@ impl App {
                                     // Add to selection without changing the primary
                                     self.editor_state.selected_mode_indices.push(mode_idx);
                                 }
-                                log::info!("Preview Ctrl+click: multi-selection now {:?}", self.editor_state.selected_mode_indices);
+                                log::info!(
+                                    "Preview Ctrl+click: multi-selection now {:?}",
+                                    self.editor_state.selected_mode_indices
+                                );
                             } else if shift_held {
                                 // Shift+click: range select from current primary to clicked mode
                                 let anchor = self.editor_state.selected_mode_index;
@@ -336,7 +359,10 @@ impl App {
                                         self.editor_state.selected_mode_indices.push(i);
                                     }
                                 }
-                                log::info!("Preview Shift+click: range selection {:?}", self.editor_state.selected_mode_indices);
+                                log::info!(
+                                    "Preview Shift+click: range selection {:?}",
+                                    self.editor_state.selected_mode_indices
+                                );
                             } else {
                                 // Plain click: single selection
                                 self.editor_state.selected_mode_index = mode_idx;
@@ -344,8 +370,10 @@ impl App {
                                 // Sync quaternion ball orientations from the selected mode's genome
                                 // data - same sync that happens when clicking a mode button directly.
                                 if let Some(mode) = self.working_genome.modes.get(mode_idx) {
-                                    self.editor_state.child_a_orientation = mode.child_a.orientation;
-                                    self.editor_state.child_b_orientation = mode.child_b.orientation;
+                                    self.editor_state.child_a_orientation =
+                                        mode.child_a.orientation;
+                                    self.editor_state.child_b_orientation =
+                                        mode.child_b.orientation;
                                 }
                                 log::info!("Preview cell click: selected mode {}", mode_idx);
                             }
@@ -405,7 +433,8 @@ impl App {
                                 ndc_x * aspect * tan_half_fov,
                                 ndc_y * tan_half_fov,
                                 -1.0,
-                            ).normalize();
+                            )
+                            .normalize();
                             let ray_dir = cam_rot * ray_dir_cam;
 
                             let cell_count = preview_scene.state.display_state.cell_count;
@@ -434,7 +463,12 @@ impl App {
                                 let scale = self.window.scale_factor() as f32;
                                 preview_scene.context_menu_screen_pos = (mx / scale, my / scale);
                                 preview_scene.context_menu_open_time = std::time::Instant::now();
-                                log::info!("Right-click tap on cell {} at screen ({}, {})", cell_idx, mx, my);
+                                log::info!(
+                                    "Right-click tap on cell {} at screen ({}, {})",
+                                    cell_idx,
+                                    mx,
+                                    my
+                                );
                             } else {
                                 preview_scene.context_menu_cell = None;
                             }
@@ -464,7 +498,8 @@ impl App {
                         let dx = mx - lx;
                         let dy = my - ly;
                         let close_enough = dx * dx + dy * dy < 20.0 * 20.0; // within 20px
-                        let fast_enough = self.last_left_click_time
+                        let fast_enough = self
+                            .last_left_click_time
                             .map(|t| now.duration_since(t).as_millis() < 400)
                             .unwrap_or(false);
 
@@ -488,107 +523,127 @@ impl App {
                             self.last_left_click_pos = (mx, my);
                         }
                     }
-                    
-                    if menu_visible && *button == MouseButton::Left && *state == ElementState::Pressed {
+
+                    if menu_visible
+                        && *button == MouseButton::Left
+                        && *state == ElementState::Pressed
+                    {
                         // Click while menu is open selects the hovered tool
                         self.editor_state.radial_menu.close(true);
                         // Hide cursor if a tool is now active
                         let new_active_tool = self.editor_state.radial_menu.active_tool;
-                        let hide_cursor = new_active_tool != crate::ui::radial_menu::RadialTool::None;
+                        let hide_cursor =
+                            new_active_tool != crate::ui::radial_menu::RadialTool::None;
                         self.window.set_cursor_visible(!hide_cursor);
                         self.window.request_redraw();
                         return true;
                     }
-                    
+
                     // Handle Insert tool click
-                    if !menu_visible 
+                    if !menu_visible
                         && active_tool == crate::ui::radial_menu::RadialTool::Insert
-                        && *button == MouseButton::Left 
+                        && *button == MouseButton::Left
                         && *state == ElementState::Pressed
                     {
                         if !self.ui.wants_pointer_input() {
-                            let world_pos = self.scene_manager.screen_to_world(
-                                self.mouse_position.0,
-                                self.mouse_position.1,
-                            );
+                            let world_pos = self
+                                .scene_manager
+                                .screen_to_world(self.mouse_position.0, self.mouse_position.1);
                             // Queue cell insertion to be processed during render phase
                             if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
-                                gpu_scene.queue_cell_insertion(world_pos, self.working_genome.clone());
+                                gpu_scene
+                                    .queue_cell_insertion(world_pos, self.working_genome.clone());
                             }
                             self.window.request_redraw();
                             return true;
                         }
                     }
-                    
+
                     // Handle Remove tool click
-                    if !menu_visible 
+                    if !menu_visible
                         && active_tool == crate::ui::radial_menu::RadialTool::Remove
-                        && *button == MouseButton::Left 
+                        && *button == MouseButton::Left
                         && *state == ElementState::Pressed
                         && !self.ui.wants_pointer_input()
                     {
                         // Initiate GPU spatial query for cell removal via scene manager
-                        self.scene_manager.start_remove_tool_query(self.mouse_position.0, self.mouse_position.1);
+                        self.scene_manager
+                            .start_remove_tool_query(self.mouse_position.0, self.mouse_position.1);
                         self.window.request_redraw();
                         return true;
                     }
-                    
+
                     // Handle Boost tool click - give cell maximum nutrients (mass = split_mass)
-                    if !menu_visible 
+                    if !menu_visible
                         && active_tool == crate::ui::radial_menu::RadialTool::Boost
-                        && *button == MouseButton::Left 
+                        && *button == MouseButton::Left
                         && *state == ElementState::Pressed
                         && !self.ui.wants_pointer_input()
                     {
                         // Initiate GPU spatial query for cell boost via scene manager
-                        self.scene_manager.start_boost_tool_query(self.mouse_position.0, self.mouse_position.1);
+                        self.scene_manager
+                            .start_boost_tool_query(self.mouse_position.0, self.mouse_position.1);
                         self.window.request_redraw();
                         return true;
                     }
-                    
+
                     // Handle Inspect tool click - select cell for inspection
-                    if !menu_visible 
+                    if !menu_visible
                         && active_tool == crate::ui::radial_menu::RadialTool::Inspect
-                        && *button == MouseButton::Left 
+                        && *button == MouseButton::Left
                         && *state == ElementState::Pressed
                         && !self.ui.wants_pointer_input()
                     {
                         // Initiate GPU spatial query for cell selection via scene manager
-                        self.scene_manager.start_cell_selection_query(self.mouse_position.0, self.mouse_position.1);
+                        self.scene_manager.start_cell_selection_query(
+                            self.mouse_position.0,
+                            self.mouse_position.1,
+                        );
                         self.window.request_redraw();
                         return true;
                     }
-                    
+
                     // Handle Drag tool - mouse press starts drag
                     if active_tool == crate::ui::radial_menu::RadialTool::Drag
-                        && *button == MouseButton::Left 
+                        && *button == MouseButton::Left
                         && *state == ElementState::Pressed
                     {
                         if !menu_visible && !self.ui.wants_pointer_input() {
                             // Start GPU spatial query for drag tool via scene manager
-                            self.scene_manager.start_drag_selection_query(self.mouse_position.0, self.mouse_position.1);
+                            self.scene_manager.start_drag_selection_query(
+                                self.mouse_position.0,
+                                self.mouse_position.1,
+                            );
                         }
                         self.window.request_redraw();
                         return true;
                     }
-                    
+
                     // Handle Drag tool - mouse release ends drag
                     if active_tool == crate::ui::radial_menu::RadialTool::Drag
-                        && *button == MouseButton::Left 
+                        && *button == MouseButton::Left
                         && *state == ElementState::Released
                         && self.editor_state.radial_menu.dragging_cell.is_some()
                     {
-                        log::info!("Stopped dragging cell {:?}", self.editor_state.radial_menu.dragging_cell);
+                        log::info!(
+                            "Stopped dragging cell {:?}",
+                            self.editor_state.radial_menu.dragging_cell
+                        );
                         self.scene_manager.clear_dragged_cell();
                         self.editor_state.radial_menu.stop_dragging();
                         self.window.request_redraw();
                         return true;
                     }
                 }
-                
+
                 // Only pass to camera if egui doesn't want the input and not dragging
-                if !self.ui.wants_pointer_input() && self.editor_state.radial_menu.dragging_cell.is_none() {
-                    self.scene_manager.active_scene_mut().camera_mut().handle_mouse_button(*button, *state);
+                if !self.ui.wants_pointer_input()
+                    && self.editor_state.radial_menu.dragging_cell.is_none()
+                {
+                    self.scene_manager
+                        .active_scene_mut()
+                        .camera_mut()
+                        .handle_mouse_button(*button, *state);
                 }
 
                 // Right-click camera drag: cursor stays visible and in place the whole time.
@@ -596,7 +651,10 @@ impl App {
                 // Always release the camera drag on mouse-up, even if egui now owns the
                 // pointer (e.g. cursor drifted over a panel mid-drag).
                 if *state == ElementState::Released {
-                    self.scene_manager.active_scene_mut().camera_mut().handle_mouse_button(*button, *state);
+                    self.scene_manager
+                        .active_scene_mut()
+                        .camera_mut()
+                        .handle_mouse_button(*button, *state);
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => {
@@ -608,7 +666,8 @@ impl App {
 
                 // Ctrl+drag: continuously add hovered cells' modes to the selection
                 if self.ctrl_drag_selecting
-                    && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Preview
+                    && self.scene_manager.current_mode()
+                        == crate::ui::types::SimulationMode::Preview
                     && !self.ui.wants_pointer_input()
                 {
                     if let Some(preview_scene) = self.scene_manager.preview_scene_mut() {
@@ -630,7 +689,8 @@ impl App {
                             ndc_x * aspect * tan_half_fov,
                             ndc_y * tan_half_fov,
                             -1.0,
-                        ).normalize();
+                        )
+                        .normalize();
                         let ray_dir = cam_rot * ray_dir_cam;
 
                         let cell_count = preview_scene.state.display_state.cell_count;
@@ -648,14 +708,16 @@ impl App {
                                 let t = -b - disc.sqrt();
                                 if t > 0.001 && t < best_t {
                                     best_t = t;
-                                    hit_mode = Some(preview_scene.state.display_state.mode_indices[i]);
+                                    hit_mode =
+                                        Some(preview_scene.state.display_state.mode_indices[i]);
                                 }
                             }
                         }
 
                         if let Some(mode_idx) = hit_mode {
                             if self.editor_state.selected_mode_indices.is_empty() {
-                                self.editor_state.selected_mode_indices = vec![self.editor_state.selected_mode_index];
+                                self.editor_state.selected_mode_indices =
+                                    vec![self.editor_state.selected_mode_index];
                             }
                             if !self.editor_state.selected_mode_indices.contains(&mode_idx) {
                                 self.editor_state.selected_mode_indices.push(mode_idx);
@@ -672,7 +734,7 @@ impl App {
                         menu.update_hover(egui::Pos2::new(position.x as f32, position.y as f32));
                         self.window.request_redraw();
                     }
-                    
+
                     // Handle Drag tool - update cell position while dragging
                     if let Some(cell_idx) = self.editor_state.radial_menu.dragging_cell {
                         // Move cell to new position at the same distance from camera using GPU operations
@@ -681,16 +743,19 @@ impl App {
                             position.y as f32,
                             self.editor_state.drag_distance,
                         );
-                        
+
                         // Use GPU position update via scene manager
-                        self.scene_manager.update_cell_position_gpu(cell_idx as u32, new_pos);
+                        self.scene_manager
+                            .update_cell_position_gpu(cell_idx as u32, new_pos);
                         self.window.request_redraw();
                     }
                 }
-                
+
                 // Only pass to camera if egui doesn't want the input and not dragging
                 let camera = self.scene_manager.active_scene_mut().camera_mut();
-                if !self.ui.wants_pointer_input() && self.editor_state.radial_menu.dragging_cell.is_none() {
+                if !self.ui.wants_pointer_input()
+                    && self.editor_state.radial_menu.dragging_cell.is_none()
+                {
                     camera.handle_mouse_move(*position);
                 } else if camera.is_dragging() {
                     // Camera is mid-drag but cursor drifted over a panel - keep feeding
@@ -701,17 +766,22 @@ impl App {
             WindowEvent::MouseWheel { delta, .. } => {
                 // Only pass to camera if egui doesn't want the input
                 if !self.ui.wants_scroll_input() {
-                    self.scene_manager.active_scene_mut().camera_mut().handle_scroll(*delta);
+                    self.scene_manager
+                        .active_scene_mut()
+                        .camera_mut()
+                        .handle_scroll(*delta);
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 // Handle radial menu Alt key (GPU mode only)
                 if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
                     use winit::keyboard::{KeyCode, PhysicalKey};
-                    
-                    if let PhysicalKey::Code(KeyCode::AltLeft) | PhysicalKey::Code(KeyCode::AltRight) = event.physical_key {
+
+                    if let PhysicalKey::Code(KeyCode::AltLeft)
+                    | PhysicalKey::Code(KeyCode::AltRight) = event.physical_key
+                    {
                         let menu = &mut self.editor_state.radial_menu;
-                        
+
                         if event.state == ElementState::Pressed && !menu.alt_held {
                             // Alt pressed - open menu at current cursor position
                             if let Some(pos) = self.ui.ctx.pointer_hover_pos() {
@@ -719,7 +789,10 @@ impl App {
                             } else {
                                 // Fallback to center of window
                                 let size = self.window.inner_size();
-                                menu.open(egui::Pos2::new(size.width as f32 / 2.0, size.height as f32 / 2.0));
+                                menu.open(egui::Pos2::new(
+                                    size.width as f32 / 2.0,
+                                    size.height as f32 / 2.0,
+                                ));
                             }
                             // Show cursor while menu is open
                             self.window.set_cursor_visible(true);
@@ -729,13 +802,14 @@ impl App {
                             // Alt released - close menu and select hovered tool
                             menu.close(true);
                             // Hide cursor if a tool is now active
-                            let hide_cursor = self.editor_state.radial_menu.active_tool != crate::ui::radial_menu::RadialTool::None;
+                            let hide_cursor = self.editor_state.radial_menu.active_tool
+                                != crate::ui::radial_menu::RadialTool::None;
                             self.window.set_cursor_visible(!hide_cursor);
                             self.window.request_redraw();
                             return true;
                         }
                     }
-                    
+
                     // Clear drag state on Escape key
                     if let PhysicalKey::Code(KeyCode::Escape) = event.physical_key {
                         if event.state == ElementState::Pressed {
@@ -750,13 +824,16 @@ impl App {
                         }
                     }
                 }
-                
+
                 // Test performance spike detection with F12 key
                 use winit::keyboard::{KeyCode, PhysicalKey};
                 if let PhysicalKey::Code(KeyCode::F12) = event.physical_key {
                     if event.state == ElementState::Pressed {
                         // Trigger a test performance spike log
-                        self.performance.log_test_spike(75.5, "F12 key pressed - testing spike detection system");
+                        self.performance.log_test_spike(
+                            75.5,
+                            "F12 key pressed - testing spike detection system",
+                        );
                         log::info!("Performance spike test triggered via F12 key");
                         return true;
                     }
@@ -775,18 +852,24 @@ impl App {
                         ));
                         self.app_phase = AppPhase::MainMenu;
                         // Restore cursor - tools and right-drag don't apply on the main menu.
-                        let _ = self.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                        let _ = self
+                            .window
+                            .set_cursor_grab(winit::window::CursorGrabMode::None);
                         self.window.set_cursor_visible(true);
-                        self.editor_state.radial_menu.active_tool = crate::ui::radial_menu::RadialTool::None;
+                        self.editor_state.radial_menu.active_tool =
+                            crate::ui::radial_menu::RadialTool::None;
                         self.editor_state.radial_menu.visible = false;
                         self.window.request_redraw();
                         return true;
                     }
                 }
-                
+
                 // Only pass to camera if egui doesn't want the input
                 if !self.ui.wants_keyboard_input() {
-                    self.scene_manager.active_scene_mut().camera_mut().handle_keyboard(event);
+                    self.scene_manager
+                        .active_scene_mut()
+                        .camera_mut()
+                        .handle_keyboard(event);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -803,13 +886,13 @@ impl App {
             }
             _ => {}
         }
-        
+
         // Don't request repaint here - let about_to_wait handle frame timing
         // egui repaints will happen on the next scheduled frame
-        
+
         true
     }
-    
+
     // --- Main menu ------------------------------------------------------------
 
     /// Full render pass for a single main-menu frame.
@@ -838,20 +921,29 @@ impl App {
                 }
             }
         };
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         // Clear the swapchain to black before egui paints.
         {
-            let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("menu_clear"),
-            });
+            let mut enc = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("menu_clear"),
+                });
             enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("menu_clear_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.02, g: 0.02, b: 0.03, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.02,
+                            g: 0.02,
+                            b: 0.03,
+                            a: 1.0,
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -894,14 +986,23 @@ impl App {
         let egui_output = self.ui.ctx.end_pass();
 
         // Submit egui rendering.
-        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("menu_egui"),
-        });
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("menu_egui"),
+            });
         let screen_desc = ScreenDescriptor {
             size_in_pixels: [self.config.width, self.config.height],
             pixels_per_point: self.window.scale_factor() as f32,
         };
-        self.ui.render(&self.device, &self.queue, &mut enc, &view, screen_desc, egui_output);
+        self.ui.render(
+            &self.device,
+            &self.queue,
+            &mut enc,
+            &view,
+            screen_desc,
+            egui_output,
+        );
         self.queue.submit(std::iter::once(enc.finish()));
         output.present();
 
@@ -920,7 +1021,9 @@ impl App {
                     self.ui.state.world_settings.cell_capacity,
                     &self.editor_state,
                 );
-                if cave_init { self.editor_state.cave_params_dirty = true; }
+                if cave_init {
+                    self.editor_state.cave_params_dirty = true;
+                }
                 self.dock_manager.switch_mode(target);
             }
             MenuAction::GenomeEditor => {
@@ -976,31 +1079,40 @@ impl App {
     }
 
     /// Draw the main-menu egui overlay and return the button action (if any).
-    fn render_main_menu_ui(ctx: &egui::Context, left_id: TextureId, right_id: TextureId, left_name: &str, right_name: &str, _panel_w: f32, _panel_h: f32, ever_shown: bool) -> MenuAction {
-        use egui::{Align2, Color32, FontId, FontFamily, Pos2, Rect, Stroke, Vec2};
+    fn render_main_menu_ui(
+        ctx: &egui::Context,
+        left_id: TextureId,
+        right_id: TextureId,
+        left_name: &str,
+        right_name: &str,
+        _panel_w: f32,
+        _panel_h: f32,
+        ever_shown: bool,
+    ) -> MenuAction {
+        use egui::{Align2, Color32, FontFamily, FontId, Pos2, Rect, Stroke, Vec2};
 
         // Background: deep navy blue, darker at edges
-        let bg          = Color32::from_rgb(7, 10, 22);
-        let bg_centre   = Color32::from_rgb(10, 16, 36);
+        let bg = Color32::from_rgb(7, 10, 22);
+        let bg_centre = Color32::from_rgb(10, 16, 36);
         // Fade colours match the background so panels blend in
-        let fade_dark   = Color32::from_rgba_premultiplied(7, 10, 22, 255);
-        let fade_clear  = Color32::from_rgba_premultiplied(7, 10, 22, 0);
+        let fade_dark = Color32::from_rgba_premultiplied(7, 10, 22, 255);
+        let fade_clear = Color32::from_rgba_premultiplied(7, 10, 22, 0);
 
         // Button palette
-        let teal_fill   = Color32::from_rgba_premultiplied(29, 158, 117, 30);
+        let teal_fill = Color32::from_rgba_premultiplied(29, 158, 117, 30);
         let teal_fill_h = Color32::from_rgba_premultiplied(29, 158, 117, 58);
         let teal_border = Color32::from_rgb(42, 122, 90);
-        let teal_text   = Color32::from_rgb(160, 240, 205);
+        let teal_text = Color32::from_rgb(160, 240, 205);
 
-        let blue_fill   = Color32::from_rgba_premultiplied(55, 138, 221, 20);
+        let blue_fill = Color32::from_rgba_premultiplied(55, 138, 221, 20);
         let blue_fill_h = Color32::from_rgba_premultiplied(55, 138, 221, 48);
         let blue_border = Color32::from_rgb(42, 64, 96);
-        let blue_text   = Color32::from_rgb(160, 205, 240);
+        let blue_text = Color32::from_rgb(160, 205, 240);
 
-        let muted_fill   = Color32::TRANSPARENT;
+        let muted_fill = Color32::TRANSPARENT;
         let muted_fill_h = Color32::from_rgba_premultiplied(255, 255, 255, 10);
         let muted_border = Color32::from_rgb(42, 42, 53);
-        let muted_text   = Color32::from_rgb(136, 135, 144);
+        let muted_text = Color32::from_rgb(136, 135, 144);
 
         let mut action = MenuAction::None;
 
@@ -1014,21 +1126,27 @@ impl App {
                 let cx = rect.center().x;
 
                 // Subtle horizontal gradient: slightly lighter navy in the centre
-                let left_half  = Rect::from_min_max(rect.min, Pos2::new(cx, rect.max.y));
+                let left_half = Rect::from_min_max(rect.min, Pos2::new(cx, rect.max.y));
                 let right_half = Rect::from_min_max(Pos2::new(cx, rect.min.y), rect.max);
-                ui.painter().add(egui::Shape::from(Self::gradient_mesh(left_half,  bg, bg_centre)));
-                ui.painter().add(egui::Shape::from(Self::gradient_mesh(right_half, bg_centre, bg)));
+                ui.painter().add(egui::Shape::from(Self::gradient_mesh(
+                    left_half, bg, bg_centre,
+                )));
+                ui.painter().add(egui::Shape::from(Self::gradient_mesh(
+                    right_half, bg_centre, bg,
+                )));
 
                 // -- genome panel images ---------------------------------------
                 let display_panel_w = w / 3.0;
-                let left_rect  = Rect::from_min_size(rect.min, Vec2::new(display_panel_w, h));
+                let left_rect = Rect::from_min_size(rect.min, Vec2::new(display_panel_w, h));
                 let right_rect = Rect::from_min_size(
                     Pos2::new(rect.max.x - display_panel_w, rect.min.y),
                     Vec2::new(display_panel_w, h),
                 );
                 let full_uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
-                ui.painter().image(left_id,  left_rect,  full_uv, Color32::WHITE);
-                ui.painter().image(right_id, right_rect, full_uv, Color32::WHITE);
+                ui.painter()
+                    .image(left_id, left_rect, full_uv, Color32::WHITE);
+                ui.painter()
+                    .image(right_id, right_rect, full_uv, Color32::WHITE);
 
                 // -- edge fades ------------------------------------------------
                 let fade_w = 90.0_f32;
@@ -1036,12 +1154,16 @@ impl App {
                     Pos2::new(rect.min.x + display_panel_w - fade_w, rect.min.y),
                     Vec2::new(fade_w, h),
                 );
-                ui.painter().add(egui::Shape::from(Self::gradient_mesh(lr, fade_clear, fade_dark)));
+                ui.painter().add(egui::Shape::from(Self::gradient_mesh(
+                    lr, fade_clear, fade_dark,
+                )));
                 let rr = Rect::from_min_size(
                     Pos2::new(rect.max.x - display_panel_w, rect.min.y),
                     Vec2::new(fade_w, h),
                 );
-                ui.painter().add(egui::Shape::from(Self::gradient_mesh(rr, fade_dark, fade_clear)));
+                ui.painter().add(egui::Shape::from(Self::gradient_mesh(
+                    rr, fade_dark, fade_clear,
+                )));
 
                 // -- genome name labels ----------------------------------------
                 let label_y = rect.max.y - 20.0;
@@ -1049,11 +1171,17 @@ impl App {
                 let label_color = Color32::from_rgb(47, 110, 84);
                 ui.painter().text(
                     Pos2::new(rect.min.x + display_panel_w * 0.5, label_y),
-                    Align2::CENTER_CENTER, left_name.to_uppercase(), label_font.clone(), label_color,
+                    Align2::CENTER_CENTER,
+                    left_name.to_uppercase(),
+                    label_font.clone(),
+                    label_color,
                 );
                 ui.painter().text(
                     Pos2::new(rect.max.x - display_panel_w * 0.5, label_y),
-                    Align2::CENTER_CENTER, right_name.to_uppercase(), label_font, label_color,
+                    Align2::CENTER_CENTER,
+                    right_name.to_uppercase(),
+                    label_font,
+                    label_color,
                 );
 
                 // -- centre hex grid pattern -----------------------------------
@@ -1061,16 +1189,16 @@ impl App {
                 // Each hex is stroked with a faint cyan that fades to transparent
                 // at the left/right edges of the centre column.
                 {
-                    let hex_r = 22.0_f32;          // circumradius (centre -> vertex)
-                    let hex_w = hex_r * 2.0;       // flat-top: width = 2r
+                    let hex_r = 22.0_f32; // circumradius (centre -> vertex)
+                    let hex_w = hex_r * 2.0; // flat-top: width = 2r
                     let hex_h = hex_r * 3.0_f32.sqrt(); // flat-top: height = r3
-                    let col_step = hex_w * 0.75;   // horizontal step between column centres
-                    let row_step = hex_h;           // vertical step between row centres
+                    let col_step = hex_w * 0.75; // horizontal step between column centres
+                    let row_step = hex_h; // vertical step between row centres
 
                     // Centre column bounds - the region between the two side panels
-                    let col_left  = rect.min.x + display_panel_w;
+                    let col_left = rect.min.x + display_panel_w;
                     let col_right = rect.max.x - display_panel_w;
-                    let col_cx    = (col_left + col_right) * 0.5;
+                    let col_cx = (col_left + col_right) * 0.5;
                     let col_half_w = (col_right - col_left) * 0.5;
 
                     // Tile enough columns and rows to cover the full centre strip
@@ -1083,7 +1211,11 @@ impl App {
                     for col in start_col..=(cols_needed / 2 + 1) {
                         for row in start_row..=rows_needed {
                             // Flat-top hex grid: odd columns are offset by half a row
-                            let offset_y = if col.rem_euclid(2) == 1 { row_step * 0.5 } else { 0.0 };
+                            let offset_y = if col.rem_euclid(2) == 1 {
+                                row_step * 0.5
+                            } else {
+                                0.0
+                            };
                             let hx = col_cx + col as f32 * col_step;
                             let hy = rect.min.y + row as f32 * row_step + offset_y;
 
@@ -1099,21 +1231,26 @@ impl App {
                             let edge_alpha = (dist_from_edge / fade_zone).min(1.0);
 
                             // Also fade vertically near top/bottom of screen
-                            let dist_from_v_edge = (h * 0.5 - (hy - rect.center().y).abs()).max(0.0);
+                            let dist_from_v_edge =
+                                (h * 0.5 - (hy - rect.center().y).abs()).max(0.0);
                             let v_fade_zone = h * 0.18;
                             let v_alpha = (dist_from_v_edge / v_fade_zone).min(1.0);
 
                             let alpha = (edge_alpha * v_alpha * 18.0) as u8;
-                            if alpha == 0 { continue; }
+                            if alpha == 0 {
+                                continue;
+                            }
 
                             let stroke_color = Color32::from_rgba_unmultiplied(60, 200, 200, alpha);
 
                             // Build the 6 vertices of a flat-top hexagon
-                            let verts: Vec<Pos2> = (0..6).map(|i| {
-                                // Flat-top: vertex angles are 0 deg, 60 deg, 120 deg, 180 deg, 240 deg, 300 deg
-                                let angle = std::f32::consts::PI / 3.0 * i as f32;
-                                Pos2::new(hx + hex_r * angle.cos(), hy + hex_r * angle.sin())
-                            }).collect();
+                            let verts: Vec<Pos2> = (0..6)
+                                .map(|i| {
+                                    // Flat-top: vertex angles are 0 deg, 60 deg, 120 deg, 180 deg, 240 deg, 300 deg
+                                    let angle = std::f32::consts::PI / 3.0 * i as f32;
+                                    Pos2::new(hx + hex_r * angle.cos(), hy + hex_r * angle.sin())
+                                })
+                                .collect();
 
                             ui.painter().add(egui::Shape::closed_line(
                                 verts,
@@ -1126,14 +1263,21 @@ impl App {
                 // -- centre column ---------------------------------------------
                 let btn_w = 240.0_f32;
                 let btn_h = 44.0_f32;
-                let gap   = 12.0_f32;
+                let gap = 12.0_f32;
 
-                let block_h = 56.0 + 30.0
-                            + btn_h + gap + btn_h + gap
-                            + 28.0
-                            + btn_h + gap + btn_h + gap
-                            + 28.0
-                            + btn_h;
+                let block_h = 56.0
+                    + 30.0
+                    + btn_h
+                    + gap
+                    + btn_h
+                    + gap
+                    + 28.0
+                    + btn_h
+                    + gap
+                    + btn_h
+                    + gap
+                    + 28.0
+                    + btn_h;
 
                 #[allow(unused_assignments)]
                 let mut y = rect.center().y - block_h * 0.5;
@@ -1173,27 +1317,48 @@ impl App {
                         );
                         if response.hovered() {
                             ui.painter().rect_filled(r, 32.0, $fill_h);
-                            ui.painter().rect_stroke(r, 32.0, Stroke::new(1.0, $border), egui::StrokeKind::Outside);
+                            ui.painter().rect_stroke(
+                                r,
+                                32.0,
+                                Stroke::new(1.0, $border),
+                                egui::StrokeKind::Outside,
+                            );
                         }
                         y += btn_h + gap;
                         response
                     }};
                 }
 
-                if btn!("Main Simulation", teal_fill, teal_fill_h, teal_border, teal_text).clicked() {
+                if btn!(
+                    "Main Simulation",
+                    teal_fill,
+                    teal_fill_h,
+                    teal_border,
+                    teal_text
+                )
+                .clicked()
+                {
                     action = MenuAction::Play;
                 }
-                if btn!("Genome editor", blue_fill, blue_fill_h, blue_border, blue_text).clicked() {
+                if btn!(
+                    "Genome editor",
+                    blue_fill,
+                    blue_fill_h,
+                    blue_border,
+                    blue_text
+                )
+                .clicked()
+                {
                     action = MenuAction::GenomeEditor;
                 }
 
                 // Tutorial button - always present; highlighted with a pulsing
                 // accent ring on first launch to guide new players.
                 {
-                    let tut_fill   = Color32::from_rgba_premultiplied(0, 180, 140, 22);
+                    let tut_fill = Color32::from_rgba_premultiplied(0, 180, 140, 22);
                     let tut_fill_h = Color32::from_rgba_premultiplied(0, 180, 140, 50);
                     let tut_border = Color32::from_rgb(0, 140, 110);
-                    let tut_text   = Color32::from_rgb(140, 230, 200);
+                    let tut_text = Color32::from_rgb(140, 230, 200);
 
                     let r = egui::Rect::from_center_size(
                         egui::Pos2::new(cx, y + btn_h * 0.5),
@@ -1210,7 +1375,12 @@ impl App {
                     );
                     if response.hovered() {
                         ui.painter().rect_filled(r, 32.0, tut_fill_h);
-                        ui.painter().rect_stroke(r, 32.0, Stroke::new(1.0, tut_border), egui::StrokeKind::Outside);
+                        ui.painter().rect_stroke(
+                            r,
+                            32.0,
+                            Stroke::new(1.0, tut_border),
+                            egui::StrokeKind::Outside,
+                        );
                     }
 
                     // First-launch: animated pulsing ring + "New? Start here" label
@@ -1222,7 +1392,10 @@ impl App {
                         ui.painter().rect_stroke(
                             r.expand(expand),
                             32.0,
-                            Stroke::new(1.5, Color32::from_rgba_unmultiplied(0, 220, 175, ring_alpha)),
+                            Stroke::new(
+                                1.5,
+                                Color32::from_rgba_unmultiplied(0, 220, 175, ring_alpha),
+                            ),
                             egui::StrokeKind::Outside,
                         );
                         // "New? Start here ->" label to the right of the button
@@ -1252,10 +1425,26 @@ impl App {
                 );
                 y += 14.0;
 
-                if btn!("Settings", muted_fill, muted_fill_h, muted_border, muted_text).clicked() {
+                if btn!(
+                    "Settings",
+                    muted_fill,
+                    muted_fill_h,
+                    muted_border,
+                    muted_text
+                )
+                .clicked()
+                {
                     action = MenuAction::Settings;
                 }
-                if btn!("Credits", muted_fill, muted_fill_h, muted_border, muted_text).clicked() {
+                if btn!(
+                    "Credits",
+                    muted_fill,
+                    muted_fill_h,
+                    muted_border,
+                    muted_text
+                )
+                .clicked()
+                {
                     action = MenuAction::Credits;
                 }
 
@@ -1276,16 +1465,36 @@ impl App {
     }
 
     /// Horizontal gradient quad mesh (for edge fades).
-    fn gradient_mesh(rect: egui::Rect, left_color: egui::Color32, right_color: egui::Color32) -> egui::Mesh {
+    fn gradient_mesh(
+        rect: egui::Rect,
+        left_color: egui::Color32,
+        right_color: egui::Color32,
+    ) -> egui::Mesh {
         use egui::epaint::Vertex;
         use egui::Pos2;
 
         let uv = Pos2::new(0.0, 0.0);
         let mut mesh = egui::Mesh::default();
-        mesh.vertices.push(Vertex { pos: rect.left_top(),     uv, color: left_color  });
-        mesh.vertices.push(Vertex { pos: rect.right_top(),    uv, color: right_color });
-        mesh.vertices.push(Vertex { pos: rect.right_bottom(), uv, color: right_color });
-        mesh.vertices.push(Vertex { pos: rect.left_bottom(),  uv, color: left_color  });
+        mesh.vertices.push(Vertex {
+            pos: rect.left_top(),
+            uv,
+            color: left_color,
+        });
+        mesh.vertices.push(Vertex {
+            pos: rect.right_top(),
+            uv,
+            color: right_color,
+        });
+        mesh.vertices.push(Vertex {
+            pos: rect.right_bottom(),
+            uv,
+            color: right_color,
+        });
+        mesh.vertices.push(Vertex {
+            pos: rect.left_bottom(),
+            uv,
+            color: left_color,
+        });
         mesh.indices = vec![0, 1, 2, 0, 2, 3];
         mesh
     }
@@ -1304,7 +1513,10 @@ impl App {
             return;
         }
 
-        let dt = now.duration_since(self.last_render_time).as_secs_f32().min(0.1);
+        let dt = now
+            .duration_since(self.last_render_time)
+            .as_secs_f32()
+            .min(0.1);
         self.last_render_time = now;
 
         // Schedule next frame for 60fps (16.67ms)
@@ -1315,18 +1527,79 @@ impl App {
             self.render_main_menu_frame(dt);
             return;
         }
-        
+
         // Update performance metrics (includes automatic spike detection)
         self.performance.update(dt);
-        
-        // Update camera gravity direction only for GPU scene (preview scene ignores gravity)
-        if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
-            self.scene_manager.active_scene_mut().camera_mut().set_gravity_direction(
-                self.ui.state.world_settings.gravity,
-                self.ui.state.world_settings.gravity_mode,
-            );
+        let gpu_headless = self.scene_manager.current_mode()
+            == crate::ui::types::SimulationMode::Gpu
+            && self.ui.state.gpu_headless_mode;
+        if gpu_headless {
+            self.window.set_cursor_visible(true);
         }
-        self.scene_manager.active_scene_mut().camera_mut().update(dt);
+
+        if gpu_headless {
+            if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                if self.ui.state.gpu_headless_auto_speed {
+                    let fps = self.performance.fps();
+                    let target = self.ui.state.gpu_headless_target_fps.max(1.0);
+                    let min_speed = self
+                        .ui
+                        .state
+                        .gpu_headless_min_speed
+                        .min(self.ui.state.gpu_headless_max_speed)
+                        .max(0.01);
+                    let max_speed = self.ui.state.gpu_headless_max_speed.max(min_speed);
+                    let old_speed = gpu_scene.time_scale;
+
+                    if fps < target * 0.96 {
+                        gpu_scene.time_scale = (gpu_scene.time_scale * 0.965).max(min_speed);
+                    } else if fps > target * 1.08 {
+                        gpu_scene.time_scale = (gpu_scene.time_scale * 1.02).min(max_speed);
+                    }
+
+                    self.ui.state.gpu_headless_auto_status = if (gpu_scene.time_scale - old_speed)
+                        .abs()
+                        < 0.001
+                    {
+                        if gpu_scene.time_scale <= min_speed + 0.001 && fps < target * 0.96 {
+                            crate::ui::types::HeadlessAutoStatus::AtMinimum
+                        } else if gpu_scene.time_scale >= max_speed - 0.001 && fps > target * 1.08 {
+                            crate::ui::types::HeadlessAutoStatus::AtMaximum
+                        } else {
+                            crate::ui::types::HeadlessAutoStatus::Holding
+                        }
+                    } else if gpu_scene.time_scale > old_speed {
+                        crate::ui::types::HeadlessAutoStatus::Increasing
+                    } else {
+                        crate::ui::types::HeadlessAutoStatus::Reducing
+                    };
+                } else {
+                    self.ui.state.gpu_headless_auto_status =
+                        crate::ui::types::HeadlessAutoStatus::Off;
+                }
+            }
+        } else {
+            self.ui.state.gpu_headless_auto_status = crate::ui::types::HeadlessAutoStatus::Off;
+        }
+
+        // Update camera gravity direction only for GPU scene (preview scene ignores gravity)
+        if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu
+            && !gpu_headless
+        {
+            self.scene_manager
+                .active_scene_mut()
+                .camera_mut()
+                .set_gravity_direction(
+                    self.ui.state.world_settings.gravity,
+                    self.ui.state.world_settings.gravity_mode,
+                );
+        }
+        if !gpu_headless {
+            self.scene_manager
+                .active_scene_mut()
+                .camera_mut()
+                .update(dt);
+        }
 
         // -- Per-frame cursor visibility ---------------------------------------
         // In GPU mode with a tool active: hide the cursor over the viewport so
@@ -1334,7 +1607,12 @@ impl App {
         // drifts over a UI panel so panels remain fully interactive.
         // Right-click camera drag overrides this (handled in handle_event).
         if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu
-            && !self.scene_manager.active_scene_mut().camera_mut().is_dragging()
+            && !gpu_headless
+            && !self
+                .scene_manager
+                .active_scene_mut()
+                .camera_mut()
+                .is_dragging()
         {
             let tool_active = self.editor_state.radial_menu.active_tool
                 != crate::ui::radial_menu::RadialTool::None;
@@ -1350,7 +1628,9 @@ impl App {
         // We correct `camera.center` (the freefly position / orbit pivot) so
         // both modes benefit. The camera is treated as a small sphere so it
         // stays a comfortable distance from the surface.
-        if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
+        if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu
+            && !gpu_headless
+        {
             if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                 if let Some(cave_renderer) = gpu_scene.cave_renderer.as_ref() {
                     let params = cave_renderer.params();
@@ -1358,26 +1638,31 @@ impl App {
                         use crate::rendering::cave_sdf_push_out;
                         const CAMERA_RADIUS: f32 = 3.0;
                         // `camera` is a public field on GpuScene - no trait import needed.
-                        gpu_scene.camera.center = cave_sdf_push_out(
-                            gpu_scene.camera.center,
-                            params,
-                            CAMERA_RADIUS,
-                        );
+                        gpu_scene.camera.center =
+                            cave_sdf_push_out(gpu_scene.camera.center, params, CAMERA_RADIUS);
                     }
                 }
             }
         }
 
         self.scene_manager.update(dt);
-        
+
         // Poll for async tool operation results (GPU mode only)
         if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
             // Poll for tool operation results and update radial menu state
-            self.scene_manager.poll_tool_operation_results(&mut self.editor_state.radial_menu, &mut self.editor_state.drag_distance, &self.queue);
+            if !gpu_headless {
+                self.scene_manager.poll_tool_operation_results(
+                    &mut self.editor_state.radial_menu,
+                    &mut self.editor_state.drag_distance,
+                    &self.queue,
+                );
+            }
 
             // Poll organism follow readback and update camera center
-            self.scene_manager.poll_organism_follow(&self.device, dt);
-            
+            if !gpu_headless {
+                self.scene_manager.poll_organism_follow(&self.device, dt);
+            }
+
             // Apply cave parameters from UI if they changed
             if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                 if self.editor_state.cave_params_dirty {
@@ -1385,24 +1670,26 @@ impl App {
                     // Clear the dirty flag in editor state
                     self.editor_state.cave_params_dirty = false;
                 }
-                
+
                 // Apply light & fog parameters from UI if they changed
                 if self.editor_state.light_params_dirty {
                     gpu_scene.apply_light_params_from_editor(&self.editor_state);
                     self.editor_state.light_params_dirty = false;
                 }
-                
+
                 // Sync volumetric fog visibility toggle
                 gpu_scene.show_volumetric_fog = self.editor_state.show_volumetric_fog;
-                
+
                 // Sync fluid voxel visibility toggle
                 gpu_scene.show_fluid_voxels = self.editor_state.fluid_show_test_voxels;
-                
+
                 // Sync GPU density mesh visibility toggle
                 gpu_scene.show_gpu_density_mesh = self.editor_state.fluid_show_mesh;
-                
+
                 // Update GPU surface nets params when changed
-                if self.editor_state.fluid_mesh_needs_regen || self.editor_state.fluid_mesh_params_dirty {
+                if self.editor_state.fluid_mesh_needs_regen
+                    || self.editor_state.fluid_mesh_params_dirty
+                {
                     if let Some(ref mut surface_nets) = gpu_scene.gpu_surface_nets {
                         // Update iso level
                         surface_nets.set_iso_level(&self.queue, self.editor_state.fluid_iso_level);
@@ -1410,7 +1697,7 @@ impl App {
                     self.editor_state.fluid_mesh_needs_regen = false;
                     self.editor_state.fluid_mesh_params_dirty = false;
                 }
-                
+
                 // Always update render params every frame (time drives wave animation)
                 if let Some(ref surface_nets) = gpu_scene.gpu_surface_nets {
                     let params = crate::rendering::DensityMeshParams {
@@ -1448,7 +1735,14 @@ impl App {
                 if let Some(ref mut skin) = gpu_scene.organism_skin_renderer {
                     skin.set_skin_radius_scale(&self.queue, os.radius_scale);
                     skin.set_iso_level(&self.queue, os.iso_level);
-                    skin.set_shrink_params(&self.queue, os.shrink_speed, os.smooth_factor, os.shrink_iters, os.smooth_iters, os.min_cells);
+                    skin.set_shrink_params(
+                        &self.queue,
+                        os.shrink_speed,
+                        os.smooth_factor,
+                        os.shrink_iters,
+                        os.smooth_iters,
+                        os.min_cells,
+                    );
                     let mut params = skin.skin_params;
                     params.base_r = os.base_color[0];
                     params.base_g = os.base_color[1];
@@ -1463,10 +1757,10 @@ impl App {
                 }
             }
         }
-        
+
         // Auto-save dock layouts periodically
         self.dock_manager.auto_save();
-        
+
         let output = loop {
             match self.surface.get_current_texture() {
                 Ok(output) => break output,
@@ -1481,10 +1775,13 @@ impl App {
                 }
             }
         };
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
         // Apply occlusion culling settings from UI to GPU scene before rendering
         if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+            gpu_scene.headless_no_render = gpu_headless;
             gpu_scene.set_occlusion_bias(self.ui.state.occlusion_bias);
             gpu_scene.set_occlusion_mip_override(self.ui.state.occlusion_mip_override);
             gpu_scene.set_occlusion_min_screen_size(self.ui.state.occlusion_min_screen_size);
@@ -1508,21 +1805,26 @@ impl App {
             gpu_scene.constraint_iterations = self.ui.state.world_settings.constraint_iterations;
             gpu_scene.acceleration_damping = self.ui.state.world_settings.acceleration_damping;
             gpu_scene.water_viscosity = self.ui.state.world_settings.water_viscosity;
-            gpu_scene.solo_metabolism_multiplier = if self.ui.state.world_settings.solo_metabolism_enabled {
-                self.ui.state.world_settings.solo_metabolism_multiplier
-            } else {
-                1.0 // 1.0 means no penalty (feature disabled)
-            };
+            gpu_scene.solo_metabolism_multiplier =
+                if self.ui.state.world_settings.solo_metabolism_enabled {
+                    self.ui.state.world_settings.solo_metabolism_multiplier
+                } else {
+                    1.0 // 1.0 means no penalty (feature disabled)
+                };
             gpu_scene.radiation_level = self.ui.state.world_settings.radiation_level;
             gpu_scene.subtle_mutations = self.ui.state.world_settings.subtle_mutations;
             // Sync radiation level and mutation mode to mutation system
             if let Some(mutation_system) = &mut gpu_scene.mutation_system {
                 mutation_system.set_radiation_level(self.ui.state.world_settings.radiation_level);
-                mutation_system.set_subtle_mutations(&self.queue, self.ui.state.world_settings.subtle_mutations);
+                mutation_system.set_subtle_mutations(
+                    &self.queue,
+                    self.ui.state.world_settings.subtle_mutations,
+                );
             }
 
             // Apply fluid settings from UI
-            gpu_scene.lateral_flow_probabilities = self.editor_state.fluid_lateral_flow_probabilities;
+            gpu_scene.lateral_flow_probabilities =
+                self.editor_state.fluid_lateral_flow_probabilities;
             gpu_scene.condensation_probability = self.editor_state.fluid_condensation_probability;
             gpu_scene.vaporization_probability = self.editor_state.fluid_vaporization_probability;
             gpu_scene.nutrient_density = self.editor_state.nutrient_density;
@@ -1558,7 +1860,10 @@ impl App {
             }
 
             // Set culling mode based on enabled flags
-            let culling_mode = match (self.ui.state.frustum_enabled, self.ui.state.occlusion_enabled) {
+            let culling_mode = match (
+                self.ui.state.frustum_enabled,
+                self.ui.state.occlusion_enabled,
+            ) {
                 (true, true) => crate::rendering::CullingMode::FrustumAndOcclusion,
                 (true, false) => crate::rendering::CullingMode::FrustumOnly,
                 (false, true) => crate::rendering::CullingMode::OcclusionOnly,
@@ -1566,14 +1871,14 @@ impl App {
             };
             gpu_scene.set_culling_mode(culling_mode);
         }
-        
+
         // Render 3D scene first (pass cell type visuals from editor state)
         let cell_type_visuals = &self.editor_state.cell_type_visuals;
         self.scene_manager.render(
-            &self.device, 
-            &self.queue, 
-            &view, 
-            Some(cell_type_visuals), 
+            &self.device,
+            &self.queue,
+            &view,
+            Some(cell_type_visuals),
             self.ui.state.world_diameter,
             self.ui.state.lod_scale_factor,
             self.ui.state.lod_threshold_low,
@@ -1582,10 +1887,39 @@ impl App {
             self.ui.state.lod_debug_colors,
             self.editor_state.cell_outline_width,
         );
-        
+
+        if gpu_headless {
+            let mut clear_encoder =
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("headless_clear_encoder"),
+                    });
+            clear_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("headless_clear_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.015,
+                            g: 0.018,
+                            b: 0.025,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            self.queue.submit(std::iter::once(clear_encoder.finish()));
+        }
+
         // Update culling stats from GPU scene using non-blocking async read
         // Only if GPU readbacks are enabled (can be disabled to avoid CPU-GPU sync overhead)
-        if self.ui.state.gpu_readbacks_enabled {
+        if self.ui.state.gpu_readbacks_enabled && !gpu_headless {
             if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                 // Poll for any pending async stats read
                 if gpu_scene.instance_builder.poll_culling_stats(&self.device) {
@@ -1597,48 +1931,51 @@ impl App {
                         stats.occluded,
                     );
                 }
-                
+
                 // Start a new async read periodically (once per second)
                 if self.performance.should_refresh_culling_stats() {
                     gpu_scene.instance_builder.start_culling_stats_read();
                 }
             }
         }
-        
+
         // Update continuous drag position every frame when dragging
-        if let Some(cell_idx) = self.editor_state.radial_menu.dragging_cell {
-            // Move cell to current mouse position at the same distance from camera using GPU operations
-            let new_pos = self.scene_manager.screen_to_world_at_distance(
-                self.mouse_position.0,
-                self.mouse_position.1,
-                self.editor_state.drag_distance,
-            );
-            
-            // Use GPU position update via scene manager
-            self.scene_manager.update_cell_position_gpu(cell_idx as u32, new_pos);
+        if !gpu_headless {
+            if let Some(cell_idx) = self.editor_state.radial_menu.dragging_cell {
+                // Move cell to current mouse position at the same distance from camera using GPU operations
+                let new_pos = self.scene_manager.screen_to_world_at_distance(
+                    self.mouse_position.0,
+                    self.mouse_position.1,
+                    self.editor_state.drag_distance,
+                );
+
+                // Use GPU position update via scene manager
+                self.scene_manager
+                    .update_cell_position_gpu(cell_idx as u32, new_pos);
+            }
         }
-        
+
         // Begin egui frame
         self.ui.begin_frame(&self.window);
-        
+
         // Get current mode info for UI
         let current_mode = self.scene_manager.current_mode();
         let _cell_count = self.scene_manager.active_scene().cell_count();
         let _sim_time = self.scene_manager.active_scene().current_time();
         let _is_paused = self.scene_manager.active_scene().is_paused();
-        
+
         // Update UI state with current simulation info
         self.ui.state.current_mode = current_mode;
-        
+
         // Use persistent editor state and create scene request
         let mut scene_request = crate::ui::panel_context::SceneModeRequest::None;
-        
+
         // Sync working genome from preview scene if in Preview mode
         // This keeps the genome available for GPU scene cell insertion.
         // Skip if a genome was just loaded this frame (the loaded genome takes priority).
         let egui_output = {
             let mut dummy_camera = crate::ui::camera::CameraController::new();
-            
+
             // Get real data if in Preview mode
             if current_mode == crate::ui::types::SimulationMode::Preview
                 && !self.editor_state.genome_just_loaded
@@ -1649,7 +1986,7 @@ impl App {
                     let preserved_name = self.working_genome.name.clone();
                     self.working_genome = preview_scene.genome.clone();
                     self.working_genome.name = preserved_name;
-                    
+
                     // One-way sync: read simulation's actual time for progress bar display only
                     // Never write back to time_value - the slider is purely user-driven
                     self.editor_state.resim_display_time = preview_scene.get_time_for_ui();
@@ -1660,7 +1997,7 @@ impl App {
                     self.editor_state.resim_display_time = preview_scene.get_time_for_ui();
                 }
             }
-            
+
             // In GPU mode, sync working_genome FROM GPU scene if it has genomes.
             // This ensures the UI always shows the GPU scene's genome, not a stale
             // preview genome. Without this, switching genomes in preview then switching
@@ -1672,7 +2009,7 @@ impl App {
                     }
                 }
             }
-            
+
             // Render right-click cell context menu for Preview mode
             if current_mode == crate::ui::types::SimulationMode::Preview {
                 if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut() {
@@ -1683,37 +2020,67 @@ impl App {
                         let genome = &preview_scene.genome;
 
                         // Gather cell info before mutable borrow
-                        let mode_idx = display_state.mode_indices.get(cell_idx).copied().unwrap_or(0);
+                        let mode_idx = display_state
+                            .mode_indices
+                            .get(cell_idx)
+                            .copied()
+                            .unwrap_or(0);
                         let mode = genome.modes.get(mode_idx);
                         let cell_type_name = mode
-                            .map(|m| crate::cell::CellType::from_index(m.cell_type as u32)
-                                .map(|ct| ct.name())
-                                .unwrap_or("Unknown"))
+                            .map(|m| {
+                                crate::cell::CellType::from_index(m.cell_type as u32)
+                                    .map(|ct| ct.name())
+                                    .unwrap_or("Unknown")
+                            })
                             .unwrap_or("Unknown");
                         let cell_type_idx = mode.map(|m| m.cell_type).unwrap_or(0);
-                        let is_oculocyte  = cell_type_idx == 7;
-                        let is_photocyte  = cell_type_idx == 3;
+                        let is_oculocyte = cell_type_idx == 7;
+                        let is_photocyte = cell_type_idx == 3;
                         let is_lipocyte_s = cell_type_idx == 4; // lipocyte as signal sender
                         let can_send_test_signal = is_oculocyte
-                            || (is_photocyte  && mode.map(|m| m.photocyte_emit_enabled).unwrap_or(false))
-                            || (is_lipocyte_s && mode.map(|m| m.lipocyte_emit_enabled).unwrap_or(false));
+                            || (is_photocyte
+                                && mode.map(|m| m.photocyte_emit_enabled).unwrap_or(false))
+                            || (is_lipocyte_s
+                                && mode.map(|m| m.lipocyte_emit_enabled).unwrap_or(false));
                         let _mass = display_state.masses.get(cell_idx).copied().unwrap_or(0.0);
-                        let nutrients = display_state.nutrients.get(cell_idx).copied().unwrap_or(0.0);
-                        let signal_channel = mode.map(|m| {
-                            if is_photocyte  { m.photocyte_emit_channel.clamp(0, 15) as usize }
-                            else if is_lipocyte_s { m.lipocyte_emit_channel.clamp(0, 15) as usize }
-                            else { m.oculocyte_signal_channel.clamp(0, 7) as usize }
-                        }).unwrap_or(0);
-                        let signal_value = mode.map(|m| {
-                            if is_photocyte  { m.photocyte_emit_value }
-                            else if is_lipocyte_s { m.lipocyte_emit_value }
-                            else { m.oculocyte_signal_value }
-                        }).unwrap_or(10.0);
-                        let signal_hops = mode.map(|m| {
-                            if is_photocyte  { m.photocyte_emit_hops.clamp(1, 20) as usize }
-                            else if is_lipocyte_s { m.lipocyte_emit_hops.clamp(1, 20) as usize }
-                            else { m.oculocyte_signal_hops.clamp(1, 20) as usize }
-                        }).unwrap_or(3);
+                        let nutrients = display_state
+                            .nutrients
+                            .get(cell_idx)
+                            .copied()
+                            .unwrap_or(0.0);
+                        let signal_channel = mode
+                            .map(|m| {
+                                if is_photocyte {
+                                    m.photocyte_emit_channel.clamp(0, 15) as usize
+                                } else if is_lipocyte_s {
+                                    m.lipocyte_emit_channel.clamp(0, 15) as usize
+                                } else {
+                                    m.oculocyte_signal_channel.clamp(0, 7) as usize
+                                }
+                            })
+                            .unwrap_or(0);
+                        let signal_value = mode
+                            .map(|m| {
+                                if is_photocyte {
+                                    m.photocyte_emit_value
+                                } else if is_lipocyte_s {
+                                    m.lipocyte_emit_value
+                                } else {
+                                    m.oculocyte_signal_value
+                                }
+                            })
+                            .unwrap_or(10.0);
+                        let signal_hops = mode
+                            .map(|m| {
+                                if is_photocyte {
+                                    m.photocyte_emit_hops.clamp(1, 20) as usize
+                                } else if is_lipocyte_s {
+                                    m.lipocyte_emit_hops.clamp(1, 20) as usize
+                                } else {
+                                    m.oculocyte_signal_hops.clamp(1, 20) as usize
+                                }
+                            })
+                            .unwrap_or(3);
 
                         // Compute metabolism rates (nutrients/sec)
                         // Matches preview_physics.rs logic
@@ -1738,10 +2105,22 @@ impl App {
                         };
                         let swim_drain = if is_flagellocyte {
                             let mode_settings = mode;
-                            let effective_speed = if mode_settings.map(|m| m.flagellocyte_use_signal).unwrap_or(false) {
-                                let channel = mode_settings.map(|m| m.flagellocyte_signal_channel.clamp(0, 7) as usize).unwrap_or(0);
-                                let signal_value = display_state.signal_channels.get(cell_idx * 16 + channel).copied().flatten().unwrap_or(0.0);
-                                let threshold_c = mode_settings.map(|m| m.flagellocyte_threshold_c).unwrap_or(0.0);
+                            let effective_speed = if mode_settings
+                                .map(|m| m.flagellocyte_use_signal)
+                                .unwrap_or(false)
+                            {
+                                let channel = mode_settings
+                                    .map(|m| m.flagellocyte_signal_channel.clamp(0, 7) as usize)
+                                    .unwrap_or(0);
+                                let signal_value = display_state
+                                    .signal_channels
+                                    .get(cell_idx * 16 + channel)
+                                    .copied()
+                                    .flatten()
+                                    .unwrap_or(0.0);
+                                let threshold_c = mode_settings
+                                    .map(|m| m.flagellocyte_threshold_c)
+                                    .unwrap_or(0.0);
                                 if signal_value >= threshold_c {
                                     mode_settings.map(|m| m.flagellocyte_speed_b).unwrap_or(0.0)
                                 } else {
@@ -1755,11 +2134,16 @@ impl App {
                             0.0
                         };
                         let sense_drain = if is_oculocyte {
-                            mode.map(|m| m.oculocyte_ray_length * OCULOCYTE_SENSE_CONSUMPTION_RATE).unwrap_or(0.0)
+                            mode.map(|m| m.oculocyte_ray_length * OCULOCYTE_SENSE_CONSUMPTION_RATE)
+                                .unwrap_or(0.0)
                         } else {
                             0.0
                         };
-                        let base_drain = if can_auto_gain { 0.0 } else { BASE_METABOLISM_RATE };
+                        let base_drain = if can_auto_gain {
+                            0.0
+                        } else {
+                            BASE_METABOLISM_RATE
+                        };
                         let total_drain = base_drain + swim_drain + sense_drain;
                         let _net_rate = gain_rate - total_drain;
 
@@ -1767,7 +2151,8 @@ impl App {
                         let split_mass = mode.map(|m| m.split_mass).unwrap_or(2.0);
                         let split_never = split_mass > 2.0;
                         let nutrient_priority = mode.map(|m| m.nutrient_priority).unwrap_or(1.0);
-                        let prioritize_when_low = mode.map(|m| m.prioritize_when_low).unwrap_or(false);
+                        let prioritize_when_low =
+                            mode.map(|m| m.prioritize_when_low).unwrap_or(false);
 
                         // Read actual flow rates recorded by the physics step.
                         // connection_flow_rates[i] = nutrients/sec, positive = A->B, negative = B->A.
@@ -1775,17 +2160,41 @@ impl App {
                         let mut transport_out_rate: f32 = 0.0;
                         let mut transport_in_rate: f32 = 0.0;
 
-                        for (conn_idx, &active) in display_state.adhesion_connections.is_active.iter().enumerate() {
-                            if active == 0 { continue; }
-                            let cell_a = display_state.adhesion_connections.cell_a_index.get(conn_idx).copied().unwrap_or(0);
-                            let cell_b = display_state.adhesion_connections.cell_b_index.get(conn_idx).copied().unwrap_or(0);
-                            if cell_a != cell_idx && cell_b != cell_idx { continue; }
+                        for (conn_idx, &active) in display_state
+                            .adhesion_connections
+                            .is_active
+                            .iter()
+                            .enumerate()
+                        {
+                            if active == 0 {
+                                continue;
+                            }
+                            let cell_a = display_state
+                                .adhesion_connections
+                                .cell_a_index
+                                .get(conn_idx)
+                                .copied()
+                                .unwrap_or(0);
+                            let cell_b = display_state
+                                .adhesion_connections
+                                .cell_b_index
+                                .get(conn_idx)
+                                .copied()
+                                .unwrap_or(0);
+                            if cell_a != cell_idx && cell_b != cell_idx {
+                                continue;
+                            }
 
-                            let flow = display_state.adhesion_connections.connection_flow_rates
-                                .get(conn_idx).copied().unwrap_or(0.0);
+                            let flow = display_state
+                                .adhesion_connections
+                                .connection_flow_rates
+                                .get(conn_idx)
+                                .copied()
+                                .unwrap_or(0.0);
 
                             // flow is positive = A->B. Flip sign if we are cell_b.
-                            let flow_from_my_perspective = if cell_a == cell_idx { flow } else { -flow };
+                            let flow_from_my_perspective =
+                                if cell_a == cell_idx { flow } else { -flow };
 
                             if flow_from_my_perspective > 0.0 {
                                 transport_out_rate += flow_from_my_perspective;
@@ -1798,7 +2207,11 @@ impl App {
 
                         // Read all 16 signal channels for this cell
                         let cell_signals: [Option<f32>; 16] = std::array::from_fn(|ch| {
-                            display_state.signal_channels.get(cell_idx * 16 + ch).copied().flatten()
+                            display_state
+                                .signal_channels
+                                .get(cell_idx * 16 + ch)
+                                .copied()
+                                .flatten()
                         });
 
                         let mut close_menu = false;
@@ -1813,8 +2226,19 @@ impl App {
                                     ui.set_min_width(220.0);
 
                                     // --- Header ---
-                                    ui.label(egui::RichText::new(format!("{} — M{}", cell_type_name, mode_idx + 1)).strong());
-                                    ui.label(egui::RichText::new(format!("Cell #{}", cell_idx)).color(egui::Color32::from_rgb(140, 140, 140)).small());
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} — M{}",
+                                            cell_type_name,
+                                            mode_idx + 1
+                                        ))
+                                        .strong(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!("Cell #{}", cell_idx))
+                                            .color(egui::Color32::from_rgb(140, 140, 140))
+                                            .small(),
+                                    );
                                     ui.separator();
 
                                     let dim = egui::Color32::from_rgb(160, 160, 160);
@@ -1841,20 +2265,45 @@ impl App {
                                         egui::vec2(bar_width, bar_height),
                                         egui::Sense::hover(),
                                     );
-                                    ui.painter().rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(50, 50, 50));
-                                    let fill_color = if nutrient_frac > 0.5 { green } else if nutrient_frac > 0.2 { egui::Color32::from_rgb(220, 180, 50) } else { red };
-                                    let fill_rect = egui::Rect::from_min_size(bar_rect.min, egui::vec2(bar_rect.width() * nutrient_frac, bar_height));
+                                    ui.painter().rect_filled(
+                                        bar_rect,
+                                        2.0,
+                                        egui::Color32::from_rgb(50, 50, 50),
+                                    );
+                                    let fill_color = if nutrient_frac > 0.5 {
+                                        green
+                                    } else if nutrient_frac > 0.2 {
+                                        egui::Color32::from_rgb(220, 180, 50)
+                                    } else {
+                                        red
+                                    };
+                                    let fill_rect = egui::Rect::from_min_size(
+                                        bar_rect.min,
+                                        egui::vec2(bar_rect.width() * nutrient_frac, bar_height),
+                                    );
                                     ui.painter().rect_filled(fill_rect, 2.0, fill_color);
                                     // Split threshold marker
                                     if !split_never {
-                                        let split_frac = (split_nutrient_threshold / nutrient_max).clamp(0.0, 1.0);
-                                        let marker_x = bar_rect.min.x + bar_rect.width() * split_frac;
+                                        let split_frac = (split_nutrient_threshold / nutrient_max)
+                                            .clamp(0.0, 1.0);
+                                        let marker_x =
+                                            bar_rect.min.x + bar_rect.width() * split_frac;
                                         ui.painter().line_segment(
-                                            [egui::pos2(marker_x, bar_rect.min.y), egui::pos2(marker_x, bar_rect.max.y)],
+                                            [
+                                                egui::pos2(marker_x, bar_rect.min.y),
+                                                egui::pos2(marker_x, bar_rect.max.y),
+                                            ],
                                             egui::Stroke::new(1.5, white),
                                         );
                                     }
-                                    ui.label(egui::RichText::new(format!("{:.0} / {:.0}", nutrients, nutrient_max)).color(dim).small());
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{:.0} / {:.0}",
+                                            nutrients, nutrient_max
+                                        ))
+                                        .color(dim)
+                                        .small(),
+                                    );
 
                                     ui.separator();
 
@@ -1866,7 +2315,10 @@ impl App {
                                             // Gain row (only if cell produces)
                                             if gain_rate > 0.0 {
                                                 ui.colored_label(dim, "Gain");
-                                                ui.colored_label(green, format!("+{:.1}/s", gain_rate));
+                                                ui.colored_label(
+                                                    green,
+                                                    format!("+{:.1}/s", gain_rate),
+                                                );
                                                 ui.end_row();
                                             }
 
@@ -1874,21 +2326,30 @@ impl App {
                                             let base_drain = total_drain - swim_drain - sense_drain;
                                             if base_drain > 0.0 {
                                                 ui.colored_label(dim, "Upkeep");
-                                                ui.colored_label(red, format!("-{:.1}/s", base_drain));
+                                                ui.colored_label(
+                                                    red,
+                                                    format!("-{:.1}/s", base_drain),
+                                                );
                                                 ui.end_row();
                                             }
 
                                             // Swim drain (flagellocytes)
                                             if swim_drain > 0.0 {
                                                 ui.colored_label(dim, "Swimming");
-                                                ui.colored_label(red, format!("-{:.1}/s", swim_drain));
+                                                ui.colored_label(
+                                                    red,
+                                                    format!("-{:.1}/s", swim_drain),
+                                                );
                                                 ui.end_row();
                                             }
 
                                             // Sense drain (oculocytes)
                                             if sense_drain > 0.0 {
                                                 ui.colored_label(dim, "Sensing");
-                                                ui.colored_label(red, format!("-{:.1}/s", sense_drain));
+                                                ui.colored_label(
+                                                    red,
+                                                    format!("-{:.1}/s", sense_drain),
+                                                );
                                                 ui.end_row();
                                             }
 
@@ -1897,9 +2358,15 @@ impl App {
                                                 let net_t = transport_in_rate - transport_out_rate;
                                                 ui.colored_label(dim, "Transport");
                                                 if net_t >= 0.0 {
-                                                    ui.colored_label(green, format!("+{:.1}/s", net_t));
+                                                    ui.colored_label(
+                                                        green,
+                                                        format!("+{:.1}/s", net_t),
+                                                    );
                                                 } else {
-                                                    ui.colored_label(red, format!("{:.1}/s", net_t));
+                                                    ui.colored_label(
+                                                        red,
+                                                        format!("{:.1}/s", net_t),
+                                                    );
                                                 }
                                                 ui.end_row();
                                             }
@@ -1909,12 +2376,28 @@ impl App {
                                             ui.end_row();
 
                                             // Net = everything combined
-                                            let total_net = gain_rate - total_drain + transport_in_rate - transport_out_rate;
+                                            let total_net = gain_rate - total_drain
+                                                + transport_in_rate
+                                                - transport_out_rate;
                                             ui.label(egui::RichText::new("Net").strong());
                                             if total_net >= 0.0 {
-                                                ui.colored_label(green, egui::RichText::new(format!("+{:.1}/s", total_net)).strong());
+                                                ui.colored_label(
+                                                    green,
+                                                    egui::RichText::new(format!(
+                                                        "+{:.1}/s",
+                                                        total_net
+                                                    ))
+                                                    .strong(),
+                                                );
                                             } else {
-                                                ui.colored_label(red, egui::RichText::new(format!("{:.1}/s", total_net)).strong());
+                                                ui.colored_label(
+                                                    red,
+                                                    egui::RichText::new(format!(
+                                                        "{:.1}/s",
+                                                        total_net
+                                                    ))
+                                                    .strong(),
+                                                );
                                             }
                                             ui.end_row();
 
@@ -1923,15 +2406,28 @@ impl App {
                                             if split_never {
                                                 ui.colored_label(dim, "Never");
                                             } else {
-                                                ui.colored_label(dim, format!("{:.0} nutrients", split_nutrient_threshold));
+                                                ui.colored_label(
+                                                    dim,
+                                                    format!(
+                                                        "{:.0} nutrients",
+                                                        split_nutrient_threshold
+                                                    ),
+                                                );
                                             }
                                             ui.end_row();
 
                                             // Priority (only show if non-default)
                                             if nutrient_priority != 1.0 || prioritize_when_low {
                                                 ui.colored_label(dim, "Priority");
-                                                let low_str = if prioritize_when_low { " (boost low)" } else { "" };
-                                                ui.colored_label(dim, format!("{:.1}{}", nutrient_priority, low_str));
+                                                let low_str = if prioritize_when_low {
+                                                    " (boost low)"
+                                                } else {
+                                                    ""
+                                                };
+                                                ui.colored_label(
+                                                    dim,
+                                                    format!("{:.1}{}", nutrient_priority, low_str),
+                                                );
                                                 ui.end_row();
                                             }
                                         });
@@ -1952,14 +2448,16 @@ impl App {
                                                 // Left column
                                                 ui.label(format!("Ch {:2}:", ch_left));
                                                 match cell_signals[ch_left] {
-                                                    Some(v) => ui.colored_label(yellow, format!("{:.1}", v)),
+                                                    Some(v) => ui
+                                                        .colored_label(yellow, format!("{:.1}", v)),
                                                     None => ui.colored_label(gray, "—"),
                                                 };
 
                                                 // Right column
                                                 ui.label(format!("Ch{:2}:", ch_right));
                                                 match cell_signals[ch_right] {
-                                                    Some(v) => ui.colored_label(yellow, format!("{:.1}", v)),
+                                                    Some(v) => ui
+                                                        .colored_label(yellow, format!("{:.1}", v)),
                                                     None => ui.colored_label(gray, "—"),
                                                 };
 
@@ -1970,20 +2468,27 @@ impl App {
 
                                     if can_send_test_signal {
                                         // Check if this cell already has an active test signal
-                                        let has_active_signal = self.test_signal_emissions.iter()
+                                        let has_active_signal = self
+                                            .test_signal_emissions
+                                            .iter()
                                             .any(|emission| emission.source_cell == cell_idx);
-                                        
-                                        let button_text = if has_active_signal { 
-                                            "Stop Test Signal" 
-                                        } else { 
-                                            "Send Test Signal" 
+
+                                        let button_text = if has_active_signal {
+                                            "Stop Test Signal"
+                                        } else {
+                                            "Send Test Signal"
                                         };
-                                        
+
                                         if ui.button(button_text).clicked() {
                                             if has_active_signal {
                                                 // Remove the signal (toggle off)
-                                                self.test_signal_emissions.retain(|emission| emission.source_cell != cell_idx);
-                                                log::info!("Stopped test signal from cell {}", cell_idx);
+                                                self.test_signal_emissions.retain(|emission| {
+                                                    emission.source_cell != cell_idx
+                                                });
+                                                log::info!(
+                                                    "Stopped test signal from cell {}",
+                                                    cell_idx
+                                                );
                                                 self.test_signals_changed = true;
                                             } else {
                                                 // Add the signal (toggle on)
@@ -2052,33 +2557,35 @@ impl App {
                 &mut scene_request,
                 &self.performance,
             );
-            
+
             // Sync genome changes and time slider back to the scene if in Preview mode
             if current_mode == crate::ui::types::SimulationMode::Preview {
                 if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut() {
                     // Sync physics config from UI world settings so constraint_iterations
                     // and other parameters take effect in the preview physics step.
-                    preview_scene.config.constraint_iterations = self.ui.state.world_settings.constraint_iterations;
+                    preview_scene.config.constraint_iterations =
+                        self.ui.state.world_settings.constraint_iterations;
 
                     preview_scene.update_genome(&self.working_genome);
 
                     // Clear the just-loaded flag now that the genome has been pushed
                     // into the preview scene. From the next frame the normal sync resumes.
                     self.editor_state.genome_just_loaded = false;
-                    
+
                     // Sync time slider to simulation (when dragging or changed)
                     preview_scene.sync_time_from_ui(
                         self.editor_state.time_value,
                         self.editor_state.max_preview_duration,
                         self.editor_state.time_slider_dragging,
                     );
-                    
+
                     // Bidirectional sync: genome panel selection -> preview highlight
-                    preview_scene.selected_mode_indices = self.editor_state.selected_mode_indices.clone();
-                    
+                    preview_scene.selected_mode_indices =
+                        self.editor_state.selected_mode_indices.clone();
+
                     // Sync test signals to preview scene (must happen before resimulation trigger)
                     preview_scene.test_signals = self.test_signal_emissions.clone();
-                    
+
                     // Trigger resimulation if test signals changed
                     if self.test_signals_changed {
                         let current_time = preview_scene.state.display_time;
@@ -2099,7 +2606,7 @@ impl App {
                     }
                 }
             }
-            
+
             // In GPU mode, push physics parameter changes (stiffness, damping, rest length,
             // break force, etc.) to the GPU settings buffers so existing cells pick them up
             // immediately. update_genome only rewrites the per-mode settings arrays - it does
@@ -2107,13 +2614,14 @@ impl App {
             // existing cells are unaffected structurally. New cells spawned after the edit
             output
         };
-        
+
         // Update gizmo configuration for all scenes
         self.scene_manager.update_gizmo_config(&self.editor_state);
-        
+
         // Update split ring configuration for all scenes
-        self.scene_manager.update_split_ring_config(&self.editor_state);
-        
+        self.scene_manager
+            .update_split_ring_config(&self.editor_state);
+
         // Handle scene mode requests from UI panels
         if scene_request.is_requested() {
             match scene_request {
@@ -2132,7 +2640,7 @@ impl App {
 
                     // Commit world_diameter from the slider value before reset
                     self.ui.state.world_diameter = new_radius * 2.0;
-                    
+
                     // Recreate GPU scene with appropriate capacity if needed
                     self.scene_manager.recreate_gpu_scene_with_capacity(
                         &self.device,
@@ -2142,15 +2650,17 @@ impl App {
                         capacity,
                         &self.editor_state,
                     );
-                    
+
                     // Reset the GPU scene
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                         gpu_scene.reset(&self.queue);
 
                         // Reset fluid simulation
-                        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Fluid Reset Encoder"),
-                        });
+                        let mut encoder =
+                            self.device
+                                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: Some("Fluid Reset Encoder"),
+                                });
                         gpu_scene.reset_fluid(&self.device, &self.queue, &mut encoder);
                         self.queue.submit(std::iter::once(encoder.finish()));
 
@@ -2171,7 +2681,7 @@ impl App {
 
                     // Commit world_diameter from the slider value before reset
                     self.ui.state.world_diameter = new_radius * 2.0;
-                    
+
                     // Recreate GPU scene with appropriate capacity if needed
                     self.scene_manager.recreate_gpu_scene_with_capacity(
                         &self.device,
@@ -2181,7 +2691,7 @@ impl App {
                         capacity,
                         &self.editor_state,
                     );
-                    
+
                     // Reset the GPU scene (cells only, keep fluid)
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                         gpu_scene.reset(&self.queue);
@@ -2222,10 +2732,16 @@ impl App {
                 }
                 crate::ui::panel_context::SceneModeRequest::LoadGenomeFromGpu(genome_id) => {
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
-                        if let Some(genome) = gpu_scene.read_back_genome(&self.device, &self.queue, genome_id) {
-                            log::info!("Loaded genome '{}' ({} modes) from GPU", genome.name, genome.modes.len());
+                        if let Some(genome) =
+                            gpu_scene.read_back_genome(&self.device, &self.queue, genome_id)
+                        {
+                            log::info!(
+                                "Loaded genome '{}' ({} modes) from GPU",
+                                genome.name,
+                                genome.modes.len()
+                            );
                             self.working_genome = genome;
-                            
+
                             // Switch to Preview mode immediately (not deferred) so we can
                             // push the readback genome into the preview scene right away.
                             // If we used request_mode_switch, the next frame's per-frame sync
@@ -2234,7 +2750,10 @@ impl App {
                             let preview_mode = crate::ui::types::SimulationMode::Preview;
                             if current_mode != preview_mode {
                                 let cave_initialized = self.scene_manager.switch_mode(
-                                    preview_mode, &self.device, &self.queue, &self.config,
+                                    preview_mode,
+                                    &self.device,
+                                    &self.queue,
+                                    &self.config,
                                     self.ui.state.world_diameter,
                                     self.ui.state.world_settings.cell_capacity,
                                     &self.editor_state,
@@ -2248,20 +2767,92 @@ impl App {
                                     self.scene_manager.clear_dragged_cell();
                                     self.editor_state.radial_menu.clear_drag_state();
                                 }
-                                let _ = self.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                                let _ = self
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::None);
                                 self.window.set_cursor_visible(true);
-                                self.editor_state.radial_menu.active_tool = crate::ui::radial_menu::RadialTool::None;
+                                self.editor_state.radial_menu.active_tool =
+                                    crate::ui::radial_menu::RadialTool::None;
                                 self.editor_state.radial_menu.visible = false;
                                 log::info!("Switched to Preview mode for genome inspection");
                             }
-                            
+
                             // Now push the readback genome into the preview scene immediately
-                            if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut() {
+                            if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut()
+                            {
                                 preview_scene.update_genome(&self.working_genome);
                                 log::info!("Pushed readback genome into preview scene");
                             }
                         } else {
                             log::error!("Failed to read back genome_id={} from GPU", genome_id);
+                        }
+                    }
+                }
+                crate::ui::panel_context::SceneModeRequest::LoadGenomeFromGpuCell {
+                    genome_id,
+                    mode_index,
+                } => {
+                    if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
+                        if let Some(genome) = gpu_scene.read_back_genome_for_inspected_cell(
+                            &self.device,
+                            &self.queue,
+                            genome_id,
+                            mode_index,
+                        ) {
+                            log::info!(
+                                "Loaded inspected cell genome '{}' ({} modes) from GPU",
+                                genome.name,
+                                genome.modes.len()
+                            );
+                            self.working_genome = genome;
+
+                            // Switch to Preview mode immediately (not deferred) so we can
+                            // push the readback genome into the preview scene right away.
+                            // If we used request_mode_switch, the next frame's per-frame sync
+                            // (working_genome = preview_scene.genome.clone()) would overwrite
+                            // our readback genome before update_genome could push it.
+                            let preview_mode = crate::ui::types::SimulationMode::Preview;
+                            if current_mode != preview_mode {
+                                let cave_initialized = self.scene_manager.switch_mode(
+                                    preview_mode,
+                                    &self.device,
+                                    &self.queue,
+                                    &self.config,
+                                    self.ui.state.world_diameter,
+                                    self.ui.state.world_settings.cell_capacity,
+                                    &self.editor_state,
+                                );
+                                if cave_initialized {
+                                    self.editor_state.cave_params_dirty = true;
+                                }
+                                self.dock_manager.switch_mode(preview_mode);
+                                // Clear radial menu / drag state from GPU mode
+                                if self.editor_state.radial_menu.dragging_cell.is_some() {
+                                    self.scene_manager.clear_dragged_cell();
+                                    self.editor_state.radial_menu.clear_drag_state();
+                                }
+                                let _ = self
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::None);
+                                self.window.set_cursor_visible(true);
+                                self.editor_state.radial_menu.active_tool =
+                                    crate::ui::radial_menu::RadialTool::None;
+                                self.editor_state.radial_menu.visible = false;
+                                log::info!("Switched to Preview mode for inspected genome");
+                            }
+
+                            // Now push the readback genome into the preview scene immediately
+                            if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut()
+                            {
+                                preview_scene.update_genome(&self.working_genome);
+                                log::info!("Pushed inspected genome into preview scene");
+                            }
+                        } else {
+                            log::error!(
+                                "Failed to read back inspected cell genome: reported_genome_id={} mode_index={}",
+                                genome_id,
+                                mode_index
+                            );
                         }
                     }
                 }
@@ -2282,7 +2873,7 @@ impl App {
                 }
             }
         }
-        
+
         // Check if mode switch was requested via UI
         if let Some(requested_mode) = self.ui.state.take_mode_request() {
             if requested_mode != current_mode {
@@ -2290,32 +2881,46 @@ impl App {
                 if requested_mode == crate::ui::types::SimulationMode::Gpu {
                     if let Some(preview_scene) = self.scene_manager.get_preview_scene() {
                         self.working_genome = preview_scene.genome.clone();
-                        log::info!("Synced genome to GPU scene: {} modes", self.working_genome.modes.len());
+                        log::info!(
+                            "Synced genome to GPU scene: {} modes",
+                            self.working_genome.modes.len()
+                        );
                     }
                 }
-                
-                let cave_initialized = self.scene_manager.switch_mode(requested_mode, &self.device, &self.queue, &self.config, self.ui.state.world_diameter, self.ui.state.world_settings.cell_capacity, &self.editor_state);
+
+                let cave_initialized = self.scene_manager.switch_mode(
+                    requested_mode,
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    self.ui.state.world_diameter,
+                    self.ui.state.world_settings.cell_capacity,
+                    &self.editor_state,
+                );
                 if cave_initialized {
                     // Cave was just initialized, mark params as dirty so they get applied
                     self.editor_state.cave_params_dirty = true;
                 }
                 self.dock_manager.switch_mode(requested_mode);
                 // Reset cursor visibility and radial menu state when switching modes
-                
+
                 // Clear any active drag state when switching modes
                 if self.editor_state.radial_menu.dragging_cell.is_some() {
                     log::info!("Clearing drag state due to mode switch");
                     self.scene_manager.clear_dragged_cell();
                     self.editor_state.radial_menu.clear_drag_state();
                 }
-                let _ = self.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                let _ = self
+                    .window
+                    .set_cursor_grab(winit::window::CursorGrabMode::None);
                 self.window.set_cursor_visible(true);
-                self.editor_state.radial_menu.active_tool = crate::ui::radial_menu::RadialTool::None;
+                self.editor_state.radial_menu.active_tool =
+                    crate::ui::radial_menu::RadialTool::None;
                 self.editor_state.radial_menu.visible = false;
                 log::info!("Switched to {} mode", requested_mode.display_name());
             }
         }
-        
+
         // Check if mode switch was requested via dock manager (for layout persistence)
         let dock_mode = self.dock_manager.current_mode();
         if dock_mode != current_mode {
@@ -2325,24 +2930,34 @@ impl App {
                     self.working_genome = preview_scene.genome.clone();
                 }
             }
-            let cave_initialized = self.scene_manager.switch_mode(dock_mode, &self.device, &self.queue, &self.config, self.ui.state.world_diameter, self.ui.state.world_settings.cell_capacity, &self.editor_state);
+            let cave_initialized = self.scene_manager.switch_mode(
+                dock_mode,
+                &self.device,
+                &self.queue,
+                &self.config,
+                self.ui.state.world_diameter,
+                self.ui.state.world_settings.cell_capacity,
+                &self.editor_state,
+            );
             if cave_initialized {
                 // Cave was just initialized, mark params as dirty so they get applied
                 self.editor_state.cave_params_dirty = true;
             }
         }
-        
+
         // Create command encoder for egui rendering
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("egui_encoder"),
-        });
-        
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("egui_encoder"),
+            });
+
         // Create screen descriptor
         let screen_descriptor = ScreenDescriptor {
             size_in_pixels: [self.config.width, self.config.height],
             pixels_per_point: self.window.scale_factor() as f32,
         };
-        
+
         // Render egui
         self.ui.render(
             &self.device,
@@ -2383,7 +2998,11 @@ impl App {
                         rows_per_image: Some(h),
                     },
                 },
-                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
             );
 
             Some((staging, w, h, padded_bytes_per_row, unpadded_bytes_per_row))
@@ -2413,11 +3032,16 @@ impl App {
         if self.editor_state.request_gif_capture {
             self.editor_state.request_gif_capture = false;
             if self.deferred_action.is_none() {
-                let save_path = self.editor_state.gif_capture_save_path.take()
+                let save_path = self
+                    .editor_state
+                    .gif_capture_save_path
+                    .take()
                     .unwrap_or_else(|| {
                         // Fallback: derive from working genome name
-                        crate::app_dirs::genomes_dir()
-                            .join(format!("{}.genome", crate::app_dirs::sanitize_filename(&self.working_genome.name)))
+                        crate::app_dirs::genomes_dir().join(format!(
+                            "{}.genome",
+                            crate::app_dirs::sanitize_filename(&self.working_genome.name)
+                        ))
                     });
                 self.deferred_action = Some(DeferredAction::CaptureGif { save_path });
             }
@@ -2463,7 +3087,11 @@ impl App {
                         match crate::scene::GpuSceneSnapshot::load_from_file(&path) {
                             Ok(snapshot) => {
                                 gpu_scene.paused = true;
-                                match gpu_scene.restore_from_snapshot(&self.device, &self.queue, &snapshot) {
+                                match gpu_scene.restore_from_snapshot(
+                                    &self.device,
+                                    &self.queue,
+                                    &snapshot,
+                                ) {
                                     Ok(()) => log::info!("Sphere loaded from {:?}", path),
                                     Err(e) => log::error!("Failed to restore sphere: {}", e),
                                 }
@@ -2474,19 +3102,36 @@ impl App {
                     self.ui.state.show_loading_popup = false;
                     self.window.request_redraw();
                 }
-                DeferredAction::TakeScreenshot { staging, width, height, padded_bytes_per_row, unpadded_bytes_per_row, format } => {
+                DeferredAction::TakeScreenshot {
+                    staging,
+                    width,
+                    height,
+                    padded_bytes_per_row,
+                    unpadded_bytes_per_row,
+                    format,
+                } => {
                     // Map the staging buffer and read back the pixel data.
                     let slice = staging.slice(..);
                     let (tx, rx) = std::sync::mpsc::channel();
-                    slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-                    match self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }) {
+                    slice.map_async(wgpu::MapMode::Read, move |r| {
+                        let _ = tx.send(r);
+                    });
+                    match self.device.poll(wgpu::PollType::Wait {
+                        submission_index: None,
+                        timeout: None,
+                    }) {
                         Ok(_) => {}
                         Err(e) => {
                             log::error!("Screenshot: device.poll failed: {:?}", e);
                             return;
                         }
                     }
-                    if rx.recv().map_err(|_| ()).and_then(|r| r.map_err(|_| ())).is_err() {
+                    if rx
+                        .recv()
+                        .map_err(|_| ())
+                        .and_then(|r| r.map_err(|_| ()))
+                        .is_err()
+                    {
                         log::error!("Screenshot: staging buffer map failed");
                         return;
                     }
@@ -2500,7 +3145,8 @@ impl App {
                     let mut rgba: Vec<u8> = Vec::with_capacity((width * height * 4) as usize);
                     for row in 0..height {
                         let row_start = (row * padded_bytes_per_row) as usize;
-                        let row_bytes = &mapped[row_start..row_start + unpadded_bytes_per_row as usize];
+                        let row_bytes =
+                            &mapped[row_start..row_start + unpadded_bytes_per_row as usize];
                         if is_bgra {
                             for chunk in row_bytes.chunks_exact(4) {
                                 rgba.push(chunk[2]); // R
@@ -2525,32 +3171,33 @@ impl App {
                     let path = screenshots_dir.join(&filename);
 
                     match image::RgbaImage::from_raw(width, height, rgba) {
-                        Some(img) => {
-                            match img.save(&path) {
-                                Ok(()) => log::info!("Screenshot saved to {:?}", path),
-                                Err(e) => log::error!("Screenshot: failed to save PNG: {}", e),
-                            }
+                        Some(img) => match img.save(&path) {
+                            Ok(()) => log::info!("Screenshot saved to {:?}", path),
+                            Err(e) => log::error!("Screenshot: failed to save PNG: {}", e),
+                        },
+                        None => {
+                            log::error!("Screenshot: failed to construct image from pixel data")
                         }
-                        None => log::error!("Screenshot: failed to construct image from pixel data"),
                     }
                 }
                 DeferredAction::CaptureGif { save_path } => {
                     // Start the incremental GIF capture state machine.
-                    let (genome, cam_rotation, cam_distance, cam_center) = if let Some(preview) = self.scene_manager.get_preview_scene() {
-                        (
-                            preview.genome.clone(),
-                            preview.camera.rotation,
-                            preview.camera.distance,
-                            preview.camera.center,
-                        )
-                    } else {
-                        (
-                            self.working_genome.clone(),
-                            glam::Quat::from_axis_angle(glam::Vec3::X, -0.35),
-                            40.0,
-                            glam::Vec3::ZERO,
-                        )
-                    };
+                    let (genome, cam_rotation, cam_distance, cam_center) =
+                        if let Some(preview) = self.scene_manager.get_preview_scene() {
+                            (
+                                preview.genome.clone(),
+                                preview.camera.rotation,
+                                preview.camera.distance,
+                                preview.camera.center,
+                            )
+                        } else {
+                            (
+                                self.working_genome.clone(),
+                                glam::Quat::from_axis_angle(glam::Vec3::X, -0.35),
+                                40.0,
+                                glam::Vec3::ZERO,
+                            )
+                        };
                     let sim_time = self.editor_state.time_value;
                     let cell_type_visuals = self.editor_state.cell_type_visuals.clone();
 
@@ -2574,9 +3221,9 @@ impl App {
                         Err(e) => {
                             log::error!("GIF capture failed to start: {}", e);
                             crate::ui::toast::remove_progress_toasts(&mut self.ui.toasts);
-                            self.ui.toasts.push(crate::ui::toast::Toast::error(
-                                format!("GIF failed: {}", e)
-                            ));
+                            self.ui
+                                .toasts
+                                .push(crate::ui::toast::Toast::error(format!("GIF failed: {}", e)));
                         }
                     }
                     self.window.request_redraw();
@@ -2592,33 +3239,33 @@ impl App {
             let done = capture.frames_done();
             let total = capture.frames_total();
             let msg = format!("Capturing GIF… {}/{}", done, total);
-            crate::ui::toast::upsert_progress_toast(
-                &mut self.ui.toasts,
-                &msg,
-                capture.progress(),
-            );
+            crate::ui::toast::upsert_progress_toast(&mut self.ui.toasts, &msg, capture.progress());
 
             if capture.is_done() {
                 let result = capture.result.take().unwrap();
                 crate::ui::toast::remove_progress_toasts(&mut self.ui.toasts);
                 match result {
                     Ok(ref gif_path) => {
-                        let gif_stem = gif_path.file_stem()
+                        let gif_stem = gif_path
+                            .file_stem()
                             .and_then(|n| n.to_str())
                             .unwrap_or("thumbnail")
                             .to_string();
 
-                        self.ui.toasts.push(crate::ui::toast::Toast::success(
-                            format!("✓ GIF saved — {}.gif", gif_stem)
-                        ));
+                        self.ui
+                            .toasts
+                            .push(crate::ui::toast::Toast::success(format!(
+                                "✓ GIF saved — {}.gif",
+                                gif_stem
+                            )));
                         // Refresh the genome browser so the new thumbnail appears.
                         self.ui.genome_browser.needs_refresh = true;
                         self.ui.genome_browser.force_full_reload = true;
                     }
                     Err(e) => {
-                        self.ui.toasts.push(crate::ui::toast::Toast::error(
-                            format!("GIF failed: {}", e)
-                        ));
+                        self.ui
+                            .toasts
+                            .push(crate::ui::toast::Toast::error(format!("GIF failed: {}", e)));
                     }
                 }
                 self.editor_state.gif_capture = None;
@@ -2626,7 +3273,7 @@ impl App {
 
             self.window.request_redraw();
         }
-        
+
         // FPS counter
         self.frame_count += 1;
         if self.fps_timer.elapsed().as_secs_f32() >= 1.0 {
@@ -2635,17 +3282,15 @@ impl App {
             self.fps_timer = std::time::Instant::now();
         }
     }
-    
+
     pub fn request_redraw(&self) {
         self.window.request_redraw();
     }
-    
+
     /// Get the next scheduled frame time for 60fps limiting
     pub fn next_frame_time(&self) -> std::time::Instant {
         self.next_frame_time
     }
-    
-
 }
 
 struct AppState {
@@ -2657,7 +3302,7 @@ impl ApplicationHandler for AppState {
         if self.app.is_some() {
             return;
         }
-        
+
         // Build window icon from embedded PNG so it is set at creation time.
         // Passing it via with_window_icon() is required for Wayland compositors
         // and ensures the taskbar / launcher shows the correct icon immediately.
@@ -2690,7 +3335,8 @@ impl ApplicationHandler for AppState {
                 if let RawWindowHandle::Win32(win32) = handle.as_raw() {
                     unsafe {
                         let hwnd = win32.hwnd.get() as winapi::shared::windef::HWND;
-                        let hinstance = winapi::um::libloaderapi::GetModuleHandleW(std::ptr::null());
+                        let hinstance =
+                            winapi::um::libloaderapi::GetModuleHandleW(std::ptr::null());
 
                         // Load large icon (32x32) from the .exe resource embedded by winres.
                         // MAKEINTRESOURCEW(1) = 1usize cast to LPCWSTR.
@@ -2699,7 +3345,8 @@ impl ApplicationHandler for AppState {
                             hinstance,
                             resource_id,
                             winapi::um::winuser::IMAGE_ICON,
-                            32, 32,
+                            32,
+                            32,
                             winapi::um::winuser::LR_DEFAULTCOLOR,
                         ) as winapi::shared::windef::HICON;
 
@@ -2708,9 +3355,11 @@ impl ApplicationHandler for AppState {
                             hinstance,
                             resource_id,
                             winapi::um::winuser::IMAGE_ICON,
-                            16, 16,
+                            16,
+                            16,
                             winapi::um::winuser::LR_DEFAULTCOLOR,
-                        ) as winapi::shared::windef::HICON;
+                        )
+                            as winapi::shared::windef::HICON;
 
                         if !hicon_big.is_null() {
                             // Patch the window CLASS so the taskbar picks it up.
@@ -2744,15 +3393,15 @@ impl ApplicationHandler for AppState {
                 }
             }
         }
-        
+
         // Initialize wgpu
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
         });
-        
+
         let surface = instance.create_surface(window.clone()).unwrap();
-        
+
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
@@ -2764,49 +3413,49 @@ impl ApplicationHandler for AppState {
         let adapter_info = adapter.get_info();
         log::warn!(
             "GPU adapter: {} ({:?}) driver: {}",
-            adapter_info.name, adapter_info.backend, adapter_info.driver
+            adapter_info.name,
+            adapter_info.backend,
+            adapter_info.driver
         );
 
         // Query what the adapter actually supports and clamp our requests to those limits.
         // Hardcoding 512 MB will panic on AMD drivers that report lower limits.
         let adapter_limits = adapter.limits();
-        let storage_binding_limit = adapter_limits.max_storage_buffer_binding_size
+        let storage_binding_limit = adapter_limits
+            .max_storage_buffer_binding_size
             .min(512 * 1024 * 1024);
-        let buffer_size_limit = adapter_limits.max_buffer_size
-            .min(512 * 1024 * 1024);
+        let buffer_size_limit = adapter_limits.max_buffer_size.min(512 * 1024 * 1024);
         log::info!(
             "Adapter limits — max_storage_buffer_binding_size: {} MB, max_buffer_size: {} MB",
             adapter_limits.max_storage_buffer_binding_size / (1024 * 1024),
             adapter_limits.max_buffer_size / (1024 * 1024),
         );
 
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("Bio-Spheres Device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits {
-                    // Cell state write bind group uses up to 40 storage buffers on Vulkan/DX12.
-                    // Metal (macOS) hard-caps at 31 - requesting 40 panics request_device on Metal.
-                    // Use backend to pick the right value; never use adapter.limits() as the
-                    // requested value since some drivers report low numbers that would cause
-                    // wgpu to validate every bind group against that cap, dropping FPS.
-                    max_storage_buffers_per_shader_stage: match adapter_info.backend {
-                        wgpu::Backend::Metal => 31,
-                        _ => 40,
-                    },
-                    // Clamp to what the adapter actually supports - requesting more than the
-                    // adapter limit causes request_device to fail (panic on .unwrap()).
-                    max_storage_buffer_binding_size: storage_binding_limit,
-                    max_buffer_size: buffer_size_limit,
-                    ..wgpu::Limits::default()
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("Bio-Spheres Device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits {
+                // Cell state write bind group uses up to 40 storage buffers on Vulkan/DX12.
+                // Metal (macOS) hard-caps at 31 - requesting 40 panics request_device on Metal.
+                // Use backend to pick the right value; never use adapter.limits() as the
+                // requested value since some drivers report low numbers that would cause
+                // wgpu to validate every bind group against that cap, dropping FPS.
+                max_storage_buffers_per_shader_stage: match adapter_info.backend {
+                    wgpu::Backend::Metal => 31,
+                    _ => 40,
                 },
-                memory_hints: Default::default(),
-                trace: Default::default(),
-                experimental_features: Default::default(),
+                // Clamp to what the adapter actually supports - requesting more than the
+                // adapter limit causes request_device to fail (panic on .unwrap()).
+                max_storage_buffer_binding_size: storage_binding_limit,
+                max_buffer_size: buffer_size_limit,
+                ..wgpu::Limits::default()
             },
-        ))
+            memory_hints: Default::default(),
+            trace: Default::default(),
+            experimental_features: Default::default(),
+        }))
         .expect("Failed to create wgpu device — check log for adapter limits");
-        
+
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
         // Prefer Bgra8UnormSrgb (AMD/Vulkan native) then any sRGB, then driver default.
@@ -2814,24 +3463,37 @@ impl ApplicationHandler for AppState {
         // while the search finds Rgba8UnormSrgb first, causing a pipeline/pass mismatch
         // because all pipelines compile with the chosen format but the swapchain images
         // come back as the driver's native format.
-        let surface_format = if surface_caps.formats.contains(&wgpu::TextureFormat::Bgra8UnormSrgb) {
+        let surface_format = if surface_caps
+            .formats
+            .contains(&wgpu::TextureFormat::Bgra8UnormSrgb)
+        {
             wgpu::TextureFormat::Bgra8UnormSrgb
-        } else if surface_caps.formats.contains(&wgpu::TextureFormat::Rgba8UnormSrgb) {
+        } else if surface_caps
+            .formats
+            .contains(&wgpu::TextureFormat::Rgba8UnormSrgb)
+        {
             wgpu::TextureFormat::Rgba8UnormSrgb
         } else {
             surface_caps.formats[0]
         };
-        log::warn!("Surface format selected: {:?} (available: {:?})", surface_format, surface_caps.formats);
-        
+        log::warn!(
+            "Surface format selected: {:?} (available: {:?})",
+            surface_format,
+            surface_caps.formats
+        );
+
         // Ensure we have non-zero dimensions before configuring
         let width = size.width.max(1);
         let height = size.height.max(1);
-        
+
         // Prefer Opaque alpha mode to prevent the OS compositor from blending the
         // swapchain against the desktop. Using a non-Opaque mode (e.g. PreMultiplied)
         // causes pixels with alpha < 1.0 to show desktop content through the window,
         // which appears as a random semi-transparent ghost overlay of the scene.
-        let alpha_mode = if surface_caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
+        let alpha_mode = if surface_caps
+            .alpha_modes
+            .contains(&wgpu::CompositeAlphaMode::Opaque)
+        {
             wgpu::CompositeAlphaMode::Opaque
         } else {
             surface_caps.alpha_modes[0]
@@ -2843,7 +3505,10 @@ impl ApplicationHandler for AppState {
             width,
             height,
             // Immediate (no vsync) is not guaranteed on all drivers - fall back to Fifo.
-            present_mode: if surface_caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
+            present_mode: if surface_caps
+                .present_modes
+                .contains(&wgpu::PresentMode::Immediate)
+            {
                 wgpu::PresentMode::Immediate
             } else {
                 wgpu::PresentMode::Fifo
@@ -2852,39 +3517,53 @@ impl ApplicationHandler for AppState {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        
+
         surface.configure(&device, &config);
-        
+
         // Create scene manager (starts with preview scene)
         let scene_manager = SceneManager::new(&device, &queue, &config);
-        
+
         // Create dock manager for UI layout persistence
         let dock_manager = DockManager::new();
-        
+
         // Create UI system
         let ui = UiSystem::new(&device, surface_format, &window);
-        
-        self.app = Some(App::new(window, surface, device, queue, config, scene_manager, dock_manager, ui));
+
+        self.app = Some(App::new(
+            window,
+            surface,
+            device,
+            queue,
+            config,
+            scene_manager,
+            dock_manager,
+            ui,
+        ));
     }
-    
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
         let Some(app) = &mut self.app else { return };
-        
+
         if window_id != app.window().id() {
             return;
         }
-        
+
         if !app.handle_event(&event) {
             event_loop.exit();
         }
     }
-    
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(app) = &self.app {
             // Limit to 60fps by waiting until next frame time
             let next_frame = app.next_frame_time();
             let now = std::time::Instant::now();
-            
+
             if now >= next_frame {
                 // Time to render - request redraw immediately
                 app.request_redraw();
@@ -2991,5 +3670,3 @@ pub fn run() {
 
     event_loop.run_app(&mut state).unwrap();
 }
-
-

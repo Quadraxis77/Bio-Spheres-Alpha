@@ -13,7 +13,7 @@ use glam::{Mat4, Quat, Vec3};
 pub struct TailVertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
-    pub t: f32,  // Parameter along helix (0-1)
+    pub t: f32, // Parameter along helix (0-1)
     pub _pad: f32,
 }
 
@@ -23,7 +23,7 @@ pub struct TailVertex {
 pub struct TailInstance {
     pub cell_position: [f32; 3],
     pub cell_radius: f32,
-    pub rotation: [f32; 4],  // Quaternion
+    pub rotation: [f32; 4], // Quaternion
     pub color: [f32; 4],
     pub tail_length: f32,
     pub tail_thickness: f32,
@@ -92,19 +92,19 @@ pub struct TailRenderer {
 
 impl TailRenderer {
     const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-    
+
     // LOD mesh parameters: (segments_along_length, radial_segments)
     // LOD 0 (far): 4 segments, 3 radial = minimal detail
     // LOD 1 (medium): 8 segments, 4 radial = balanced
     // LOD 2 (close): 16 segments, 6 radial = high detail
     // LOD 3 (very close): 24 segments, 8 radial = maximum detail
     const LOD_PARAMS: [(u32, u32); 4] = [
-        (4, 3),   // LOD 0: 4*3*2 = 24 triangles
-        (8, 4),   // LOD 1: 8*4*2 = 64 triangles
-        (16, 6),  // LOD 2: 16*6*2 = 192 triangles
-        (24, 8),  // LOD 3: 24*8*2 = 384 triangles
+        (4, 3),  // LOD 0: 4*3*2 = 24 triangles
+        (8, 4),  // LOD 1: 8*4*2 = 64 triangles
+        (16, 6), // LOD 2: 16*6*2 = 192 triangles
+        (24, 8), // LOD 3: 24*8*2 = 384 triangles
     ];
-    
+
     pub fn new(
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,
@@ -113,30 +113,34 @@ impl TailRenderer {
         // Generate all LOD meshes and combine into single buffers
         let mut all_vertices = Vec::new();
         let mut all_indices = Vec::new();
-        let mut lod_info = [TailLodInfo { vertex_offset: 0, index_offset: 0, index_count: 0 }; 4];
-        
+        let mut lod_info = [TailLodInfo {
+            vertex_offset: 0,
+            index_offset: 0,
+            index_count: 0,
+        }; 4];
+
         for (lod, &(segments, radial_segments)) in Self::LOD_PARAMS.iter().enumerate() {
             let vertex_offset = all_vertices.len() as u32;
             let index_offset = all_indices.len() as u32;
-            
+
             let (vertices, indices) = Self::generate_helix_mesh(segments, radial_segments);
-            
+
             // Offset indices to account for vertex offset
             let offset_indices: Vec<u32> = indices.iter().map(|i| i + vertex_offset).collect();
-            
+
             lod_info[lod] = TailLodInfo {
                 vertex_offset,
                 index_offset,
                 index_count: indices.len() as u32,
             };
-            
+
             all_vertices.extend(vertices);
             all_indices.extend(offset_indices);
         }
-        
+
         // Use LOD 2 as default for backward compatibility
         let index_count = lod_info[2].index_count;
-        
+
         // Create vertex buffer with all LOD meshes
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Tail Vertex Buffer"),
@@ -144,9 +148,12 @@ impl TailRenderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: true,
         });
-        vertex_buffer.slice(..).get_mapped_range_mut().copy_from_slice(bytemuck::cast_slice(&all_vertices));
+        vertex_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&all_vertices));
         vertex_buffer.unmap();
-        
+
         // Create index buffer with all LOD meshes
         let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Tail Index Buffer"),
@@ -154,9 +161,12 @@ impl TailRenderer {
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: true,
         });
-        index_buffer.slice(..).get_mapped_range_mut().copy_from_slice(bytemuck::cast_slice(&all_indices));
+        index_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&all_indices));
         index_buffer.unmap();
-        
+
         // Create instance buffer for CPU-built instances
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Tail Instance Buffer"),
@@ -164,7 +174,7 @@ impl TailRenderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // Create uniform buffers
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Tail Camera Buffer"),
@@ -172,14 +182,14 @@ impl TailRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         let lighting_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Tail Lighting Buffer"),
             size: std::mem::size_of::<TailLightingUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // Create bind group layout for CPU instances
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Tail Bind Group Layout"),
@@ -206,47 +216,48 @@ impl TailRenderer {
                 },
             ],
         });
-        
+
         // Create bind group layout for GPU instances (reads from cell instance buffer)
-        let gpu_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Tail GPU Bind Group Layout"),
-            entries: &[
-                // Camera uniform
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let gpu_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Tail GPU Bind Group Layout"),
+                entries: &[
+                    // Camera uniform
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Lighting uniform
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Lighting uniform
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Cell instance buffer (storage, read-only)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Cell instance buffer (storage, read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
-        
+                ],
+            });
+
         // Create bind group for CPU instances
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Tail Bind Group"),
@@ -262,33 +273,35 @@ impl TailRenderer {
                 },
             ],
         });
-        
+
         // Create shader for CPU instances
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Tail Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cells/tail.wgsl").into()),
         });
-        
+
         // Create shader for GPU instances
         let gpu_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Tail GPU Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cells/tail_gpu.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/cells/tail_gpu.wgsl").into(),
+            ),
         });
-        
+
         // Create pipeline layout for CPU instances
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Tail Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
-        
+
         // Create pipeline layout for GPU instances
         let gpu_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Tail GPU Pipeline Layout"),
             bind_group_layouts: &[&gpu_bind_group_layout],
             push_constant_ranges: &[],
         });
-        
+
         // Create render pipeline for CPU instances
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Tail Render Pipeline"),
@@ -394,7 +407,7 @@ impl TailRenderer {
             multiview: None,
             cache: None,
         });
-        
+
         // Create render pipeline for GPU instances (vertex-only buffer, reads instances from storage)
         let gpu_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Tail GPU Render Pipeline"),
@@ -458,7 +471,7 @@ impl TailRenderer {
             multiview: None,
             cache: None,
         });
-        
+
         // Create indexed indirect buffer for GPU rendering
         // Format: [index_count, instance_count, first_index, base_vertex, first_instance]
         let indexed_indirect_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -467,7 +480,7 @@ impl TailRenderer {
             usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         Self {
             pipeline,
             gpu_pipeline,
@@ -487,29 +500,29 @@ impl TailRenderer {
             height: 600,
         }
     }
-    
+
     /// Generate a unit helix tube mesh (will be transformed per-instance)
     fn generate_helix_mesh(segments: u32, radial_segments: u32) -> (Vec<TailVertex>, Vec<u32>) {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        
+
         // Generate vertices along helix
         for i in 0..=segments {
             let t = i as f32 / segments as f32;
-            
+
             // Unit helix: extends along +Z, with radius 1 at base
             // Actual position/scale applied in shader based on instance params
-            let z = t;  // 0 to 1 along length
-            
+            let z = t; // 0 to 1 along length
+
             // Generate ring of vertices around tube at this point
             for j in 0..radial_segments {
                 let angle = (j as f32 / radial_segments as f32) * std::f32::consts::TAU;
                 let (sin_a, cos_a) = angle.sin_cos();
-                
+
                 // Local position on unit circle (will be scaled by thickness in shader)
                 let local_x = cos_a;
                 let local_y = sin_a;
-                
+
                 vertices.push(TailVertex {
                     position: [local_x, local_y, z],
                     normal: [cos_a, sin_a, 0.0],
@@ -518,7 +531,7 @@ impl TailRenderer {
                 });
             }
         }
-        
+
         // Generate indices for tube triangles
         for i in 0..segments {
             for j in 0..radial_segments {
@@ -526,23 +539,30 @@ impl TailRenderer {
                 let next = i * radial_segments + (j + 1) % radial_segments;
                 let current_next_ring = (i + 1) * radial_segments + j;
                 let next_next_ring = (i + 1) * radial_segments + (j + 1) % radial_segments;
-                
+
                 // Two triangles per quad - CCW winding for outward-facing normals
                 indices.push(current);
                 indices.push(next);
                 indices.push(current_next_ring);
-                
+
                 indices.push(next);
                 indices.push(next_next_ring);
                 indices.push(current_next_ring);
             }
         }
-        
+
         (vertices, indices)
     }
-    
+
     /// Update camera uniform
-    fn update_camera(&self, queue: &wgpu::Queue, camera_pos: Vec3, camera_rotation: Quat, time: f32, partition_offset: u32) {
+    fn update_camera(
+        &self,
+        queue: &wgpu::Queue,
+        camera_pos: Vec3,
+        camera_rotation: Quat,
+        time: f32,
+        partition_offset: u32,
+    ) {
         let view = Mat4::from_rotation_translation(camera_rotation, camera_pos).inverse();
         let aspect = self.width as f32 / self.height as f32;
         let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 1000.0);
@@ -558,12 +578,12 @@ impl TailRenderer {
 
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
-    
+
     /// Set the light color.
     pub fn set_light_color(&mut self, color: [f32; 3]) {
         self.light_color = color;
     }
-    
+
     /// Update lighting uniform
     fn update_lighting(&self, queue: &wgpu::Queue) {
         let uniform = TailLightingUniform {
@@ -572,10 +592,10 @@ impl TailRenderer {
             light_color: self.light_color,
             _padding: 0.0,
         };
-        
+
         queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&uniform));
     }
-    
+
     /// Ensure instance buffer has sufficient capacity
     fn ensure_capacity(&mut self, device: &wgpu::Device, required: usize) {
         if required > self.instance_capacity {
@@ -589,13 +609,13 @@ impl TailRenderer {
             self.instance_capacity = new_capacity;
         }
     }
-    
+
     /// Resize the renderer
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
     }
-    
+
     /// Render tails for flagellocyte cells (CPU-built instances, for PreviewScene)
     pub fn render(
         &mut self,
@@ -614,20 +634,20 @@ impl TailRenderer {
         if instances.is_empty() {
             return;
         }
-        
+
         self.width = width;
         self.height = height;
-        
+
         // Ensure capacity
         self.ensure_capacity(device, instances.len());
-        
+
         // Upload instance data
         queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(instances));
 
         // Update uniforms (partition_offset = 0 for PreviewScene which uses contiguous data)
         self.update_camera(queue, camera_pos, camera_rotation, time, 0);
         self.update_lighting(queue);
-        
+
         // Render pass
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -652,18 +672,19 @@ impl TailRenderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            
+
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &self.bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            
+
             // Select LOD based on average distance to instances
             let avg_distance = if instances.is_empty() {
                 100.0
             } else {
-                let total_dist: f32 = instances.iter()
+                let total_dist: f32 = instances
+                    .iter()
                     .map(|inst| {
                         let pos = Vec3::from_array(inst.cell_position);
                         (pos - camera_pos).length()
@@ -671,7 +692,7 @@ impl TailRenderer {
                     .sum();
                 total_dist / instances.len() as f32
             };
-            
+
             // LOD thresholds (matching cell LOD system)
             let lod_level = if avg_distance > 50.0 {
                 0 // Far - minimal detail
@@ -682,16 +703,16 @@ impl TailRenderer {
             } else {
                 3 // Very close - maximum detail
             };
-            
+
             let lod = &self.lod_info[lod_level];
             render_pass.draw_indexed(
                 lod.index_offset..(lod.index_offset + lod.index_count),
                 0,
-                0..instances.len() as u32
+                0..instances.len() as u32,
             );
         }
     }
-    
+
     /// Render tails using GPU instance buffer (for GpuScene)
     /// Reads cell instances directly from the instance builder's partitioned buffer.
     /// Uses first_instance to offset into the Flagellocyte partition.
@@ -715,7 +736,7 @@ impl TailRenderer {
         // Update dimensions for correct aspect ratio
         self.width = width;
         self.height = height;
-        
+
         // With dynamic instance allocation, Flagellocytes are mixed throughout the buffer
         // The shader will filter by cell_type (stored in instance.type_data_1.w)
         // No partition offset needed - shader iterates through all cells
@@ -734,19 +755,23 @@ impl TailRenderer {
         // Target format (draw_indexed_indirect): [index_count, instance_count, first_index, base_vertex, first_instance]
         // first_instance is 0 - shader iterates all instances and filters by cell_type
         let indexed_indirect_data: [u32; 5] = [lod.index_count, 0, lod.index_offset, 0, 0];
-        queue.write_buffer(&self.indexed_indirect_buffer, 0, bytemuck::cast_slice(&indexed_indirect_data));
+        queue.write_buffer(
+            &self.indexed_indirect_buffer,
+            0,
+            bytemuck::cast_slice(&indexed_indirect_data),
+        );
 
         // Copy instance_count from indirect buffer (offset 4) to indexed indirect buffer (offset 4)
         encoder.copy_buffer_to_buffer(
             indirect_buffer,
-            4,  // instance_count in source
+            4, // instance_count in source
             &self.indexed_indirect_buffer,
-            4,  // instance_count in dest
-            4,  // 4 bytes
+            4, // instance_count in dest
+            4, // 4 bytes
         );
 
         // Note: first_instance is now set to the partition offset above, no need to copy from indirect buffer
-        
+
         // Create bind group with cell instance buffer
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Tail GPU Bind Group"),
@@ -766,7 +791,7 @@ impl TailRenderer {
                 },
             ],
         });
-        
+
         // Render pass
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -791,7 +816,7 @@ impl TailRenderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            
+
             render_pass.set_pipeline(&self.gpu_pipeline);
             render_pass.set_bind_group(0, &bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));

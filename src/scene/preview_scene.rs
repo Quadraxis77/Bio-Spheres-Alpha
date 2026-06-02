@@ -4,8 +4,11 @@
 //! editing and debugging genomes with small cell counts.
 
 use crate::genome::Genome;
-use crate::rendering::{AdhesionLineRenderer, CellRenderer, OrientationGizmoRenderer, PreviewSkyboxRenderer, SplitRingRenderer, TailRenderer, TailInstance};
 use crate::rendering::fov_cone::FovConeRenderer;
+use crate::rendering::{
+    AdhesionLineRenderer, CellRenderer, OrientationGizmoRenderer, PreviewSkyboxRenderer,
+    SplitRingRenderer, TailInstance, TailRenderer,
+};
 use crate::scene::{PreviewState, Scene};
 use crate::simulation::PhysicsConfig;
 use crate::ui::camera::CameraController;
@@ -70,13 +73,14 @@ impl PreviewScene {
         let capacity = 256; // Preview capacity limit
         let genome = Genome::new_with_random_colors();
         let config = PhysicsConfig::default();
-        
+
         let mut state = PreviewState::new(capacity, &config);
         state.genome_hash = PreviewState::compute_genome_hash(&genome);
         state.update_initial_state(&genome, &config);
 
         let renderer = CellRenderer::new(device, queue, surface_config, capacity);
-        let adhesion_renderer = AdhesionLineRenderer::new(device, queue, surface_config, capacity * 20); // 20 adhesions per cell max
+        let adhesion_renderer =
+            AdhesionLineRenderer::new(device, queue, surface_config, capacity * 20); // 20 adhesions per cell max
         let gizmo_renderer = OrientationGizmoRenderer::new(device, queue, surface_config);
         let split_ring_renderer = SplitRingRenderer::new(device, queue, surface_config);
         let tail_renderer = TailRenderer::new(device, surface_config.format, capacity);
@@ -111,11 +115,11 @@ impl PreviewScene {
     /// Update genome immediately (no debouncing)
     pub fn update_genome(&mut self, new_genome: &Genome) {
         let new_hash = PreviewState::compute_genome_hash(new_genome);
-        
+
         // Only update if actually changed
         if new_hash != self.state.genome_hash {
             log::info!("Applying genome change, triggering resimulation");
-            
+
             self.genome = new_genome.clone();
             self.state.genome_hash = new_hash;
             self.state.clear_checkpoints();
@@ -123,33 +127,38 @@ impl PreviewScene {
             self.state.seek_to_time(self.state.display_time);
         }
     }
-    
+
     /// Sync time slider value from UI
     /// Called each frame to check if user moved the slider
     /// Time slider range is 0-60 seconds
-    pub fn sync_time_from_ui(&mut self, ui_time_value: f32, _max_duration: f32, _is_dragging: bool) {
+    pub fn sync_time_from_ui(
+        &mut self,
+        ui_time_value: f32,
+        _max_duration: f32,
+        _is_dragging: bool,
+    ) {
         // Slider value is directly in seconds (0-60 range)
         let target_sim_time = ui_time_value;
-        
+
         // Only update if time value actually changed significantly
         if (ui_time_value - self.last_ui_time_value).abs() > 0.01 {
             // Only seek if target changed (avoid redundant resimulations)
             let current_target = self.state.target_time.unwrap_or(self.state.display_time);
             let needs_update = (current_target - target_sim_time).abs() > 0.01;
-            
+
             if needs_update {
                 self.state.seek_to_time(target_sim_time);
             }
-            
+
             self.last_ui_time_value = ui_time_value;
         }
     }
-    
+
     /// Get current simulation time for syncing back to UI
     pub fn get_time_for_ui(&self) -> f32 {
         self.state.work_time
     }
-    
+
     /// Check if currently resimulating (for UI feedback)
     pub fn is_resimulating(&self) -> bool {
         self.state.is_resimulating
@@ -161,19 +170,20 @@ impl Scene for PreviewScene {
         // Preview mode is entirely slider-driven
         // Simulation only runs when seeking to a new time via the slider
         // No automatic time advancement
-        
+
         // Run incremental resimulation if there's a pending seek or ongoing work
         if self.state.target_time.is_some() || self.state.is_resimulating {
-            self.state.run_resimulation(&self.genome, &self.config, &self.test_signals);
+            self.state
+                .run_resimulation(&self.genome, &self.config, &self.test_signals);
         }
     }
 
     fn render(
-        &mut self, 
-        device: &wgpu::Device, 
-        queue: &wgpu::Queue, 
-        view: &wgpu::TextureView, 
-        cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>, 
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+        cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
         _world_diameter: f32,
         lod_scale_factor: f32,
         lod_threshold_low: f32,
@@ -279,10 +289,10 @@ impl Scene for PreviewScene {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Preview Scene Tail Encoder"),
             });
-            
+
             // Build tail instances for flagellocyte cells
             let tail_instances = self.build_tail_instances(cell_type_visuals);
-            
+
             if !tail_instances.is_empty() {
                 self.tail_renderer.render(
                     device,
@@ -298,7 +308,7 @@ impl Scene for PreviewScene {
                     self.renderer.height,
                 );
             }
-            
+
             queue.submit(std::iter::once(encoder.finish()));
         }
 
@@ -355,19 +365,22 @@ impl Scene for PreviewScene {
                     let mode_index = self.state.display_state.mode_indices[i];
 
                     // Queue orientation gizmo for this cell
-                    self.gizmo_renderer.queue_gizmo(cell_position, cell_rotation, cell_radius);
+                    self.gizmo_renderer
+                        .queue_gizmo(cell_position, cell_rotation, cell_radius);
 
                     // Queue split rings if the mode has split direction settings
                     if mode_index < self.genome.modes.len() {
                         let mode = &self.genome.modes[mode_index];
-                        
+
                         // Calculate split direction from pitch and yaw (same as BioSpheres-Q reference)
                         let pitch = mode.parent_split_direction.x.to_radians();
                         let yaw = mode.parent_split_direction.y.to_radians();
-                        
+
                         // Use Euler rotation to match the division code
-                        let split_direction_local = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z;
-                        
+                        let split_direction_local =
+                            glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0)
+                                * glam::Vec3::Z;
+
                         self.split_ring_renderer.queue_rings(
                             cell_position,
                             cell_rotation,
@@ -378,26 +391,43 @@ impl Scene for PreviewScene {
                 }
 
                 // Render all queued gizmos and rings in batches
-                self.gizmo_renderer.render_queued(&mut render_pass, queue, view_proj, self.camera.position());
-                self.split_ring_renderer.render_queued(&mut render_pass, queue, view_proj, self.camera.position());
+                self.gizmo_renderer.render_queued(
+                    &mut render_pass,
+                    queue,
+                    view_proj,
+                    self.camera.position(),
+                );
+                self.split_ring_renderer.render_queued(
+                    &mut render_pass,
+                    queue,
+                    view_proj,
+                    self.camera.position(),
+                );
 
                 // Render FOV cones for all cells of the selected modes (if any are oculocyte modes)
                 self.fov_cone_renderer.begin_frame();
                 for &selected_mode in &self.selected_mode_indices {
                     if let Some(mode) = self.genome.modes.get(selected_mode) {
-                        if mode.cell_type == 7 { // Oculocyte
+                        if mode.cell_type == 7 {
+                            // Oculocyte
                             let ray_length = mode.oculocyte_ray_length.clamp(1.0, 100.0);
                             for i in 0..self.state.display_state.cell_count {
                                 if self.state.display_state.mode_indices[i] == selected_mode {
                                     let cell_pos = self.state.display_state.positions[i];
                                     let cell_rot = self.state.display_state.rotations[i];
-                                    self.fov_cone_renderer.queue_ray(cell_pos, cell_rot, ray_length);
+                                    self.fov_cone_renderer
+                                        .queue_ray(cell_pos, cell_rot, ray_length);
                                 }
                             }
                         }
                     }
                 }
-                self.fov_cone_renderer.render_queued(&mut render_pass, queue, view_proj, self.camera.position());
+                self.fov_cone_renderer.render_queued(
+                    &mut render_pass,
+                    queue,
+                    view_proj,
+                    self.camera.position(),
+                );
             }
 
             queue.submit(std::iter::once(encoder.finish()));
@@ -439,50 +469,59 @@ impl Scene for PreviewScene {
 
 impl PreviewScene {
     /// Update gizmo configuration from UI state
-    pub fn update_gizmo_config(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
+    pub fn update_gizmo_config(
+        &mut self,
+        editor_state: &crate::ui::panel_context::GenomeEditorState,
+    ) {
         use crate::rendering::orientation_gizmo::GizmoConfig;
         let config = GizmoConfig::from_editor_state(editor_state);
         self.gizmo_renderer.update_config(&config);
     }
 
     /// Update split ring configuration from UI state
-    pub fn update_split_ring_config(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
+    pub fn update_split_ring_config(
+        &mut self,
+        editor_state: &crate::ui::panel_context::GenomeEditorState,
+    ) {
         use crate::rendering::split_rings::SplitRingConfig;
         let config = SplitRingConfig::from_editor_state(editor_state);
         self.split_ring_renderer.update_config(&config);
     }
-    
+
     /// Build tail instances for flagellocyte cells
-    fn build_tail_instances(&self, cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>) -> Vec<TailInstance> {
+    fn build_tail_instances(
+        &self,
+        cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
+    ) -> Vec<TailInstance> {
         use crate::cell::CellType;
-        
+
         let mut instances = Vec::new();
         let flagellocyte_index = CellType::Flagellocyte as usize;
-        
+
         // Get flagellocyte visuals for tail parameters
         let visuals = cell_type_visuals
             .and_then(|v| v.get(flagellocyte_index))
             .copied()
             .unwrap_or_default();
-        
+
         for i in 0..self.state.display_state.cell_count {
             let mode_index = self.state.display_state.mode_indices[i];
-            
+
             // Check if this cell is a flagellocyte
             let cell_type_index = if mode_index < self.genome.modes.len() {
                 self.genome.modes[mode_index].cell_type as u32
             } else {
                 0
             };
-            
+
             if cell_type_index != CellType::Flagellocyte as u32 {
                 continue;
             }
-            
+
             let position = self.state.display_state.positions[i];
             let rotation = self.state.display_state.rotations[i];
             let radius = self.state.display_state.radii[i];
-            
+
             // Get color from mode
             let color = if mode_index < self.genome.modes.len() {
                 let mode = &self.genome.modes[mode_index];
@@ -490,7 +529,7 @@ impl PreviewScene {
             } else {
                 [0.8, 0.6, 0.9, 1.0] // Default purple for flagellocyte
             };
-            
+
             // Calculate tail speed from swim_force
             let swim_force = if mode_index < self.genome.modes.len() {
                 self.genome.modes[mode_index].swim_force
@@ -498,7 +537,7 @@ impl PreviewScene {
                 0.5
             };
             let tail_speed = swim_force * 15.0;
-            
+
             instances.push(TailInstance {
                 cell_position: position.to_array(),
                 cell_radius: radius,
@@ -514,7 +553,7 @@ impl PreviewScene {
                 _pad: 0.0,
             });
         }
-        
+
         instances
     }
 }

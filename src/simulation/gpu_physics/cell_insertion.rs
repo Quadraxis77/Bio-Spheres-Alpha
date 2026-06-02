@@ -1,21 +1,21 @@
 //! GPU Cell Insertion System
-//! 
+//!
 //! Provides GPU-only cell insertion without CPU state management.
 //! Uses atomic operations for safe slot allocation and initializes all cell properties.
 //! Writes to ALL THREE triple buffer sets to ensure data is available regardless of
 //! which buffer the physics pipeline reads from.
 
-use super::{GpuTripleBufferSystem, CellInsertionParams};
+use super::{CellInsertionParams, GpuTripleBufferSystem};
 use crate::genome::Genome;
 
 /// GPU cell insertion system for direct GPU cell creation
 pub struct GpuCellInsertion {
     /// Cell insertion compute pipeline
     pipeline: wgpu::ComputePipeline,
-    
+
     /// Cell insertion parameters uniform buffer
     params_buffer: wgpu::Buffer,
-    
+
     /// Bind groups for cell insertion (writes to all 3 buffer sets)
     physics_bind_group: wgpu::BindGroup,
     params_bind_group: wgpu::BindGroup,
@@ -24,7 +24,7 @@ pub struct GpuCellInsertion {
 
 impl GpuCellInsertion {
     /// Create a new GPU cell insertion system
-    /// 
+    ///
     /// Creates bind groups that write to ALL THREE triple buffer sets for positions,
     /// velocities, and rotations. This ensures inserted cell data is available
     /// regardless of which buffer the physics pipeline reads from.
@@ -44,7 +44,7 @@ impl GpuCellInsertion {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // Create physics bind group (Group 0) - all 3 position and velocity buffer sets
         let physics_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cell Insertion Physics Bind Group"),
@@ -87,7 +87,7 @@ impl GpuCellInsertion {
                 },
             ],
         });
-        
+
         // Create params bind group (Group 1) - all 3 rotation buffer sets
         let params_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cell Insertion Params Bind Group"),
@@ -137,7 +137,7 @@ impl GpuCellInsertion {
                 },
             ],
         });
-        
+
         // Create state bind group (Group 2) - single buffers, not triple-buffered
         let state_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cell Insertion State Bind Group"),
@@ -221,7 +221,7 @@ impl GpuCellInsertion {
                 },
             ],
         });
-        
+
         Self {
             pipeline,
             params_buffer,
@@ -230,9 +230,9 @@ impl GpuCellInsertion {
             state_bind_group,
         }
     }
-    
+
     /// Insert a cell directly on GPU using compute shader
-    /// 
+    ///
     /// This method uploads cell parameters and dispatches the compute shader
     /// to atomically allocate a slot and initialize all cell properties.
     /// The shader writes to ALL THREE triple buffer sets.
@@ -250,35 +250,50 @@ impl GpuCellInsertion {
         genomes: &[Genome],
     ) {
         // Get parameters from genome mode
-        let (split_interval, split_mass, stiffness, nutrient_gain_rate, max_cell_size, max_splits, cell_type) = 
-            if (genome_id as usize) < genomes.len() {
-                let genome = &genomes[genome_id as usize];
-                if (mode_index as usize) < genome.modes.len() {
-                    let mode = &genome.modes[mode_index as usize];
-                    // Flagellocytes (cell_type == 1) don't generate their own nutrients
-                    let nutrient_rate = if mode.cell_type == 1 { 0.0 } else { mode.nutrient_gain_rate };
-                    (
-                        mode.split_interval,
-                        mode.split_mass,
-                        mode.membrane_stiffness,
-                        nutrient_rate,
-                        mode.max_cell_size,
-                        if mode.max_splits < 0 { u32::MAX } else { mode.max_splits as u32 },
-                        mode.cell_type as u32
-                    )
+        let (
+            split_interval,
+            split_mass,
+            stiffness,
+            nutrient_gain_rate,
+            max_cell_size,
+            max_splits,
+            cell_type,
+        ) = if (genome_id as usize) < genomes.len() {
+            let genome = &genomes[genome_id as usize];
+            if (mode_index as usize) < genome.modes.len() {
+                let mode = &genome.modes[mode_index as usize];
+                // Flagellocytes (cell_type == 1) don't generate their own nutrients
+                let nutrient_rate = if mode.cell_type == 1 {
+                    0.0
                 } else {
-                    (10.0, 2.0, 50.0, 0.2, 2.0, u32::MAX, 0) // Default values (Test cell type)
-                }
+                    mode.nutrient_gain_rate
+                };
+                (
+                    mode.split_interval,
+                    mode.split_mass,
+                    mode.membrane_stiffness,
+                    nutrient_rate,
+                    mode.max_cell_size,
+                    if mode.max_splits < 0 {
+                        u32::MAX
+                    } else {
+                        mode.max_splits as u32
+                    },
+                    mode.cell_type as u32,
+                )
             } else {
                 (10.0, 2.0, 50.0, 0.2, 2.0, u32::MAX, 0) // Default values (Test cell type)
-            };
-        
+            }
+        } else {
+            (10.0, 2.0, 50.0, 0.2, 2.0, u32::MAX, 0) // Default values (Test cell type)
+        };
+
         // Convert split_mass to nutrient threshold: (split_mass - 1.0) * 100.0
         let split_nutrient_threshold = (split_mass - 1.0) * 100.0;
-        
+
         // Calculate radius from mass
         let radius = (mass * 3.0 / (4.0 * std::f32::consts::PI)).powf(1.0 / 3.0);
-        
+
         // Convert local mode_index to ABSOLUTE mode_index (with genome offset)
         // This matches how mode_visuals buffer is organized in instance builder:
         // mode_visuals[0..genome0.modes.len()] = genome 0's modes
@@ -293,7 +308,7 @@ impl GpuCellInsertion {
             }
             offset + mode_index
         };
-        
+
         // Create cell insertion parameters
         let params = CellInsertionParams {
             position: [position.x, position.y, position.z],
@@ -332,13 +347,13 @@ impl GpuCellInsertion {
         compute_pass.set_bind_group(0, &self.physics_bind_group, &[]);
         compute_pass.set_bind_group(1, &self.params_bind_group, &[]);
         compute_pass.set_bind_group(2, &self.state_bind_group, &[]);
-        
+
         // Single workgroup dispatch (1,1,1) for atomic safety as per requirements
         compute_pass.dispatch_workgroups(1, 1, 1);
-        
+
         drop(compute_pass);
     }
-    
+
     /// Insert a cell with specific cell ID (for deterministic insertion)
     pub fn insert_cell_with_id(
         &self,
@@ -363,35 +378,50 @@ impl GpuCellInsertion {
         initial_nutrients_override: Option<u32>,
     ) {
         // Get parameters from genome mode
-        let (split_interval, split_mass, stiffness, nutrient_gain_rate, max_cell_size, max_splits, cell_type) = 
-            if (genome_id as usize) < genomes.len() {
-                let genome = &genomes[genome_id as usize];
-                if (mode_index as usize) < genome.modes.len() {
-                    let mode = &genome.modes[mode_index as usize];
-                    // Flagellocytes (cell_type == 1) don't generate their own nutrients
-                    let nutrient_rate = if mode.cell_type == 1 { 0.0 } else { mode.nutrient_gain_rate };
-                    (
-                        mode.split_interval,
-                        mode.split_mass,
-                        mode.membrane_stiffness,
-                        nutrient_rate,
-                        mode.max_cell_size,
-                        if mode.max_splits < 0 { u32::MAX } else { mode.max_splits as u32 },
-                        mode.cell_type as u32
-                    )
+        let (
+            split_interval,
+            split_mass,
+            stiffness,
+            nutrient_gain_rate,
+            max_cell_size,
+            max_splits,
+            cell_type,
+        ) = if (genome_id as usize) < genomes.len() {
+            let genome = &genomes[genome_id as usize];
+            if (mode_index as usize) < genome.modes.len() {
+                let mode = &genome.modes[mode_index as usize];
+                // Flagellocytes (cell_type == 1) don't generate their own nutrients
+                let nutrient_rate = if mode.cell_type == 1 {
+                    0.0
                 } else {
-                    (10.0, 2.0, 50.0, 0.2, 2.0, u32::MAX, 0) // Default values (Test cell type)
-                }
+                    mode.nutrient_gain_rate
+                };
+                (
+                    mode.split_interval,
+                    mode.split_mass,
+                    mode.membrane_stiffness,
+                    nutrient_rate,
+                    mode.max_cell_size,
+                    if mode.max_splits < 0 {
+                        u32::MAX
+                    } else {
+                        mode.max_splits as u32
+                    },
+                    mode.cell_type as u32,
+                )
             } else {
                 (10.0, 2.0, 50.0, 0.2, 2.0, u32::MAX, 0) // Default values (Test cell type)
-            };
-        
+            }
+        } else {
+            (10.0, 2.0, 50.0, 0.2, 2.0, u32::MAX, 0) // Default values (Test cell type)
+        };
+
         // Convert split_mass to nutrient threshold: (split_mass - 1.0) * 100.0
         let split_nutrient_threshold = (split_mass - 1.0) * 100.0;
-        
+
         // Calculate radius from mass
         let radius = (mass * 3.0 / (4.0 * std::f32::consts::PI)).powf(1.0 / 3.0);
-        
+
         // Convert local mode_index to ABSOLUTE mode_index (with genome offset)
         // This matches how mode_visuals buffer is organized in instance builder:
         // mode_visuals[0..genome0.modes.len()] = genome 0's modes
@@ -406,7 +436,7 @@ impl GpuCellInsertion {
             }
             offset + mode_index
         };
-        
+
         // Create cell insertion parameters with specific cell ID
         let params = CellInsertionParams {
             position: [position.x, position.y, position.z],
@@ -428,26 +458,30 @@ impl GpuCellInsertion {
             cell_id,
             cell_type,
             initial_reserve: initial_reserve_override.unwrap_or_else(|| {
-                if cell_type == 10 { 65535000 } else { 0 }
+                if cell_type == 10 {
+                    65535000
+                } else {
+                    0
+                }
             }),
             initial_nutrients: initial_nutrients_override.unwrap_or(0),
             _pad4: 0,
         };
-        
+
         // Upload parameters to GPU
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
-        
+
         // Dispatch compute shader (single workgroup as per requirements)
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Cell Insertion Pass"),
             timestamp_writes: None,
         });
-        
+
         compute_pass.set_pipeline(&self.pipeline);
         compute_pass.set_bind_group(0, &self.physics_bind_group, &[]);
         compute_pass.set_bind_group(1, &self.params_bind_group, &[]);
         compute_pass.set_bind_group(2, &self.state_bind_group, &[]);
-        
+
         // Single workgroup dispatch (1,1,1) for atomic safety as per requirements
         compute_pass.dispatch_workgroups(1, 1, 1);
     }

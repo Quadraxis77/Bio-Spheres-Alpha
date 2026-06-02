@@ -205,6 +205,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // NOTE: We do NOT check cell_count_buffer[0] here because it is a high-water
     // mark that never decreases when cells die. Checking it would permanently block
     // insertion once the peak count reaches capacity, even with many dead/recycled slots.
+    let effective_capacity = min(params.cell_capacity, arrayLength(&positions_0));
+    let previous_live = atomicAdd(&cell_count_buffer[1], 1u);
+    if (previous_live >= effective_capacity) {
+        atomicSub(&cell_count_buffer[1], 1u);
+        return;
+    }
     
     // Use ring buffer for slot allocation (matches lifecycle_unified.wgsl)
     // Try to pop a recycled slot from the ring buffer first
@@ -221,6 +227,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         slot = free_slot_ring[ring_idx];
         used_free_slot = true;
 
+        if (slot >= effective_capacity) {
+            atomicSub(&cell_count_buffer[1], 1u);
+            return;
+        }
+
         // Mark this slot as alive again
         death_flags[slot] = 0u;
     } else {
@@ -231,15 +242,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         slot = atomicAdd(&ring_state[2], 1u);
 
         // Check capacity
-        if (slot >= params.cell_capacity) {
+        if (slot >= effective_capacity) {
             // Rollback and fail
             atomicSub(&ring_state[2], 1u);
+            atomicSub(&cell_count_buffer[1], 1u);
             return;
         }
     }
 
     // Ensure slot is within bounds
-    if (slot >= params.cell_capacity) {
+    if (slot >= effective_capacity) {
+        atomicSub(&cell_count_buffer[1], 1u);
         return;
     }
 
@@ -343,7 +356,5 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let reserve_value = select(default_reserve, insertion_params.initial_reserve, insertion_params.initial_reserve != 0u);
     atomicStore(&embryocyte_reserves[slot], reserve_value);
 
-    // Update live cell count - always increment by 1
-    // Whether we used a recycled slot or a new slot, we're adding one live cell
-    atomicAdd(&cell_count_buffer[1], 1u);
+    // Live cell count was reserved before slot allocation.
 }

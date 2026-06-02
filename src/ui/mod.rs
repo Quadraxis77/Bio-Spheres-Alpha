@@ -21,5 +21,5 @@ pub use performance::PerformanceMetrics;
 pub use radial_menu::{RadialMenuState, RadialTool};
 pub use tab_viewer::PanelTabViewer;
 pub use tutorial::TutorialState;
-pub use types::{GlobalUiState, SimulationMode, FluidSettings, OrganismSkinSettings};
+pub use types::{FluidSettings, GlobalUiState, OrganismSkinSettings, SimulationMode};
 pub use ui_system::UiSystem;

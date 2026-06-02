@@ -30,8 +30,8 @@
 //! - **Persistence**: remember that a predator was detected even after it leaves
 //!   the oculocyte's field of view.
 
-use crate::genome::ModeSettings;
 use super::{CellBehavior, TypeSpecificInstanceData};
+use crate::genome::ModeSettings;
 
 /// Behavior implementation for Memorocyte (leaky-integrator) cells.
 pub struct MemoryocyteBehavior;

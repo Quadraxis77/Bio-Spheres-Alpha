@@ -1,13 +1,13 @@
 //! Preview Physics - CPU-based physics for preview scene
-//! 
+//!
 //! This module provides CPU physics for the preview scene which needs
 //! time scrubbing and checkpoint support. The GPU scene uses pure GPU physics.
 
-use glam::{Vec3, Quat};
+use crate::cell::division;
+use crate::genome::Genome;
 use crate::simulation::canonical_state::{CanonicalState, DivisionEvent};
 use crate::simulation::physics_config::PhysicsConfig;
-use crate::genome::Genome;
-use crate::cell::division;
+use glam::{Quat, Vec3};
 
 /// Collision pair between two cells
 #[derive(Clone, Copy, Debug)]
@@ -21,16 +21,26 @@ pub struct CollisionPair {
 /// Forward neighbors for half-space optimization
 const FORWARD_NEIGHBORS: [glam::IVec3; 13] = [
     glam::IVec3::new(1, 0, 0),
-    glam::IVec3::new(-1, 1, 0), glam::IVec3::new(0, 1, 0), glam::IVec3::new(1, 1, 0),
-    glam::IVec3::new(-1, -1, 1), glam::IVec3::new(0, -1, 1), glam::IVec3::new(1, -1, 1),
-    glam::IVec3::new(-1, 0, 1), glam::IVec3::new(0, 0, 1), glam::IVec3::new(1, 0, 1),
-    glam::IVec3::new(-1, 1, 1), glam::IVec3::new(0, 1, 1), glam::IVec3::new(1, 1, 1),
+    glam::IVec3::new(-1, 1, 0),
+    glam::IVec3::new(0, 1, 0),
+    glam::IVec3::new(1, 1, 0),
+    glam::IVec3::new(-1, -1, 1),
+    glam::IVec3::new(0, -1, 1),
+    glam::IVec3::new(1, -1, 1),
+    glam::IVec3::new(-1, 0, 1),
+    glam::IVec3::new(0, 0, 1),
+    glam::IVec3::new(1, 0, 1),
+    glam::IVec3::new(-1, 1, 1),
+    glam::IVec3::new(0, 1, 1),
+    glam::IVec3::new(1, 1, 1),
 ];
 
 /// Check if two cells are connected via adhesions
 #[inline]
 fn are_cells_in_same_organism(state: &CanonicalState, cell_a: usize, cell_b: usize) -> bool {
-    state.adhesion_manager.are_cells_connected(&state.adhesion_connections, cell_a, cell_b)
+    state
+        .adhesion_manager
+        .are_cells_connected(&state.adhesion_connections, cell_a, cell_b)
 }
 
 /// Detect collisions using the spatial grid
@@ -55,9 +65,13 @@ pub fn detect_collisions(state: &CanonicalState) -> Vec<CollisionPair> {
                     if are_cells_in_same_organism(state, idx_a, idx_b) {
                         continue;
                     }
-                    
+
                     let overlap = combined_radius - distance;
-                    let normal = if distance > 0.0001 { delta / distance } else { Vec3::X };
+                    let normal = if distance > 0.0001 {
+                        delta / distance
+                    } else {
+                        Vec3::X
+                    };
 
                     collision_pairs.push(CollisionPair {
                         index_a: idx_a,
@@ -72,7 +86,9 @@ pub fn detect_collisions(state: &CanonicalState) -> Vec<CollisionPair> {
         // Check forward neighbors
         for &offset in &FORWARD_NEIGHBORS {
             let neighbor_coord = grid_coord + offset;
-            let Some(neighbor_idx) = state.spatial_grid.active_cell_index(neighbor_coord) else { continue };
+            let Some(neighbor_idx) = state.spatial_grid.active_cell_index(neighbor_coord) else {
+                continue;
+            };
             let neighbor_cells = state.spatial_grid.get_cell_contents(neighbor_idx);
 
             for &idx_a in cells_in_grid {
@@ -82,10 +98,16 @@ pub fn detect_collisions(state: &CanonicalState) -> Vec<CollisionPair> {
                     let combined_radius = state.radii[idx_a] + state.radii[idx_b];
 
                     if distance < combined_radius {
-                        if are_cells_in_same_organism(state, idx_a, idx_b) { continue; }
-                        
+                        if are_cells_in_same_organism(state, idx_a, idx_b) {
+                            continue;
+                        }
+
                         let overlap = combined_radius - distance;
-                        let normal = if distance > 0.0001 { delta / distance } else { Vec3::X };
+                        let normal = if distance > 0.0001 {
+                            delta / distance
+                        } else {
+                            Vec3::X
+                        };
 
                         collision_pairs.push(CollisionPair {
                             index_a: idx_a,
@@ -104,7 +126,11 @@ pub fn detect_collisions(state: &CanonicalState) -> Vec<CollisionPair> {
 }
 
 /// Compute collision forces
-pub fn compute_collision_forces(state: &mut CanonicalState, collision_pairs: &[CollisionPair], config: &PhysicsConfig) {
+pub fn compute_collision_forces(
+    state: &mut CanonicalState,
+    collision_pairs: &[CollisionPair],
+    config: &PhysicsConfig,
+) {
     for i in 0..state.cell_count {
         state.forces[i] = Vec3::ZERO;
         state.torques[i] = Vec3::ZERO;
@@ -131,7 +157,8 @@ pub fn compute_collision_forces(state: &mut CanonicalState, collision_pairs: &[C
         let relative_velocity = state.velocities[idx_b] - state.velocities[idx_a];
         let relative_velocity_normal = relative_velocity.dot(pair.normal);
         let damping_force_magnitude = -config.damping * relative_velocity_normal;
-        let total_force_magnitude = (spring_force_magnitude + damping_force_magnitude).clamp(-10000.0, 10000.0);
+        let total_force_magnitude =
+            (spring_force_magnitude + damping_force_magnitude).clamp(-10000.0, 10000.0);
         let force = total_force_magnitude * pair.normal;
 
         state.forces[idx_b] += force;
@@ -143,7 +170,7 @@ pub fn compute_collision_forces(state: &mut CanonicalState, collision_pairs: &[C
         let radius_a = state.radii[idx_a];
         let radius_b = state.radii[idx_b];
         let r_a = -pair.normal * radius_a; // from A centre to contact
-        let r_b =  pair.normal * radius_b; // from B centre to contact
+        let r_b = pair.normal * radius_b; // from B centre to contact
 
         // Surface velocity at the contact point for each cell:
         //   v_contact = v_linear + omega x r
@@ -183,12 +210,15 @@ pub fn apply_boundary_forces(state: &mut CanonicalState, config: &PhysicsConfig)
 
     for i in 0..state.cell_count {
         let distance_from_origin = state.positions[i].length();
-        if distance_from_origin < 0.0001 { continue; }
+        if distance_from_origin < 0.0001 {
+            continue;
+        }
 
         let r_hat = state.positions[i] / distance_from_origin;
 
         if distance_from_origin > soft_zone_start {
-            let penetration = ((distance_from_origin - soft_zone_start) / soft_zone_thickness).clamp(0.0, 1.0);
+            let penetration =
+                ((distance_from_origin - soft_zone_start) / soft_zone_thickness).clamp(0.0, 1.0);
             let force_magnitude = max_boundary_force * penetration * penetration;
             let inward_force = -r_hat * force_magnitude;
             state.velocities[i] += inward_force * 0.016;
@@ -207,7 +237,12 @@ pub fn apply_boundary_forces(state: &mut CanonicalState, config: &PhysicsConfig)
 }
 
 /// Verlet position integration
-pub fn verlet_integrate_positions(positions: &mut [Vec3], velocities: &[Vec3], accelerations: &[Vec3], dt: f32) {
+pub fn verlet_integrate_positions(
+    positions: &mut [Vec3],
+    velocities: &[Vec3],
+    accelerations: &[Vec3],
+    dt: f32,
+) {
     let dt_sq = dt * dt;
     for i in 0..positions.len() {
         if velocities[i].is_finite() && accelerations[i].is_finite() {
@@ -229,8 +264,10 @@ pub fn verlet_integrate_velocities(
     let velocity_damping_factor = velocity_damping.powf(dt * 100.0);
 
     for i in 0..velocities.len() {
-        if masses[i] <= 0.0 || !masses[i].is_finite() { continue; }
-        
+        if masses[i] <= 0.0 || !masses[i].is_finite() {
+            continue;
+        }
+
         let old_acceleration = accelerations[i];
         let new_acceleration = forces[i] / masses[i];
 
@@ -268,12 +305,15 @@ pub fn integrate_angular_velocities(
     let angular_damping_factor = angular_damping.powf(dt * 100.0);
 
     for i in 0..angular_velocities.len() {
-        if masses[i] <= 0.0 || !masses[i].is_finite() || radii[i] <= 0.0 { continue; }
+        if masses[i] <= 0.0 || !masses[i].is_finite() || radii[i] <= 0.0 {
+            continue;
+        }
 
         let moment_of_inertia = 0.4 * masses[i] * radii[i] * radii[i];
         if moment_of_inertia > 0.0 {
             let angular_acceleration = torques[i] / moment_of_inertia;
-            angular_velocities[i] = (angular_velocities[i] + angular_acceleration * dt) * angular_damping_factor;
+            angular_velocities[i] =
+                (angular_velocities[i] + angular_acceleration * dt) * angular_damping_factor;
         }
     }
 }
@@ -306,7 +346,9 @@ pub fn apply_myocyte_contraction(state: &mut CanonicalState, genome: &Genome, cu
         let contraction = if mode.myocyte_use_signal {
             // Signal-based mode: read from the specific channel
             let channel = (mode.myocyte_signal_channel as usize).min(15);
-            let signal_value = state.signal_channels.get(i * 16 + channel)
+            let signal_value = state
+                .signal_channels
+                .get(i * 16 + channel)
                 .copied()
                 .flatten()
                 .unwrap_or(0.0);
@@ -319,9 +361,9 @@ pub fn apply_myocyte_contraction(state: &mut CanonicalState, genome: &Genome, cu
             // Phased timer mode: oscillate based on current_time
             let wave = (current_time * mode.myocyte_pulse_rate * 2.0 * std::f32::consts::PI).sin();
             let is_active_phase = if mode.myocyte_pulse_phase == 0 {
-                wave >= 0.0  // Pulse A
+                wave >= 0.0 // Pulse A
             } else {
-                wave < 0.0   // Pulse B
+                wave < 0.0 // Pulse B
             };
             if is_active_phase {
                 mode.myocyte_contraction
@@ -335,14 +377,14 @@ pub fn apply_myocyte_contraction(state: &mut CanonicalState, genome: &Genome, cu
 }
 
 /// Apply swim forces for Flagellocyte cells (cell_type == 1)
-/// 
+///
 /// Flagellocytes apply a forward thrust force in their orientation direction.
 /// The thrust magnitude is determined by the swim_force parameter in ModeSettings.
-/// 
+///
 /// # Arguments
 /// * `state` - The canonical simulation state containing cell data
 /// * `genome` - The genome containing mode settings with swim_force values
-/// 
+///
 /// # Physics
 /// - Forward direction is derived from the cell's rotation quaternion (local +Z axis)
 /// - Thrust force = forward * swim_force * 120.0 (scaled for physics simulation)
@@ -377,11 +419,13 @@ pub fn apply_swim_forces(state: &mut CanonicalState, genome: &Genome) {
                     mode.swim_force
                 };
 
-                if effective_speed <= 0.0 { continue; }
+                if effective_speed <= 0.0 {
+                    continue;
+                }
 
                 // Get forward direction from cell's rotation (local +Z axis)
                 let forward = state.rotations[i] * Vec3::Z;
-                
+
                 // Apply thrust force in forward direction
                 // Scale by 120.0 to make the force meaningful in the physics simulation
                 let thrust_force = forward * effective_speed * 120.0;
@@ -392,37 +436,33 @@ pub fn apply_swim_forces(state: &mut CanonicalState, genome: &Genome) {
 }
 
 /// Consume nutrients for Flagellocyte cells based on swim force.
-/// 
+///
 /// Flagellocytes (cell_type == 1) consume mass proportional to their swim force.
 /// The consumption rate is fixed (not user-adjustable) - faster swimming costs more nutrients.
-/// 
+///
 /// # Arguments
 /// * `state` - The canonical simulation state containing cell data
 /// * `genome` - The genome containing mode settings with swim_force values
 /// * `dt` - Delta time for this physics step
-/// 
+///
 /// # Returns
 /// A vector of cell indices that died (mass < MIN_CELL_MASS threshold).
 /// These cells should be removed from the simulation.
-/// 
+///
 /// # Physics
 /// - Consumption rate: swim_force * 5.0 * dt (5 nutrients per second at full swim force)
 /// - Death threshold: nutrients < 1.0
 /// - Mass and radius are derived from nutrients: mass = 1.0 + nutrients/100.0
 /// - Only applies to cells with cell_type == 1 (Flagellocyte) and swim_force > 0.0
-pub fn consume_swim_nutrients(
-    state: &mut CanonicalState,
-    genome: &Genome,
-    dt: f32,
-) -> Vec<usize> {
+pub fn consume_swim_nutrients(state: &mut CanonicalState, genome: &Genome, dt: f32) -> Vec<usize> {
     const DEATH_NUTRIENT_THRESHOLD: f32 = 1.0;
     // Fixed consumption rate - NOT adjustable by user
     // This creates a direct tradeoff: faster swimming = higher nutrient cost
     // Rate: 1.0 nutrients/sec at swim_force=1.0, 3.0/sec at swim_force=3.0
     const CONSUMPTION_RATE: f32 = 1.0;
-    
+
     let mut cells_to_remove = Vec::new();
-    
+
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
         if let Some(mode) = genome.modes.get(mode_index) {
@@ -440,18 +480,20 @@ pub fn consume_swim_nutrients(
                 } else {
                     mode.swim_force
                 };
-                if effective_speed <= 0.0 { continue; }
+                if effective_speed <= 0.0 {
+                    continue;
+                }
 
                 // Consume nutrients proportional to effective speed
                 let nutrient_loss = effective_speed * CONSUMPTION_RATE * dt;
                 state.nutrients[i] = (state.nutrients[i] - nutrient_loss).max(0.0);
-                
+
                 // Check if cell has died (below death nutrient threshold)
                 if state.nutrients[i] < DEATH_NUTRIENT_THRESHOLD {
                     cells_to_remove.push(i);
                     continue;
                 }
-                
+
                 // Derive mass and radius from nutrients
                 let new_mass = 1.0 + state.nutrients[i] / 100.0;
                 let new_radius = new_mass.min(mode.max_cell_size).clamp(0.5, 2.0);
@@ -466,7 +508,7 @@ pub fn consume_swim_nutrients(
             }
         }
     }
-    
+
     cells_to_remove
 }
 
@@ -567,7 +609,8 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
                         let actual_convert = convert_fixed.min(state.reserves[i]);
                         state.reserves[i] = state.reserves[i].saturating_sub(actual_convert);
                         let nutrients_gained = actual_convert as f32 / 1000.0;
-                        let new_nutrients = (current_nutrients + nutrients_gained - remaining_loss).max(0.0);
+                        let new_nutrients =
+                            (current_nutrients + nutrients_gained - remaining_loss).max(0.0);
                         if new_nutrients != current_nutrients {
                             state.nutrients[i] = new_nutrients;
                             let new_mass = 1.0 + new_nutrients / 100.0;
@@ -623,12 +666,16 @@ pub fn update_embryocyte_reserve_burn(state: &mut CanonicalState, genome: &Genom
 
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
-        let Some(mode) = genome.modes.get(mode_index) else { continue };
+        let Some(mode) = genome.modes.get(mode_index) else {
+            continue;
+        };
         if mode.cell_type != 10 {
             continue;
         }
 
-        let adhesion_count = state.adhesion_manager.count_active_adhesions(i, &state.adhesion_connections);
+        let adhesion_count = state
+            .adhesion_manager
+            .count_active_adhesions(i, &state.adhesion_connections);
         if adhesion_count > 0 {
             // Attached: tick the accumulation timer
             state.embryocyte_timers[i] += dt;
@@ -658,13 +705,19 @@ pub fn check_embryocyte_release_triggers(state: &mut CanonicalState, genome: &Ge
 
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
-        let Some(mode) = genome.modes.get(mode_index) else { continue };
+        let Some(mode) = genome.modes.get(mode_index) else {
+            continue;
+        };
         if mode.cell_type != 10 {
             continue;
         }
 
         // Must have at least one adhesion to "release" from
-        if state.adhesion_manager.count_active_adhesions(i, &state.adhesion_connections) == 0 {
+        if state
+            .adhesion_manager
+            .count_active_adhesions(i, &state.adhesion_connections)
+            == 0
+        {
             continue;
         }
 
@@ -693,7 +746,8 @@ pub fn check_embryocyte_release_triggers(state: &mut CanonicalState, genome: &Ge
 
         if all_satisfied && mode.embryocyte_use_signal {
             let channel = (mode.embryocyte_signal_channel as usize).min(15);
-            let signal_val = state.signal_channels
+            let signal_val = state
+                .signal_channels
                 .get(i * 16 + channel)
                 .copied()
                 .flatten()
@@ -710,10 +764,9 @@ pub fn check_embryocyte_release_triggers(state: &mut CanonicalState, genome: &Ge
 
     // Drop all adhesions for triggered cells
     for i in cells_to_release {
-        state.adhesion_manager.remove_all_connections_for_cell(
-            &mut state.adhesion_connections,
-            i,
-        );
+        state
+            .adhesion_manager
+            .remove_all_connections_for_cell(&mut state.adhesion_connections, i);
         // Reset accumulation timer
         state.embryocyte_timers[i] = 0.0;
     }
@@ -723,7 +776,7 @@ pub fn check_embryocyte_release_triggers(state: &mut CanonicalState, genome: &Ge
 /// Total outflow per cell is capped at TRANSPORT_RATE nutrients/sec regardless of connection count.
 /// Transfer is lerped (smoothed) to prevent oscillation.
 pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome: &Genome, dt: f32) {
-        const PRIORITY_BOOST: f32 = 10.0;
+    const PRIORITY_BOOST: f32 = 10.0;
     /// Max nutrients/sec a cell can send OR receive in total across all connections.
     /// Raised from 30 to 100 so non-vascular organisms can diffuse nutrients through
     /// the body without needing vasculocytes. The pressure gradient (nutrient imbalance
@@ -741,8 +794,8 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         conn_idx: usize,
         cell_a: usize,
         cell_b: usize,
-        desired: f32,   // nutrients/sec, clamped to rate_cap
-        rate_cap: f32,  // per-connection rate cap (higher for embryocyte connections)
+        desired: f32,  // nutrients/sec, clamped to rate_cap
+        rate_cap: f32, // per-connection rate cap (higher for embryocyte connections)
     }
     let mut conn_flows: Vec<ConnFlow> = Vec::new();
 
@@ -811,11 +864,18 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
             // Embryocyte sender: will be blocked later, but set negative for direction
             -embryo_rate_cap
         } else {
-            let pressure_diff = effective_nutrients_a / priority_a - effective_nutrients_b / priority_b;
+            let pressure_diff =
+                effective_nutrients_a / priority_a - effective_nutrients_b / priority_b;
             pressure_diff.clamp(-embryo_rate_cap, embryo_rate_cap)
         };
 
-        conn_flows.push(ConnFlow { conn_idx: i, cell_a, cell_b, desired, rate_cap: embryo_rate_cap });
+        conn_flows.push(ConnFlow {
+            conn_idx: i,
+            cell_a,
+            cell_b,
+            desired,
+            rate_cap: embryo_rate_cap,
+        });
     }
 
     // Pass 2: sum total desired outflow per cell to compute scaling factors.
@@ -856,16 +916,23 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         // Clamp by available nutrients and receiver capacity
         let mode_a = genome.modes.get(state.mode_indices[cell_a]).unwrap();
         let mode_b = genome.modes.get(state.mode_indices[cell_b]).unwrap();
-        let min_a = if mode_a.prioritize_when_low { 10.0 } else { 0.0 };
-        let min_b = if mode_b.prioritize_when_low { 10.0 } else { 0.0 };
+        let min_a = if mode_a.prioritize_when_low {
+            10.0
+        } else {
+            0.0
+        };
+        let min_b = if mode_b.prioritize_when_low {
+            10.0
+        } else {
+            0.0
+        };
         let max_a = state.split_nutrient_thresholds[cell_a].min(200.0) * 2.0;
         let max_b = state.split_nutrient_thresholds[cell_b].min(200.0) * 2.0;
 
         let is_embryo_a = mode_a.cell_type == 10;
         let is_embryo_b = mode_b.cell_type == 10;
 
-        let transfer_blocked = (transfer > 0.0 && is_embryo_a)
-                            || (transfer < 0.0 && is_embryo_b);
+        let transfer_blocked = (transfer > 0.0 && is_embryo_a) || (transfer < 0.0 && is_embryo_b);
         if transfer_blocked {
             if dt > 0.0 {
                 state.adhesion_connections.connection_flow_rates[cf.conn_idx] = 0.0;
@@ -880,7 +947,8 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         let actual = if transfer > 0.0 {
             let can_give = (snap_a - min_a).max(0.0);
             let can_recv = if is_embryo_b {
-                let reserve_space = 65_535_000u32.saturating_sub(state.reserves[cell_b]) as f32 / 1000.0;
+                let reserve_space =
+                    65_535_000u32.saturating_sub(state.reserves[cell_b]) as f32 / 1000.0;
                 reserve_space
             } else {
                 (max_b - snap_b).max(0.0)
@@ -889,7 +957,8 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         } else {
             let can_give = (snap_b - min_b).max(0.0);
             let can_recv = if is_embryo_a {
-                let reserve_space = 65_535_000u32.saturating_sub(state.reserves[cell_a]) as f32 / 1000.0;
+                let reserve_space =
+                    65_535_000u32.saturating_sub(state.reserves[cell_a]) as f32 / 1000.0;
                 reserve_space
             } else {
                 (max_a - snap_a).max(0.0)
@@ -901,13 +970,17 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         if transfer > 0.0 && is_embryo_b {
             // A->B, B is Embryocyte: add to B's reserve (x1000 fixed-point)
             let gained = (actual.max(0.0) * 1000.0) as u32;
-            state.reserves[cell_b] = state.reserves[cell_b].saturating_add(gained).min(65_535_000);
+            state.reserves[cell_b] = state.reserves[cell_b]
+                .saturating_add(gained)
+                .min(65_535_000);
             nutrient_deltas[cell_a] -= actual;
             // Don't touch nutrient_deltas[cell_b] - reserve was updated directly
         } else if transfer < 0.0 && is_embryo_a {
             // B->A, A is Embryocyte: add to A's reserve (x1000 fixed-point)
             let gained = ((-actual).max(0.0) * 1000.0) as u32;
-            state.reserves[cell_a] = state.reserves[cell_a].saturating_add(gained).min(65_535_000);
+            state.reserves[cell_a] = state.reserves[cell_a]
+                .saturating_add(gained)
+                .min(65_535_000);
             nutrient_deltas[cell_b] -= -actual;
             // Don't touch nutrient_deltas[cell_a]
         } else {
@@ -929,7 +1002,9 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
                 // Derive mass from nutrients: mass = 1.0 + nutrients/100.0
                 let new_mass = 1.0 + new_nutrients / 100.0;
                 state.masses[i] = new_mass;
-                let max_size = genome.modes.get(state.mode_indices[i])
+                let max_size = genome
+                    .modes
+                    .get(state.mode_indices[i])
                     .map(|m| m.max_cell_size)
                     .unwrap_or(2.0);
                 let new_radius = new_mass.min(max_size).clamp(0.5, 2.0);
@@ -947,14 +1022,21 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
 /// Any Glueocyte (cell_type == 6) that is currently overlapping another cell
 /// will attempt to form an adhesion bond using its configured adhesion_settings,
 /// subject to the cell's max_adhesions limit and the global adhesion capacity.
-pub fn form_glueocyte_contact_bonds(state: &mut CanonicalState, genome: &Genome, current_time: f32) {
+pub fn form_glueocyte_contact_bonds(
+    state: &mut CanonicalState,
+    genome: &Genome,
+    current_time: f32,
+) {
     let collision_pairs = detect_collisions(state);
 
     for pair in collision_pairs {
         let idx_a = pair.index_a;
         let idx_b = pair.index_b;
 
-        if state.adhesion_manager.are_cells_connected(&state.adhesion_connections, idx_a, idx_b) {
+        if state
+            .adhesion_manager
+            .are_cells_connected(&state.adhesion_connections, idx_a, idx_b)
+        {
             continue;
         }
 
@@ -971,16 +1053,32 @@ pub fn form_glueocyte_contact_bonds(state: &mut CanonicalState, genome: &Genome,
         let mode_a = state.mode_indices[idx_a];
         let mode_b = state.mode_indices[idx_b];
 
-        let is_glue_a = genome.modes.get(mode_a).map(|m| m.cell_type == 6).unwrap_or(false);
-        let is_glue_b = genome.modes.get(mode_b).map(|m| m.cell_type == 6).unwrap_or(false);
+        let is_glue_a = genome
+            .modes
+            .get(mode_a)
+            .map(|m| m.cell_type == 6)
+            .unwrap_or(false);
+        let is_glue_b = genome
+            .modes
+            .get(mode_b)
+            .map(|m| m.cell_type == 6)
+            .unwrap_or(false);
 
         if !is_glue_a && !is_glue_b {
             continue;
         }
 
         // Skip if the Glueocyte(s) in this pair have cell adhesion disabled
-        let cell_adhesion_a = genome.modes.get(mode_a).map(|m| !is_glue_a || m.glueocyte_cell_adhesion).unwrap_or(true);
-        let cell_adhesion_b = genome.modes.get(mode_b).map(|m| !is_glue_b || m.glueocyte_cell_adhesion).unwrap_or(true);
+        let cell_adhesion_a = genome
+            .modes
+            .get(mode_a)
+            .map(|m| !is_glue_a || m.glueocyte_cell_adhesion)
+            .unwrap_or(true);
+        let cell_adhesion_b = genome
+            .modes
+            .get(mode_b)
+            .map(|m| !is_glue_b || m.glueocyte_cell_adhesion)
+            .unwrap_or(true);
         if !cell_adhesion_a || !cell_adhesion_b {
             continue;
         }
@@ -988,42 +1086,79 @@ pub fn form_glueocyte_contact_bonds(state: &mut CanonicalState, genome: &Genome,
         // Skip if either glueocyte has self-adhesion disabled.
         // In preview mode all cells belong to the same organism, so self-adhesion
         // off means no cell-to-cell bonding at all in this context.
-        let self_adhesion_a = genome.modes.get(mode_a).map(|m| !is_glue_a || m.glueocyte_self_adhesion).unwrap_or(true);
-        let self_adhesion_b = genome.modes.get(mode_b).map(|m| !is_glue_b || m.glueocyte_self_adhesion).unwrap_or(true);
+        let self_adhesion_a = genome
+            .modes
+            .get(mode_a)
+            .map(|m| !is_glue_a || m.glueocyte_self_adhesion)
+            .unwrap_or(true);
+        let self_adhesion_b = genome
+            .modes
+            .get(mode_b)
+            .map(|m| !is_glue_b || m.glueocyte_self_adhesion)
+            .unwrap_or(true);
         if !self_adhesion_a || !self_adhesion_b {
             continue;
         }
 
-        let adhesions_a = state.adhesion_manager.count_active_adhesions(idx_a, &state.adhesion_connections);
-        let adhesions_b = state.adhesion_manager.count_active_adhesions(idx_b, &state.adhesion_connections);
+        let adhesions_a = state
+            .adhesion_manager
+            .count_active_adhesions(idx_a, &state.adhesion_connections);
+        let adhesions_b = state
+            .adhesion_manager
+            .count_active_adhesions(idx_b, &state.adhesion_connections);
 
-        let max_a = genome.modes.get(mode_a).map(|m| m.max_adhesions as usize).unwrap_or(10);
-        let max_b = genome.modes.get(mode_b).map(|m| m.max_adhesions as usize).unwrap_or(10);
+        let max_a = genome
+            .modes
+            .get(mode_a)
+            .map(|m| m.max_adhesions as usize)
+            .unwrap_or(10);
+        let max_b = genome
+            .modes
+            .get(mode_b)
+            .map(|m| m.max_adhesions as usize)
+            .unwrap_or(10);
 
         if adhesions_a >= max_a || adhesions_b >= max_b {
             continue;
         }
 
-        let dir_a_to_b = (state.positions[idx_b] - state.positions[idx_a]).normalize_or(glam::Vec3::X);
+        let dir_a_to_b =
+            (state.positions[idx_b] - state.positions[idx_a]).normalize_or(glam::Vec3::X);
         let dir_b_to_a = -dir_a_to_b;
 
         let anchor_a = state.genome_orientations[idx_a].inverse() * dir_a_to_b;
         let anchor_b = state.genome_orientations[idx_b].inverse() * dir_b_to_a;
 
-        let split_dir_a = genome.modes.get(mode_a).map(|m| {
-            let pitch = m.parent_split_direction.x.to_radians();
-            let yaw = m.parent_split_direction.y.to_radians();
-            glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z
-        }).unwrap_or(glam::Vec3::Z);
+        let split_dir_a = genome
+            .modes
+            .get(mode_a)
+            .map(|m| {
+                let pitch = m.parent_split_direction.x.to_radians();
+                let yaw = m.parent_split_direction.y.to_radians();
+                glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z
+            })
+            .unwrap_or(glam::Vec3::Z);
 
-        let split_dir_b = genome.modes.get(mode_b).map(|m| {
-            let pitch = m.parent_split_direction.x.to_radians();
-            let yaw = m.parent_split_direction.y.to_radians();
-            glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z
-        }).unwrap_or(glam::Vec3::Z);
+        let split_dir_b = genome
+            .modes
+            .get(mode_b)
+            .map(|m| {
+                let pitch = m.parent_split_direction.x.to_radians();
+                let yaw = m.parent_split_direction.y.to_radians();
+                glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z
+            })
+            .unwrap_or(glam::Vec3::Z);
 
-        let split_ratio_a = genome.modes.get(mode_a).map(|m| m.split_ratio).unwrap_or(0.5);
-        let split_ratio_b = genome.modes.get(mode_b).map(|m| m.split_ratio).unwrap_or(0.5);
+        let split_ratio_a = genome
+            .modes
+            .get(mode_a)
+            .map(|m| m.split_ratio)
+            .unwrap_or(0.5);
+        let split_ratio_b = genome
+            .modes
+            .get(mode_b)
+            .map(|m| m.split_ratio)
+            .unwrap_or(0.5);
 
         let _ = state.adhesion_manager.add_adhesion_with_directions(
             &mut state.adhesion_connections,
@@ -1142,7 +1277,6 @@ pub fn kill_frenzied_organisms(state: &mut CanonicalState) {
     }
 }
 
-
 /// Physics step with genome support
 pub fn physics_step_with_genome(
     state: &mut CanonicalState,
@@ -1166,7 +1300,9 @@ pub fn physics_step_with_genome(
         dt,
     );
 
-    state.spatial_grid.rebuild(&state.positions, state.cell_count);
+    state
+        .spatial_grid
+        .rebuild(&state.positions, state.cell_count);
 
     let collisions = detect_collisions(state);
     compute_collision_forces(state, &collisions, config);
@@ -1181,17 +1317,22 @@ pub fn physics_step_with_genome(
         // Apply adhesion expansion: override rest_length to the genome maximum (5.0)
         // when the tool is active, so all bonds appear fully stretched.
         let expanded_settings: Vec<crate::genome::AdhesionSettings>;
-        let effective_settings: &[crate::genome::AdhesionSettings] = if state.adhesion_expansion_active {
-            const ADHESION_MAX_REST_LENGTH: f32 = 5.0;
-            expanded_settings = state.cached_adhesion_settings.iter().map(|s| {
-                let mut s2 = s.clone();
-                s2.rest_length = ADHESION_MAX_REST_LENGTH;
-                s2
-            }).collect();
-            &expanded_settings
-        } else {
-            &state.cached_adhesion_settings
-        };
+        let effective_settings: &[crate::genome::AdhesionSettings] =
+            if state.adhesion_expansion_active {
+                const ADHESION_MAX_REST_LENGTH: f32 = 5.0;
+                expanded_settings = state
+                    .cached_adhesion_settings
+                    .iter()
+                    .map(|s| {
+                        let mut s2 = s.clone();
+                        s2.rest_length = ADHESION_MAX_REST_LENGTH;
+                        s2
+                    })
+                    .collect();
+                &expanded_settings
+            } else {
+                &state.cached_adhesion_settings
+            };
 
         let bonds_to_break = crate::cell::compute_adhesion_forces_parallel(
             &state.adhesion_connections,
@@ -1209,7 +1350,9 @@ pub fn physics_step_with_genome(
             dt,
         );
         for conn_idx in bonds_to_break {
-            state.adhesion_manager.remove_adhesion(&mut state.adhesion_connections, conn_idx);
+            state
+                .adhesion_manager
+                .remove_adhesion(&mut state.adhesion_connections, conn_idx);
         }
     }
 
@@ -1250,17 +1393,22 @@ pub fn physics_step_with_genome(
         let cell_count = state.cell_count;
         // Reuse the same expansion logic for substep iterations
         let expanded_settings_sub: Vec<crate::genome::AdhesionSettings>;
-        let effective_settings_sub: &[crate::genome::AdhesionSettings] = if state.adhesion_expansion_active {
-            const ADHESION_MAX_REST_LENGTH: f32 = 5.0;
-            expanded_settings_sub = state.cached_adhesion_settings.iter().map(|s| {
-                let mut s2 = s.clone();
-                s2.rest_length = ADHESION_MAX_REST_LENGTH;
-                s2
-            }).collect();
-            &expanded_settings_sub
-        } else {
-            &state.cached_adhesion_settings
-        };
+        let effective_settings_sub: &[crate::genome::AdhesionSettings] =
+            if state.adhesion_expansion_active {
+                const ADHESION_MAX_REST_LENGTH: f32 = 5.0;
+                expanded_settings_sub = state
+                    .cached_adhesion_settings
+                    .iter()
+                    .map(|s| {
+                        let mut s2 = s.clone();
+                        s2.rest_length = ADHESION_MAX_REST_LENGTH;
+                        s2
+                    })
+                    .collect();
+                &expanded_settings_sub
+            } else {
+                &state.cached_adhesion_settings
+            };
         for _ in 0..config.constraint_iterations {
             crate::cell::compute_adhesion_substep(
                 &state.adhesion_connections,
@@ -1313,7 +1461,9 @@ pub fn physics_step_with_genome(
     let starved: Vec<usize> = (0..state.cell_count)
         .filter(|&i| {
             let mode_index = state.mode_indices[i];
-            let is_embryocyte = genome.modes.get(mode_index)
+            let is_embryocyte = genome
+                .modes
+                .get(mode_index)
                 .map(|m| m.cell_type == 10)
                 .unwrap_or(false);
             if is_embryocyte {
@@ -1341,7 +1491,11 @@ pub fn physics_step_with_genome(
     // normally-computed oculocyte and regulation signals.
     if let Some(test_signals) = test_signals {
         if !test_signals.is_empty() {
-            crate::simulation::signal_system::propagate_test_signals(state, genome, test_signals.to_vec());
+            crate::simulation::signal_system::propagate_test_signals(
+                state,
+                genome,
+                test_signals.to_vec(),
+            );
         }
     }
 
@@ -1353,11 +1507,16 @@ pub fn physics_step_with_genome(
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
         if let Some(mode) = genome.modes.get(mode_index) {
-            if mode.apoptosis_signal_channel >= 8 && (mode.apoptosis_signal_channel as usize) <= 15 {
+            if mode.apoptosis_signal_channel >= 8 && (mode.apoptosis_signal_channel as usize) <= 15
+            {
                 let ch = mode.apoptosis_signal_channel as usize;
                 let signal_val = state.signal_channels[i * 16 + ch].unwrap_or(0.0);
                 let above = signal_val >= mode.apoptosis_signal_threshold;
-                let should_die = if mode.apoptosis_signal_invert { !above } else { above };
+                let should_die = if mode.apoptosis_signal_invert {
+                    !above
+                } else {
+                    above
+                };
                 if should_die {
                     apoptosis_cells.push(i);
                 }
@@ -1372,11 +1531,18 @@ pub fn physics_step_with_genome(
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
         if let Some(mode) = genome.modes.get(mode_index) {
-            if mode.mode_switch_signal_channel >= 8 && (mode.mode_switch_signal_channel as usize) <= 15 && mode.mode_switch_target >= 0 {
+            if mode.mode_switch_signal_channel >= 8
+                && (mode.mode_switch_signal_channel as usize) <= 15
+                && mode.mode_switch_target >= 0
+            {
                 let ch = mode.mode_switch_signal_channel as usize;
                 let signal_val = state.signal_channels[i * 16 + ch].unwrap_or(0.0);
                 let above = signal_val >= mode.mode_switch_signal_threshold;
-                let should_switch = if mode.mode_switch_invert { !above } else { above };
+                let should_switch = if mode.mode_switch_invert {
+                    !above
+                } else {
+                    above
+                };
                 if should_switch {
                     let target = mode.mode_switch_target as usize;
                     if target < genome.modes.len() {

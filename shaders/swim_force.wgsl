@@ -22,7 +22,7 @@ struct PhysicsParams {
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
     cell_capacity: u32,
-    _pad0: f32,
+    gravity_mode: u32,
     _pad1: f32,
     _pad2: f32,
 }
@@ -126,6 +126,25 @@ fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     return v + ((uv * q.w) + uuv) * 2.0;
 }
 
+fn anti_gravity_direction(pos: vec3<f32>) -> vec3<f32> {
+    if (params.gravity_mode == 3u) {
+        let r = length(pos);
+        if (r > 0.001) {
+            return pos / r;
+        }
+        return vec3<f32>(0.0, 1.0, 0.0);
+    }
+
+    let sign = select(1.0, -1.0, params.gravity < 0.0);
+    if (params.gravity_mode == 0u) {
+        return vec3<f32>(sign, 0.0, 0.0);
+    }
+    if (params.gravity_mode == 2u) {
+        return vec3<f32>(0.0, 0.0, sign);
+    }
+    return vec3<f32>(0.0, sign, 0.0);
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
@@ -226,14 +245,18 @@ fn buoyancy_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let buoyancy_force = mode_properties_v4[mode_idx].w;
     if (buoyancy_force <= 0.0) { return; }
 
-    // Apply upward force (world +Y).
+    // Apply force opposite the configured gravity axis.
     // Traction falloff: buoyancy force tapers as the cell approaches its terminal
     // rise speed, preventing large buoyocyte blobs from accumulating unlimited
     // upward force that would fling them through the boundary.
     const BUOYANCY_MULTIPLIER: f32 = 120.0;
     const BUOYANCY_TERMINAL_SPEED: f32 = 12.0;
-    let vel_y = velocities_in[cell_idx].y;
-    let traction = clamp(1.0 - vel_y / max(buoyancy_force * BUOYANCY_TERMINAL_SPEED, 0.001), 0.0, 1.0);
-    let fy = buoyancy_force * BUOYANCY_MULTIPLIER * traction;
-    atomicAdd(&force_accum_y[cell_idx], float_to_fixed(fy));
+    let pos = positions_in[cell_idx].xyz;
+    let up = anti_gravity_direction(pos);
+    let velocity_along_up = dot(velocities_in[cell_idx].xyz, up);
+    let traction = clamp(1.0 - velocity_along_up / max(buoyancy_force * BUOYANCY_TERMINAL_SPEED, 0.001), 0.0, 1.0);
+    let force = up * (buoyancy_force * BUOYANCY_MULTIPLIER * traction);
+    atomicAdd(&force_accum_x[cell_idx], float_to_fixed(force.x));
+    atomicAdd(&force_accum_y[cell_idx], float_to_fixed(force.y));
+    atomicAdd(&force_accum_z[cell_idx], float_to_fixed(force.z));
 }

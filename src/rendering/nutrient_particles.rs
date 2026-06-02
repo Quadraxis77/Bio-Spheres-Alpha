@@ -13,7 +13,7 @@ pub struct NutrientParticle {
     pub position: [f32; 3],
     pub size: f32,
     pub color: [f32; 4],
-    pub animation: [f32; 4],  // Time offset, rotation speed, etc.
+    pub animation: [f32; 4], // Time offset, rotation speed, etc.
 }
 
 /// Parameters for nutrient extraction compute shader
@@ -26,9 +26,9 @@ pub struct NutrientExtractParams {
     pub time: f32,
     pub grid_origin: [f32; 3],
     pub world_radius: f32,
-    pub spawn_probability: f32,  // Legacy parameter (kept for compatibility)
-    pub nutrient_density: f32,   // Density parameter (0.0 = sparse, 1.0 = dense)
-    pub _padding: [f32; 2],      // Pad to 48 bytes for WGSL struct alignment
+    pub spawn_probability: f32, // Legacy parameter (kept for compatibility)
+    pub nutrient_density: f32,  // Density parameter (0.0 = sparse, 1.0 = dense)
+    pub _padding: [f32; 2],     // Pad to 48 bytes for WGSL struct alignment
 }
 
 /// Particle counter (for atomic counting in compute shader)
@@ -76,7 +76,7 @@ impl NutrientParticleRenderer {
         width: u32,
         height: u32,
     ) -> Self {
-        let max_particles = 800_000u32;  // Support up to 800k nutrient particles
+        let max_particles = 800_000u32; // Support up to 800k nutrient particles
 
         // Create render shader
         let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -106,7 +106,9 @@ impl NutrientParticleRenderer {
         let counter_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Nutrient Particle Counter"),
             size: std::mem::size_of::<NutrientParticleCounter>() as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -127,84 +129,86 @@ impl NutrientParticleRenderer {
         });
 
         // Create extract compute bind group layout
-        let extract_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Nutrient Extract Bind Group Layout"),
-            entries: &[
-                // Fluid state buffer (read)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let extract_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Nutrient Extract Bind Group Layout"),
+                entries: &[
+                    // Fluid state buffer (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Particle buffer (write)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Particle buffer (write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Counter buffer (atomic)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Counter buffer (atomic)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Solid mask buffer (read)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Solid mask buffer (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Params uniform
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Params uniform
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Nutrient voxels buffer (read) - stores which voxels have nutrients
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Nutrient voxels buffer (read) - stores which voxels have nutrients
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
+                ],
+            });
 
         // Create compute pipeline
-        let extract_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Nutrient Extract Pipeline Layout"),
-            bind_group_layouts: &[&extract_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let extract_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Nutrient Extract Pipeline Layout"),
+                bind_group_layouts: &[&extract_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
         let extract_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Nutrient Extract Pipeline"),
@@ -216,17 +220,19 @@ impl NutrientParticleRenderer {
         });
 
         // Create render bind group layout
-        let render_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Nutrient Render Bind Group Layout"),
-            entries: &[],
-        });
+        let render_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Nutrient Render Bind Group Layout"),
+                entries: &[],
+            });
 
         // Create render pipeline layout
-        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Nutrient Particle Pipeline Layout"),
-            bind_group_layouts: &[camera_layout, &render_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Nutrient Particle Pipeline Layout"),
+                bind_group_layouts: &[camera_layout, &render_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
         // Vertex buffer layout for instanced particles
         let vertex_buffer_layout = wgpu::VertexBufferLayout {
@@ -291,7 +297,7 @@ impl NutrientParticleRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,  // Camera-facing triangles need no culling
+                cull_mode: None, // Camera-facing triangles need no culling
                 unclipped_depth: false,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
@@ -313,10 +319,10 @@ impl NutrientParticleRenderer {
         });
 
         // Clone the camera layout for later use
-        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Nutrient Camera Bind Group Layout (stored)"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Nutrient Camera Bind Group Layout (stored)"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
@@ -325,9 +331,8 @@ impl NutrientParticleRenderer {
                         min_binding_size: None,
                     },
                     count: None,
-                },
-            ],
-        });
+                }],
+            });
 
         Self {
             render_pipeline,
@@ -342,7 +347,7 @@ impl NutrientParticleRenderer {
             max_particles,
             time: 0.0,
             particle_count: 0,
-            spawn_probability: 0.1,  // 10% chance to spawn in eligible water voxels
+            spawn_probability: 0.1, // 10% chance to spawn in eligible water voxels
             width,
             height,
         }
@@ -548,7 +553,7 @@ impl NutrientParticleRenderer {
         render_pass.set_bind_group(0, camera_bind_group, &[]);
         render_pass.set_bind_group(1, render_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.particle_buffer.slice(..));
-        render_pass.draw(0..3, 0..self.particle_count);  // 3 vertices for triangle
+        render_pass.draw(0..3, 0..self.particle_count); // 3 vertices for triangle
     }
 
     /// Get particle count

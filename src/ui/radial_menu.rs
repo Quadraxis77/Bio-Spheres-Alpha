@@ -137,17 +137,17 @@ impl RadialMenuState {
         // atan2 returns angle from -PI to PI, with 0 pointing right (+X)
         // We want 0 to be at the top (-Y in screen coords), so rotate by PI/2
         let angle = delta.y.atan2(delta.x);
-        
+
         // Normalize to 0..TAU range, with 0 at top
         // Add PI/2 to rotate so top is 0, then normalize
-        let normalized = (angle + std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU) 
-            % std::f32::consts::TAU;
-        
+        let normalized =
+            (angle + std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU) % std::f32::consts::TAU;
+
         // Determine which segment this angle falls into
         let segment_idx = (normalized / segment_angle) as usize % segment_count;
         self.hovered_segment = Some(segment_idx);
     }
-    
+
     /// Clear drag state and reset menu state.
     /// Used when drag operation needs to be cancelled (focus loss, mode switch, etc.)
     pub fn clear_drag_state(&mut self) {
@@ -227,8 +227,8 @@ pub fn show_radial_menu(ctx: &egui::Context, state: &mut RadialMenuState) {
             for (i, tool) in tools.iter().enumerate() {
                 // Start angle for this segment (0 = top, going clockwise)
                 // In screen coords: -PI/2 is top, angles increase clockwise
-                let start_angle = -std::f32::consts::FRAC_PI_2 
-                    + (i as f32 * segment_angle) 
+                let start_angle = -std::f32::consts::FRAC_PI_2
+                    + (i as f32 * segment_angle)
                     + config.segment_gap / 2.0;
                 let end_angle = start_angle + segment_angle - config.segment_gap;
 
@@ -258,10 +258,11 @@ pub fn show_radial_menu(ctx: &egui::Context, state: &mut RadialMenuState) {
                 // Draw icon and label at segment center
                 let mid_angle = (start_angle + end_angle) / 2.0;
                 let label_radius = (config.inner_radius + config.outer_radius) / 2.0;
-                let label_pos = center + Vec2::new(
-                    mid_angle.cos() * label_radius,
-                    mid_angle.sin() * label_radius,
-                );
+                let label_pos = center
+                    + Vec2::new(
+                        mid_angle.cos() * label_radius,
+                        mid_angle.sin() * label_radius,
+                    );
 
                 // Icon
                 painter.text(
@@ -335,7 +336,6 @@ fn draw_arc_segment(
     painter.add(egui::Shape::convex_polygon(points.clone(), fill, stroke));
 }
 
-
 /// Render a custom cursor overlay showing the active tool icon.
 /// Call this when a tool is active to display the tool icon near the cursor.
 pub fn show_tool_cursor(ctx: &egui::Context, state: &RadialMenuState) {
@@ -351,17 +351,13 @@ pub fn show_tool_cursor(ctx: &egui::Context, state: &RadialMenuState) {
         } else {
             state.active_tool.icon()
         };
-        
+
         egui::Area::new(egui::Id::new("tool_cursor"))
             .fixed_pos(pos - Vec2::new(12.0, 12.0)) // Center icon at cursor tip
             .order(egui::Order::Tooltip)
             .interactable(false)
             .show(ctx, |ui| {
-                ui.label(
-                    egui::RichText::new(icon)
-                        .size(24.0)
-                        .color(Color32::WHITE),
-                );
+                ui.label(egui::RichText::new(icon).size(24.0).color(Color32::WHITE));
             });
     }
 }

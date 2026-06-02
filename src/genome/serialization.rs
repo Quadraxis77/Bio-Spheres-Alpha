@@ -37,11 +37,12 @@ pub struct SerializableGenome {
     #[serde(default = "default_quat")]
     pub initial_orientation: [f32; 4],
     /// Total number of modes in this genome.
-    /// Stored so loading restores the exact mode count rather than defaulting to 1.
-    /// Old files without this field default to 80 for backward compatibility.
-    #[serde(skip_serializing_if = "is_default_mode_count")]
-    #[serde(default = "default_mode_count")]
-    pub mode_count: usize,
+    /// Stored so loading restores the exact mode count. Old files without this
+    /// field infer the count from the highest modified mode index instead of
+    /// expanding sparse genomes to the historical 80-mode default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub mode_count: Option<usize>,
     /// Only modes that differ from defaults are stored
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[serde(default)]
@@ -63,12 +64,6 @@ fn default_quat() -> [f32; 4] {
     [0.0, 0.0, 0.0, 1.0]
 }
 
-/// Old files without mode_count default to 80 for backward compatibility.
-fn default_mode_count() -> usize { 80 }
-
-/// Skip serializing mode_count when it equals 10 (the new default).
-fn is_default_mode_count(n: &usize) -> bool { *n == 10 }
-
 /// A mode with its index and only the fields that differ from default
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SerializableMode {
@@ -76,7 +71,6 @@ pub struct SerializableMode {
     #[serde(flatten)]
     pub settings: SerializableModeSettings,
 }
-
 
 /// Serializable mode settings - all fields optional, only non-default values serialized
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -356,7 +350,6 @@ pub struct SerializableAdhesionSettings {
     pub enable_twist_constraint: Option<bool>,
 }
 
-
 // ============================================================================
 // Conversion: Genome -> SerializableGenome (for saving)
 // ============================================================================
@@ -416,7 +409,7 @@ impl Genome {
             name: self.name.clone(),
             initial_mode: self.initial_mode,
             initial_orientation: quat_to_array(self.initial_orientation),
-            mode_count: self.modes.len(),
+            mode_count: Some(self.modes.len()),
             modified_modes,
         }
     }
@@ -425,9 +418,20 @@ impl Genome {
     fn from_serializable(ser: SerializableGenome) -> Result<Self, GenomeDeserializeError> {
         use super::MAX_MODES;
 
-        // Determine how many modes to create. Old files without mode_count default to 80.
+        // Determine how many modes to create. Old files without mode_count
+        // infer the smallest mode count that preserves all modified entries.
         // Clamp to MAX_MODES so corrupt/future files can't allocate unbounded memory.
-        let target_count = ser.mode_count.min(MAX_MODES).max(1);
+        let inferred_count = ser
+            .modified_modes
+            .iter()
+            .map(|mode| mode.index + 1)
+            .max()
+            .unwrap_or(1);
+        let target_count = ser
+            .mode_count
+            .unwrap_or(inferred_count)
+            .min(MAX_MODES)
+            .max(1);
 
         // Build a genome with the right number of modes.
         // The baseline for each mode is ModeSettings::default() (cell_type = 0, Test cell)
@@ -438,17 +442,19 @@ impl Genome {
             name: String::new(),
             initial_mode: 0,
             initial_orientation: glam::Quat::IDENTITY,
-            modes: (0..target_count).map(|i| {
-                let mode_name = format!("M {}", i + 1);
-                let mut mode = super::ModeSettings {
-                    name: mode_name.clone(),
-                    default_name: mode_name,
-                    ..super::ModeSettings::default()
-                };
-                mode.child_a.mode_number = i as i32;
-                mode.child_b.mode_number = i as i32;
-                mode
-            }).collect(),
+            modes: (0..target_count)
+                .map(|i| {
+                    let mode_name = format!("M {}", i + 1);
+                    let mut mode = super::ModeSettings {
+                        name: mode_name.clone(),
+                        default_name: mode_name,
+                        ..super::ModeSettings::default()
+                    };
+                    mode.child_a.mode_number = i as i32;
+                    mode.child_b.mode_number = i as i32;
+                    mode
+                })
+                .collect(),
         };
         genome.name = ser.name;
         genome.initial_mode = ser.initial_mode;
@@ -500,67 +506,184 @@ fn mode_to_serializable(
         split_ratio: diff_f32(mode.split_ratio, default.split_ratio),
         nutrient_priority: diff_f32(mode.nutrient_priority, default.nutrient_priority),
         prioritize_when_low: diff_bool(mode.prioritize_when_low, default.prioritize_when_low),
-        parent_split_direction: diff_vec2(&mode.parent_split_direction, &default.parent_split_direction),
+        parent_split_direction: diff_vec2(
+            &mode.parent_split_direction,
+            &default.parent_split_direction,
+        ),
         max_adhesions: diff_i32(mode.max_adhesions, default.max_adhesions),
         min_adhesions: diff_i32(mode.min_adhesions, default.min_adhesions),
-        enable_parent_angle_snapping: diff_bool(mode.enable_parent_angle_snapping, default.enable_parent_angle_snapping),
+        enable_parent_angle_snapping: diff_bool(
+            mode.enable_parent_angle_snapping,
+            default.enable_parent_angle_snapping,
+        ),
         max_splits: diff_i32(mode.max_splits, default.max_splits),
         mode_a_after_splits: diff_i32(mode.mode_a_after_splits, default.mode_a_after_splits),
         mode_b_after_splits: diff_i32(mode.mode_b_after_splits, default.mode_b_after_splits),
-        child_a_after_split_orientation: diff_quat(&mode.child_a_after_split_orientation, &default.child_a_after_split_orientation),
-        child_b_after_split_orientation: diff_quat(&mode.child_b_after_split_orientation, &default.child_b_after_split_orientation),
-        child_a_after_split_keep_adhesion: diff_bool(mode.child_a_after_split_keep_adhesion, default.child_a_after_split_keep_adhesion),
-        child_b_after_split_keep_adhesion: diff_bool(mode.child_b_after_split_keep_adhesion, default.child_b_after_split_keep_adhesion),
-        glueocyte_cell_adhesion: diff_bool(mode.glueocyte_cell_adhesion, default.glueocyte_cell_adhesion),
-        glueocyte_self_adhesion: diff_bool(mode.glueocyte_self_adhesion, default.glueocyte_self_adhesion),
-        glueocyte_env_adhesion: diff_bool(mode.glueocyte_env_adhesion, default.glueocyte_env_adhesion),
-        glueocyte_boulder_adhesion: diff_bool(mode.glueocyte_boulder_adhesion, default.glueocyte_boulder_adhesion),
-        glueocyte_cell_adhesion_signal_channel: diff_i32(mode.glueocyte_cell_adhesion_signal_channel, default.glueocyte_cell_adhesion_signal_channel),
-        glueocyte_cell_adhesion_signal_threshold: diff_f32(mode.glueocyte_cell_adhesion_signal_threshold, default.glueocyte_cell_adhesion_signal_threshold),
-        glueocyte_signal_gate_invert: diff_bool(mode.glueocyte_signal_gate_invert, default.glueocyte_signal_gate_invert),
+        child_a_after_split_orientation: diff_quat(
+            &mode.child_a_after_split_orientation,
+            &default.child_a_after_split_orientation,
+        ),
+        child_b_after_split_orientation: diff_quat(
+            &mode.child_b_after_split_orientation,
+            &default.child_b_after_split_orientation,
+        ),
+        child_a_after_split_keep_adhesion: diff_bool(
+            mode.child_a_after_split_keep_adhesion,
+            default.child_a_after_split_keep_adhesion,
+        ),
+        child_b_after_split_keep_adhesion: diff_bool(
+            mode.child_b_after_split_keep_adhesion,
+            default.child_b_after_split_keep_adhesion,
+        ),
+        glueocyte_cell_adhesion: diff_bool(
+            mode.glueocyte_cell_adhesion,
+            default.glueocyte_cell_adhesion,
+        ),
+        glueocyte_self_adhesion: diff_bool(
+            mode.glueocyte_self_adhesion,
+            default.glueocyte_self_adhesion,
+        ),
+        glueocyte_env_adhesion: diff_bool(
+            mode.glueocyte_env_adhesion,
+            default.glueocyte_env_adhesion,
+        ),
+        glueocyte_boulder_adhesion: diff_bool(
+            mode.glueocyte_boulder_adhesion,
+            default.glueocyte_boulder_adhesion,
+        ),
+        glueocyte_cell_adhesion_signal_channel: diff_i32(
+            mode.glueocyte_cell_adhesion_signal_channel,
+            default.glueocyte_cell_adhesion_signal_channel,
+        ),
+        glueocyte_cell_adhesion_signal_threshold: diff_f32(
+            mode.glueocyte_cell_adhesion_signal_threshold,
+            default.glueocyte_cell_adhesion_signal_threshold,
+        ),
+        glueocyte_signal_gate_invert: diff_bool(
+            mode.glueocyte_signal_gate_invert,
+            default.glueocyte_signal_gate_invert,
+        ),
         swim_force: diff_f32(mode.swim_force, default.swim_force),
-        flagellocyte_use_signal: diff_bool(mode.flagellocyte_use_signal, default.flagellocyte_use_signal),
-        flagellocyte_signal_channel: diff_i32(mode.flagellocyte_signal_channel, default.flagellocyte_signal_channel),
+        flagellocyte_use_signal: diff_bool(
+            mode.flagellocyte_use_signal,
+            default.flagellocyte_use_signal,
+        ),
+        flagellocyte_signal_channel: diff_i32(
+            mode.flagellocyte_signal_channel,
+            default.flagellocyte_signal_channel,
+        ),
         flagellocyte_speed_a: diff_f32(mode.flagellocyte_speed_a, default.flagellocyte_speed_a),
         flagellocyte_speed_b: diff_f32(mode.flagellocyte_speed_b, default.flagellocyte_speed_b),
-        flagellocyte_threshold_c: diff_f32(mode.flagellocyte_threshold_c, default.flagellocyte_threshold_c),
+        flagellocyte_threshold_c: diff_f32(
+            mode.flagellocyte_threshold_c,
+            default.flagellocyte_threshold_c,
+        ),
         buoyancy_force: diff_f32(mode.buoyancy_force, default.buoyancy_force),
-        photocyte_emit_enabled: diff_bool(mode.photocyte_emit_enabled, default.photocyte_emit_enabled),
-        photocyte_emit_channel: diff_i32(mode.photocyte_emit_channel, default.photocyte_emit_channel),
+        photocyte_emit_enabled: diff_bool(
+            mode.photocyte_emit_enabled,
+            default.photocyte_emit_enabled,
+        ),
+        photocyte_emit_channel: diff_i32(
+            mode.photocyte_emit_channel,
+            default.photocyte_emit_channel,
+        ),
         photocyte_emit_hops: diff_i32(mode.photocyte_emit_hops, default.photocyte_emit_hops),
-        photocyte_emit_threshold: diff_f32(mode.photocyte_emit_threshold, default.photocyte_emit_threshold),
+        photocyte_emit_threshold: diff_f32(
+            mode.photocyte_emit_threshold,
+            default.photocyte_emit_threshold,
+        ),
         photocyte_emit_mode: diff_i32(mode.photocyte_emit_mode, default.photocyte_emit_mode),
         photocyte_emit_value: diff_f32(mode.photocyte_emit_value, default.photocyte_emit_value),
         lipocyte_emit_enabled: diff_bool(mode.lipocyte_emit_enabled, default.lipocyte_emit_enabled),
         lipocyte_emit_channel: diff_i32(mode.lipocyte_emit_channel, default.lipocyte_emit_channel),
         lipocyte_emit_hops: diff_i32(mode.lipocyte_emit_hops, default.lipocyte_emit_hops),
-        lipocyte_emit_threshold: diff_f32(mode.lipocyte_emit_threshold, default.lipocyte_emit_threshold),
+        lipocyte_emit_threshold: diff_f32(
+            mode.lipocyte_emit_threshold,
+            default.lipocyte_emit_threshold,
+        ),
         lipocyte_emit_mode: diff_i32(mode.lipocyte_emit_mode, default.lipocyte_emit_mode),
         lipocyte_emit_value: diff_f32(mode.lipocyte_emit_value, default.lipocyte_emit_value),
         oculocyte_sense_type: diff_u32(mode.oculocyte_sense_type, default.oculocyte_sense_type),
-        oculocyte_signal_channel: diff_i32(mode.oculocyte_signal_channel, default.oculocyte_signal_channel),
-        oculocyte_signal_value: diff_f32(mode.oculocyte_signal_value, default.oculocyte_signal_value),
+        oculocyte_signal_channel: diff_i32(
+            mode.oculocyte_signal_channel,
+            default.oculocyte_signal_channel,
+        ),
+        oculocyte_signal_value: diff_f32(
+            mode.oculocyte_signal_value,
+            default.oculocyte_signal_value,
+        ),
         oculocyte_signal_hops: diff_i32(mode.oculocyte_signal_hops, default.oculocyte_signal_hops),
         oculocyte_ray_length: diff_f32(mode.oculocyte_ray_length, default.oculocyte_ray_length),
-        regulation_emit_channel: diff_i32(mode.regulation_emit_channel, default.regulation_emit_channel),
+        regulation_emit_channel: diff_i32(
+            mode.regulation_emit_channel,
+            default.regulation_emit_channel,
+        ),
         regulation_emit_value: diff_f32(mode.regulation_emit_value, default.regulation_emit_value),
         regulation_emit_hops: diff_i32(mode.regulation_emit_hops, default.regulation_emit_hops),
-        division_signal_channel: diff_i32(mode.division_signal_channel, default.division_signal_channel),
-        division_signal_threshold: diff_f32(mode.division_signal_threshold, default.division_signal_threshold),
-        division_signal_invert: diff_bool(mode.division_signal_invert, default.division_signal_invert),
-        apoptosis_signal_channel: diff_i32(mode.apoptosis_signal_channel, default.apoptosis_signal_channel),
-        apoptosis_signal_threshold: diff_f32(mode.apoptosis_signal_threshold, default.apoptosis_signal_threshold),
-        apoptosis_signal_invert: diff_bool(mode.apoptosis_signal_invert, default.apoptosis_signal_invert),
-        signal_child_a_channel: diff_i32(mode.signal_child_a_channel, default.signal_child_a_channel),
-        signal_child_a_threshold: diff_f32(mode.signal_child_a_threshold, default.signal_child_a_threshold),
-        signal_child_a_mode_above: diff_i32(mode.signal_child_a_mode_above, default.signal_child_a_mode_above),
-        signal_child_a_mode_below: diff_i32(mode.signal_child_a_mode_below, default.signal_child_a_mode_below),
-        signal_child_b_channel: diff_i32(mode.signal_child_b_channel, default.signal_child_b_channel),
-        signal_child_b_threshold: diff_f32(mode.signal_child_b_threshold, default.signal_child_b_threshold),
-        signal_child_b_mode_above: diff_i32(mode.signal_child_b_mode_above, default.signal_child_b_mode_above),
-        signal_child_b_mode_below: diff_i32(mode.signal_child_b_mode_below, default.signal_child_b_mode_below),
-        mode_switch_signal_channel: diff_i32(mode.mode_switch_signal_channel, default.mode_switch_signal_channel),
-        mode_switch_signal_threshold: diff_f32(mode.mode_switch_signal_threshold, default.mode_switch_signal_threshold),
+        division_signal_channel: diff_i32(
+            mode.division_signal_channel,
+            default.division_signal_channel,
+        ),
+        division_signal_threshold: diff_f32(
+            mode.division_signal_threshold,
+            default.division_signal_threshold,
+        ),
+        division_signal_invert: diff_bool(
+            mode.division_signal_invert,
+            default.division_signal_invert,
+        ),
+        apoptosis_signal_channel: diff_i32(
+            mode.apoptosis_signal_channel,
+            default.apoptosis_signal_channel,
+        ),
+        apoptosis_signal_threshold: diff_f32(
+            mode.apoptosis_signal_threshold,
+            default.apoptosis_signal_threshold,
+        ),
+        apoptosis_signal_invert: diff_bool(
+            mode.apoptosis_signal_invert,
+            default.apoptosis_signal_invert,
+        ),
+        signal_child_a_channel: diff_i32(
+            mode.signal_child_a_channel,
+            default.signal_child_a_channel,
+        ),
+        signal_child_a_threshold: diff_f32(
+            mode.signal_child_a_threshold,
+            default.signal_child_a_threshold,
+        ),
+        signal_child_a_mode_above: diff_i32(
+            mode.signal_child_a_mode_above,
+            default.signal_child_a_mode_above,
+        ),
+        signal_child_a_mode_below: diff_i32(
+            mode.signal_child_a_mode_below,
+            default.signal_child_a_mode_below,
+        ),
+        signal_child_b_channel: diff_i32(
+            mode.signal_child_b_channel,
+            default.signal_child_b_channel,
+        ),
+        signal_child_b_threshold: diff_f32(
+            mode.signal_child_b_threshold,
+            default.signal_child_b_threshold,
+        ),
+        signal_child_b_mode_above: diff_i32(
+            mode.signal_child_b_mode_above,
+            default.signal_child_b_mode_above,
+        ),
+        signal_child_b_mode_below: diff_i32(
+            mode.signal_child_b_mode_below,
+            default.signal_child_b_mode_below,
+        ),
+        mode_switch_signal_channel: diff_i32(
+            mode.mode_switch_signal_channel,
+            default.mode_switch_signal_channel,
+        ),
+        mode_switch_signal_threshold: diff_f32(
+            mode.mode_switch_signal_threshold,
+            default.mode_switch_signal_threshold,
+        ),
         mode_switch_target: diff_i32(mode.mode_switch_target, default.mode_switch_target),
         mode_switch_invert: diff_bool(mode.mode_switch_invert, default.mode_switch_invert),
         cilia_speed: diff_f32(mode.cilia_speed, default.cilia_speed),
@@ -573,37 +696,100 @@ fn mode_to_serializable(
         cilia_attract_force: diff_f32(mode.cilia_attract_force, default.cilia_attract_force),
         myocyte_contraction: diff_f32(mode.myocyte_contraction, default.myocyte_contraction),
         myocyte_use_signal: diff_bool(mode.myocyte_use_signal, default.myocyte_use_signal),
-        myocyte_signal_channel: diff_i32(mode.myocyte_signal_channel, default.myocyte_signal_channel),
-        myocyte_contraction_above: diff_f32(mode.myocyte_contraction_above, default.myocyte_contraction_above),
-        myocyte_contraction_below: diff_f32(mode.myocyte_contraction_below, default.myocyte_contraction_below),
+        myocyte_signal_channel: diff_i32(
+            mode.myocyte_signal_channel,
+            default.myocyte_signal_channel,
+        ),
+        myocyte_contraction_above: diff_f32(
+            mode.myocyte_contraction_above,
+            default.myocyte_contraction_above,
+        ),
+        myocyte_contraction_below: diff_f32(
+            mode.myocyte_contraction_below,
+            default.myocyte_contraction_below,
+        ),
         myocyte_threshold: diff_f32(mode.myocyte_threshold, default.myocyte_threshold),
         myocyte_pulse_rate: diff_f32(mode.myocyte_pulse_rate, default.myocyte_pulse_rate),
         myocyte_pulse_phase: diff_i32(mode.myocyte_pulse_phase, default.myocyte_pulse_phase),
         embryocyte_use_timer: diff_bool(mode.embryocyte_use_timer, default.embryocyte_use_timer),
-        embryocyte_release_timer: diff_f32(mode.embryocyte_release_timer, default.embryocyte_release_timer),
-        embryocyte_use_threshold: diff_bool(mode.embryocyte_use_threshold, default.embryocyte_use_threshold),
-        embryocyte_threshold_value: if mode.embryocyte_threshold_value != default.embryocyte_threshold_value { Some(mode.embryocyte_threshold_value) } else { None },
+        embryocyte_release_timer: diff_f32(
+            mode.embryocyte_release_timer,
+            default.embryocyte_release_timer,
+        ),
+        embryocyte_use_threshold: diff_bool(
+            mode.embryocyte_use_threshold,
+            default.embryocyte_use_threshold,
+        ),
+        embryocyte_threshold_value: if mode.embryocyte_threshold_value
+            != default.embryocyte_threshold_value
+        {
+            Some(mode.embryocyte_threshold_value)
+        } else {
+            None
+        },
         embryocyte_use_signal: diff_bool(mode.embryocyte_use_signal, default.embryocyte_use_signal),
-        embryocyte_signal_channel: diff_i32(mode.embryocyte_signal_channel, default.embryocyte_signal_channel),
-        embryocyte_signal_value: diff_f32(mode.embryocyte_signal_value, default.embryocyte_signal_value),
-        devorocyte_consume_range: diff_f32(mode.devorocyte_consume_range, default.devorocyte_consume_range),
-        devorocyte_consume_rate: diff_f32(mode.devorocyte_consume_rate, default.devorocyte_consume_rate),
+        embryocyte_signal_channel: diff_i32(
+            mode.embryocyte_signal_channel,
+            default.embryocyte_signal_channel,
+        ),
+        embryocyte_signal_value: diff_f32(
+            mode.embryocyte_signal_value,
+            default.embryocyte_signal_value,
+        ),
+        devorocyte_consume_range: diff_f32(
+            mode.devorocyte_consume_range,
+            default.devorocyte_consume_range,
+        ),
+        devorocyte_consume_rate: diff_f32(
+            mode.devorocyte_consume_rate,
+            default.devorocyte_consume_rate,
+        ),
         vascular_outlet: diff_bool(mode.vascular_outlet, default.vascular_outlet),
-        vascular_signal_transport: diff_bool(mode.vascular_signal_transport, default.vascular_signal_transport),
-        vascular_signal_capacity: diff_f32(mode.vascular_signal_capacity, default.vascular_signal_capacity),
-        gametocyte_merge_range: diff_f32(mode.gametocyte_merge_range, default.gametocyte_merge_range),
+        vascular_signal_transport: diff_bool(
+            mode.vascular_signal_transport,
+            default.vascular_signal_transport,
+        ),
+        vascular_signal_capacity: diff_f32(
+            mode.vascular_signal_capacity,
+            default.vascular_signal_capacity,
+        ),
+        gametocyte_merge_range: diff_f32(
+            mode.gametocyte_merge_range,
+            default.gametocyte_merge_range,
+        ),
         memorocyte_rate: diff_f32(mode.memorocyte_rate, default.memorocyte_rate),
-        memorocyte_input_channel: diff_i32(mode.memorocyte_input_channel, default.memorocyte_input_channel),
-        memorocyte_output_channel: diff_i32(mode.memorocyte_output_channel, default.memorocyte_output_channel),
-        memorocyte_output_hops: diff_i32(mode.memorocyte_output_hops, default.memorocyte_output_hops),
+        memorocyte_input_channel: diff_i32(
+            mode.memorocyte_input_channel,
+            default.memorocyte_input_channel,
+        ),
+        memorocyte_output_channel: diff_i32(
+            mode.memorocyte_output_channel,
+            default.memorocyte_output_channel,
+        ),
+        memorocyte_output_hops: diff_i32(
+            mode.memorocyte_output_hops,
+            default.memorocyte_output_hops,
+        ),
         cognocyte_operation: diff_i32(mode.cognocyte_operation, default.cognocyte_operation),
-        cognocyte_input_channel_a: diff_i32(mode.cognocyte_input_channel_a, default.cognocyte_input_channel_a),
-        cognocyte_input_channel_b: diff_i32(mode.cognocyte_input_channel_b, default.cognocyte_input_channel_b),
-        cognocyte_output_channel: diff_i32(mode.cognocyte_output_channel, default.cognocyte_output_channel),
+        cognocyte_input_channel_a: diff_i32(
+            mode.cognocyte_input_channel_a,
+            default.cognocyte_input_channel_a,
+        ),
+        cognocyte_input_channel_b: diff_i32(
+            mode.cognocyte_input_channel_b,
+            default.cognocyte_input_channel_b,
+        ),
+        cognocyte_output_channel: diff_i32(
+            mode.cognocyte_output_channel,
+            default.cognocyte_output_channel,
+        ),
         cognocyte_output_hops: diff_i32(mode.cognocyte_output_hops, default.cognocyte_output_hops),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
-        adhesion_settings: adhesion_to_serializable(&mode.adhesion_settings, &default.adhesion_settings),
+        adhesion_settings: adhesion_to_serializable(
+            &mode.adhesion_settings,
+            &default.adhesion_settings,
+        ),
     };
 
     // Only include if any field is set
@@ -613,7 +799,6 @@ fn mode_to_serializable(
         None
     }
 }
-
 
 impl SerializableModeSettings {
     fn has_any_field(&self) -> bool {
@@ -745,7 +930,10 @@ fn child_to_serializable(
         mode_number: diff_i32(child.mode_number, default.mode_number),
         orientation: diff_quat(&child.orientation, &default.orientation),
         keep_adhesion: diff_bool(child.keep_adhesion, default.keep_adhesion),
-        enable_angle_snapping: diff_bool(child.enable_angle_snapping, default.enable_angle_snapping),
+        enable_angle_snapping: diff_bool(
+            child.enable_angle_snapping,
+            default.enable_angle_snapping,
+        ),
     };
 
     if ser.mode_number.is_some()
@@ -767,14 +955,38 @@ fn adhesion_to_serializable(
         can_break: diff_bool(adhesion.can_break, default.can_break),
         break_force: diff_f32(adhesion.break_force, default.break_force),
         rest_length: diff_f32(adhesion.rest_length, default.rest_length),
-        linear_spring_stiffness: diff_f32(adhesion.linear_spring_stiffness, default.linear_spring_stiffness),
-        linear_spring_damping: diff_f32(adhesion.linear_spring_damping, default.linear_spring_damping),
-        orientation_spring_stiffness: diff_f32(adhesion.orientation_spring_stiffness, default.orientation_spring_stiffness),
-        orientation_spring_damping: diff_f32(adhesion.orientation_spring_damping, default.orientation_spring_damping),
-        max_angular_deviation: diff_f32(adhesion.max_angular_deviation, default.max_angular_deviation),
-        twist_constraint_stiffness: diff_f32(adhesion.twist_constraint_stiffness, default.twist_constraint_stiffness),
-        twist_constraint_damping: diff_f32(adhesion.twist_constraint_damping, default.twist_constraint_damping),
-        enable_twist_constraint: diff_bool(adhesion.enable_twist_constraint, default.enable_twist_constraint),
+        linear_spring_stiffness: diff_f32(
+            adhesion.linear_spring_stiffness,
+            default.linear_spring_stiffness,
+        ),
+        linear_spring_damping: diff_f32(
+            adhesion.linear_spring_damping,
+            default.linear_spring_damping,
+        ),
+        orientation_spring_stiffness: diff_f32(
+            adhesion.orientation_spring_stiffness,
+            default.orientation_spring_stiffness,
+        ),
+        orientation_spring_damping: diff_f32(
+            adhesion.orientation_spring_damping,
+            default.orientation_spring_damping,
+        ),
+        max_angular_deviation: diff_f32(
+            adhesion.max_angular_deviation,
+            default.max_angular_deviation,
+        ),
+        twist_constraint_stiffness: diff_f32(
+            adhesion.twist_constraint_stiffness,
+            default.twist_constraint_stiffness,
+        ),
+        twist_constraint_damping: diff_f32(
+            adhesion.twist_constraint_damping,
+            default.twist_constraint_damping,
+        ),
+        enable_twist_constraint: diff_bool(
+            adhesion.enable_twist_constraint,
+            default.enable_twist_constraint,
+        ),
     };
 
     if ser.can_break.is_some()
@@ -794,7 +1006,6 @@ fn adhesion_to_serializable(
         None
     }
 }
-
 
 // ============================================================================
 // Apply serialized settings back to mode (for loading)
@@ -873,17 +1084,27 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(keep_adhesion) = ser.child_b_after_split_keep_adhesion {
         mode.child_b_after_split_keep_adhesion = keep_adhesion;
     }
-    if let Some(v) = ser.glueocyte_cell_adhesion { mode.glueocyte_cell_adhesion = v; }
-    if let Some(v) = ser.glueocyte_self_adhesion  { mode.glueocyte_self_adhesion  = v; }
-    if let Some(v) = ser.glueocyte_env_adhesion  { mode.glueocyte_env_adhesion  = v; }
-    if let Some(v) = ser.glueocyte_boulder_adhesion { mode.glueocyte_boulder_adhesion = v; }
+    if let Some(v) = ser.glueocyte_cell_adhesion {
+        mode.glueocyte_cell_adhesion = v;
+    }
+    if let Some(v) = ser.glueocyte_self_adhesion {
+        mode.glueocyte_self_adhesion = v;
+    }
+    if let Some(v) = ser.glueocyte_env_adhesion {
+        mode.glueocyte_env_adhesion = v;
+    }
+    if let Some(v) = ser.glueocyte_boulder_adhesion {
+        mode.glueocyte_boulder_adhesion = v;
+    }
     if let Some(v) = ser.glueocyte_cell_adhesion_signal_channel {
         mode.glueocyte_cell_adhesion_signal_channel = v;
     }
     if let Some(v) = ser.glueocyte_cell_adhesion_signal_threshold {
         mode.glueocyte_cell_adhesion_signal_threshold = v;
     }
-    if let Some(v) = ser.glueocyte_signal_gate_invert { mode.glueocyte_signal_gate_invert = v; }
+    if let Some(v) = ser.glueocyte_signal_gate_invert {
+        mode.glueocyte_signal_gate_invert = v;
+    }
     if let Some(swim_force) = ser.swim_force {
         mode.swim_force = swim_force;
     }
@@ -1064,24 +1285,60 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.gametocyte_merge_range {
         mode.gametocyte_merge_range = v;
     }
-    if let Some(v) = ser.photocyte_emit_enabled    { mode.photocyte_emit_enabled = v; }
-    if let Some(v) = ser.photocyte_emit_channel   { mode.photocyte_emit_channel = v; }
-    if let Some(v) = ser.photocyte_emit_hops       { mode.photocyte_emit_hops = v; }
-    if let Some(v) = ser.photocyte_emit_threshold  { mode.photocyte_emit_threshold = v; }
-    if let Some(v) = ser.photocyte_emit_mode       { mode.photocyte_emit_mode = v; }
-    if let Some(v) = ser.photocyte_emit_value      { mode.photocyte_emit_value = v; }
-    if let Some(v) = ser.lipocyte_emit_enabled      { mode.lipocyte_emit_enabled = v; }
-    if let Some(v) = ser.lipocyte_emit_channel     { mode.lipocyte_emit_channel = v; }
-    if let Some(v) = ser.lipocyte_emit_hops        { mode.lipocyte_emit_hops = v; }
-    if let Some(v) = ser.lipocyte_emit_threshold   { mode.lipocyte_emit_threshold = v; }
-    if let Some(v) = ser.lipocyte_emit_mode        { mode.lipocyte_emit_mode = v; }
-    if let Some(v) = ser.lipocyte_emit_value       { mode.lipocyte_emit_value = v; }
-    if let Some(v) = ser.vascular_signal_transport { mode.vascular_signal_transport = v; }
-    if let Some(v) = ser.vascular_signal_capacity { mode.vascular_signal_capacity = v; }
-    if let Some(v) = ser.memorocyte_rate           { mode.memorocyte_rate = v; }
-    if let Some(v) = ser.memorocyte_input_channel  { mode.memorocyte_input_channel = v; }
-    if let Some(v) = ser.memorocyte_output_channel { mode.memorocyte_output_channel = v; }
-    if let Some(v) = ser.memorocyte_output_hops    { mode.memorocyte_output_hops = v; }
+    if let Some(v) = ser.photocyte_emit_enabled {
+        mode.photocyte_emit_enabled = v;
+    }
+    if let Some(v) = ser.photocyte_emit_channel {
+        mode.photocyte_emit_channel = v;
+    }
+    if let Some(v) = ser.photocyte_emit_hops {
+        mode.photocyte_emit_hops = v;
+    }
+    if let Some(v) = ser.photocyte_emit_threshold {
+        mode.photocyte_emit_threshold = v;
+    }
+    if let Some(v) = ser.photocyte_emit_mode {
+        mode.photocyte_emit_mode = v;
+    }
+    if let Some(v) = ser.photocyte_emit_value {
+        mode.photocyte_emit_value = v;
+    }
+    if let Some(v) = ser.lipocyte_emit_enabled {
+        mode.lipocyte_emit_enabled = v;
+    }
+    if let Some(v) = ser.lipocyte_emit_channel {
+        mode.lipocyte_emit_channel = v;
+    }
+    if let Some(v) = ser.lipocyte_emit_hops {
+        mode.lipocyte_emit_hops = v;
+    }
+    if let Some(v) = ser.lipocyte_emit_threshold {
+        mode.lipocyte_emit_threshold = v;
+    }
+    if let Some(v) = ser.lipocyte_emit_mode {
+        mode.lipocyte_emit_mode = v;
+    }
+    if let Some(v) = ser.lipocyte_emit_value {
+        mode.lipocyte_emit_value = v;
+    }
+    if let Some(v) = ser.vascular_signal_transport {
+        mode.vascular_signal_transport = v;
+    }
+    if let Some(v) = ser.vascular_signal_capacity {
+        mode.vascular_signal_capacity = v;
+    }
+    if let Some(v) = ser.memorocyte_rate {
+        mode.memorocyte_rate = v;
+    }
+    if let Some(v) = ser.memorocyte_input_channel {
+        mode.memorocyte_input_channel = v;
+    }
+    if let Some(v) = ser.memorocyte_output_channel {
+        mode.memorocyte_output_channel = v;
+    }
+    if let Some(v) = ser.memorocyte_output_hops {
+        mode.memorocyte_output_hops = v;
+    }
     if let Some(v) = ser.cognocyte_operation {
         mode.cognocyte_operation = v;
     }
@@ -1159,7 +1416,6 @@ fn apply_adhesion_settings(adhesion: &mut AdhesionSettings, ser: &SerializableAd
     }
 }
 
-
 // ============================================================================
 // Helper functions for diffing values
 // ============================================================================
@@ -1236,4 +1492,42 @@ fn quat_to_array(q: Quat) -> [f32; 4] {
 
 fn array_to_quat(arr: [f32; 4]) -> Quat {
     Quat::from_xyzw(arr[0], arr[1], arr[2], arr[3])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_genome_without_mode_count_infers_sparse_mode_count() {
+        let yaml = r#"
+name: Sparse Legacy
+modified_modes:
+- index: 2
+  name: M 3 Custom
+  color:
+  - 0.2
+  - 0.4
+  - 0.6
+"#;
+
+        let genome = Genome::from_yaml_string(yaml).unwrap();
+
+        assert_eq!(genome.modes.len(), 3);
+        assert_eq!(genome.modes[2].name, "M 3 Custom");
+        assert!((genome.modes[2].color.x - 0.2).abs() < 0.0001);
+    }
+
+    #[test]
+    fn saved_genome_round_trip_preserves_explicit_mode_count() {
+        let mut genome = Genome::new_with_mode_count(5);
+        genome.name = "Five Modes".to_string();
+        genome.modes[1].name = "Changed".to_string();
+
+        let yaml = genome.to_yaml_string().unwrap();
+        let loaded = Genome::from_yaml_string(&yaml).unwrap();
+
+        assert_eq!(loaded.modes.len(), 5);
+        assert_eq!(loaded.modes[1].name, "Changed");
+    }
 }

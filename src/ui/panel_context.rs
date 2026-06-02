@@ -41,6 +41,12 @@ pub enum SceneModeRequest {
     RegenerateFluidMesh,
     /// Request to read back a mutated genome from GPU and load it into the editor
     LoadGenomeFromGpu(u32),
+    /// Request to read back the GPU genome for an inspected cell.
+    ///
+    /// The inspector reports both `genome_id` and absolute `mode_index`. If
+    /// `genome_id` is stale, the app can resolve the real GPU genome from the
+    /// absolute mode range before loading it into the editor.
+    LoadGenomeFromGpuCell { genome_id: u32, mode_index: u32 },
     /// Request to save a GPU scene snapshot (path chosen by file dialog)
     SaveSnapshot,
     /// Request to restore a GPU scene snapshot from the given path
@@ -106,7 +112,7 @@ pub struct GenomeEditorState {
     pub child_a_orientation: glam::Quat,
     /// Persistent orientation for Child B quaternion ball
     pub child_b_orientation: glam::Quat,
-    
+
     // Axis tracking for Child A quaternion ball (UI feedback only)
     pub child_a_x_axis_lat: f32,
     pub child_a_x_axis_lon: f32,
@@ -114,7 +120,7 @@ pub struct GenomeEditorState {
     pub child_a_y_axis_lon: f32,
     pub child_a_z_axis_lat: f32,
     pub child_a_z_axis_lon: f32,
-    
+
     // Axis tracking for Child B quaternion ball (UI feedback only)
     pub child_b_x_axis_lat: f32,
     pub child_b_x_axis_lon: f32,
@@ -122,7 +128,7 @@ pub struct GenomeEditorState {
     pub child_b_y_axis_lon: f32,
     pub child_b_z_axis_lat: f32,
     pub child_b_z_axis_lon: f32,
-    
+
     // Quaternion ball state for child split angles
     /// Locked axis for Child A split angle quaternion ball
     pub child_a_split_locked_axis: i32,
@@ -132,7 +138,7 @@ pub struct GenomeEditorState {
     pub child_b_split_locked_axis: i32,
     /// Initial distance for Child B split angle quaternion ball
     pub child_b_split_initial_distance: f32,
-    
+
     // Axis tracking for Child A split angle quaternion ball (UI feedback only)
     pub child_a_split_x_axis_lat: f32,
     pub child_a_split_x_axis_lon: f32,
@@ -140,7 +146,7 @@ pub struct GenomeEditorState {
     pub child_a_split_y_axis_lon: f32,
     pub child_a_split_z_axis_lat: f32,
     pub child_a_split_z_axis_lon: f32,
-    
+
     // Axis tracking for Child B split angle quaternion ball (UI feedback only)
     pub child_b_split_x_axis_lat: f32,
     pub child_b_split_x_axis_lon: f32,
@@ -174,7 +180,7 @@ pub struct GenomeEditorState {
     pub time_slider_dragging: bool,
     /// Actual simulation time reached (read-only from sim, used for progress bar display)
     pub resim_display_time: f32,
-    
+
     // Cave system parameters
     pub cave_density: f32,
     pub cave_scale: f32,
@@ -185,7 +191,7 @@ pub struct GenomeEditorState {
     pub cave_seed: u32,
     pub cave_resolution: u32,
     pub cave_params_dirty: bool,
-    
+
     // Fluid simulation parameters
     pub fluid_gravity: f32,
     pub fluid_gravity_x: bool,
@@ -210,13 +216,13 @@ pub struct GenomeEditorState {
     pub nutrient_spawn_end: f32,
     /// Fraction of epoch where despawn starts (0.0-1.0)
     pub nutrient_despawn_start: f32,
-    
+
     // Fluid visualization
     pub fluid_show_voxel_grid: bool,
     pub fluid_show_solid_only: bool,
     pub fluid_show_wireframe: bool,
     pub fluid_color_mode: u32,
-    
+
     // Fluid statistics (read-only, updated from GPU)
     pub fluid_solid_count: u32,
     pub fluid_empty_count: u32,
@@ -227,22 +233,22 @@ pub struct GenomeEditorState {
     pub fluid_water_mass: f32,
     pub fluid_lava_mass: f32,
     pub fluid_steam_mass: f32,
-    
+
     // Fluid initialization
     pub fluid_water_percent: f32,
     pub fluid_lava_percent: f32,
     pub fluid_steam_percent: f32,
-    
+
     // Fluid type selection
     pub selected_fluid_type: u32, // 0=Empty, 1=Water, 2=Lava, 3=Steam
-    
+
     // Fluid visualization toggle
     pub fluid_show_test_voxels: bool,
     /// Whether to render fluid as smooth mesh (surface nets)
     pub fluid_show_mesh: bool,
     /// Whether to enable continuous fluid spawning
     pub fluid_continuous_spawn: bool,
-    
+
     // Fluid mesh settings
     /// Iso level for surface extraction (0.0-1.0)
     pub fluid_iso_level: f32,
@@ -279,12 +285,12 @@ pub struct GenomeEditorState {
     pub fluid_noise_lacunarity: f32,
     /// Amplitude multiplier per octave
     pub fluid_noise_persistence: f32,
-    
+
     /// Flag to indicate mesh params need update
     pub fluid_mesh_params_dirty: bool,
     /// Flag to indicate mesh needs regeneration (iso level changed)
     pub fluid_mesh_needs_regen: bool,
-    
+
     // Light field & volumetric fog settings
     /// Light direction (x, y, z) - will be normalized
     pub light_dir: [f32; 3],
@@ -324,7 +330,7 @@ pub struct GenomeEditorState {
     pub photocyte_min_light_threshold: f32,
     /// Flag to indicate light params need GPU update
     pub light_params_dirty: bool,
-    
+
     // Depth of field settings
     /// Whether depth of field is enabled
     pub show_dof: bool,
@@ -336,7 +342,7 @@ pub struct GenomeEditorState {
     pub dof_max_blur_radius: f32,
     /// Blur intensity multiplier
     pub dof_blur_strength: f32,
-    
+
     // Sun renderer settings
     /// Whether the procedural sun is visible
     pub show_sun: bool,
@@ -346,7 +352,7 @@ pub struct GenomeEditorState {
     pub sun_angular_radius: f32,
     /// Sun intensity
     pub sun_intensity: f32,
-    
+
     // Shadow settings
     /// Whether surface shadows are enabled
     pub shadow_enabled: bool,
@@ -443,22 +449,22 @@ pub struct GenomeEditorState {
     pub skin_sss_strength: f32,
     /// Skin rim light strength
     pub skin_rim_strength: f32,
-    
+
     // Orientation gizmo state
     /// Whether the orientation gizmo is visible
     pub gizmo_visible: bool,
-    
+
     // Split ring state
     /// Whether the split rings are visible
     pub split_rings_visible: bool,
-    
+
     // Radial menu state (GPU scene only)
     /// Radial menu state for tool selection
     pub radial_menu: crate::ui::radial_menu::RadialMenuState,
-    
+
     /// Distance from camera to dragged cell (for maintaining depth during drag)
     pub drag_distance: f32,
-    
+
     // Cell type visuals state
     /// Cell outline width for cel-shaded black outline effect (0.0 = off, 0.3 = thick)
     pub cell_outline_width: f32,
@@ -471,7 +477,11 @@ pub struct GenomeEditorState {
     /// Request to toggle the mode graph panel
     pub toggle_mode_graph_panel: bool,
     /// Stored location of mode graph panel when hidden (surface, node, tab indices)
-    pub mode_graph_panel_location: Option<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, egui_dock::TabIndex)>,
+    pub mode_graph_panel_location: Option<(
+        egui_dock::SurfaceIndex,
+        egui_dock::NodeIndex,
+        egui_dock::TabIndex,
+    )>,
 
     /// Request to generate a procedural genome with this seed (set by rail button, consumed in end_frame).
     pub procedural_genome_seed: Option<u64>,
@@ -544,38 +554,115 @@ pub struct GenomeEditorState {
 impl GenomeEditorState {
     /// Create a new genome editor state with default values.
     pub fn new() -> Self {
-        let (cave_density, cave_scale, cave_octaves, cave_persistence, cave_threshold, 
-             cave_smoothness, cave_seed, cave_resolution,
-             show_moss, moss_growth_rate, moss_erosion_rate, moss_decay_rate,
-             moss_min_light, moss_nutrient_per_moss, moss_consume_rate,
-             moss_wetness_evaporation, moss_parallax_depth, moss_scale, moss_water_radius,
-             moss_noise_type, moss_noise_frequency, moss_noise_lacunarity,
-             moss_height_sharpness_low, moss_height_sharpness_high, moss_bump_strength,
-             moss_color_dark, moss_color_bright,
-             show_boulders, boulder_target_count, boulder_initial_moss, boulder_radius,
-             boulder_size_gate, boulder_spawn_interval, boulder_buoyancy,
-             boulder_radius_min, boulder_radius_max, boulder_moss_min, boulder_moss_max,
-             ) = Self::load_cave_settings();
-        
-        let (fluid_gravity, fluid_gravity_x, fluid_gravity_y, fluid_gravity_z, 
-             fluid_vorticity_epsilon, fluid_pressure_iterations, fluid_lateral_flow_probabilities,
-             _fluid_continuous_spawn, selected_fluid_type, fluid_condensation_probability, fluid_vaporization_probability, nutrient_density) = Self::load_fluid_settings();
-        
-        let (light_dir, show_volumetric_fog, fog_density, fog_steps, light_color, light_intensity,
-             fog_color, fog_scattering_anisotropy, fog_absorption, fog_height_density, fog_height_falloff,
-             light_field_max_steps, light_field_step_size, light_field_absorption_solid,
-             light_field_absorption_cell, light_field_ambient_floor, show_sun, sun_color, sun_angular_radius, sun_intensity,
-             shadow_enabled, shadow_strength, shadow_quality,
-             caustic_intensity, caustic_scale, caustic_speed,
-             photocyte_mass_per_second, photocyte_min_light_threshold) = Self::load_light_settings();
-        
-        let (fluid_iso_level, fluid_ambient, fluid_diffuse, fluid_specular, fluid_shininess,
-             fluid_fresnel, fluid_fresnel_power, fluid_reflection, fluid_alpha, fluid_rim,
-             fluid_wave_height, fluid_wave_speed, fluid_noise_scale, fluid_noise_octaves,
-             fluid_noise_lacunarity, fluid_noise_persistence) = Self::load_fluid_render_settings();
-        
-        let (cell_type_visuals, cell_outline_width) = crate::cell::types::CellTypeVisualsStore::load();
-        
+        let (
+            cave_density,
+            cave_scale,
+            cave_octaves,
+            cave_persistence,
+            cave_threshold,
+            cave_smoothness,
+            cave_seed,
+            cave_resolution,
+            show_moss,
+            moss_growth_rate,
+            moss_erosion_rate,
+            moss_decay_rate,
+            moss_min_light,
+            moss_nutrient_per_moss,
+            moss_consume_rate,
+            moss_wetness_evaporation,
+            moss_parallax_depth,
+            moss_scale,
+            moss_water_radius,
+            moss_noise_type,
+            moss_noise_frequency,
+            moss_noise_lacunarity,
+            moss_height_sharpness_low,
+            moss_height_sharpness_high,
+            moss_bump_strength,
+            moss_color_dark,
+            moss_color_bright,
+            show_boulders,
+            boulder_target_count,
+            boulder_initial_moss,
+            boulder_radius,
+            boulder_size_gate,
+            boulder_spawn_interval,
+            boulder_buoyancy,
+            boulder_radius_min,
+            boulder_radius_max,
+            boulder_moss_min,
+            boulder_moss_max,
+        ) = Self::load_cave_settings();
+
+        let (
+            fluid_gravity,
+            fluid_gravity_x,
+            fluid_gravity_y,
+            fluid_gravity_z,
+            fluid_vorticity_epsilon,
+            fluid_pressure_iterations,
+            fluid_lateral_flow_probabilities,
+            _fluid_continuous_spawn,
+            selected_fluid_type,
+            fluid_condensation_probability,
+            fluid_vaporization_probability,
+            nutrient_density,
+        ) = Self::load_fluid_settings();
+
+        let (
+            light_dir,
+            show_volumetric_fog,
+            fog_density,
+            fog_steps,
+            light_color,
+            light_intensity,
+            fog_color,
+            fog_scattering_anisotropy,
+            fog_absorption,
+            fog_height_density,
+            fog_height_falloff,
+            light_field_max_steps,
+            light_field_step_size,
+            light_field_absorption_solid,
+            light_field_absorption_cell,
+            light_field_ambient_floor,
+            show_sun,
+            sun_color,
+            sun_angular_radius,
+            sun_intensity,
+            shadow_enabled,
+            shadow_strength,
+            shadow_quality,
+            caustic_intensity,
+            caustic_scale,
+            caustic_speed,
+            photocyte_mass_per_second,
+            photocyte_min_light_threshold,
+        ) = Self::load_light_settings();
+
+        let (
+            fluid_iso_level,
+            fluid_ambient,
+            fluid_diffuse,
+            fluid_specular,
+            fluid_shininess,
+            fluid_fresnel,
+            fluid_fresnel_power,
+            fluid_reflection,
+            fluid_alpha,
+            fluid_rim,
+            fluid_wave_height,
+            fluid_wave_speed,
+            fluid_noise_scale,
+            fluid_noise_octaves,
+            fluid_noise_lacunarity,
+            fluid_noise_persistence,
+        ) = Self::load_fluid_render_settings();
+
+        let (cell_type_visuals, cell_outline_width) =
+            crate::cell::types::CellTypeVisualsStore::load();
+
         let state = Self {
             renaming_mode: None,
             rename_buffer: String::new(),
@@ -603,13 +690,13 @@ impl GenomeEditorState {
             child_b_y_axis_lon: 0.0,
             child_b_z_axis_lat: 0.0,
             child_b_z_axis_lon: 0.0,
-            
+
             // Quaternion ball state for child split angles
             child_a_split_locked_axis: -1,
             child_a_split_initial_distance: 1.0,
             child_b_split_locked_axis: -1,
             child_b_split_initial_distance: 1.0,
-            
+
             // Axis tracking for Child A split angle quaternion ball (UI feedback only)
             child_a_split_x_axis_lat: 0.0,
             child_a_split_x_axis_lon: 0.0,
@@ -617,7 +704,7 @@ impl GenomeEditorState {
             child_a_split_y_axis_lon: 0.0,
             child_a_split_z_axis_lat: 0.0,
             child_a_split_z_axis_lon: 0.0,
-            
+
             // Axis tracking for Child B split angle quaternion ball (UI feedback only)
             child_b_split_x_axis_lat: 0.0,
             child_b_split_x_axis_lon: 0.0,
@@ -676,7 +763,7 @@ impl GenomeEditorState {
             selected_fluid_type,
             fluid_show_test_voxels: false,
             fluid_show_mesh: true,
-            fluid_continuous_spawn: false,  // Always start disabled by default
+            fluid_continuous_spawn: false, // Always start disabled by default
             fluid_iso_level,
             fluid_ambient,
             fluid_diffuse,
@@ -694,7 +781,7 @@ impl GenomeEditorState {
             fluid_noise_octaves,
             fluid_noise_lacunarity,
             fluid_noise_persistence,
-            fluid_mesh_params_dirty: true,  // Trigger GPU upload on first frame
+            fluid_mesh_params_dirty: true, // Trigger GPU upload on first frame
             fluid_mesh_needs_regen: false,
             light_dir,
             show_volumetric_fog,
@@ -805,11 +892,14 @@ impl GenomeEditorState {
 
     /// Save cell type visuals to disk.
     pub fn save_cell_type_visuals(&self) {
-        if let Err(e) = crate::cell::types::CellTypeVisualsStore::save(&self.cell_type_visuals, self.cell_outline_width) {
+        if let Err(e) = crate::cell::types::CellTypeVisualsStore::save(
+            &self.cell_type_visuals,
+            self.cell_outline_width,
+        ) {
             log::error!("Failed to save cell type visuals: {}", e);
         }
     }
-    
+
     /// Save cave settings to disk.
     pub fn save_cave_settings(&self) {
         if let Err(e) = Self::save_cave_settings_to_file(
@@ -855,7 +945,7 @@ impl GenomeEditorState {
             log::error!("Failed to save cave settings: {}", e);
         }
     }
-    
+
     /// Save fluid settings to disk.
     pub fn save_fluid_settings(&self) {
         if let Err(e) = Self::save_fluid_settings_to_file(
@@ -875,7 +965,7 @@ impl GenomeEditorState {
             log::error!("Failed to save fluid settings: {}", e);
         }
     }
-    
+
     fn save_cave_settings_to_file(
         density: f32,
         scale: f32,
@@ -957,7 +1047,7 @@ impl GenomeEditorState {
             boulder_moss_min: f32,
             boulder_moss_max: f32,
         }
-        
+
         let settings = CaveSettings {
             density,
             scale,
@@ -998,13 +1088,13 @@ impl GenomeEditorState {
             boulder_moss_min,
             boulder_moss_max,
         };
-        
+
         let path = crate::app_dirs::config_file("cave_settings.ron");
         let contents = ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default())?;
         std::fs::write(path, contents)?;
         Ok(())
     }
-    
+
     fn save_fluid_settings_to_file(
         gravity: f32,
         gravity_x: bool,
@@ -1034,7 +1124,7 @@ impl GenomeEditorState {
             vaporization_probability: f32,
             nutrient_density: f32,
         }
-        
+
         let settings = FluidSettings {
             gravity,
             gravity_x,
@@ -1049,19 +1139,55 @@ impl GenomeEditorState {
             vaporization_probability,
             nutrient_density,
         };
-        
+
         let path = crate::app_dirs::config_file("fluid_settings.ron");
         let contents = ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default())?;
         std::fs::write(path, contents)?;
         Ok(())
     }
-    
+
     /// Load cave settings from disk, or return defaults if file doesn't exist.
     #[allow(clippy::type_complexity)]
-    pub fn load_cave_settings() -> (f32, f32, u32, f32, f32, f32, u32, u32,
-                                     bool, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32,
-                                     u32, f32, f32, f32, f32, f32, [f32; 3], [f32; 3],
-                                     bool, u32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
+    pub fn load_cave_settings() -> (
+        f32,
+        f32,
+        u32,
+        f32,
+        f32,
+        f32,
+        u32,
+        u32,
+        bool,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        u32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        [f32; 3],
+        [f32; 3],
+        bool,
+        u32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+    ) {
         #[derive(serde::Deserialize)]
         struct CaveSettings {
             density: f32,
@@ -1134,105 +1260,201 @@ impl GenomeEditorState {
             #[serde(default = "default_boulder_moss_max")]
             boulder_moss_max: f32,
         }
-        
-        fn default_resolution() -> u32 { 128 }
-        fn default_show_moss() -> bool { true }
-        fn default_moss_growth_rate() -> f32 { 0.15 }
-        fn default_moss_erosion_rate() -> f32 { 0.3 }
-        fn default_moss_decay_rate() -> f32 { 0.05 }
-        fn default_moss_min_light() -> f32 { 0.05 }
-        fn default_moss_nutrient_per_moss() -> f32 { 50.0 }
-        fn default_moss_graze_cooldown() -> f32 { 5.0 }
-        fn default_moss_wetness_evaporation() -> f32 { 0.02 }
-        fn default_moss_parallax_depth() -> f32 { 0.08 }
-        fn default_moss_scale() -> f32 { 0.15 }
-        fn default_moss_water_radius() -> f32 { 20.0 }
-        fn default_moss_noise_type() -> u32 { 0 }
-        fn default_moss_noise_frequency() -> f32 { 18.0 }
-        fn default_moss_noise_lacunarity() -> f32 { 2.5 }
-        fn default_moss_height_sharpness_low() -> f32 { 0.25 }
-        fn default_moss_height_sharpness_high() -> f32 { 0.7 }
-        fn default_moss_bump_strength() -> f32 { 5.0 }
-        fn default_moss_color_dark() -> [f32; 3] { [0.06, 0.12, 0.04] }
-        fn default_moss_color_bright() -> [f32; 3] { [0.20, 0.38, 0.10] }
-        fn default_show_boulders() -> bool { true }
-        fn default_boulder_target_count() -> u32 { 32 }
-        fn default_boulder_initial_moss() -> f32 { 10_000.0 }
-        fn default_boulder_radius() -> f32 { 4.0 }
-        fn default_boulder_size_gate() -> f32 { 20.0 }
-        fn default_boulder_spawn_interval() -> f32 { 5.0 }
-        fn default_boulder_buoyancy() -> f32 { 0.08 }
-        fn default_boulder_radius_min() -> f32 { 2.0 }
-        fn default_boulder_radius_max() -> f32 { 8.0 }
-        fn default_boulder_moss_min() -> f32 { 2_000.0 }
-        fn default_boulder_moss_max() -> f32 { 20_000.0 }
-        
+
+        fn default_resolution() -> u32 {
+            128
+        }
+        fn default_show_moss() -> bool {
+            true
+        }
+        fn default_moss_growth_rate() -> f32 {
+            0.15
+        }
+        fn default_moss_erosion_rate() -> f32 {
+            0.3
+        }
+        fn default_moss_decay_rate() -> f32 {
+            0.05
+        }
+        fn default_moss_min_light() -> f32 {
+            0.05
+        }
+        fn default_moss_nutrient_per_moss() -> f32 {
+            50.0
+        }
+        fn default_moss_graze_cooldown() -> f32 {
+            5.0
+        }
+        fn default_moss_wetness_evaporation() -> f32 {
+            0.02
+        }
+        fn default_moss_parallax_depth() -> f32 {
+            0.08
+        }
+        fn default_moss_scale() -> f32 {
+            0.15
+        }
+        fn default_moss_water_radius() -> f32 {
+            20.0
+        }
+        fn default_moss_noise_type() -> u32 {
+            0
+        }
+        fn default_moss_noise_frequency() -> f32 {
+            18.0
+        }
+        fn default_moss_noise_lacunarity() -> f32 {
+            2.5
+        }
+        fn default_moss_height_sharpness_low() -> f32 {
+            0.25
+        }
+        fn default_moss_height_sharpness_high() -> f32 {
+            0.7
+        }
+        fn default_moss_bump_strength() -> f32 {
+            5.0
+        }
+        fn default_moss_color_dark() -> [f32; 3] {
+            [0.06, 0.12, 0.04]
+        }
+        fn default_moss_color_bright() -> [f32; 3] {
+            [0.20, 0.38, 0.10]
+        }
+        fn default_show_boulders() -> bool {
+            true
+        }
+        fn default_boulder_target_count() -> u32 {
+            32
+        }
+        fn default_boulder_initial_moss() -> f32 {
+            10_000.0
+        }
+        fn default_boulder_radius() -> f32 {
+            4.0
+        }
+        fn default_boulder_size_gate() -> f32 {
+            20.0
+        }
+        fn default_boulder_spawn_interval() -> f32 {
+            5.0
+        }
+        fn default_boulder_buoyancy() -> f32 {
+            0.08
+        }
+        fn default_boulder_radius_min() -> f32 {
+            2.0
+        }
+        fn default_boulder_radius_max() -> f32 {
+            8.0
+        }
+        fn default_boulder_moss_min() -> f32 {
+            2_000.0
+        }
+        fn default_boulder_moss_max() -> f32 {
+            20_000.0
+        }
+
         let path = crate::app_dirs::config_file("cave_settings.ron");
-        
+
         if path.exists() {
             match std::fs::read_to_string(&path) {
-                Ok(contents) => {
-                match ron::from_str::<CaveSettings>(&contents) {
+                Ok(contents) => match ron::from_str::<CaveSettings>(&contents) {
                     Ok(settings) => {
                         return (
-                                settings.density,
-                                settings.scale,
-                                settings.octaves,
-                                settings.persistence,
-                                settings.threshold,
-                                settings.smoothness,
-                                settings.seed,
-                                settings.resolution,
-                                settings.show_moss,
-                                settings.moss_growth_rate,
-                                settings.moss_erosion_rate,
-                                settings.moss_decay_rate,
-                                settings.moss_min_light,
-                                settings.moss_nutrient_per_moss,
-                                settings.moss_graze_cooldown,
-                                settings.moss_wetness_evaporation,
-                                settings.moss_parallax_depth,
-                                settings.moss_scale,
-                                settings.moss_water_radius,
-                                settings.moss_noise_type,
-                                settings.moss_noise_frequency,
-                                settings.moss_noise_lacunarity,
-                                settings.moss_height_sharpness_low,
-                                settings.moss_height_sharpness_high,
-                                settings.moss_bump_strength,
-                                settings.moss_color_dark,
-                                settings.moss_color_bright,
-                                settings.show_boulders,
-                                settings.boulder_target_count,
-                                settings.boulder_initial_moss,
-                                settings.boulder_radius,
-                                settings.boulder_size_gate,
-                                settings.boulder_spawn_interval,
-                                settings.boulder_buoyancy,
-                                settings.boulder_radius_min,
-                                settings.boulder_radius_max,
-                                settings.boulder_moss_min,
-                                settings.boulder_moss_max,
-                            );
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to parse cave settings: {}. Using defaults.", e);
-                        }
+                            settings.density,
+                            settings.scale,
+                            settings.octaves,
+                            settings.persistence,
+                            settings.threshold,
+                            settings.smoothness,
+                            settings.seed,
+                            settings.resolution,
+                            settings.show_moss,
+                            settings.moss_growth_rate,
+                            settings.moss_erosion_rate,
+                            settings.moss_decay_rate,
+                            settings.moss_min_light,
+                            settings.moss_nutrient_per_moss,
+                            settings.moss_graze_cooldown,
+                            settings.moss_wetness_evaporation,
+                            settings.moss_parallax_depth,
+                            settings.moss_scale,
+                            settings.moss_water_radius,
+                            settings.moss_noise_type,
+                            settings.moss_noise_frequency,
+                            settings.moss_noise_lacunarity,
+                            settings.moss_height_sharpness_low,
+                            settings.moss_height_sharpness_high,
+                            settings.moss_bump_strength,
+                            settings.moss_color_dark,
+                            settings.moss_color_bright,
+                            settings.show_boulders,
+                            settings.boulder_target_count,
+                            settings.boulder_initial_moss,
+                            settings.boulder_radius,
+                            settings.boulder_size_gate,
+                            settings.boulder_spawn_interval,
+                            settings.boulder_buoyancy,
+                            settings.boulder_radius_min,
+                            settings.boulder_radius_max,
+                            settings.boulder_moss_min,
+                            settings.boulder_moss_max,
+                        );
                     }
-                }
+                    Err(e) => {
+                        log::warn!("Failed to parse cave settings: {}. Using defaults.", e);
+                    }
+                },
                 Err(e) => {
                     log::warn!("Failed to read cave settings: {}. Using defaults.", e);
                 }
             }
         }
-        
+
         // Return defaults
-        (0.5, 100.0, 2u32, 0.5, 1.0, 0.0, 12345u32, 128u32,
-         true, 0.15, 0.3, 0.05, 0.05, 50.0, 5.0, 0.02, 0.08, 0.15, 20.0,
-         0, 18.0, 2.5, 0.25, 0.7, 5.0, [0.06, 0.12, 0.04], [0.20, 0.38, 0.10],
-         true, 32u32, 10_000.0f32, 4.0f32, 20.0f32, 5.0f32, 0.08f32, 2.0f32, 8.0f32, 2_000.0f32, 20_000.0f32)
+        (
+            0.5,
+            100.0,
+            2u32,
+            0.5,
+            1.0,
+            0.0,
+            12345u32,
+            128u32,
+            true,
+            0.15,
+            0.3,
+            0.05,
+            0.05,
+            50.0,
+            5.0,
+            0.02,
+            0.08,
+            0.15,
+            20.0,
+            0,
+            18.0,
+            2.5,
+            0.25,
+            0.7,
+            5.0,
+            [0.06, 0.12, 0.04],
+            [0.20, 0.38, 0.10],
+            true,
+            32u32,
+            10_000.0f32,
+            4.0f32,
+            20.0f32,
+            5.0f32,
+            0.08f32,
+            2.0f32,
+            8.0f32,
+            2_000.0f32,
+            20_000.0f32,
+        )
     }
-    
+
     /// Save light settings to disk.
     pub fn save_light_settings(&self) {
         if let Err(e) = Self::save_light_settings_to_file(
@@ -1272,7 +1494,7 @@ impl GenomeEditorState {
             log::warn!("Failed to save light settings: {}", e);
         }
     }
-    
+
     fn save_light_settings_to_file(
         light_dir: [f32; 3],
         show_volumetric_fog: bool,
@@ -1341,7 +1563,7 @@ impl GenomeEditorState {
             photocyte_mass_per_second: f32,
             photocyte_min_light_threshold: f32,
         }
-        
+
         let settings = LightSettings {
             light_dir,
             show_volumetric_fog,
@@ -1376,15 +1598,44 @@ impl GenomeEditorState {
             photocyte_mass_per_second,
             photocyte_min_light_threshold,
         };
-        
+
         let path = crate::app_dirs::config_file("light_settings.ron");
         let contents = ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default())?;
         std::fs::write(path, contents)?;
         Ok(())
     }
-    
+
     /// Load light settings from disk, or return defaults if file doesn't exist.
-    pub fn load_light_settings() -> ([f32; 3], bool, f32, u32, [f32; 3], f32, [f32; 3], f32, f32, f32, f32, u32, f32, f32, f32, f32, bool, [f32; 3], f32, f32, bool, f32, f32, f32, f32, f32, f32, f32) {
+    pub fn load_light_settings() -> (
+        [f32; 3],
+        bool,
+        f32,
+        u32,
+        [f32; 3],
+        f32,
+        [f32; 3],
+        f32,
+        f32,
+        f32,
+        f32,
+        u32,
+        f32,
+        f32,
+        f32,
+        f32,
+        bool,
+        [f32; 3],
+        f32,
+        f32,
+        bool,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+    ) {
         #[derive(serde::Deserialize)]
         struct LightSettings {
             light_dir: [f32; 3],
@@ -1430,17 +1681,33 @@ impl GenomeEditorState {
             #[serde(default = "default_photocyte_threshold")]
             photocyte_min_light_threshold: f32,
         }
-        fn default_shadow_enabled() -> bool { true }
-        fn default_shadow_strength() -> f32 { 0.7 }
-        fn default_shadow_quality() -> f32 { 0.8 }
-        fn default_caustic_intensity() -> f32 { 0.5 }
-        fn default_caustic_scale() -> f32 { 8.0 }
-        fn default_caustic_speed() -> f32 { 1.0 }
-        fn default_photocyte_mass() -> f32 { 0.012 }
-        fn default_photocyte_threshold() -> f32 { 0.05 }
-        
+        fn default_shadow_enabled() -> bool {
+            true
+        }
+        fn default_shadow_strength() -> f32 {
+            0.7
+        }
+        fn default_shadow_quality() -> f32 {
+            0.8
+        }
+        fn default_caustic_intensity() -> f32 {
+            0.5
+        }
+        fn default_caustic_scale() -> f32 {
+            8.0
+        }
+        fn default_caustic_speed() -> f32 {
+            1.0
+        }
+        fn default_photocyte_mass() -> f32 {
+            0.012
+        }
+        fn default_photocyte_threshold() -> f32 {
+            0.05
+        }
+
         let path = crate::app_dirs::config_file("light_settings.ron");
-        
+
         if path.exists() {
             match std::fs::read_to_string(&path) {
                 Ok(contents) => {
@@ -1491,46 +1758,59 @@ impl GenomeEditorState {
                 }
             }
         }
-        
+
         // Return defaults
         (
-            [0.0, 1.0, 0.0],    // light_dir
-            true,               // show_volumetric_fog
-            0.15,               // fog_density
-            20,                 // fog_steps
+            [0.0, 1.0, 0.0],   // light_dir
+            true,              // show_volumetric_fog
+            0.15,              // fog_density
+            20,                // fog_steps
             [1.0, 0.95, 0.95], // light_color
-            2.6,                // light_intensity
+            2.6,               // light_intensity
             [0.4, 0.5, 0.6],   // fog_color
-            0.5,                // fog_scattering_anisotropy
-            0.13,               // fog_absorption
-            1.35,               // fog_height_density
-            0.002,              // fog_height_falloff
-            90,                 // light_field_max_steps
-            1.5,                // light_field_step_size
-            20.0,               // light_field_absorption_solid
-            5.0,                // light_field_absorption_cell
-            0.02,               // light_field_ambient_floor
+            0.5,               // fog_scattering_anisotropy
+            0.13,              // fog_absorption
+            1.35,              // fog_height_density
+            0.002,             // fog_height_falloff
+            90,                // light_field_max_steps
+            1.5,               // light_field_step_size
+            20.0,              // light_field_absorption_solid
+            5.0,               // light_field_absorption_cell
+            0.02,              // light_field_ambient_floor
             // Sun settings
-            true,               // show_sun
-            [0.6, 0.4, 0.2],   // sun_color
-            0.05,               // sun_angular_radius
-            15.0,               // sun_intensity
+            true,            // show_sun
+            [0.6, 0.4, 0.2], // sun_color
+            0.05,            // sun_angular_radius
+            15.0,            // sun_intensity
             // Shadow settings
-            true,               // shadow_enabled
-            0.7,                // shadow_strength
-            0.8,                // shadow_quality
+            true, // shadow_enabled
+            0.7,  // shadow_strength
+            0.8,  // shadow_quality
             // Caustic settings
-            0.5,                // caustic_intensity
-            8.0,                // caustic_scale
-            1.0,                // caustic_speed
+            0.5, // caustic_intensity
+            8.0, // caustic_scale
+            1.0, // caustic_speed
             // Photocyte settings
-            0.012,              // photocyte_mass_per_second (scaled by sun_intensity at sync)
-            0.05,               // photocyte_min_light_threshold
+            0.012, // photocyte_mass_per_second (scaled by sun_intensity at sync)
+            0.05,  // photocyte_min_light_threshold
         )
     }
-    
+
     /// Load fluid settings from disk, or return defaults if file doesn't exist.
-    pub fn load_fluid_settings() -> (f32, bool, bool, bool, f32, u32, [f32; 4], bool, u32, f32, f32, f32) {
+    pub fn load_fluid_settings() -> (
+        f32,
+        bool,
+        bool,
+        bool,
+        f32,
+        u32,
+        [f32; 4],
+        bool,
+        u32,
+        f32,
+        f32,
+        f32,
+    ) {
         #[derive(serde::Deserialize)]
         struct FluidSettings {
             gravity: f32,
@@ -1546,44 +1826,55 @@ impl GenomeEditorState {
             vaporization_probability: f32,
             nutrient_density: f32,
         }
-        
+
         let path = crate::app_dirs::config_file("fluid_settings.ron");
-        
+
         if path.exists() {
             match std::fs::read_to_string(&path) {
-                Ok(contents) => {
-                    match ron::from_str::<FluidSettings>(&contents) {
-                        Ok(settings) => {
-                            return (
-                                settings.gravity,
-                                settings.gravity_x,
-                                settings.gravity_y,
-                                settings.gravity_z,
-                                settings.vorticity_epsilon,
-                                settings.pressure_iterations,
-                                settings.lateral_flow_probabilities,
-                                settings.continuous_spawn,
-                                settings.selected_fluid_type,
-                                settings.condensation_probability,
-                                settings.vaporization_probability,
-                                settings.nutrient_density,
-                            );
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to parse fluid settings: {}. Using defaults.", e);
-                        }
+                Ok(contents) => match ron::from_str::<FluidSettings>(&contents) {
+                    Ok(settings) => {
+                        return (
+                            settings.gravity,
+                            settings.gravity_x,
+                            settings.gravity_y,
+                            settings.gravity_z,
+                            settings.vorticity_epsilon,
+                            settings.pressure_iterations,
+                            settings.lateral_flow_probabilities,
+                            settings.continuous_spawn,
+                            settings.selected_fluid_type,
+                            settings.condensation_probability,
+                            settings.vaporization_probability,
+                            settings.nutrient_density,
+                        );
                     }
-                }
+                    Err(e) => {
+                        log::warn!("Failed to parse fluid settings: {}. Using defaults.", e);
+                    }
+                },
                 Err(e) => {
                     log::warn!("Failed to read fluid settings: {}. Using defaults.", e);
                 }
             }
         }
-        
+
         // Return defaults
-        (9.8, false, true, false, 0.05, 10, [1.0, 0.8, 0.6, 0.9], false, 1, 0.1, 0.1, 0.2)
+        (
+            9.8,
+            false,
+            true,
+            false,
+            0.05,
+            10,
+            [1.0, 0.8, 0.6, 0.9],
+            false,
+            1,
+            0.1,
+            0.1,
+            0.2,
+        )
     }
-    
+
     /// Save sun settings to disk.
     pub fn save_sun_settings(&self) {
         #[derive(serde::Serialize)]
@@ -1593,14 +1884,14 @@ impl GenomeEditorState {
             sun_angular_radius: f32,
             sun_intensity: f32,
         }
-        
+
         let settings = SunSettings {
             show_sun: self.show_sun,
             sun_color: self.sun_color,
             sun_angular_radius: self.sun_angular_radius,
             sun_intensity: self.sun_intensity,
         };
-        
+
         let path = crate::app_dirs::config_file("sun_settings.ron");
         match ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default()) {
             Ok(contents) => {
@@ -1613,7 +1904,7 @@ impl GenomeEditorState {
             }
         }
     }
-    
+
     /// Save fluid render settings to disk.
     pub fn save_fluid_render_settings(&self) {
         #[derive(serde::Serialize)]
@@ -1635,7 +1926,7 @@ impl GenomeEditorState {
             noise_lacunarity: f32,
             noise_persistence: f32,
         }
-        
+
         let settings = FluidRenderSettings {
             iso_level: self.fluid_iso_level,
             ambient: self.fluid_ambient,
@@ -1654,7 +1945,7 @@ impl GenomeEditorState {
             noise_lacunarity: self.fluid_noise_lacunarity,
             noise_persistence: self.fluid_noise_persistence,
         };
-        
+
         let path = crate::app_dirs::config_file("fluid_render_settings.ron");
         match ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default()) {
             Ok(contents) => {
@@ -1667,9 +1958,26 @@ impl GenomeEditorState {
             }
         }
     }
-    
+
     /// Load fluid render settings from disk, or return defaults if file doesn't exist.
-    pub fn load_fluid_render_settings() -> (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
+    pub fn load_fluid_render_settings() -> (
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+    ) {
         #[derive(serde::Deserialize)]
         #[serde(default)]
         struct FluidRenderSettings {
@@ -1712,39 +2020,69 @@ impl GenomeEditorState {
                 }
             }
         }
-        
+
         let path = crate::app_dirs::config_file("fluid_render_settings.ron");
-        
+
         if path.exists() {
             match std::fs::read_to_string(&path) {
-                Ok(contents) => {
-                    match ron::from_str::<FluidRenderSettings>(&contents) {
-                        Ok(s) => {
-                            return (
-                                s.iso_level, s.ambient, s.diffuse, s.specular, s.shininess,
-                                s.fresnel, s.fresnel_power, s.reflection, s.alpha, s.rim,
-                                s.wave_height, s.wave_speed, s.noise_scale, s.noise_octaves,
-                                s.noise_lacunarity, s.noise_persistence,
-                            );
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to parse fluid render settings: {}. Using defaults.", e);
-                        }
+                Ok(contents) => match ron::from_str::<FluidRenderSettings>(&contents) {
+                    Ok(s) => {
+                        return (
+                            s.iso_level,
+                            s.ambient,
+                            s.diffuse,
+                            s.specular,
+                            s.shininess,
+                            s.fresnel,
+                            s.fresnel_power,
+                            s.reflection,
+                            s.alpha,
+                            s.rim,
+                            s.wave_height,
+                            s.wave_speed,
+                            s.noise_scale,
+                            s.noise_octaves,
+                            s.noise_lacunarity,
+                            s.noise_persistence,
+                        );
                     }
-                }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to parse fluid render settings: {}. Using defaults.",
+                            e
+                        );
+                    }
+                },
                 Err(e) => {
-                    log::warn!("Failed to read fluid render settings: {}. Using defaults.", e);
+                    log::warn!(
+                        "Failed to read fluid render settings: {}. Using defaults.",
+                        e
+                    );
                 }
             }
         }
-        
+
         let d = FluidRenderSettings::default();
-        (d.iso_level, d.ambient, d.diffuse, d.specular, d.shininess,
-         d.fresnel, d.fresnel_power, d.reflection, d.alpha, d.rim,
-         d.wave_height, d.wave_speed, d.noise_scale, d.noise_octaves,
-         d.noise_lacunarity, d.noise_persistence)
+        (
+            d.iso_level,
+            d.ambient,
+            d.diffuse,
+            d.specular,
+            d.shininess,
+            d.fresnel,
+            d.fresnel_power,
+            d.reflection,
+            d.alpha,
+            d.rim,
+            d.wave_height,
+            d.wave_speed,
+            d.noise_scale,
+            d.noise_octaves,
+            d.noise_lacunarity,
+            d.noise_persistence,
+        )
     }
-    
+
     /// Load sun settings from disk. Returns defaults if file doesn't exist.
     pub fn load_sun_settings(&mut self) {
         #[derive(serde::Deserialize)]
@@ -1765,26 +2103,24 @@ impl GenomeEditorState {
                 }
             }
         }
-        
+
         let path = crate::app_dirs::config_file("sun_settings.ron");
         if !path.exists() {
             return; // Use defaults already set in new()
         }
-        
+
         match std::fs::read_to_string(&path) {
-            Ok(contents) => {
-                match ron::from_str::<SunSettings>(&contents) {
-                    Ok(s) => {
-                        self.show_sun = s.show_sun;
-                        self.sun_color = s.sun_color;
-                        self.sun_angular_radius = s.sun_angular_radius;
-                        self.sun_intensity = s.sun_intensity;
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to parse sun settings: {}. Using defaults.", e);
-                    }
+            Ok(contents) => match ron::from_str::<SunSettings>(&contents) {
+                Ok(s) => {
+                    self.show_sun = s.show_sun;
+                    self.sun_color = s.sun_color;
+                    self.sun_angular_radius = s.sun_angular_radius;
+                    self.sun_intensity = s.sun_intensity;
                 }
-            }
+                Err(e) => {
+                    log::warn!("Failed to parse sun settings: {}. Using defaults.", e);
+                }
+            },
             Err(e) => {
                 log::warn!("Failed to read sun settings: {}. Using defaults.", e);
             }
@@ -1883,7 +2219,7 @@ impl<'a> PanelContext<'a> {
             false
         }
     }
-    
+
     /// Get the current simulation speed (time_scale).
     pub fn simulation_speed(&self) -> f32 {
         if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
@@ -1892,7 +2228,7 @@ impl<'a> PanelContext<'a> {
             1.0
         }
     }
-    
+
     /// Set the simulation speed (time_scale).
     pub fn set_simulation_speed(&mut self, speed: f32) {
         *self.scene_request = SceneModeRequest::SetSpeed(speed);
@@ -1902,7 +2238,7 @@ impl<'a> PanelContext<'a> {
     pub fn cell_count(&self) -> usize {
         self.scene_manager.active_scene().cell_count()
     }
-    
+
     /// Get the GPU cell count buffer (GPU-only, no CPU readback).
     /// Returns None if not in GPU mode.
     /// Note: This returns the canonical state cell count as the GPU scene
@@ -1910,7 +2246,7 @@ impl<'a> PanelContext<'a> {
     pub fn gpu_cell_count(&self) -> Option<u32> {
         self.scene_manager.gpu_scene().map(|s| s.current_cell_count)
     }
-    
+
     /// Get the GPU scene capacity.
     /// Returns None if not in GPU mode.
     pub fn gpu_capacity(&self) -> Option<u32> {
@@ -1926,7 +2262,7 @@ impl<'a> PanelContext<'a> {
     pub fn is_paused(&self) -> bool {
         self.scene_manager.active_scene().is_paused()
     }
-    
+
     /// Check if GPU cell extraction is currently in progress
     pub fn is_gpu_cell_extraction_in_progress(&self) -> bool {
         if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
@@ -1935,9 +2271,11 @@ impl<'a> PanelContext<'a> {
             false
         }
     }
-    
+
     /// Get the latest GPU cell extraction result
-    pub fn get_latest_gpu_cell_extraction(&self) -> Option<&crate::simulation::gpu_physics::ReadbackResult> {
+    pub fn get_latest_gpu_cell_extraction(
+        &self,
+    ) -> Option<&crate::simulation::gpu_physics::ReadbackResult> {
         if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
             gpu_scene.get_latest_cell_extraction()
         } else {

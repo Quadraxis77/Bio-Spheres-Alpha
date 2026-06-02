@@ -45,7 +45,7 @@ impl ModeNode {
             color: [color.x, color.y, color.z],
         }
     }
-    
+
     pub fn color_vec3(&self) -> glam::Vec3 {
         glam::Vec3::new(self.color[0], self.color[1], self.color[2])
     }
@@ -105,52 +105,50 @@ impl ModeGraphState {
             node_positions: std::collections::HashMap::new(),
         }
     }
-    
+
     /// Update node positions and clean up slots for nodes that have moved away or been removed
     pub fn update_node_positions(&mut self, ui: &egui::Ui) {
         const START_X: f32 = 50.0;
         const POSITION_TOLERANCE: f32 = 60.0;
-        
+
         // Use egui's memory to store and retrieve node positions across frames
         let ctx = ui.ctx();
-        
+
         // Check each node's position
         for (node_id, _) in self.snarl.node_ids() {
             // Create a unique ID for storing this node's position
             let pos_id = egui::Id::new("node_pos").with(node_id);
-            
+
             // Try to get the stored position from last frame
             if let Some(last_pos) = ctx.data(|d| d.get_temp::<egui::Pos2>(pos_id)) {
                 // Check if the node has moved away from the initial column
                 let x_distance = (last_pos.x - START_X).abs();
-                
+
                 if x_distance > POSITION_TOLERANCE {
                     // Node has been moved away from initial column, free up its slot
                     self.initial_column_slots.retain(|_, id| *id != node_id);
                 }
-                
+
                 // Update our tracking
                 self.node_positions.insert(node_id, last_pos);
             }
         }
-        
+
         // Clean up slots for nodes that no longer exist (removed nodes)
-        self.initial_column_slots.retain(|_, node_id| {
-            self.snarl.node_ids().any(|(id, _)| id == *node_id)
-        });
-        
+        self.initial_column_slots
+            .retain(|_, node_id| self.snarl.node_ids().any(|(id, _)| id == *node_id));
+
         // Clean up positions for nodes that no longer exist
-        self.node_positions.retain(|node_id, _| {
-            self.snarl.node_ids().any(|(id, _)| id == *node_id)
-        });
+        self.node_positions
+            .retain(|node_id, _| self.snarl.node_ids().any(|(id, _)| id == *node_id));
     }
-    
+
     /// Get the next position for a new node, reusing slots where nodes have been moved away
     pub fn next_node_position(&mut self) -> egui::Pos2 {
         const NODE_SPACING: f32 = 120.0;
         const START_X: f32 = 50.0;
         const START_Y: f32 = 50.0;
-        
+
         // Find the first available slot
         for slot in 0..100 {
             if !self.initial_column_slots.contains_key(&slot) {
@@ -159,24 +157,24 @@ impl ModeGraphState {
                 return egui::pos2(START_X, START_Y + (slot as f32 * NODE_SPACING));
             }
         }
-        
+
         // Fallback: use next position after all slots
         let y = START_Y + (self.node_add_count as f32 * NODE_SPACING);
         self.node_add_count += 1;
         egui::pos2(START_X, y)
     }
-    
+
     /// Record that a node occupies a specific slot
     pub fn record_node_in_slot(&mut self, node_id: NodeId, pos: egui::Pos2) {
         const NODE_SPACING: f32 = 120.0;
         const START_Y: f32 = 50.0;
-        
+
         // Calculate which slot this position corresponds to
         let slot = ((pos.y - START_Y) / NODE_SPACING).round() as i32;
         if slot >= 0 {
             self.initial_column_slots.insert(slot as usize, node_id);
         }
-        
+
         // Also record the position
         self.node_positions.insert(node_id, pos);
     }
@@ -285,32 +283,27 @@ impl<'a> SnarlViewer<ModeNode> for ModeGraphViewer<'a> {
         }
     }
 
-    fn connect(
-        &mut self,
-        from: &OutPin,
-        to: &InPin,
-        snarl: &mut Snarl<ModeNode>,
-    ) {
+    fn connect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<ModeNode>) {
         // Check if this output pin (Child A or Child B) already has a connection
         // Each output pin can only have one connection
         let from_pin_id = from.id;
-        
+
         // Get existing connections from this output pin
         let existing_remotes: Vec<_> = snarl.out_pin(from_pin_id).remotes.iter().copied().collect();
-        
+
         // Remove existing connections from this output pin
         for remote_in_pin in existing_remotes {
             snarl.disconnect(from_pin_id, remote_in_pin);
-            
+
             // The child mode will be updated below, so no need to reset here
         }
-        
+
         let from_node = &snarl[from.id.node];
         let to_node = &snarl[to.id.node];
-        
+
         let from_mode = from_node.mode_index;
         let to_mode = to_node.mode_index as i32;
-        
+
         // Update the child mode based on which output pin
         match from.id.output {
             0 => {
@@ -333,7 +326,7 @@ impl<'a> SnarlViewer<ModeNode> for ModeGraphViewer<'a> {
     fn disconnect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<ModeNode>) {
         let from_node = &snarl[from.id.node];
         let from_mode = from_node.mode_index;
-        
+
         // Reset child mode to self when disconnected
         match from.id.output {
             0 => {
@@ -385,15 +378,15 @@ impl<'a> SnarlViewer<ModeNode> for ModeGraphViewer<'a> {
             egui::Color32::GRAY
         };
         let text_color = contrasting_text_color(color);
-        
+
         let title = if node.mode_index < self.mode_names.len() {
             self.mode_names[node.mode_index].clone()
         } else {
             node.name.clone()
         };
-        
+
         ui.label(egui::RichText::new(title).color(text_color).strong());
-        
+
         // Store the node's screen position in egui's memory for next frame comparison
         // We'll use the UI's current cursor position as a proxy for node position
         let pos_id = egui::Id::new("node_pos").with(node_id);
@@ -415,17 +408,17 @@ impl<'a> SnarlViewer<ModeNode> for ModeGraphViewer<'a> {
     ) {
         let node = &snarl[node_id];
         let mode_idx = node.mode_index;
-        
+
         if mode_idx >= self.mode_settings.len() {
             return;
         }
-        
+
         let mode = &self.mode_settings[mode_idx];
         let default = crate::genome::ModeSettings::default();
-        
+
         // Collect changes from default
         let mut changes = Vec::new();
-        
+
         if mode.cell_type != default.cell_type {
             changes.push(format!("Type:{}", mode.cell_type));
         }
@@ -466,7 +459,7 @@ impl<'a> SnarlViewer<ModeNode> for ModeGraphViewer<'a> {
         if (mode.swim_force - default.swim_force).abs() > 0.01 {
             changes.push(format!("Swim:{:.1}", mode.swim_force));
         }
-        
+
         if changes.is_empty() {
             ui.label(egui::RichText::new("(default)").weak().small());
         } else {
@@ -475,7 +468,11 @@ impl<'a> SnarlViewer<ModeNode> for ModeGraphViewer<'a> {
                 ui.label(egui::RichText::new(change).small());
             }
             if changes.len() > 4 {
-                ui.label(egui::RichText::new(format!("+{} more", changes.len() - 4)).weak().small());
+                ui.label(
+                    egui::RichText::new(format!("+{} more", changes.len() - 4))
+                        .weak()
+                        .small(),
+                );
             }
         }
     }

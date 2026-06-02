@@ -24,8 +24,8 @@
 //! The contraction value (0.0 to 1.0) scales the adhesion rest length:
 //! effective_rest_length = rest_length * (1.0 - contraction)
 
-use crate::genome::ModeSettings;
 use super::{CellBehavior, TypeSpecificInstanceData};
+use crate::genome::ModeSettings;
 
 /// Behavior implementation for Myocyte (muscle) cells.
 ///
@@ -58,15 +58,11 @@ mod tests {
     fn myocyte_behavior_returns_empty_data() {
         let behavior = MyocyteBehavior;
         let mode_settings = ModeSettings::default();
-        
+
         let instance_data = behavior.build_instance_data(&mode_settings);
-        
+
         for i in 0..8 {
-            assert_eq!(
-                instance_data.data[i], 0.0,
-                "type_data[{}] should be 0.0",
-                i
-            );
+            assert_eq!(instance_data.data[i], 0.0, "type_data[{}] should be 0.0", i);
         }
     }
 

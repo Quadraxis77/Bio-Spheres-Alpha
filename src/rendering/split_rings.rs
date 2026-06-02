@@ -15,7 +15,7 @@ const MAX_RINGS: usize = 256;
 /// Renders two colored rings (blue and green) positioned on either side of the split plane
 /// to visualize where a cell will divide.
 pub struct SplitRingRenderer {
-    render_pipeline_blue: wgpu::RenderPipeline,  // Culls back faces
+    render_pipeline_blue: wgpu::RenderPipeline, // Culls back faces
     render_pipeline_green: wgpu::RenderPipeline, // Culls front faces
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -134,30 +134,26 @@ impl SplitRingRenderer {
         // Create bind group layout (camera only)
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Split Ring Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-            ],
+                count: None,
+            }],
         });
 
         // Create bind group
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Split Ring Camera Bind Group"),
             layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
         });
 
         // Create ring geometry
@@ -290,49 +286,50 @@ impl SplitRingRenderer {
             cache: None,
         });
 
-        let render_pipeline_green = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Split Ring Green Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[vertex_buffer_layout, instance_buffer_layout],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Front), // Green ring culls front faces
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-            cache: None,
-        });
+        let render_pipeline_green =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Split Ring Green Pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[vertex_buffer_layout, instance_buffer_layout],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Front), // Green ring culls front faces
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+                cache: None,
+            });
 
         Self {
             render_pipeline_blue,
@@ -361,7 +358,8 @@ impl SplitRingRenderer {
 
         for i in 0..segments {
             let angle1 = (2.0 * std::f32::consts::PI * i as f32) / segments as f32;
-            let angle2 = (2.0 * std::f32::consts::PI * ((i + 1) % segments) as f32) / segments as f32;
+            let angle2 =
+                (2.0 * std::f32::consts::PI * ((i + 1) % segments) as f32) / segments as f32;
 
             let cos1 = angle1.cos();
             let sin1 = angle1.sin();
@@ -487,7 +485,11 @@ impl SplitRingRenderer {
             camera_pos: camera_position.to_array(),
             _padding: 0.0,
         };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
+        queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[camera_uniform]),
+        );
 
         // Set shared state
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -496,18 +498,34 @@ impl SplitRingRenderer {
 
         // Render blue rings
         if !self.pending_blue_instances.is_empty() {
-            queue.write_buffer(&self.instance_buffer_blue, 0, bytemuck::cast_slice(&self.pending_blue_instances));
+            queue.write_buffer(
+                &self.instance_buffer_blue,
+                0,
+                bytemuck::cast_slice(&self.pending_blue_instances),
+            );
             render_pass.set_pipeline(&self.render_pipeline_blue);
             render_pass.set_vertex_buffer(1, self.instance_buffer_blue.slice(..));
-            render_pass.draw_indexed(0..self.index_count, 0, 0..self.pending_blue_instances.len() as u32);
+            render_pass.draw_indexed(
+                0..self.index_count,
+                0,
+                0..self.pending_blue_instances.len() as u32,
+            );
         }
 
         // Render green rings
         if !self.pending_green_instances.is_empty() {
-            queue.write_buffer(&self.instance_buffer_green, 0, bytemuck::cast_slice(&self.pending_green_instances));
+            queue.write_buffer(
+                &self.instance_buffer_green,
+                0,
+                bytemuck::cast_slice(&self.pending_green_instances),
+            );
             render_pass.set_pipeline(&self.render_pipeline_green);
             render_pass.set_vertex_buffer(1, self.instance_buffer_green.slice(..));
-            render_pass.draw_indexed(0..self.index_count, 0, 0..self.pending_green_instances.len() as u32);
+            render_pass.draw_indexed(
+                0..self.index_count,
+                0,
+                0..self.pending_green_instances.len() as u32,
+            );
         }
     }
 

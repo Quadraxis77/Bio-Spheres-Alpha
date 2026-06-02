@@ -1,5 +1,5 @@
 //! Simulation module - GPU physics pipeline
-//! 
+//!
 //! Contains the core simulation state and GPU compute physics.
 
 pub mod adhesion_inheritance;
@@ -13,7 +13,7 @@ pub mod spatial_grid;
 
 pub use adhesion_inheritance::inherit_adhesions_on_division;
 pub use canonical_state::CanonicalState;
+pub use gpu_physics::*;
 pub use physics_config::PhysicsConfig;
 pub use signal_system::*;
 pub use spatial_grid::DeterministicSpatialGrid;
-pub use gpu_physics::*;

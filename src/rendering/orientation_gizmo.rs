@@ -140,12 +140,10 @@ impl OrientationGizmoRenderer {
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Gizmo Bind Group"),
             layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
         });
 
         // Create gizmo geometry (3 axis lines)
@@ -166,7 +164,9 @@ impl OrientationGizmoRenderer {
         // Load shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Gizmo Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/orientation_gizmo.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/orientation_gizmo.wgsl").into(),
+            ),
         });
 
         // Create pipeline layout
@@ -335,18 +335,13 @@ impl OrientationGizmoRenderer {
     }
 
     /// Queue a gizmo for rendering
-    pub fn queue_gizmo(
-        &mut self,
-        cell_position: Vec3,
-        cell_rotation: Quat,
-        cell_radius: f32,
-    ) {
+    pub fn queue_gizmo(&mut self, cell_position: Vec3, cell_rotation: Quat, cell_radius: f32) {
         if !self.config.visible || self.pending_instances.len() >= MAX_GIZMOS {
             return;
         }
 
-        let transform = Mat4::from_translation(cell_position) 
-            * Mat4::from_quat(cell_rotation) 
+        let transform = Mat4::from_translation(cell_position)
+            * Mat4::from_quat(cell_rotation)
             * Mat4::from_scale(Vec3::splat(cell_radius));
 
         self.pending_instances.push(GizmoInstance {
@@ -373,10 +368,18 @@ impl OrientationGizmoRenderer {
             camera_pos: camera_position.to_array(),
             _padding: 0.0,
         };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
+        queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[camera_uniform]),
+        );
 
         // Update instance buffer
-        queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.pending_instances));
+        queue.write_buffer(
+            &self.instance_buffer,
+            0,
+            bytemuck::cast_slice(&self.pending_instances),
+        );
 
         render_pass.set_pipeline(&self.render_pipeline);
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);

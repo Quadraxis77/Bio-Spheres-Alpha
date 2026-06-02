@@ -5,8 +5,8 @@
 //! the GPU detects the event and the CPU performs genome crossover to produce
 //! a hybrid offspring organism. Both parent Gametocytes die upon merging.
 
-use crate::genome::ModeSettings;
 use super::{CellBehavior, TypeSpecificInstanceData};
+use crate::genome::ModeSettings;
 
 /// Behavior implementation for Gametocyte cells.
 ///

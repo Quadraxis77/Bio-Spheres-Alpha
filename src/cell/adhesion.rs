@@ -1,4 +1,4 @@
-use glam::{Vec3, Quat};
+use glam::{Quat, Vec3};
 
 /// Maximum adhesions per cell
 pub const MAX_ADHESIONS_PER_CELL: usize = 20;
@@ -30,12 +30,12 @@ pub struct AdhesionConnections {
     pub zone_a: Vec<u8>,
     /// Zone classification for cell B
     pub zone_b: Vec<u8>,
-    
+
     /// Anchor direction for cell A (local space, normalized)
     pub anchor_direction_a: Vec<Vec3>,
     /// Anchor direction for cell B (local space, normalized)
     pub anchor_direction_b: Vec<Vec3>,
-    
+
     /// Twist reference quaternion for cell A
     pub twist_reference_a: Vec<Quat>,
     /// Twist reference quaternion for cell B

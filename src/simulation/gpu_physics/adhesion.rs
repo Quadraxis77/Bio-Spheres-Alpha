@@ -44,34 +44,34 @@ pub const MAX_ADHESION_CONNECTIONS: u32 = 500_000;
 #[derive(Copy, Clone, Debug, Pod, Zeroable, Serialize, Deserialize)]
 pub struct GpuAdhesionConnection {
     /// Index of first cell in the connection
-    pub cell_a_index: u32,          // offset 0
+    pub cell_a_index: u32, // offset 0
     /// Index of second cell in the connection
-    pub cell_b_index: u32,          // offset 4
+    pub cell_b_index: u32, // offset 4
     /// Mode index for adhesion settings lookup
-    pub mode_index: u32,            // offset 8
+    pub mode_index: u32, // offset 8
     /// Whether this connection is active (1 = active, 0 = inactive)
-    pub is_active: u32,             // offset 12
+    pub is_active: u32, // offset 12
     /// Zone classification for cell A (0=ZoneA, 1=ZoneB, 2=ZoneC)
-    pub zone_a: u32,                // offset 16
+    pub zone_a: u32, // offset 16
     /// Zone classification for cell B (0=ZoneA, 1=ZoneB, 2=ZoneC)
-    pub zone_b: u32,                // offset 20
+    pub zone_b: u32, // offset 20
     /// Bond origin flags: bit 0 = created by glueocyte cell-adhesion (vs division/inheritance)
-    pub bond_flags: u32,            // offset 24
+    pub bond_flags: u32, // offset 24
     /// Padding to align anchor_direction_a to 16 bytes
-    pub _align_pad: u32,            // offset 28
+    pub _align_pad: u32, // offset 28
     /// Anchor direction for cell A in local cell space (xyz = direction, w = padding)
-    pub anchor_direction_a: [f32; 4],  // offset 32-47 (16 bytes)
+    pub anchor_direction_a: [f32; 4], // offset 32-47 (16 bytes)
     /// Anchor direction for cell B in local cell space (xyz = direction, w = padding)
-    pub anchor_direction_b: [f32; 4],  // offset 48-63 (16 bytes)
+    pub anchor_direction_b: [f32; 4], // offset 48-63 (16 bytes)
     /// Reference quaternion for twist constraint for cell A (x, y, z, w)
-    pub twist_reference_a: [f32; 4],   // offset 64-79 (16 bytes)
+    pub twist_reference_a: [f32; 4], // offset 64-79 (16 bytes)
     /// Reference quaternion for twist constraint for cell B (x, y, z, w)
-    pub twist_reference_b: [f32; 4],   // offset 80-95 (16 bytes)
+    pub twist_reference_b: [f32; 4], // offset 80-95 (16 bytes)
     /// Simulation time when this bond was created (for break grace period)
-    pub birth_time: f32,            // offset 96-99 (4 bytes)
+    pub birth_time: f32, // offset 96-99 (4 bytes)
     /// Padding to 104 bytes
-    pub _padding: u32,              // offset 100-103 (4 bytes)
-}                                   // total: 104 bytes
+    pub _padding: u32, // offset 100-103 (4 bytes)
+} // total: 104 bytes
 
 // Verify size at compile time
 const _: () = assert!(std::mem::size_of::<GpuAdhesionConnection>() == 104);
@@ -113,8 +113,8 @@ impl GpuAdhesionConnection {
             cell_b_index,
             mode_index,
             is_active: 1,
-            zone_a: 1, // Zone B (positive split direction)
-            zone_b: 0, // Zone A (negative split direction)
+            zone_a: 1,     // Zone B (positive split direction)
+            zone_b: 0,     // Zone A (negative split direction)
             bond_flags: 0, // division bond - not glueocyte-created
             _align_pad: 0,
             anchor_direction_a: [anchor_a.x, anchor_a.y, anchor_a.z, 0.0],
@@ -207,12 +207,16 @@ pub enum AdhesionZone {
 
 impl AdhesionZone {
     /// Classify a bond direction into zones based on angle from split direction
-    /// 
+    ///
     /// # Arguments
     /// * `bond_dir_local` - Bond direction in local cell space (normalized)
     /// * `split_dir_local` - Split direction in local cell space (normalized)
     /// * `inheritance_angle_deg` - Half-width of equatorial zone in degrees
-    pub fn classify(bond_dir_local: glam::Vec3, split_dir_local: glam::Vec3, inheritance_angle_deg: f32) -> Self {
+    pub fn classify(
+        bond_dir_local: glam::Vec3,
+        split_dir_local: glam::Vec3,
+        inheritance_angle_deg: f32,
+    ) -> Self {
         let dot = bond_dir_local.dot(split_dir_local);
         let angle = dot.clamp(-1.0, 1.0).acos().to_degrees();
         let half_width = inheritance_angle_deg;

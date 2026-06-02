@@ -102,14 +102,18 @@ impl MainMenuScene {
         left_preview.camera.target_distance = ORBIT_DISTANCE;
         left_preview.update_genome(&left_genome);
         // Disable gizmos and split rings - not appropriate for the menu backdrop
-        left_preview.gizmo_renderer.update_config(&crate::rendering::orientation_gizmo::GizmoConfig {
-            visible: false,
-            ..Default::default()
-        });
-        left_preview.split_ring_renderer.update_config(&crate::rendering::split_rings::SplitRingConfig {
-            visible: false,
-            ..Default::default()
-        });
+        left_preview.gizmo_renderer.update_config(
+            &crate::rendering::orientation_gizmo::GizmoConfig {
+                visible: false,
+                ..Default::default()
+            },
+        );
+        left_preview.split_ring_renderer.update_config(
+            &crate::rendering::split_rings::SplitRingConfig {
+                visible: false,
+                ..Default::default()
+            },
+        );
 
         // Right preview - load a different saved genome (counter+1 ensures a different pick)
         let right_genome = Genome::load_from_genomes_dir_at(counter + 1)
@@ -123,14 +127,18 @@ impl MainMenuScene {
         right_preview.camera.target_distance = ORBIT_DISTANCE;
         right_preview.update_genome(&right_genome);
         // Disable gizmos and split rings - not appropriate for the menu backdrop
-        right_preview.gizmo_renderer.update_config(&crate::rendering::orientation_gizmo::GizmoConfig {
-            visible: false,
-            ..Default::default()
-        });
-        right_preview.split_ring_renderer.update_config(&crate::rendering::split_rings::SplitRingConfig {
-            visible: false,
-            ..Default::default()
-        });
+        right_preview.gizmo_renderer.update_config(
+            &crate::rendering::orientation_gizmo::GizmoConfig {
+                visible: false,
+                ..Default::default()
+            },
+        );
+        right_preview.split_ring_renderer.update_config(
+            &crate::rendering::split_rings::SplitRingConfig {
+                visible: false,
+                ..Default::default()
+            },
+        );
 
         // Off-screen render targets
         let (left_color_tex, right_color_tex) =
@@ -180,11 +188,15 @@ impl MainMenuScene {
         // Advance simulations forward by dt - no seeking, no checkpoints.
         let left_genome = self.left_preview.genome.clone();
         let left_config = self.left_preview.config.clone();
-        self.left_preview.state.step_forward(dt, &left_genome, &left_config);
+        self.left_preview
+            .state
+            .step_forward(dt, &left_genome, &left_config);
 
         let right_genome = self.right_preview.genome.clone();
         let right_config = self.right_preview.config.clone();
-        self.right_preview.state.step_forward(dt, &right_genome, &right_config);
+        self.right_preview
+            .state
+            .step_forward(dt, &right_genome, &right_config);
 
         // Run one incremental resimulation chunk each frame.
         self.left_preview.update(dt);
@@ -199,9 +211,12 @@ impl MainMenuScene {
         queue: &wgpu::Queue,
         cell_type_visuals: Option<&[CellTypeVisuals]>,
     ) {
-        let left_view = self.left_color_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let right_view =
-            self.right_color_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let left_view = self
+            .left_color_tex
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let right_view = self
+            .right_color_tex
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         // Render each preview into its off-screen texture.
         // lod_scale_factor must match the editor default (500.0) so that cells at the
@@ -266,9 +281,12 @@ impl MainMenuScene {
         self.right_color_tex = right_tex;
 
         // Rebind new texture views
-        let left_view = self.left_color_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let right_view =
-            self.right_color_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let left_view = self
+            .left_color_tex
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let right_view = self
+            .right_color_tex
+            .create_view(&wgpu::TextureViewDescriptor::default());
         egui_renderer.update_egui_texture_from_wgpu_texture(
             device,
             &left_view,
@@ -291,12 +309,15 @@ impl MainMenuScene {
         width: u32,
         height: u32,
     ) -> (wgpu::Texture, wgpu::Texture) {
-        let usage =
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
 
         let desc = wgpu::TextureDescriptor {
             label: Some("menu_left_tex"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,

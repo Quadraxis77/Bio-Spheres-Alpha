@@ -1,9 +1,9 @@
 //! Deterministic Spatial Grid for Collision Detection
-//! 
+//!
 //! This spatial partitioning system divides 3D space into a uniform grid to accelerate
 //! collision detection. Used by preview scene for CPU-based physics.
 
-use glam::{Vec3, IVec3, UVec3};
+use glam::{IVec3, UVec3, Vec3};
 use std::collections::HashMap;
 
 /// Deterministic spatial grid using fixed-size arrays and prefix-sum algorithm
@@ -35,8 +35,13 @@ impl DeterministicSpatialGrid {
     pub fn new(grid_dim: u32, world_size: f32, sphere_radius: f32) -> Self {
         Self::with_capacity(grid_dim, world_size, sphere_radius, 10_000)
     }
-    
-    pub fn with_capacity(grid_dim: u32, world_size: f32, sphere_radius: f32, max_cells: usize) -> Self {
+
+    pub fn with_capacity(
+        grid_dim: u32,
+        world_size: f32,
+        sphere_radius: f32,
+        max_cells: usize,
+    ) -> Self {
         let grid_dimensions = UVec3::splat(grid_dim);
         let cell_size = world_size / grid_dim as f32;
 

@@ -4,7 +4,7 @@
 //! Each connection half is a camera-facing quad with zone colors in the center
 //! and signal-state colors (black/yellow) as an outline.
 
-use crate::cell::adhesion_zones::{AdhesionZone, get_zone_color};
+use crate::cell::adhesion_zones::{get_zone_color, AdhesionZone};
 use crate::simulation::CanonicalState;
 use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
@@ -98,7 +98,9 @@ impl AdhesionLineRenderer {
         // Load shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Adhesion Line Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/adhesion_line.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/adhesion_line.wgsl").into(),
+            ),
         });
 
         // Create pipeline layout
@@ -215,18 +217,48 @@ impl AdhesionLineRenderer {
         // Quad corners: left edge = +perp, right edge = -perp
         let v0 = start + perp * hw; // start, left  (edge=+1)
         let v1 = start - perp * hw; // start, right (edge=-1)
-        let v2 = end + perp * hw;   // end, left    (edge=+1)
-        let v3 = end - perp * hw;   // end, right   (edge=-1)
+        let v2 = end + perp * hw; // end, left    (edge=+1)
+        let v3 = end - perp * hw; // end, right   (edge=-1)
 
         // Triangle 1: v0, v1, v2
-        vertices.push(LineVertex { position: v0.to_array(), zone_color, signal_color, edge_factor: 1.0 });
-        vertices.push(LineVertex { position: v1.to_array(), zone_color, signal_color, edge_factor: -1.0 });
-        vertices.push(LineVertex { position: v2.to_array(), zone_color, signal_color, edge_factor: 1.0 });
+        vertices.push(LineVertex {
+            position: v0.to_array(),
+            zone_color,
+            signal_color,
+            edge_factor: 1.0,
+        });
+        vertices.push(LineVertex {
+            position: v1.to_array(),
+            zone_color,
+            signal_color,
+            edge_factor: -1.0,
+        });
+        vertices.push(LineVertex {
+            position: v2.to_array(),
+            zone_color,
+            signal_color,
+            edge_factor: 1.0,
+        });
 
         // Triangle 2: v1, v3, v2
-        vertices.push(LineVertex { position: v1.to_array(), zone_color, signal_color, edge_factor: -1.0 });
-        vertices.push(LineVertex { position: v3.to_array(), zone_color, signal_color, edge_factor: -1.0 });
-        vertices.push(LineVertex { position: v2.to_array(), zone_color, signal_color, edge_factor: 1.0 });
+        vertices.push(LineVertex {
+            position: v1.to_array(),
+            zone_color,
+            signal_color,
+            edge_factor: -1.0,
+        });
+        vertices.push(LineVertex {
+            position: v3.to_array(),
+            zone_color,
+            signal_color,
+            edge_factor: -1.0,
+        });
+        vertices.push(LineVertex {
+            position: v2.to_array(),
+            zone_color,
+            signal_color,
+            edge_factor: 1.0,
+        });
     }
 
     /// Render adhesion lines within an existing render pass
@@ -317,10 +349,24 @@ impl AdhesionLineRenderer {
             }
 
             // Half-segment 1: Cell A -> Midpoint (zone A color)
-            Self::push_quad(&mut vertices, pos_a, midpoint, perp, zone_color_a, signal_color);
+            Self::push_quad(
+                &mut vertices,
+                pos_a,
+                midpoint,
+                perp,
+                zone_color_a,
+                signal_color,
+            );
 
             // Half-segment 2: Midpoint -> Cell B (zone B color)
-            Self::push_quad(&mut vertices, midpoint, pos_b, perp, zone_color_b, signal_color);
+            Self::push_quad(
+                &mut vertices,
+                midpoint,
+                pos_b,
+                perp,
+                zone_color_b,
+                signal_color,
+            );
         }
 
         // Update vertex buffer and render

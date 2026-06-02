@@ -19,35 +19,35 @@ pub const VERTICES_PER_BOULDER: u32 = 240;
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct CameraUniform {
-    view_proj:            [[f32; 4]; 4],
-    camera_pos:           [f32; 3],
-    time:                 f32,
-    lod_scale_factor:     f32,
-    lod_threshold_low:    f32,
+    view_proj: [[f32; 4]; 4],
+    camera_pos: [f32; 3],
+    time: f32,
+    lod_scale_factor: f32,
+    lod_threshold_low: f32,
     lod_threshold_medium: f32,
-    lod_threshold_high:   f32,
+    lod_threshold_high: f32,
 }
 
 /// Lighting uniform matching the cell renderer layout.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct LightingUniform {
-    light_dir:     [f32; 3],
-    ambient:       f32,
-    light_color:   [f32; 3],
+    light_dir: [f32; 3],
+    ambient: f32,
+    light_color: [f32; 3],
     outline_width: f32,
 }
 
 pub struct BoulderRenderer {
-    pipeline:          wgpu::RenderPipeline,
-    camera_buffer:     wgpu::Buffer,
-    lighting_buffer:   wgpu::Buffer,
+    pipeline: wgpu::RenderPipeline,
+    camera_buffer: wgpu::Buffer,
+    lighting_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     /// Bind group for boulder storage buffers (group 1).
     /// Rebuilt when boulder system is initialized.
     pub boulder_bind_group: Option<wgpu::BindGroup>,
     boulder_bind_group_layout: wgpu::BindGroupLayout,
-    pub width:  u32,
+    pub width: u32,
     pub height: u32,
 }
 
@@ -98,13 +98,12 @@ impl BoulderRenderer {
             },
             count: None,
         };
-        let boulder_bind_group_layout = device.create_bind_group_layout(
-            &wgpu::BindGroupLayoutDescriptor {
+        let boulder_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Boulder Storage BGL"),
                 // state(ro), count(ro)
                 entries: &[ro(0), ro(1)],
-            },
-        );
+            });
 
         // -- Buffers -----------------------------------------------------------
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -122,9 +121,9 @@ impl BoulderRenderer {
         });
 
         let default_lighting = LightingUniform {
-            light_dir:     [-0.5, -0.7, -0.5],
-            ambient:       0.15,
-            light_color:   [1.0, 0.98, 0.95],
+            light_dir: [-0.5, -0.7, -0.5],
+            ambient: 0.15,
+            light_color: [1.0, 0.98, 0.95],
             outline_width: 0.0,
         };
         queue.write_buffer(&lighting_buffer, 0, bytemuck::bytes_of(&default_lighting));
@@ -133,8 +132,14 @@ impl BoulderRenderer {
             label: Some("Boulder Camera BG"),
             layout: &camera_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: camera_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: lighting_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: lighting_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -215,8 +220,14 @@ impl BoulderRenderer {
             label: Some("Boulder Storage BG"),
             layout: &self.boulder_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: buffers.boulder_state.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: buffers.boulder_count.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.boulder_state.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.boulder_count.as_entire_binding(),
+                },
             ],
         })
     }
@@ -228,9 +239,9 @@ impl BoulderRenderer {
 
     pub fn set_light_dir(&self, queue: &wgpu::Queue, dir: [f32; 3]) {
         let lighting = LightingUniform {
-            light_dir:     dir,
-            ambient:       0.15,
-            light_color:   [1.0, 0.98, 0.95],
+            light_dir: dir,
+            ambient: 0.15,
+            light_color: [1.0, 0.98, 0.95],
             outline_width: 0.0,
         };
         queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting));
@@ -265,13 +276,13 @@ impl BoulderRenderer {
         let view_proj = proj * view;
 
         let camera_uniform = CameraUniform {
-            view_proj:            view_proj.to_cols_array_2d(),
-            camera_pos:           camera_pos.to_array(),
-            time:                 current_time,
-            lod_scale_factor:     1.0,
-            lod_threshold_low:    0.0,
+            view_proj: view_proj.to_cols_array_2d(),
+            camera_pos: camera_pos.to_array(),
+            time: current_time,
+            lod_scale_factor: 1.0,
+            lod_threshold_low: 0.0,
             lod_threshold_medium: 0.0,
-            lod_threshold_high:   0.0,
+            lod_threshold_high: 0.0,
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
 

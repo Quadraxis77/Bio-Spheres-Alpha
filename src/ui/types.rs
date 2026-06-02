@@ -52,31 +52,31 @@ impl UiTheme {
 
     pub fn display_name(self) -> &'static str {
         match self {
-            UiTheme::BiotechDark     => "Biotech Dark",
-            UiTheme::Arctic          => "Arctic",
-            UiTheme::Parchment       => "Parchment",
-            UiTheme::Blossom         => "Blossom",
-            UiTheme::Crimson         => "Crimson",
-            UiTheme::NeonSynthwave   => "Neon Synthwave",
-            UiTheme::NeonToxic       => "Neon Toxic",
+            UiTheme::BiotechDark => "Biotech Dark",
+            UiTheme::Arctic => "Arctic",
+            UiTheme::Parchment => "Parchment",
+            UiTheme::Blossom => "Blossom",
+            UiTheme::Crimson => "Crimson",
+            UiTheme::NeonSynthwave => "Neon Synthwave",
+            UiTheme::NeonToxic => "Neon Toxic",
             UiTheme::NeonUltraviolet => "Neon Ultraviolet",
-            UiTheme::HighContrast    => "High Contrast",
-            UiTheme::Custom          => "Custom",
+            UiTheme::HighContrast => "High Contrast",
+            UiTheme::Custom => "Custom",
         }
     }
 
     pub fn accent_color(self) -> egui::Color32 {
         match self {
-            UiTheme::BiotechDark     => egui::Color32::from_rgb(0,   200, 160),
-            UiTheme::Arctic          => egui::Color32::from_rgb(30,  120, 220),
-            UiTheme::Parchment       => egui::Color32::from_rgb(180,  80,  30),
-            UiTheme::Blossom         => egui::Color32::from_rgb(210,  90, 150),
-            UiTheme::Crimson         => egui::Color32::from_rgb(210, 165,  40),
-            UiTheme::NeonSynthwave   => egui::Color32::from_rgb(255,  30, 180),
-            UiTheme::NeonToxic       => egui::Color32::from_rgb( 50, 255,  50),
-            UiTheme::NeonUltraviolet => egui::Color32::from_rgb(180,  30, 255),
-            UiTheme::HighContrast    => egui::Color32::from_rgb(255, 255, 255),
-            UiTheme::Custom          => egui::Color32::from_rgb(200, 200, 200),
+            UiTheme::BiotechDark => egui::Color32::from_rgb(0, 200, 160),
+            UiTheme::Arctic => egui::Color32::from_rgb(30, 120, 220),
+            UiTheme::Parchment => egui::Color32::from_rgb(180, 80, 30),
+            UiTheme::Blossom => egui::Color32::from_rgb(210, 90, 150),
+            UiTheme::Crimson => egui::Color32::from_rgb(210, 165, 40),
+            UiTheme::NeonSynthwave => egui::Color32::from_rgb(255, 30, 180),
+            UiTheme::NeonToxic => egui::Color32::from_rgb(50, 255, 50),
+            UiTheme::NeonUltraviolet => egui::Color32::from_rgb(180, 30, 255),
+            UiTheme::HighContrast => egui::Color32::from_rgb(255, 255, 255),
+            UiTheme::Custom => egui::Color32::from_rgb(200, 200, 200),
         }
     }
 }
@@ -98,55 +98,55 @@ impl ThemeColor {
 /// Matches the 20 fields extracted from `apply_theme` (excludes derived rail_icon fields).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomThemePalette {
-    pub bg_darkest:       ThemeColor,
-    pub bg_panel:         ThemeColor,
-    pub bg_widget:        ThemeColor,
-    pub bg_hover:         ThemeColor,
-    pub bg_active:        ThemeColor,
-    pub bg_selected:      ThemeColor,
-    pub accent_primary:   ThemeColor,
+    pub bg_darkest: ThemeColor,
+    pub bg_panel: ThemeColor,
+    pub bg_widget: ThemeColor,
+    pub bg_hover: ThemeColor,
+    pub bg_active: ThemeColor,
+    pub bg_selected: ThemeColor,
+    pub accent_primary: ThemeColor,
     pub accent_secondary: ThemeColor,
-    pub text_primary:     ThemeColor,
-    pub text_secondary:   ThemeColor,
-    pub text_dim:         ThemeColor,
-    pub border_subtle:    ThemeColor,
-    pub border_normal:    ThemeColor,
-    pub border_bright:    ThemeColor,
-    pub topbar_bg:        ThemeColor,
-    pub topbar_border:    ThemeColor,
-    pub status_ok:        ThemeColor,
-    pub status_warn:      ThemeColor,
-    pub status_err:       ThemeColor,
-    pub status_info:      ThemeColor,
+    pub text_primary: ThemeColor,
+    pub text_secondary: ThemeColor,
+    pub text_dim: ThemeColor,
+    pub border_subtle: ThemeColor,
+    pub border_normal: ThemeColor,
+    pub border_bright: ThemeColor,
+    pub topbar_bg: ThemeColor,
+    pub topbar_border: ThemeColor,
+    pub status_ok: ThemeColor,
+    pub status_warn: ThemeColor,
+    pub status_err: ThemeColor,
+    pub status_info: ThemeColor,
     /// Whether to use dark_mode (true) or light_mode (false) for egui internals.
-    pub dark_mode:        bool,
+    pub dark_mode: bool,
 }
 
 impl Default for CustomThemePalette {
     fn default() -> Self {
         // Starts as a copy of BiotechDark so the user has a sensible starting point.
         Self {
-            bg_darkest:       ThemeColor([  6,   9,  18]),
-            bg_panel:         ThemeColor([ 12,  17,  32]),
-            bg_widget:        ThemeColor([ 22,  30,  52]),
-            bg_hover:         ThemeColor([ 32,  44,  72]),
-            bg_active:        ThemeColor([ 42,  58,  95]),
-            bg_selected:      ThemeColor([ 18,  55,  85]),
-            accent_primary:   ThemeColor([  0, 220, 175]),
-            accent_secondary: ThemeColor([ 60, 195, 240]),
-            text_primary:     ThemeColor([225, 235, 255]),
-            text_secondary:   ThemeColor([155, 175, 210]),
-            text_dim:         ThemeColor([ 80, 100, 145]),
-            border_subtle:    ThemeColor([ 28,  42,  72]),
-            border_normal:    ThemeColor([ 50,  72, 115]),
-            border_bright:    ThemeColor([  0, 180, 140]),
-            topbar_bg:        ThemeColor([  4,   6,  14]),
-            topbar_border:    ThemeColor([  0, 160, 125]),
-            status_ok:        ThemeColor([ 60, 210, 100]),
-            status_warn:      ThemeColor([220, 185,  50]),
-            status_err:       ThemeColor([225,  70,  70]),
-            status_info:      ThemeColor([ 60, 150, 230]),
-            dark_mode:        true,
+            bg_darkest: ThemeColor([6, 9, 18]),
+            bg_panel: ThemeColor([12, 17, 32]),
+            bg_widget: ThemeColor([22, 30, 52]),
+            bg_hover: ThemeColor([32, 44, 72]),
+            bg_active: ThemeColor([42, 58, 95]),
+            bg_selected: ThemeColor([18, 55, 85]),
+            accent_primary: ThemeColor([0, 220, 175]),
+            accent_secondary: ThemeColor([60, 195, 240]),
+            text_primary: ThemeColor([225, 235, 255]),
+            text_secondary: ThemeColor([155, 175, 210]),
+            text_dim: ThemeColor([80, 100, 145]),
+            border_subtle: ThemeColor([28, 42, 72]),
+            border_normal: ThemeColor([50, 72, 115]),
+            border_bright: ThemeColor([0, 180, 140]),
+            topbar_bg: ThemeColor([4, 6, 14]),
+            topbar_border: ThemeColor([0, 160, 125]),
+            status_ok: ThemeColor([60, 210, 100]),
+            status_warn: ThemeColor([220, 185, 50]),
+            status_err: ThemeColor([225, 70, 70]),
+            status_info: ThemeColor([60, 150, 230]),
+            dark_mode: true,
         }
     }
 }
@@ -194,7 +194,6 @@ impl std::fmt::Display for SimulationMode {
         write!(f, "{}", self.display_name())
     }
 }
-
 
 /// Per-scene UI configuration.
 ///
@@ -539,6 +538,43 @@ fn default_true() -> bool {
     true
 }
 
+fn default_headless_target_fps() -> f32 {
+    30.0
+}
+
+fn default_headless_min_speed() -> f32 {
+    0.1
+}
+
+fn default_headless_max_speed() -> f32 {
+    20.0
+}
+
+/// Status shown by the GPU headless auto-speed controller.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum HeadlessAutoStatus {
+    #[default]
+    Off,
+    Increasing,
+    Holding,
+    Reducing,
+    AtMinimum,
+    AtMaximum,
+}
+
+impl HeadlessAutoStatus {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            HeadlessAutoStatus::Off => "Manual",
+            HeadlessAutoStatus::Increasing => "Increasing speed",
+            HeadlessAutoStatus::Holding => "Holding steady",
+            HeadlessAutoStatus::Reducing => "Reducing speed",
+            HeadlessAutoStatus::AtMinimum => "At minimum speed",
+            HeadlessAutoStatus::AtMaximum => "At maximum speed",
+        }
+    }
+}
+
 fn default_gravity_mode() -> u32 {
     1 // Y axis
 }
@@ -559,7 +595,6 @@ fn default_solo_metabolism_multiplier() -> f32 {
     3.0
 }
 
-
 fn default_organism_grid_resolution() -> u32 {
     128
 }
@@ -568,11 +603,21 @@ fn default_skin_radius_scale() -> f32 {
     1.2
 }
 
-fn default_shrink_speed() -> f32 { 0.25 }
-fn default_smooth_factor() -> f32 { 0.3 }
-fn default_shrink_iters() -> u32 { 8 }
-fn default_smooth_iters() -> u32 { 3 }
-fn default_min_cells_for_skin() -> u32 { 4 }
+fn default_shrink_speed() -> f32 {
+    0.25
+}
+fn default_smooth_factor() -> f32 {
+    0.3
+}
+fn default_shrink_iters() -> u32 {
+    8
+}
+fn default_smooth_iters() -> u32 {
+    3
+}
+fn default_min_cells_for_skin() -> u32 {
+    4
+}
 
 fn default_skin_sss_strength() -> f32 {
     0.5
@@ -662,6 +707,30 @@ pub struct GlobalUiState {
     /// Disabling this can improve performance by avoiding CPU-GPU sync
     #[serde(default = "default_true")]
     pub gpu_readbacks_enabled: bool,
+
+    /// GPU mode no-render performance cockpit. Simulation continues, visual render passes stop.
+    #[serde(default)]
+    pub gpu_headless_mode: bool,
+
+    /// Automatically adjust GPU simulation speed to stay near the target FPS.
+    #[serde(default)]
+    pub gpu_headless_auto_speed: bool,
+
+    /// Target FPS for the GPU headless auto-speed controller.
+    #[serde(default = "default_headless_target_fps")]
+    pub gpu_headless_target_fps: f32,
+
+    /// Lower clamp for automatic GPU simulation speed.
+    #[serde(default = "default_headless_min_speed")]
+    pub gpu_headless_min_speed: f32,
+
+    /// Upper clamp for automatic GPU simulation speed.
+    #[serde(default = "default_headless_max_speed")]
+    pub gpu_headless_max_speed: f32,
+
+    /// Current auto-speed status. Session-only; derived from recent performance.
+    #[serde(skip)]
+    pub gpu_headless_auto_status: HeadlessAutoStatus,
 
     /// Whether to show adhesion lines between cells
     #[serde(default = "default_true")]
@@ -790,6 +859,12 @@ impl Default for GlobalUiState {
             occlusion_enabled: true,
             frustum_enabled: true,
             gpu_readbacks_enabled: true,
+            gpu_headless_mode: false,
+            gpu_headless_auto_speed: false,
+            gpu_headless_target_fps: default_headless_target_fps(),
+            gpu_headless_min_speed: default_headless_min_speed(),
+            gpu_headless_max_speed: default_headless_max_speed(),
+            gpu_headless_auto_status: HeadlessAutoStatus::Off,
             show_adhesion_lines: true,
             world_diameter: 395.0,
             lod_scale_factor: 500.0,
@@ -911,7 +986,7 @@ impl GlobalUiState {
     /// Load UI state from disk, or create default if file doesn't exist.
     pub fn load() -> Self {
         let path = crate::app_dirs::config_file("ui_state.ron");
-        
+
         if path.exists() {
             match Self::load_from_file(&path) {
                 Ok(state) => {
@@ -925,7 +1000,7 @@ impl GlobalUiState {
         } else {
             log::info!("No saved UI state found, using embedded default");
         }
-        
+
         // Try to load from embedded default
         Self::load_embedded_default()
     }
@@ -933,10 +1008,13 @@ impl GlobalUiState {
     /// Load embedded default UI state.
     fn load_embedded_default() -> Self {
         let embedded_content = include_str!("../../default_ui_state.ron");
-        
+
         log::info!("Attempting to load embedded default UI state");
-        log::debug!("Embedded UI state content length: {} characters", embedded_content.len());
-        
+        log::debug!(
+            "Embedded UI state content length: {} characters",
+            embedded_content.len()
+        );
+
         match ron::from_str::<GlobalUiState>(embedded_content) {
             Ok(state) => {
                 log::info!("Successfully loaded embedded default UI state");
@@ -947,7 +1025,10 @@ impl GlobalUiState {
                     "Failed to parse embedded default UI state: {}. Using hardcoded default.",
                     e
                 );
-                log::debug!("Embedded content preview: {}", &embedded_content[..embedded_content.len().min(200)]);
+                log::debug!(
+                    "Embedded content preview: {}",
+                    &embedded_content[..embedded_content.len().min(200)]
+                );
                 Self::default()
             }
         }

@@ -91,6 +91,8 @@ var<storage, read> water_velocity: array<u32>;
 
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const WATER_GRID_X_GROUPS: u32 = 4u;  // 128 / 32 = 4 u32s per row
+const MIN_SAFE_DT: f32 = 0.0001;
+const MAX_CELL_ACCELERATION: f32 = 300.0;
 
 // Convert fixed-point i32 back to float
 fn fixed_to_float(v: i32) -> f32 {
@@ -193,6 +195,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
+    let dt = max(params.delta_time, MIN_SAFE_DT);
     let pos = positions_in[cell_idx].xyz;
     let mass = positions_in[cell_idx].w;
 
@@ -250,8 +253,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Exponential damping per second - stable at any viscosity value.
             // axial_retain   = e^(-viscosity * 8  * dt)
             // lateral_retain = e^(-viscosity * 40 * dt)
-            let axial_retain   = exp(-water_params.water_viscosity * 8.0  * params.delta_time);
-            let lateral_retain = exp(-water_params.water_viscosity * 40.0 * params.delta_time);
+            let axial_retain   = exp(-water_params.water_viscosity * 8.0  * dt);
+            let lateral_retain = exp(-water_params.water_viscosity * 40.0 * dt);
 
             // Reconstruct velocity with per-component damping applied
             let new_vel_axial   = vel_axial   * axial_retain;
@@ -263,40 +266,46 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             //   delta = desired - current
             // Add delta / dt as an extra force (F = m * a = m * delta/dt).
             let vel_delta = (new_vel_axial + new_vel_lateral) - vel;
-            force += vel_delta * (safe_mass / params.delta_time);
+            force += vel_delta * (safe_mass / dt);
         }
     }
 
     // Apply gravity (F = mg) in the selected axis or radially toward origin
-    let gravity_force = params.gravity * mass * gravity_multiplier;
-    if params.gravity_mode == 3u {
-        // Radial: pull toward origin (positive gravity = inward)
-        let r = length(pos);
-        if r > 0.001 {
-            let inward = -(pos / r);
-            force += gravity_force * inward;
+    if abs(params.gravity) > 0.0001 {
+        let gravity_force = params.gravity * mass * gravity_multiplier;
+        if params.gravity_mode == 3u {
+            // Radial: pull toward origin (positive gravity = inward)
+            let r = length(pos);
+            if r > 0.001 {
+                let inward = -(pos / r);
+                force += gravity_force * inward;
+            }
+        } else if params.gravity_mode == 0u {
+            force.x -= gravity_force;
+        } else if params.gravity_mode == 2u {
+            force.z -= gravity_force;
+        } else {
+            force.y -= gravity_force;
         }
-    } else if params.gravity_mode == 0u {
-        force.x -= gravity_force;
-    } else if params.gravity_mode == 2u {
-        force.z -= gravity_force;
-    } else {
-        force.y -= gravity_force;
     }
 
     // Read previous acceleration for Verlet integration
     let old_acceleration = prev_accelerations[cell_idx].xyz;
 
     // Calculate new acceleration from accumulated forces
-    let new_acceleration = force / safe_mass;
+    var new_acceleration = force / safe_mass;
+    let acceleration_speed = length(new_acceleration);
+    if (acceleration_speed > MAX_CELL_ACCELERATION) {
+        new_acceleration = (new_acceleration / acceleration_speed) * MAX_CELL_ACCELERATION;
+    }
     
     // Verlet integration (matching CPU exactly):
     // velocity_change = 0.5 * (old_acceleration + new_acceleration) * dt
-    let velocity_change = 0.5 * (old_acceleration + new_acceleration) * params.delta_time;
+    let velocity_change = 0.5 * (old_acceleration + new_acceleration) * dt;
     
     // Apply velocity damping: damping^dt gives frame-rate-independent damping
     // where acceleration_damping = fraction of velocity retained per second
-    let damping_factor = pow(params.acceleration_damping, params.delta_time);
+    let damping_factor = pow(params.acceleration_damping, dt);
     var new_vel = (vel + velocity_change) * damping_factor;
     
     // Clamp velocity to max 150 units/second (safety cap - matches preview frenzy threshold)
@@ -306,7 +315,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Simple position update
-    let new_pos = pos + new_vel * params.delta_time;
+    let new_pos = pos + new_vel * dt;
     
     // Smooth boundary collision with lerping to prevent teleporting
     let boundary_radius = params.world_size * 0.5;

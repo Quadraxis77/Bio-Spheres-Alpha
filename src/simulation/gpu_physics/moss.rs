@@ -29,7 +29,7 @@ pub struct MossGrowthParams {
     pub world_radius: f32,
     pub water_radius: f32,
     pub wetness_evaporation: f32,
-    pub slice_index: u32,  // unused, kept for struct alignment
+    pub slice_index: u32, // unused, kept for struct alignment
     pub _pad1: f32,
     pub _pad2: f32,
 }
@@ -107,8 +107,7 @@ impl MossSystem {
         let wetness_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Moss Wetness Buffer"),
             size: (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -227,15 +226,14 @@ impl MossSystem {
                 push_constant_ranges: &[],
             });
 
-        let growth_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("Moss Growth Pipeline"),
-                layout: Some(&growth_pipeline_layout),
-                module: &growth_shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
+        let growth_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Moss Growth Pipeline"),
+            layout: Some(&growth_pipeline_layout),
+            module: &growth_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
         // === Consumption pipeline ===
         let consume_physics_layout =
@@ -365,15 +363,14 @@ impl MossSystem {
                 push_constant_ranges: &[],
             });
 
-        let consume_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("Moss Consume Pipeline"),
-                layout: Some(&consume_pipeline_layout),
-                module: &consume_shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
+        let consume_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Moss Consume Pipeline"),
+            layout: Some(&consume_pipeline_layout),
+            module: &consume_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
         Self {
             moss_density_buffer,
@@ -561,7 +558,11 @@ impl MossSystem {
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        queue.write_buffer(&self.growth_params_buffer, 0, bytemuck::cast_slice(&[params]));
+        queue.write_buffer(
+            &self.growth_params_buffer,
+            0,
+            bytemuck::cast_slice(&[params]),
+        );
 
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Moss Growth Pass"),

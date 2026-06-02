@@ -11,8 +11,8 @@
 //! - Responds to physical compression (e.g. from myocytes) with a transport boost,
 //!   enabling myocyte-driven pumping without any explicit signal wiring
 
-use crate::genome::ModeSettings;
 use super::{CellBehavior, TypeSpecificInstanceData};
+use crate::genome::ModeSettings;
 
 /// Behavior implementation for Vasculocyte cells.
 pub struct VasculocyteBehavior;

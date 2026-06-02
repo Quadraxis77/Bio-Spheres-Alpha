@@ -130,10 +130,7 @@ pub struct SunRenderer {
 }
 
 impl SunRenderer {
-    pub fn new(
-        device: &wgpu::Device,
-        surface_format: wgpu::TextureFormat,
-    ) -> Self {
+    pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         // Camera bind group layout (group 0)
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Sun Camera Layout"),
@@ -188,9 +185,7 @@ impl SunRenderer {
         // Create shader module
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Procedural Sun Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/sun.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/sun.wgsl").into()),
         });
 
         // Create pipeline layout
@@ -320,65 +315,65 @@ impl SunRenderer {
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
 
         // Procedural sun settings
-    let corona_radius = 2.0;
-    let corona_intensity = 3.0;
-    let corona_falloff = 5.0;
-    let flare_intensity = 0.0;
-    let flare_ghost_count = 1.0;
-    let flare_ghost_dispersal = 3.0;
-    let flare_halo_radius = 0.05;
-    let ray_intensity = 0.0;
-    let ray_count = 8.0;
-    let ray_falloff = 6.0;
-    let flare_speed = 1.0;
-    let sunspot_scale = 20.0;
-    let starburst_intensity = 1.05;
-    let starburst_points = 6.0;
-    let starburst_falloff = 8.0;
-    let streak_intensity = 1.0;
-    let streak_width = 175.0;
-    let ghost_size = 0.005;
-    let chromatic_aberration = 0.29;
-    let prominence_intensity = 0.0;
-    let glow_intensity = 0.0;
-    let prominence_extent = 0.0;
+        let corona_radius = 2.0;
+        let corona_intensity = 3.0;
+        let corona_falloff = 5.0;
+        let flare_intensity = 0.0;
+        let flare_ghost_count = 1.0;
+        let flare_ghost_dispersal = 3.0;
+        let flare_halo_radius = 0.05;
+        let ray_intensity = 0.0;
+        let ray_count = 8.0;
+        let ray_falloff = 6.0;
+        let flare_speed = 1.0;
+        let sunspot_scale = 20.0;
+        let starburst_intensity = 1.05;
+        let starburst_points = 6.0;
+        let starburst_falloff = 8.0;
+        let streak_intensity = 1.0;
+        let streak_width = 175.0;
+        let ghost_size = 0.005;
+        let chromatic_aberration = 0.29;
+        let prominence_intensity = 0.0;
+        let glow_intensity = 0.0;
+        let prominence_extent = 0.0;
 
-    // Update sun parameters
-    let params = SunParams {
-        light_dir_x: light_dir[0],
-        light_dir_y: light_dir[1],
-        light_dir_z: light_dir[2],
-        sun_angular_radius: self.sun_angular_radius,
-        sun_color_r: self.sun_color[0],
-        sun_color_g: self.sun_color[1],
-        sun_color_b: self.sun_color[2],
-        sun_intensity,
-        corona_radius,
-        corona_intensity,
-        corona_falloff,
-        flare_intensity,
-        flare_ghost_count,
-        flare_ghost_dispersal,
-        flare_halo_radius,
-        ray_intensity,
-        ray_count,
-        ray_falloff,
-        eclipse_factor: 1.0, // Shader computes eclipse from depth
-        screen_width: self.width as f32,
-        screen_height: self.height as f32,
-        flare_speed,
-        sunspot_scale,
-        starburst_intensity,
-        starburst_points,
-        starburst_falloff,
-        streak_intensity,
-        streak_width,
-        ghost_size,
-        chromatic_aberration,
-        prominence_intensity,
-        glow_intensity,
-        prominence_extent,
-    };
+        // Update sun parameters
+        let params = SunParams {
+            light_dir_x: light_dir[0],
+            light_dir_y: light_dir[1],
+            light_dir_z: light_dir[2],
+            sun_angular_radius: self.sun_angular_radius,
+            sun_color_r: self.sun_color[0],
+            sun_color_g: self.sun_color[1],
+            sun_color_b: self.sun_color[2],
+            sun_intensity,
+            corona_radius,
+            corona_intensity,
+            corona_falloff,
+            flare_intensity,
+            flare_ghost_count,
+            flare_ghost_dispersal,
+            flare_halo_radius,
+            ray_intensity,
+            ray_count,
+            ray_falloff,
+            eclipse_factor: 1.0, // Shader computes eclipse from depth
+            screen_width: self.width as f32,
+            screen_height: self.height as f32,
+            flare_speed,
+            sunspot_scale,
+            starburst_intensity,
+            starburst_points,
+            starburst_falloff,
+            streak_intensity,
+            streak_width,
+            ghost_size,
+            chromatic_aberration,
+            prominence_intensity,
+            glow_intensity,
+            prominence_extent,
+        };
         queue.write_buffer(&self.sun_params_buffer, 0, bytemuck::bytes_of(&params));
 
         // Create camera bind group

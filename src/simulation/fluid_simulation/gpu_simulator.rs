@@ -17,13 +17,13 @@ pub struct GpuFluidParams {
     pub grid_resolution: u32,
     pub world_radius: f32,
     pub cell_size: f32,
-    pub direction: u32,  // 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z
+    pub direction: u32, // 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z
 
     // vec3<f32> grid_origin - needs to match WGSL layout exactly
     pub grid_origin_x: f32,
     pub grid_origin_y: f32,
     pub grid_origin_z: f32,
-    pub time: f32,  // Time for wave animations
+    pub time: f32, // Time for wave animations
 
     // Gravity parameters
     pub gravity_magnitude: f32,
@@ -37,11 +37,11 @@ pub struct GpuFluidParams {
     pub lateral_flow_probability_water: f32,
     pub lateral_flow_probability_lava: f32,
     pub lateral_flow_probability_steam: f32,
-    
+
     // Phase change probabilities (0.0 to 1.0)
-    pub condensation_probability: f32,  // Steam to Water
-    pub vaporization_probability: f32,  // Water to Steam
-    
+    pub condensation_probability: f32, // Steam to Water
+    pub vaporization_probability: f32, // Water to Steam
+
     // Fluid type for spawning (0=Empty, 1=Water, 2=Lava, 3=Steam)
     pub spawn_fluid_type: u32,
 
@@ -50,7 +50,7 @@ pub struct GpuFluidParams {
 
     // Gravity mode: 0=X axis, 1=Y axis, 2=Z axis, 3=radial (toward origin)
     pub gravity_mode: u32,
-    pub surface_pressure: f32,  // Tangential smoothing strength for radial mode (0.0-1.0)
+    pub surface_pressure: f32, // Tangential smoothing strength for radial mode (0.0-1.0)
     pub _pad_rg1: u32,
     pub _pad_rg2: u32,
 }
@@ -92,8 +92,8 @@ pub struct WaterGridParams {
     pub grid_origin_x: f32,
     pub grid_origin_y: f32,
     pub grid_origin_z: f32,
-    pub buoyancy_multiplier: f32,  // How strongly to reverse gravity in water (1.0 = full reversal)
-    pub water_viscosity: f32,      // Drag applied to cells moving through water (0.0 = off, 1.0 = heavy drag)
+    pub buoyancy_multiplier: f32, // How strongly to reverse gravity in water (1.0 = full reversal)
+    pub water_viscosity: f32, // Drag applied to cells moving through water (0.0 = off, 1.0 = heavy drag)
     pub _pad1: f32,
 }
 
@@ -129,11 +129,11 @@ pub struct GpuFluidSimulator {
     params_buffer: wgpu::Buffer,
     world_radius: f32,
     world_center: Vec3,
-    time: std::cell::Cell<f32>,  // Time for wave animations (mutable)
+    time: std::cell::Cell<f32>, // Time for wave animations (mutable)
 
     // Continuous spawning control
     continuous_spawn_enabled: std::cell::Cell<bool>,
-    
+
     // Fluid type control (0=Empty, 1=Water, 2=Lava, 3=Steam)
     fluid_type: std::cell::Cell<u32>,
 
@@ -195,7 +195,12 @@ pub struct GpuFluidSimulator {
 }
 
 impl GpuFluidSimulator {
-    pub fn new(device: &wgpu::Device, world_radius: f32, world_center: Vec3, solid_mask_buffer: wgpu::Buffer) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        world_radius: f32,
+        world_center: Vec3,
+        solid_mask_buffer: wgpu::Buffer,
+    ) -> Self {
         let world_diameter = world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = world_center - Vec3::splat(world_diameter / 2.0);
@@ -205,7 +210,9 @@ impl GpuFluidSimulator {
         let state_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Fluid State Buffer"),
             size: buffer_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
@@ -221,15 +228,15 @@ impl GpuFluidSimulator {
             time: 0.0,
             gravity_magnitude: 9.8,
             gravity_dir_x: 0.0,
-            gravity_dir_y: -9.8,  // Default gravity pointing down (-Y)
+            gravity_dir_y: -9.8, // Default gravity pointing down (-Y)
             gravity_dir_z: 0.0,
             lateral_flow_probability_empty: 1.0,
             lateral_flow_probability_water: 0.8,
             lateral_flow_probability_lava: 0.6,
-            lateral_flow_probability_steam: 0.9,  // [Empty, Water, Lava, Steam]
-            condensation_probability: 0.1,  // Default condensation probability
-            vaporization_probability: 0.1,  // Default vaporization probability
-            spawn_fluid_type: 1u32,  // Default to water
+            lateral_flow_probability_steam: 0.9, // [Empty, Water, Lava, Steam]
+            condensation_probability: 0.1,       // Default condensation probability
+            vaporization_probability: 0.1,       // Default vaporization probability
+            spawn_fluid_type: 1u32,              // Default to water
             sub_step: 0,
             gravity_mode: 1, // default Y axis
             surface_pressure: 0.5,
@@ -244,11 +251,12 @@ impl GpuFluidSimulator {
         });
 
         // Pre-create staging buffer with sub-step values [0,1,2,3] for multi-pass dispatch
-        let sub_step_staging_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Sub-step Staging Buffer"),
-            contents: bytemuck::cast_slice(&[0u32, 1u32, 2u32, 3u32]),
-            usage: wgpu::BufferUsages::COPY_SRC,
-        });
+        let sub_step_staging_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Sub-step Staging Buffer"),
+                contents: bytemuck::cast_slice(&[0u32, 1u32, 2u32, 3u32]),
+                usage: wgpu::BufferUsages::COPY_SRC,
+            });
 
         // Create water velocity buffer (128^3 * 4 bytes = ~8MB)
         // Each u32 encodes the last movement direction of water at that voxel
@@ -310,7 +318,9 @@ impl GpuFluidSimulator {
         // Create shader module
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Fluid Sim Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/fluid/fluid_sim.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../shaders/fluid/fluid_sim.wgsl").into(),
+            ),
         });
 
         // Create pipeline layout
@@ -330,23 +340,25 @@ impl GpuFluidSimulator {
             cache: None,
         });
 
-        let init_sphere_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Fluid Init Sphere Pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: Some("fluid_init_sphere"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+        let init_sphere_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Fluid Init Sphere Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("fluid_init_sphere"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
 
-        let spawn_continuous_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Fluid Spawn Continuous Pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: Some("fluid_spawn_continuous"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+        let spawn_continuous_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Fluid Spawn Continuous Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("fluid_spawn_continuous"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
 
         let clear_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Fluid Clear Pipeline"),
@@ -358,72 +370,76 @@ impl GpuFluidSimulator {
         });
 
         // Create extraction bind group layout
-        let extract_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Fluid Extract Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let extract_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Fluid Extract Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
+                ],
+            });
 
-        let extract_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Fluid Extract Pipeline Layout"),
-            bind_group_layouts: &[&extract_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let extract_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Fluid Extract Pipeline Layout"),
+                bind_group_layouts: &[&extract_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
         // Create separate shader module for extraction
         let extract_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Fluid Extract Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/fluid/fluid_extract.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../shaders/fluid/fluid_extract.wgsl").into(),
+            ),
         });
 
         let extract_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -487,65 +503,70 @@ impl GpuFluidSimulator {
             grid_origin_x: grid_origin.x,
             grid_origin_y: grid_origin.y,
             grid_origin_z: grid_origin.z,
-            buoyancy_multiplier: 1.0,  // Full gravity reversal in water
-            water_viscosity: 0.0,  // Default off, set by UI
+            buoyancy_multiplier: 1.0, // Full gravity reversal in water
+            water_viscosity: 0.0,     // Default off, set by UI
             _pad1: 0.0,
         };
 
-        let water_grid_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Water Grid Params Buffer"),
-            contents: bytemuck::cast_slice(&[water_grid_params]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let water_grid_params_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Water Grid Params Buffer"),
+                contents: bytemuck::cast_slice(&[water_grid_params]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
 
         // Bitfield bind group layout
-        let bitfield_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Bitfield Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let bitfield_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Bitfield Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
+                ],
+            });
 
         // Bitfield shader and pipeline
         let bitfield_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Water Bitfield Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/fluid/water_bitfield.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../shaders/fluid/water_bitfield.wgsl").into(),
+            ),
         });
 
-        let bitfield_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Bitfield Pipeline Layout"),
-            bind_group_layouts: &[&bitfield_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let bitfield_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Bitfield Pipeline Layout"),
+                bind_group_layouts: &[&bitfield_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
         let bitfield_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Generate Water Bitfield Pipeline"),
@@ -562,7 +583,9 @@ impl GpuFluidSimulator {
         let nutrient_voxels_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Nutrient Voxels Buffer"),
             size: nutrient_buffer_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
@@ -584,69 +607,75 @@ impl GpuFluidSimulator {
             _pad: [0.0; 3],
         };
 
-        let nutrient_populate_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Nutrient Populate Params Buffer"),
-            contents: bytemuck::cast_slice(&[nutrient_populate_params]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let nutrient_populate_params_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Nutrient Populate Params Buffer"),
+                contents: bytemuck::cast_slice(&[nutrient_populate_params]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
 
         // Nutrient populate bind group layout
-        let nutrient_populate_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Nutrient Populate Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let nutrient_populate_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Nutrient Populate Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
+                ],
+            });
 
         // Nutrient populate shader and pipeline
         let nutrient_populate_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Nutrient Populate Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/nutrient_populate.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../shaders/nutrient_populate.wgsl").into(),
+            ),
         });
 
-        let nutrient_populate_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Nutrient Populate Pipeline Layout"),
-            bind_group_layouts: &[&nutrient_populate_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let nutrient_populate_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Nutrient Populate Pipeline Layout"),
+                bind_group_layouts: &[&nutrient_populate_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
-        let nutrient_populate_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Nutrient Populate Pipeline"),
-            layout: Some(&nutrient_populate_pipeline_layout),
-            module: &nutrient_populate_shader,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+        let nutrient_populate_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Nutrient Populate Pipeline"),
+                layout: Some(&nutrient_populate_pipeline_layout),
+                module: &nutrient_populate_shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
 
         // Pre-create cached bind groups (buffers never change)
         let cached_sim_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -742,7 +771,7 @@ impl GpuFluidSimulator {
             cached_nutrient_bind_group,
             cached_extract_bind_group: std::cell::RefCell::new(None),
             fluid_type: std::cell::Cell::new(1u32), // Default to water
-            gravity_mode: std::cell::Cell::new(1), // default Y axis
+            gravity_mode: std::cell::Cell::new(1),  // default Y axis
             gravity_magnitude: std::cell::Cell::new(9.8), // default gravity
             surface_pressure: std::cell::Cell::new(0.5),
             paused: false,
@@ -776,7 +805,17 @@ impl GpuFluidSimulator {
     }
 
     /// Update params buffer
-    fn update_params(&self, queue: &wgpu::Queue, direction: u32, time: f32, gravity_magnitude: f32, gravity_dir: [bool; 3], lateral_flow_probabilities: [f32; 4], condensation_probability: f32, vaporization_probability: f32) {
+    fn update_params(
+        &self,
+        queue: &wgpu::Queue,
+        direction: u32,
+        time: f32,
+        gravity_magnitude: f32,
+        gravity_dir: [bool; 3],
+        lateral_flow_probabilities: [f32; 4],
+        condensation_probability: f32,
+        vaporization_probability: f32,
+    ) {
         let world_diameter = self.world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
@@ -785,10 +824,16 @@ impl GpuFluidSimulator {
         let mut grav_x = 0.0;
         let mut grav_y = 0.0;
         let mut grav_z = 0.0;
-        
-        if gravity_dir[0] { grav_x = gravity_magnitude; }
-        if gravity_dir[1] { grav_y = gravity_magnitude; }
-        if gravity_dir[2] { grav_z = gravity_magnitude; }
+
+        if gravity_dir[0] {
+            grav_x = gravity_magnitude;
+        }
+        if gravity_dir[1] {
+            grav_y = gravity_magnitude;
+        }
+        if gravity_dir[2] {
+            grav_z = gravity_magnitude;
+        }
 
         let params = GpuFluidParams {
             grid_resolution: GRID_RESOLUTION,
@@ -821,8 +866,22 @@ impl GpuFluidSimulator {
     }
 
     /// Initialize with a water sphere
-    pub fn init_water_sphere(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
-        self.update_params(queue, 0, 0.0, 9.8, [false, true, false], [1.0, 0.8, 0.6, 0.9], 0.1, 0.1);
+    pub fn init_water_sphere(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        self.update_params(
+            queue,
+            0,
+            0.0,
+            9.8,
+            [false, true, false],
+            [1.0, 0.8, 0.6, 0.9],
+            0.1,
+            0.1,
+        );
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
@@ -836,8 +895,23 @@ impl GpuFluidSimulator {
     }
 
     /// Continuously spawn water at the top of the world
-    pub fn spawn_continuous(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, time: f32) {
-        self.update_params(queue, 0, time, 9.8, [false, true, false], [1.0, 0.8, 0.6, 0.9], 0.1, 0.1);
+    pub fn spawn_continuous(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        time: f32,
+    ) {
+        self.update_params(
+            queue,
+            0,
+            time,
+            9.8,
+            [false, true, false],
+            [1.0, 0.8, 0.6, 0.9],
+            0.1,
+            0.1,
+        );
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
@@ -851,8 +925,22 @@ impl GpuFluidSimulator {
     }
 
     /// Clear all fluid
-    pub fn clear(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
-        self.update_params(queue, 0, 0.0, 9.8, [false, true, false], [1.0, 0.8, 0.6, 0.9], 0.1, 0.1);
+    pub fn clear(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        self.update_params(
+            queue,
+            0,
+            0.0,
+            9.8,
+            [false, true, false],
+            [1.0, 0.8, 0.6, 0.9],
+            0.1,
+            0.1,
+        );
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
@@ -913,7 +1001,18 @@ impl GpuFluidSimulator {
 
     /// Step the simulation - 100% GPU with zero CPU logic
     /// Uses the caller's command encoder to avoid a separate queue.submit (GPU sync point)
-    pub fn step(&self, _device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, dt: f32, gravity_magnitude: f32, gravity_dir: [bool; 3], lateral_flow_probabilities: [f32; 4], condensation_probability: f32, vaporization_probability: f32) {
+    pub fn step(
+        &self,
+        _device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        dt: f32,
+        gravity_magnitude: f32,
+        gravity_dir: [bool; 3],
+        lateral_flow_probabilities: [f32; 4],
+        condensation_probability: f32,
+        vaporization_probability: f32,
+    ) {
         if self.paused {
             return;
         }
@@ -924,11 +1023,20 @@ impl GpuFluidSimulator {
         let current_time = (self.time.get() + dt) % 65536.0;
         self.time.set(current_time);
         self.gravity_magnitude.set(gravity_magnitude);
-        
+
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
         // Update parameters for GPU (required for shader logic) - sub_step starts at 0
-        self.update_params(queue, 3, current_time, gravity_magnitude, gravity_dir, lateral_flow_probabilities, condensation_probability, vaporization_probability);
+        self.update_params(
+            queue,
+            3,
+            current_time,
+            gravity_magnitude,
+            gravity_dir,
+            lateral_flow_probabilities,
+            condensation_probability,
+            vaporization_probability,
+        );
 
         // Clear water velocity field before simulation (DMA zero-fill)
         encoder.clear_buffer(&self.water_velocity_buffer, 0, None);
@@ -1017,7 +1125,11 @@ impl GpuFluidSimulator {
             _pad4: 0.0,
             _pad5: 0.0,
         };
-        queue.write_buffer(&self.extract_params_buffer, 0, bytemuck::cast_slice(&[extract_params]));
+        queue.write_buffer(
+            &self.extract_params_buffer,
+            0,
+            bytemuck::cast_slice(&[extract_params]),
+        );
 
         // Lazily create and cache the extract bind group (buffers never change after init)
         let mut cached = self.cached_extract_bind_group.borrow_mut();
@@ -1064,7 +1176,11 @@ impl GpuFluidSimulator {
 
     /// Update the water bitfield from current voxel state
     /// Call this after fluid simulation step, before cell physics
-    pub fn update_water_bitfield(&self, _device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+    pub fn update_water_bitfield(
+        &self,
+        _device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
         // 65536 bitfield entries / 256 threads per workgroup = 256 workgroups
         let bitfield_size = TOTAL_VOXELS / 32;
         let workgroup_count = (bitfield_size as u32 + 255) / 256;
@@ -1106,18 +1222,26 @@ impl GpuFluidSimulator {
             grid_origin_y: grid_origin.y,
             grid_origin_z: grid_origin.z,
             buoyancy_multiplier: multiplier,
-            water_viscosity: 0.0,  // Will be set separately
+            water_viscosity: 0.0, // Will be set separately
             _pad1: 0.0,
         };
 
-        queue.write_buffer(&self.water_grid_params_buffer, 0, bytemuck::cast_slice(&[water_grid_params]));
+        queue.write_buffer(
+            &self.water_grid_params_buffer,
+            0,
+            bytemuck::cast_slice(&[water_grid_params]),
+        );
     }
 
     /// Update water viscosity (drag applied to cells moving through water)
     pub fn set_water_drag_strength(&self, queue: &wgpu::Queue, strength: f32) {
         // water_viscosity is at byte offset 24 in WaterGridParams (field index 6, after 6 f32s)
         let offset = 6 * std::mem::size_of::<f32>() as u64;
-        queue.write_buffer(&self.water_grid_params_buffer, offset, bytemuck::cast_slice(&[strength]));
+        queue.write_buffer(
+            &self.water_grid_params_buffer,
+            offset,
+            bytemuck::cast_slice(&[strength]),
+        );
     }
 
     /// Get the nutrient voxels buffer
@@ -1167,7 +1291,11 @@ impl GpuFluidSimulator {
             despawn_start,
             _pad: [0.0; 3],
         };
-        queue.write_buffer(&self.nutrient_populate_params_buffer, 0, bytemuck::cast_slice(&[params]));
+        queue.write_buffer(
+            &self.nutrient_populate_params_buffer,
+            0,
+            bytemuck::cast_slice(&[params]),
+        );
 
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
@@ -1217,15 +1345,26 @@ impl GpuFluidSimulator {
             label: Some("Fluid Snapshot Encoder"),
         });
         encoder.copy_buffer_to_buffer(&self.state_buffer, 0, &fluid_staging, 0, byte_size);
-        encoder.copy_buffer_to_buffer(&self.nutrient_voxels_buffer, 0, &nutrient_staging, 0, byte_size);
+        encoder.copy_buffer_to_buffer(
+            &self.nutrient_voxels_buffer,
+            0,
+            &nutrient_staging,
+            0,
+            byte_size,
+        );
         queue.submit(std::iter::once(encoder.finish()));
 
         // Map and read fluid state.
         let fluid_voxels = {
             let slice = fluid_staging.slice(..);
             let (tx, rx) = std::sync::mpsc::channel();
-            slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            slice.map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+            let _ = device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
             let _ = rx.recv();
             let data = slice.get_mapped_range();
             let voxels: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
@@ -1238,8 +1377,13 @@ impl GpuFluidSimulator {
         let nutrient_voxels = {
             let slice = nutrient_staging.slice(..);
             let (tx, rx) = std::sync::mpsc::channel();
-            slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            slice.map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+            let _ = device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
             let _ = rx.recv();
             let data = slice.get_mapped_range();
             let voxels: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
@@ -1263,16 +1407,24 @@ impl GpuFluidSimulator {
         nutrient_voxels: &[u32],
     ) {
         assert_eq!(
-            fluid_voxels.len(), TOTAL_VOXELS,
+            fluid_voxels.len(),
+            TOTAL_VOXELS,
             "fluid_voxels length {} != TOTAL_VOXELS {}",
-            fluid_voxels.len(), TOTAL_VOXELS,
+            fluid_voxels.len(),
+            TOTAL_VOXELS,
         );
         assert_eq!(
-            nutrient_voxels.len(), TOTAL_VOXELS,
+            nutrient_voxels.len(),
+            TOTAL_VOXELS,
             "nutrient_voxels length {} != TOTAL_VOXELS {}",
-            nutrient_voxels.len(), TOTAL_VOXELS,
+            nutrient_voxels.len(),
+            TOTAL_VOXELS,
         );
         queue.write_buffer(&self.state_buffer, 0, bytemuck::cast_slice(fluid_voxels));
-        queue.write_buffer(&self.nutrient_voxels_buffer, 0, bytemuck::cast_slice(nutrient_voxels));
+        queue.write_buffer(
+            &self.nutrient_voxels_buffer,
+            0,
+            bytemuck::cast_slice(nutrient_voxels),
+        );
     }
 }

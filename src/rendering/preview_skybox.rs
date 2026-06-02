@@ -25,31 +25,31 @@ pub struct PreviewSkyboxCamera {
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct PreviewSkyboxThemeParams {
-    pub zenith_color:  [f32; 3],
-    pub _pad0:         f32,
+    pub zenith_color: [f32; 3],
+    pub _pad0: f32,
     pub horizon_color: [f32; 3],
-    pub _pad1:         f32,
-    pub glow_color:    [f32; 3],
-    pub _pad2:         f32,
-    pub grid_color:    [f32; 3],
-    pub grid_opacity:  f32,
-    pub floor_color:   [f32; 3],
-    pub _pad3:         f32,
+    pub _pad1: f32,
+    pub glow_color: [f32; 3],
+    pub _pad2: f32,
+    pub grid_color: [f32; 3],
+    pub grid_opacity: f32,
+    pub floor_color: [f32; 3],
+    pub _pad3: f32,
 }
 
 impl Default for PreviewSkyboxThemeParams {
     fn default() -> Self {
         Self {
-            zenith_color:  [0.012, 0.020, 0.055],
-            _pad0:         0.0,
+            zenith_color: [0.012, 0.020, 0.055],
+            _pad0: 0.0,
             horizon_color: [0.018, 0.065, 0.085],
-            _pad1:         0.0,
-            glow_color:    [0.0, 0.04, 0.06],
-            _pad2:         0.0,
-            grid_color:    [0.05, 0.55, 0.65],
-            grid_opacity:  0.35,
-            floor_color:   [0.008, 0.012, 0.020],
-            _pad3:         0.0,
+            _pad1: 0.0,
+            glow_color: [0.0, 0.04, 0.06],
+            _pad2: 0.0,
+            grid_color: [0.05, 0.55, 0.65],
+            grid_opacity: 0.35,
+            floor_color: [0.008, 0.012, 0.020],
+            _pad3: 0.0,
         }
     }
 }
@@ -74,159 +74,177 @@ impl PreviewSkyboxThemeParams {
         let floor = |r: u8, g: u8, b: u8| -> [f32; 3] {
             // Clamp to a very dark range so no theme produces a bright floor.
             let scale = 0.06_f32;
-            [r as f32 / 255.0 * scale, g as f32 / 255.0 * scale, b as f32 / 255.0 * scale]
+            [
+                r as f32 / 255.0 * scale,
+                g as f32 / 255.0 * scale,
+                b as f32 / 255.0 * scale,
+            ]
         };
 
         match p.theme {
             UiTheme::BiotechDark => Self {
-                zenith_color:  rgb(  3,   5,  14),
+                zenith_color: rgb(3, 5, 14),
                 _pad0: 0.0,
-                horizon_color: rgb(  4,  16,  22),
+                horizon_color: rgb(4, 16, 22),
                 _pad1: 0.0,
-                glow_color:    rgb(  0,  10,  15),
+                glow_color: rgb(0, 10, 15),
                 _pad2: 0.0,
-                grid_color:    rgb( 20, 200, 160),
-                grid_opacity:  0.40,
-                floor_color:   floor(  0, 220, 175),
+                grid_color: rgb(20, 200, 160),
+                grid_opacity: 0.40,
+                floor_color: floor(0, 220, 175),
                 _pad3: 0.0,
             },
             UiTheme::Arctic => Self {
-                zenith_color:  rgb(  8,  14,  28),
+                zenith_color: rgb(8, 14, 28),
                 _pad0: 0.0,
-                horizon_color: rgb( 12,  22,  48),
+                horizon_color: rgb(12, 22, 48),
                 _pad1: 0.0,
-                glow_color:    rgb(  5,  12,  30),
+                glow_color: rgb(5, 12, 30),
                 _pad2: 0.0,
-                grid_color:    rgb( 60, 140, 255),
-                grid_opacity:  0.45,
-                floor_color:   floor( 10,  90, 200),
+                grid_color: rgb(60, 140, 255),
+                grid_opacity: 0.45,
+                floor_color: floor(10, 90, 200),
                 _pad3: 0.0,
             },
             UiTheme::Parchment => Self {
-                zenith_color:  rgb( 10,   6,   2),
+                zenith_color: rgb(10, 6, 2),
                 _pad0: 0.0,
-                horizon_color: rgb( 18,  10,   4),
+                horizon_color: rgb(18, 10, 4),
                 _pad1: 0.0,
-                glow_color:    rgb( 12,   5,   2),
+                glow_color: rgb(12, 5, 2),
                 _pad2: 0.0,
-                grid_color:    rgb(200,  90,  30),
-                grid_opacity:  0.45,
-                floor_color:   floor(165,  55,  15),
+                grid_color: rgb(200, 90, 30),
+                grid_opacity: 0.45,
+                floor_color: floor(165, 55, 15),
                 _pad3: 0.0,
             },
             UiTheme::Blossom => Self {
-                zenith_color:  rgb( 10,   2,   6),
+                zenith_color: rgb(10, 2, 6),
                 _pad0: 0.0,
-                horizon_color: rgb( 18,   4,  10),
+                horizon_color: rgb(18, 4, 10),
                 _pad1: 0.0,
-                glow_color:    rgb( 12,   2,   6),
+                glow_color: rgb(12, 2, 6),
                 _pad2: 0.0,
-                grid_color:    rgb(220,  40, 120),
-                grid_opacity:  0.45,
-                floor_color:   floor(185,  10, 105),
+                grid_color: rgb(220, 40, 120),
+                grid_opacity: 0.45,
+                floor_color: floor(185, 10, 105),
                 _pad3: 0.0,
             },
             UiTheme::Crimson => Self {
-                zenith_color:  rgb(  6,   1,   2),
+                zenith_color: rgb(6, 1, 2),
                 _pad0: 0.0,
-                horizon_color: rgb( 14,   4,   6),
+                horizon_color: rgb(14, 4, 6),
                 _pad1: 0.0,
-                glow_color:    rgb( 10,   4,   0),
+                glow_color: rgb(10, 4, 0),
                 _pad2: 0.0,
-                grid_color:    rgb(225, 178,  35),
-                grid_opacity:  0.50,
-                floor_color:   floor(225, 178,  35),
+                grid_color: rgb(225, 178, 35),
+                grid_opacity: 0.50,
+                floor_color: floor(225, 178, 35),
                 _pad3: 0.0,
             },
             UiTheme::NeonSynthwave => Self {
-                zenith_color:  rgb(  3,   1,   8),
+                zenith_color: rgb(3, 1, 8),
                 _pad0: 0.0,
-                horizon_color: rgb(  8,   2,  14),
+                horizon_color: rgb(8, 2, 14),
                 _pad1: 0.0,
-                glow_color:    rgb( 10,   0,  10),
+                glow_color: rgb(10, 0, 10),
                 _pad2: 0.0,
-                grid_color:    rgb(255,  20, 175),
-                grid_opacity:  0.50,
-                floor_color:   floor(255,  20, 175),
+                grid_color: rgb(255, 20, 175),
+                grid_opacity: 0.50,
+                floor_color: floor(255, 20, 175),
                 _pad3: 0.0,
             },
             UiTheme::NeonToxic => Self {
-                zenith_color:  rgb(  0,   3,   0),
+                zenith_color: rgb(0, 3, 0),
                 _pad0: 0.0,
-                horizon_color: rgb(  1,   8,   1),
+                horizon_color: rgb(1, 8, 1),
                 _pad1: 0.0,
-                glow_color:    rgb(  0,   6,   0),
+                glow_color: rgb(0, 6, 0),
                 _pad2: 0.0,
-                grid_color:    rgb( 40, 255,  40),
-                grid_opacity:  0.55,
-                floor_color:   floor( 40, 255,  40),
+                grid_color: rgb(40, 255, 40),
+                grid_opacity: 0.55,
+                floor_color: floor(40, 255, 40),
                 _pad3: 0.0,
             },
             UiTheme::NeonUltraviolet => Self {
-                zenith_color:  rgb(  2,   0,   6),
+                zenith_color: rgb(2, 0, 6),
                 _pad0: 0.0,
-                horizon_color: rgb(  5,   1,  12),
+                horizon_color: rgb(5, 1, 12),
                 _pad1: 0.0,
-                glow_color:    rgb(  4,   0,   8),
+                glow_color: rgb(4, 0, 8),
                 _pad2: 0.0,
-                grid_color:    rgb(175,  25, 255),
-                grid_opacity:  0.55,
-                floor_color:   floor(175,  25, 255),
+                grid_color: rgb(175, 25, 255),
+                grid_opacity: 0.55,
+                floor_color: floor(175, 25, 255),
                 _pad3: 0.0,
             },
             UiTheme::HighContrast => Self {
-                zenith_color:  rgb(  0,   0,   0),
+                zenith_color: rgb(0, 0, 0),
                 _pad0: 0.0,
-                horizon_color: rgb(  0,   0,   0),
+                horizon_color: rgb(0, 0, 0),
                 _pad1: 0.0,
-                glow_color:    rgb(  0,   0,   0),
+                glow_color: rgb(0, 0, 0),
                 _pad2: 0.0,
-                grid_color:    rgb(255, 230,   0),
-                grid_opacity:  0.80,
-                floor_color:   [0.0, 0.0, 0.0],
+                grid_color: rgb(255, 230, 0),
+                grid_opacity: 0.80,
+                floor_color: [0.0, 0.0, 0.0],
                 _pad3: 0.0,
             },
             // -- CUSTOM -------------------------------------------------------
             // Derive from the active palette's bg and accent colors.
             UiTheme::Custom => {
-                let bg  = p.bg_darkest;
+                let bg = p.bg_darkest;
                 let acc = p.accent_primary;
                 // Sky: very dark tint of bg_darkest
-                let zenith  = [bg.r() as f32 / 255.0 * 0.5,
-                                bg.g() as f32 / 255.0 * 0.5,
-                                bg.b() as f32 / 255.0 * 0.5];
-                let horizon = [bg.r() as f32 / 255.0 * 0.5 + acc.r() as f32 / 255.0 * 0.06,
-                                bg.g() as f32 / 255.0 * 0.5 + acc.g() as f32 / 255.0 * 0.06,
-                                bg.b() as f32 / 255.0 * 0.5 + acc.b() as f32 / 255.0 * 0.06];
-                let glow    = [acc.r() as f32 / 255.0 * 0.04,
-                                acc.g() as f32 / 255.0 * 0.04,
-                                acc.b() as f32 / 255.0 * 0.04];
-                let grid    = [acc.r() as f32 / 255.0 * 0.8,
-                                acc.g() as f32 / 255.0 * 0.8,
-                                acc.b() as f32 / 255.0 * 0.8];
-                let floor   = [acc.r() as f32 / 255.0 * 0.04,
-                                acc.g() as f32 / 255.0 * 0.04,
-                                acc.b() as f32 / 255.0 * 0.04];
+                let zenith = [
+                    bg.r() as f32 / 255.0 * 0.5,
+                    bg.g() as f32 / 255.0 * 0.5,
+                    bg.b() as f32 / 255.0 * 0.5,
+                ];
+                let horizon = [
+                    bg.r() as f32 / 255.0 * 0.5 + acc.r() as f32 / 255.0 * 0.06,
+                    bg.g() as f32 / 255.0 * 0.5 + acc.g() as f32 / 255.0 * 0.06,
+                    bg.b() as f32 / 255.0 * 0.5 + acc.b() as f32 / 255.0 * 0.06,
+                ];
+                let glow = [
+                    acc.r() as f32 / 255.0 * 0.04,
+                    acc.g() as f32 / 255.0 * 0.04,
+                    acc.b() as f32 / 255.0 * 0.04,
+                ];
+                let grid = [
+                    acc.r() as f32 / 255.0 * 0.8,
+                    acc.g() as f32 / 255.0 * 0.8,
+                    acc.b() as f32 / 255.0 * 0.8,
+                ];
+                let floor = [
+                    acc.r() as f32 / 255.0 * 0.04,
+                    acc.g() as f32 / 255.0 * 0.04,
+                    acc.b() as f32 / 255.0 * 0.04,
+                ];
                 Self {
-                    zenith_color:  zenith,  _pad0: 0.0,
-                    horizon_color: horizon, _pad1: 0.0,
-                    glow_color:    glow,    _pad2: 0.0,
-                    grid_color:    grid,
-                    grid_opacity:  0.45,
-                    floor_color:   floor,   _pad3: 0.0,
+                    zenith_color: zenith,
+                    _pad0: 0.0,
+                    horizon_color: horizon,
+                    _pad1: 0.0,
+                    glow_color: glow,
+                    _pad2: 0.0,
+                    grid_color: grid,
+                    grid_opacity: 0.45,
+                    floor_color: floor,
+                    _pad3: 0.0,
                 }
-            },
+            }
         }
     }
 }
 
 /// Preview scene skybox renderer.
 pub struct PreviewSkyboxRenderer {
-    pipeline:      wgpu::RenderPipeline,
+    pipeline: wgpu::RenderPipeline,
     camera_layout: wgpu::BindGroupLayout,
-    theme_layout:  wgpu::BindGroupLayout,
+    theme_layout: wgpu::BindGroupLayout,
     camera_buffer: wgpu::Buffer,
-    theme_buffer:  wgpu::Buffer,
+    theme_buffer: wgpu::Buffer,
     /// Current theme params - update each frame via `set_theme_params`.
     pub theme_params: PreviewSkyboxThemeParams,
 }
@@ -334,28 +352,32 @@ impl PreviewSkyboxRenderer {
     /// `view_proj` is the full camera view-projection matrix.
     pub fn render(
         &self,
-        encoder:    &mut wgpu::CommandEncoder,
-        queue:      &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
         color_view: &wgpu::TextureView,
-        device:     &wgpu::Device,
-        view_proj:  glam::Mat4,
+        device: &wgpu::Device,
+        view_proj: glam::Mat4,
         camera_pos: glam::Vec3,
-        time:       f32,
+        time: f32,
     ) {
         // Rotation-only view-proj: cancel the translation so the sky doesn't shake.
         // view_proj = P * V,  V = R * T(-cam)
         // view_proj * T(+cam) = P * R  (translation cancels)
-        let rot_view_proj     = view_proj * glam::Mat4::from_translation(camera_pos);
+        let rot_view_proj = view_proj * glam::Mat4::from_translation(camera_pos);
         let inv_view_rot_proj = rot_view_proj.inverse();
 
         let uniform = PreviewSkyboxCamera {
             inv_view_rot_proj: inv_view_rot_proj.to_cols_array_2d(),
-            view_proj:         view_proj.to_cols_array_2d(),
-            camera_pos:        camera_pos.to_array(),
+            view_proj: view_proj.to_cols_array_2d(),
+            camera_pos: camera_pos.to_array(),
             time,
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
-        queue.write_buffer(&self.theme_buffer, 0, bytemuck::bytes_of(&self.theme_params));
+        queue.write_buffer(
+            &self.theme_buffer,
+            0,
+            bytemuck::bytes_of(&self.theme_params),
+        );
 
         let camera_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Preview Skybox Camera BG"),

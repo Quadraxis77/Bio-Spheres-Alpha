@@ -6,8 +6,8 @@
 //! Test cells have no special visual effects or simulation behaviors beyond
 //! the basic physics (collision, adhesion, etc.).
 
-use crate::genome::ModeSettings;
 use super::{CellBehavior, TypeSpecificInstanceData};
+use crate::genome::ModeSettings;
 
 /// Behavior implementation for Test cells.
 ///
@@ -60,9 +60,9 @@ mod tests {
     fn test_cell_behavior_returns_empty_data() {
         let behavior = TestCellBehavior;
         let mode_settings = ModeSettings::default();
-        
+
         let instance_data = behavior.build_instance_data(&mode_settings);
-        
+
         // All type_data fields should be zero for Test cells
         for i in 0..8 {
             assert_eq!(

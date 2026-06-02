@@ -22,11 +22,10 @@ const APP_NAME: &str = "Bio-Spheres";
 /// Returns `%APPDATA%\Bio-Spheres` (Windows) or `~/.config/Bio-Spheres`
 /// (Linux/macOS), creating it if it doesn't exist.
 pub fn config_dir() -> PathBuf {
-    let base = dirs::config_dir()
-        .unwrap_or_else(|| {
-            log::warn!("Could not determine config directory; falling back to current directory");
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        });
+    let base = dirs::config_dir().unwrap_or_else(|| {
+        log::warn!("Could not determine config directory; falling back to current directory");
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    });
     let dir = base.join(APP_NAME);
     ensure_dir(&dir);
     dir
@@ -41,11 +40,10 @@ pub fn config_file(filename: &str) -> PathBuf {
 
 /// Returns `Documents\Bio-Spheres`, creating it if needed.
 pub fn biospheres_dir() -> PathBuf {
-    let base = dirs::document_dir()
-        .unwrap_or_else(|| {
-            log::warn!("Could not determine Documents directory; falling back to config dir");
-            config_dir()
-        });
+    let base = dirs::document_dir().unwrap_or_else(|| {
+        log::warn!("Could not determine Documents directory; falling back to config dir");
+        config_dir()
+    });
     let dir = base.join(APP_NAME);
     ensure_dir(&dir);
     dir

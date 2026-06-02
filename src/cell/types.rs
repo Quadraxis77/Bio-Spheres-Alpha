@@ -98,9 +98,9 @@
 //! }
 //! ```
 
+use bytemuck::{Pod, Zeroable};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use bytemuck::{Pod, Zeroable};
 
 /// GPU-side behavior flags for cell types.
 /// These flags replace hard-coded type checks in shaders with parameterized logic.
@@ -159,7 +159,7 @@ pub struct CellTypeVisuals {
     pub membrane_noise_strength: f32,
     /// Animation speed of the membrane noise (0 = static)
     pub membrane_noise_speed: f32,
-    
+
     // Flagella parameters (used by Flagellocyte cell type)
     /// Length of the flagellum tail (0.5 - 3.0, default 1.7)
     pub tail_length: f32,
@@ -217,9 +217,9 @@ impl Default for CellTypeVisuals {
             specular_strength: 0.3,
             specular_power: 32.0,
             fresnel_strength: 0.2,
-            membrane_noise_scale: 0.0,        // Disabled by default
-            membrane_noise_strength: 0.0,     // Disabled by default
-            membrane_noise_speed: 0.0,        // Disabled by default
+            membrane_noise_scale: 0.0,    // Disabled by default
+            membrane_noise_strength: 0.0, // Disabled by default
+            membrane_noise_speed: 0.0,    // Disabled by default
             // Flagella defaults (from reference implementation)
             tail_length: 1.7,
             tail_thickness: 0.15,
@@ -282,11 +282,11 @@ impl CellTypeVisuals {
                 v.specular_strength = 0.17;
                 v.specular_power = 128.0;
                 v.fresnel_strength = 0.2;
-                v.goldberg_scale = 4.0;        // subdivision level
+                v.goldberg_scale = 4.0; // subdivision level
                 v.goldberg_ridge_width = 0.01; // very thin ridges
-                v.goldberg_meander = 0.0;      // clean straight ridges
+                v.goldberg_meander = 0.0; // clean straight ridges
                 v.goldberg_ridge_strength = 0.5;
-                v.nucleus_scale = 0.9;         // large inner nucleus sphere
+                v.nucleus_scale = 0.9; // large inner nucleus sphere
             }
             CellType::Lipocyte => {
                 // droplet_scale=3.0, droplet_threshold=0.35, boundary_sharpness=0.15, brightness=1.0
@@ -304,11 +304,11 @@ impl CellTypeVisuals {
             }
             CellType::Glueocyte => {
                 // Voronoi slime pattern
-                v.goldberg_scale = 3.0;          // voro_scale
-                v.goldberg_ridge_width = 0.12;   // border_width
-                v.goldberg_meander = 0.08;        // meander
+                v.goldberg_scale = 3.0; // voro_scale
+                v.goldberg_ridge_width = 0.12; // border_width
+                v.goldberg_meander = 0.08; // meander
                 v.goldberg_ridge_strength = 0.15; // border_dark
-                v.membrane_noise_speed = 2.85;    // anim_speed
+                v.membrane_noise_speed = 2.85; // anim_speed
                 v.membrane_noise_scale = 0.0;
                 v.membrane_noise_strength = 0.0;
                 v.specular_strength = 1.0;
@@ -321,10 +321,10 @@ impl CellTypeVisuals {
                 // goldberg_ridge_width -> iris_freq (type_data_0.y)
                 // goldberg_meander -> iris_texture (type_data_0.z)
                 // goldberg_ridge_strength -> pupil_dark (type_data_0.w)
-                v.goldberg_scale = 0.25;          // pupil_size
-                v.goldberg_ridge_width = 8.0;     // iris_freq (striation count)
-                v.goldberg_meander = 0.3;          // iris_texture blend
-                v.goldberg_ridge_strength = 0.85;  // pupil_dark
+                v.goldberg_scale = 0.25; // pupil_size
+                v.goldberg_ridge_width = 8.0; // iris_freq (striation count)
+                v.goldberg_meander = 0.3; // iris_texture blend
+                v.goldberg_ridge_strength = 0.85; // pupil_dark
                 v.specular_strength = 0.5;
                 v.specular_power = 36.0;
                 v.fresnel_strength = 0.3;
@@ -342,10 +342,10 @@ impl CellTypeVisuals {
             CellType::Myocyte => {
                 // Muscle fibers: goldberg_scale=line_freq, goldberg_ridge_width=bulge_strength,
                 // goldberg_meander=warp_amt (type_data_0.x/y/z)
-                v.goldberg_scale = 8.0;           // line_freq (fiber count)
-                v.goldberg_ridge_width = 0.55;    // bulge_strength
-                v.goldberg_meander = 0.12;         // warp_amt
-                v.goldberg_ridge_strength = 0.0;   // unused
+                v.goldberg_scale = 8.0; // line_freq (fiber count)
+                v.goldberg_ridge_width = 0.55; // bulge_strength
+                v.goldberg_meander = 0.12; // warp_amt
+                v.goldberg_ridge_strength = 0.0; // unused
                 v.specular_strength = 0.45;
                 v.specular_power = 48.0;
                 v.fresnel_strength = 0.25;
@@ -356,10 +356,10 @@ impl CellTypeVisuals {
                 // goldberg_meander=yolk_brightness (type_data_0.x/y/z)
                 // Note: yolk_offset_y is negative in shader (clamped to -0.35..0.0),
                 // stored as positive in UI and negated when packed.
-                v.goldberg_scale = 0.5;           // yolk_radius
-                v.goldberg_ridge_width = 0.15;    // yolk_drop (stored positive, negated in shader)
-                v.goldberg_meander = 1.0;          // yolk_brightness
-                v.goldberg_ridge_strength = 0.0;   // unused
+                v.goldberg_scale = 0.5; // yolk_radius
+                v.goldberg_ridge_width = 0.15; // yolk_drop (stored positive, negated in shader)
+                v.goldberg_meander = 1.0; // yolk_brightness
+                v.goldberg_ridge_strength = 0.0; // unused
                 v.specular_strength = 0.3;
                 v.specular_power = 32.0;
                 v.fresnel_strength = 0.2;
@@ -378,10 +378,10 @@ impl CellTypeVisuals {
             CellType::Vasculocyte => {
                 // Vessel wall cobblestone: goldberg_scale=cell_scale, goldberg_ridge_width=border_width,
                 // goldberg_meander=meander, goldberg_ridge_strength=border_depth (type_data_0.x/y/z/w)
-                v.goldberg_scale = 8.0;           // cell_scale
-                v.goldberg_ridge_width = 0.68;    // border_width
-                v.goldberg_meander = 0.12;         // meander
-                v.goldberg_ridge_strength = 0.09;  // border_depth
+                v.goldberg_scale = 8.0; // cell_scale
+                v.goldberg_ridge_width = 0.68; // border_width
+                v.goldberg_meander = 0.12; // meander
+                v.goldberg_ridge_strength = 0.09; // border_depth
                 v.specular_strength = 0.3;
                 v.specular_power = 32.0;
                 v.fresnel_strength = 0.2;
@@ -392,9 +392,9 @@ impl CellTypeVisuals {
                 // param_a = pulse_speed (pulsing glow animation rate)
                 // param_b = nucleus_glow (brightness of inner nucleus)
                 // param_c = membrane_translucency (0=opaque, 1=translucent)
-                v.param_a = 1.5;  // pulse_speed
-                v.param_b = 1.2;  // nucleus_glow
-                v.param_c = 0.6;  // membrane_translucency
+                v.param_a = 1.5; // pulse_speed
+                v.param_b = 1.2; // nucleus_glow
+                v.param_c = 0.6; // membrane_translucency
                 v.param_d = 0.0;
                 v.specular_strength = 0.6;
                 v.specular_power = 24.0;
@@ -456,7 +456,10 @@ impl CellTypeVisualsStore {
     const FILE_NAME: &'static str = "cell_visuals.ron";
 
     /// Save cell type visuals to disk.
-    pub fn save(visuals: &[CellTypeVisuals], cell_outline_width: f32) -> Result<(), CellVisualsError> {
+    pub fn save(
+        visuals: &[CellTypeVisuals],
+        cell_outline_width: f32,
+    ) -> Result<(), CellVisualsError> {
         let store = CellTypeVisualsStore {
             visuals: visuals.to_vec(),
             cell_outline_width,
@@ -471,7 +474,7 @@ impl CellTypeVisualsStore {
     /// Load cell type visuals from disk, or return defaults if file doesn't exist.
     pub fn load() -> (Vec<CellTypeVisuals>, f32) {
         let path = crate::app_dirs::config_file(Self::FILE_NAME);
-        
+
         if path.exists() {
             match Self::load_from_file(&path) {
                 Ok(store) => {
@@ -490,7 +493,7 @@ impl CellTypeVisualsStore {
                 }
             }
         }
-        
+
         let default = Self::default();
         (default.visuals, default.cell_outline_width)
     }
@@ -636,7 +639,24 @@ impl CellType {
 
     /// Get all cell type names as a slice.
     pub const fn names() -> &'static [&'static str] {
-        &["Test", "Flagellocyte", "Phagocyte", "Photocyte", "Lipocyte", "Buoyocyte", "Glueocyte", "Oculocyte", "Ciliocyte", "Myocyte", "Embryocyte", "Devorocyte", "Vasculocyte", "Gametocyte", "Cognocyte", "Memorocyte"]
+        &[
+            "Test",
+            "Flagellocyte",
+            "Phagocyte",
+            "Photocyte",
+            "Lipocyte",
+            "Buoyocyte",
+            "Glueocyte",
+            "Oculocyte",
+            "Ciliocyte",
+            "Myocyte",
+            "Embryocyte",
+            "Devorocyte",
+            "Vasculocyte",
+            "Gametocyte",
+            "Cognocyte",
+            "Memorocyte",
+        ]
     }
 
     /// Convert from integer index to cell type.
@@ -671,81 +691,97 @@ impl CellType {
     /// in the genome editor's Type dropdown.
     pub const fn tooltip(&self) -> &'static str {
         match self {
-            CellType::Test =>
+            CellType::Test => {
                 "Gains nutrients automatically at a fixed rate. Useful for quick \
-                 prototyping — no food source needed.",
+                 prototyping — no food source needed."
+            }
 
-            CellType::Flagellocyte =>
+            CellType::Flagellocyte => {
                 "Propels the organism using a whip-like flagellum tail. Swim force \
-                 can be fixed or switched between two speeds via an oculocyte signal.",
+                 can be fixed or switched between two speeds via an oculocyte signal."
+            }
 
-            CellType::Phagocyte =>
+            CellType::Phagocyte => {
                 "Absorbs free-floating nutrient particles from the environment on \
-                 contact. The primary food-gathering cell in nutrient-rich worlds.",
+                 contact. The primary food-gathering cell in nutrient-rich worlds."
+            }
 
-            CellType::Photocyte =>
+            CellType::Photocyte => {
                 "Converts light into nutrients — self-sustaining near a light source. \
-                 Nutrient gain scales with the local light field intensity.",
+                 Nutrient gain scales with the local light field intensity."
+            }
 
-            CellType::Lipocyte =>
+            CellType::Lipocyte => {
                 "Stores surplus nutrients as fat reserves, acting as a buffer during \
-                 food shortages. Excess mass is donated to hungry neighbours.",
+                 food shortages. Excess mass is donated to hungry neighbours."
+            }
 
-            CellType::Buoyocyte =>
+            CellType::Buoyocyte => {
                 "Generates an upward buoyancy force, counteracting gravity and keeping \
-                 the organism neutrally buoyant or floating near the surface.",
+                 the organism neutrally buoyant or floating near the surface."
+            }
 
-            CellType::Glueocyte =>
+            CellType::Glueocyte => {
                 "Bonds to other cells or cave walls on contact. Useful for anchoring \
-                 an organism to a surface or building sticky capture traps.",
+                 an organism to a surface or building sticky capture traps."
+            }
 
-            CellType::Oculocyte =>
+            CellType::Oculocyte => {
                 "Casts a detection ray to sense cells, food particles, light, or \
                  barriers. Broadcasts a numeric signal through the adhesion network \
-                 when a target is detected.",
+                 when a target is detected."
+            }
 
-            CellType::Ciliocyte =>
+            CellType::Ciliocyte => {
                 "Uses rows of cilia to push nearby cells and fluid in the \
                  forward direction. Good for conveying particles along a chain or \
-                 creating internal circulation.",
+                 creating internal circulation."
+            }
 
-            CellType::Myocyte =>
+            CellType::Myocyte => {
                 "A muscle cell that rhythmically contracts its adhesion bonds. \
                  Contractions can be timer-driven or signal-gated, producing \
-                 peristaltic pumping or coordinated movement.",
+                 peristaltic pumping or coordinated movement."
+            }
 
-            CellType::Embryocyte =>
+            CellType::Embryocyte => {
                 "Incubates a fully-formed sub-organism and releases it when triggered \
                  by a timer, a nutrient threshold, or an incoming signal. Enables \
-                 complex reproductive strategies.",
+                 complex reproductive strategies."
+            }
 
-            CellType::Devorocyte =>
+            CellType::Devorocyte => {
                 "Aggressively steals nutrients from neighbouring foreign cells within \
                  contact range. A predatory cell type — effective against slow or \
-                 undefended organisms.",
+                 undefended organisms."
+            }
 
-            CellType::Vasculocyte =>
+            CellType::Vasculocyte => {
                 "Efficiently transports nutrients through the organism body along \
                  adhesion pathways. Acts as a sealed pipe by default; set Outlet to \
-                 release nutrients to non-vascular neighbours.",
+                 release nutrients to non-vascular neighbours."
+            }
 
-            CellType::Gametocyte =>
+            CellType::Gametocyte => {
                 "A reproductive gamete cell. When two Gametocytes from different \
                  organisms come into contact, their genomes are crossed over and a \
                  new hybrid offspring organism is spawned. Gametocytes never split; \
-                 they only detach and merge. Both Gametocytes then die.",
+                 they only detach and merge. Both Gametocytes then die."
+            }
 
-            CellType::Cognocyte =>
+            CellType::Cognocyte => {
                 "A signal-processing cell. Reads signals from two input channels, \
                  applies an arithmetic, comparison, or boolean operation, and emits \
                  the result on an output channel. Composable into arbitrarily complex \
-                 decision-making circuits within an organism.",
+                 decision-making circuits within an organism."
+            }
 
-            CellType::Memorocyte =>
+            CellType::Memorocyte => {
                 "A leaky-integrator memory cell. Accumulates incoming signals over \
                  time and slowly forgets them. Decay and gain are independently \
                  configurable. Useful for smoothing noisy sensors, building timers, \
-                 and creating hysteresis in decision circuits.",
+                 and creating hysteresis in decision circuits."
+            }
         }
     }
 
@@ -773,7 +809,7 @@ impl CellType {
                 _padding: [0; 7],
             },
             CellType::Flagellocyte => GpuCellTypeBehaviorFlags {
-                ignores_split_interval: 0,  // Respect split interval
+                ignores_split_interval: 0, // Respect split interval
                 applies_swim_force: 1,
                 uses_texture_atlas: 0,
                 has_procedural_tail: 1,

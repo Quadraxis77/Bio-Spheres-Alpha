@@ -37,10 +37,10 @@ pub struct ExtractParams {
     pub max_particles: u32,
     pub time: f32,
     pub grid_origin: [f32; 3],
-    pub world_radius: f32,  // World boundary radius
-    pub prominence_factor: f32,  // How prominent to make water particles (0.0-1.0)
-    pub gravity_mode: u32,  // 0=X, 1=Y, 2=Z, 3=radial
-    pub _padding: [f32; 2],      // Pad to 48 bytes for WGSL struct alignment
+    pub world_radius: f32,      // World boundary radius
+    pub prominence_factor: f32, // How prominent to make water particles (0.0-1.0)
+    pub gravity_mode: u32,      // 0=X, 1=Y, 2=Z, 3=radial
+    pub _padding: [f32; 2],     // Pad to 48 bytes for WGSL struct alignment
 }
 
 /// Particle counter (for atomic counting in compute shader)
@@ -74,8 +74,8 @@ pub struct WaterParticleRenderer {
     max_particles: u32,
     time: f32,
     particle_count: u32,
-    prominence_factor: f32,  // How prominent water particles should be
-    gravity_mode: u32,       // Current gravity mode for elongation
+    prominence_factor: f32, // How prominent water particles should be
+    gravity_mode: u32,      // Current gravity mode for elongation
     width: u32,
     height: u32,
 }
@@ -89,7 +89,7 @@ impl WaterParticleRenderer {
         width: u32,
         height: u32,
     ) -> Self {
-        let max_particles = 500_000u32;  // Support up to 500k water voxels
+        let max_particles = 500_000u32; // Support up to 500k water voxels
 
         // Create render shader
         let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -119,7 +119,9 @@ impl WaterParticleRenderer {
         let counter_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Water Particle Counter"),
             size: std::mem::size_of::<ParticleCounter>() as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -148,84 +150,86 @@ impl WaterParticleRenderer {
         });
 
         // Create extract compute bind group layout
-        let extract_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Water Extract Bind Group Layout"),
-            entries: &[
-                // Fluid state buffer (read)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let extract_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Water Extract Bind Group Layout"),
+                entries: &[
+                    // Fluid state buffer (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Particle buffer (write)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Particle buffer (write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Counter buffer (atomic)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Counter buffer (atomic)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Solid mask buffer (read)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Solid mask buffer (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Params uniform
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Params uniform
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Water velocity buffer (read)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Water velocity buffer (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
+                ],
+            });
 
         // Create compute pipeline
-        let extract_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Water Extract Pipeline Layout"),
-            bind_group_layouts: &[&extract_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let extract_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Water Extract Pipeline Layout"),
+                bind_group_layouts: &[&extract_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
         let extract_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Water Extract Pipeline"),
@@ -237,10 +241,10 @@ impl WaterParticleRenderer {
         });
 
         // Create render bind group layout (for render params uniform)
-        let render_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Water Render Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let render_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Water Render Bind Group Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
@@ -249,16 +253,16 @@ impl WaterParticleRenderer {
                         min_binding_size: None,
                     },
                     count: None,
-                },
-            ],
-        });
+                }],
+            });
 
         // Create render pipeline layout
-        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Water Particle Pipeline Layout"),
-            bind_group_layouts: &[camera_layout, &render_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Water Particle Pipeline Layout"),
+                bind_group_layouts: &[camera_layout, &render_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
         // Vertex buffer layout for instanced particles
         let vertex_buffer_layout = wgpu::VertexBufferLayout {
@@ -323,7 +327,7 @@ impl WaterParticleRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,  // Billboards need no culling
+                cull_mode: None, // Billboards need no culling
                 unclipped_depth: false,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
@@ -345,10 +349,10 @@ impl WaterParticleRenderer {
         });
 
         // Clone the camera layout for later use
-        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Water Camera Bind Group Layout (stored)"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Water Camera Bind Group Layout (stored)"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
@@ -357,9 +361,8 @@ impl WaterParticleRenderer {
                         min_binding_size: None,
                     },
                     count: None,
-                },
-            ],
-        });
+                }],
+            });
 
         Self {
             render_pipeline,
@@ -375,8 +378,8 @@ impl WaterParticleRenderer {
             max_particles,
             time: 0.0,
             particle_count: 0,
-            prominence_factor: 0.0,  // Default subtle prominence
-            gravity_mode: 1,         // Default Y axis
+            prominence_factor: 0.0, // Default subtle prominence
+            gravity_mode: 1,        // Default Y axis
             width,
             height,
         }
@@ -427,12 +430,10 @@ impl WaterParticleRenderer {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Water Render Bind Group"),
             layout: &self.render_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.render_params_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.render_params_buffer.as_entire_binding(),
+            }],
         })
     }
 
@@ -489,7 +490,11 @@ impl WaterParticleRenderer {
             _pad1: 0,
             _pad2: 0,
         };
-        queue.write_buffer(&self.render_params_buffer, 0, bytemuck::cast_slice(&[render_params]));
+        queue.write_buffer(
+            &self.render_params_buffer,
+            0,
+            bytemuck::cast_slice(&[render_params]),
+        );
 
         // Run compute shader
         {

@@ -238,17 +238,32 @@ fn pop_free_slot() -> u32 {
 // First tries ring buffer, then falls back to append mode
 // Returns 0xFFFFFFFF if at capacity
 fn allocate_slot() -> u32 {
+    let effective_capacity = min(params.cell_capacity, arrayLength(&positions_out));
+
+    // Reserve live-cell capacity first. Many cells can divide in the same scan
+    // dispatch, so a non-atomic "live < capacity" check is not enough.
+    let previous_live = atomicAdd(&cell_count_buffer[1], 1u);
+    if (previous_live >= effective_capacity) {
+        atomicSub(&cell_count_buffer[1], 1u);
+        return 0xFFFFFFFFu;
+    }
+
     // Try to get a recycled slot from the ring buffer
     let recycled_slot = pop_free_slot();
     if (recycled_slot != 0xFFFFFFFFu) {
+        if (recycled_slot >= effective_capacity) {
+            atomicSub(&cell_count_buffer[1], 1u);
+            return 0xFFFFFFFFu;
+        }
         return recycled_slot;
     }
     
     // Ring buffer empty, try to allocate new slot
     let new_slot = atomicAdd(&ring_state[2], 1u);
-    if (new_slot >= params.cell_capacity) {
+    if (new_slot >= effective_capacity) {
         // At capacity, undo and fail
         atomicSub(&ring_state[2], 1u);
+        atomicSub(&cell_count_buffer[1], 1u);
         return 0xFFFFFFFFu;
     }
     

@@ -3,8 +3,8 @@
 //! This module generates a solid mask that treats the entire cave volume as solid.
 //! It uses the exact same noise function and cave settings to replicate the cave volume.
 
-use glam::Vec3;
 use crate::rendering::cave_system::CaveParams;
+use glam::Vec3;
 
 /// Solid mask generator for fluid system
 pub struct SolidMaskGenerator {
@@ -35,7 +35,7 @@ impl SolidMaskGenerator {
         // Calculate cell size (distance between grid points)
         let world_diameter = self.world_radius * 2.0;
         let cell_size = world_diameter / self.grid_resolution as f32;
-        
+
         // Grid origin (bottom-back-left corner)
         let grid_origin = self.world_center - Vec3::splat(self.world_radius);
 
@@ -44,17 +44,18 @@ impl SolidMaskGenerator {
             for y in 0..grid_size {
                 for z in 0..grid_size {
                     let voxel_index = x + y * grid_size + z * grid_size * grid_size;
-                    
+
                     // Calculate world position of grid point
-                    let world_pos = grid_origin + Vec3::new(
-                        x as f32 * cell_size,
-                        y as f32 * cell_size,
-                        z as f32 * cell_size,
-                    );
+                    let world_pos = grid_origin
+                        + Vec3::new(
+                            x as f32 * cell_size,
+                            y as f32 * cell_size,
+                            z as f32 * cell_size,
+                        );
 
                     // Use cave generation logic to determine if this is solid
                     let is_solid = self.is_solid_cave_volume(world_pos, cave_params);
-                    
+
                     solid_mask[voxel_index] = if is_solid { 1 } else { 0 };
                 }
             }
@@ -69,7 +70,7 @@ impl SolidMaskGenerator {
         // Distance from world center (spherical constraint)
         let world_center = Vec3::from(params.world_center);
         let dist_from_center = (pos - world_center).length();
-        
+
         // Treat the world sphere boundary as a solid wall for fluid containment.
         // This prevents water from accumulating in the gap between the sphere
         // boundary and the cave generation radius, which caused a visible sheet
@@ -191,8 +192,10 @@ impl SolidMaskGenerator {
         // Sample noise at offset positions to get warp vectors
         let warp_seed = params.seed.wrapping_add(9999);
         let wx = self.value_noise_3d(pos / warp_scale, warp_seed) - 0.5;
-        let wy = self.value_noise_3d(pos / warp_scale + Vec3::new(31.7, 47.3, 13.1), warp_seed) - 0.5;
-        let wz = self.value_noise_3d(pos / warp_scale + Vec3::new(73.9, 19.4, 67.2), warp_seed) - 0.5;
+        let wy =
+            self.value_noise_3d(pos / warp_scale + Vec3::new(31.7, 47.3, 13.1), warp_seed) - 0.5;
+        let wz =
+            self.value_noise_3d(pos / warp_scale + Vec3::new(73.9, 19.4, 67.2), warp_seed) - 0.5;
 
         Vec3::new(
             pos.x + wx * warp_strength,
@@ -210,27 +213,30 @@ mod tests {
     fn test_solid_mask_generation() {
         let generator = SolidMaskGenerator::new(32, Vec3::ZERO, 200.0);
         let cave_params = CaveParams::default();
-        
+
         let solid_mask = generator.generate_solid_mask(&cave_params);
-        
+
         // Should have correct number of voxels
         assert_eq!(solid_mask.len(), 32 * 32 * 32);
-        
+
         // Should have both solid and empty voxels
         let solid_count = solid_mask.iter().sum::<u32>();
         assert!(solid_count > 0, "Should have some solid voxels");
-        assert!(solid_count < (32 * 32 * 32) as u32, "Should have some empty voxels");
+        assert!(
+            solid_count < (32 * 32 * 32) as u32,
+            "Should have some empty voxels"
+        );
     }
 
     #[test]
     fn test_solid_cave_volume() {
         let generator = SolidMaskGenerator::new(64, Vec3::ZERO, 200.0);
         let cave_params = CaveParams::default();
-        
+
         // Test outside world sphere (should be solid)
         let outside_pos = Vec3::new(300.0, 0.0, 0.0);
         assert!(generator.is_solid_cave_volume(outside_pos, &cave_params));
-        
+
         // Test inside world sphere (depends on noise)
         let inside_pos = Vec3::new(0.0, 0.0, 0.0);
         let result = generator.is_solid_cave_volume(inside_pos, &cave_params);

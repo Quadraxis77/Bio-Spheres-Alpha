@@ -9,29 +9,18 @@ pub mod types;
 
 // Re-export adhesion types
 pub use adhesion::{
-    AdhesionConnections, 
-    AdhesionIndices, 
-    MAX_ADHESIONS_PER_CELL, 
-    ANCHOR_OVERLAP_COS,
-    MAX_ADHESION_CONNECTIONS,
-    init_adhesion_indices,
+    init_adhesion_indices, AdhesionConnections, AdhesionIndices, ANCHOR_OVERLAP_COS,
+    MAX_ADHESIONS_PER_CELL, MAX_ADHESION_CONNECTIONS,
 };
 pub use adhesion_forces::{
-    compute_adhesion_forces, 
-    compute_adhesion_forces_parallel, 
-    compute_adhesion_forces_batched,
+    compute_adhesion_forces, compute_adhesion_forces_batched, compute_adhesion_forces_parallel,
     compute_adhesion_substep,
 };
 pub use adhesion_manager::AdhesionConnectionManager;
 pub use adhesion_zones::{
-    AdhesionZone, 
-    classify_bond_direction, 
-    get_zone_color, 
-    compute_equatorial_degrees,
-    compute_ratio_shift,
-    EQUATORIAL_THRESHOLD_DEGREES,
+    classify_bond_direction, compute_equatorial_degrees, compute_ratio_shift, get_zone_color,
+    AdhesionZone, EQUATORIAL_THRESHOLD_DEGREES, EQUATORIAL_THRESHOLD_DEGREES_MAX,
     EQUATORIAL_THRESHOLD_DEGREES_MIN,
-    EQUATORIAL_THRESHOLD_DEGREES_MAX,
 };
 
 // Re-export cell type registry
@@ -39,4 +28,4 @@ pub use type_registry::CellTypeRegistry;
 pub use types::CellType;
 
 // Re-export behavior types
-pub use behaviors::{CellBehavior, TypeSpecificInstanceData, create_behavior};
+pub use behaviors::{create_behavior, CellBehavior, TypeSpecificInstanceData};

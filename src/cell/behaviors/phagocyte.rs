@@ -6,8 +6,8 @@
 //!
 //! Phagocytes have a darker appearance with membrane ripples.
 
-use crate::genome::ModeSettings;
 use super::{CellBehavior, TypeSpecificInstanceData};
+use crate::genome::ModeSettings;
 
 /// Behavior implementation for Phagocyte cells.
 ///

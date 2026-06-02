@@ -1,8 +1,8 @@
 //! Genome browser - a styled floating window for loading genomes.
 
-use std::path::PathBuf;
-use egui::{Color32, Rect, Sense, Vec2};
 use crate::ui::ui_system::palette;
+use egui::{Color32, Rect, Sense, Vec2};
+use std::path::PathBuf;
 
 const CARD_W: f32 = 180.0;
 /// Thumbnail is square - matches the 256x256 GIF aspect ratio exactly.
@@ -43,16 +43,22 @@ impl GenomeThumbnail {
                 ));
             }
         }
-        if frames.is_empty() { return None; }
+        if frames.is_empty() {
+            return None;
+        }
 
         // Read the static frame index from the .gif.meta sidecar if it exists.
         let meta_path = gif_path.with_extension("gif.meta");
         let static_frame = if meta_path.exists() {
-            std::fs::read_to_string(&meta_path).ok()
+            std::fs::read_to_string(&meta_path)
+                .ok()
                 .and_then(|s| {
                     // Parse {"static_frame":N}
-                    s.split(':').nth(1)
-                        .and_then(|v| v.trim_matches(|c: char| !c.is_ascii_digit()).parse::<usize>().ok())
+                    s.split(':').nth(1).and_then(|v| {
+                        v.trim_matches(|c: char| !c.is_ascii_digit())
+                            .parse::<usize>()
+                            .ok()
+                    })
                 })
                 .unwrap_or(0)
                 .min(frames.len().saturating_sub(1))
@@ -60,14 +66,23 @@ impl GenomeThumbnail {
             0
         };
 
-        Some(Self { frames, frame_idx: static_frame, frame_timer: 0.0, static_frame })
+        Some(Self {
+            frames,
+            frame_idx: static_frame,
+            frame_timer: 0.0,
+            static_frame,
+        })
     }
 
     pub fn advance(&mut self, dt: f32) {
         self.frame_timer += dt;
         let last = self.frames.len().saturating_sub(1);
         // Last frame holds for 1 second before looping back to frame 0.
-        let d = if self.frame_idx == last { 1.0 } else { 1.0 / GIF_FPS };
+        let d = if self.frame_idx == last {
+            1.0
+        } else {
+            1.0 / GIF_FPS
+        };
         while self.frame_timer >= d {
             self.frame_timer -= d;
             if self.frame_idx == last {
@@ -78,8 +93,13 @@ impl GenomeThumbnail {
         }
     }
 
-    pub fn reset(&mut self) { self.frame_idx = self.static_frame; self.frame_timer = 0.0; }
-    pub fn current_tex(&self) -> egui::TextureId { self.frames[self.frame_idx].id() }
+    pub fn reset(&mut self) {
+        self.frame_idx = self.static_frame;
+        self.frame_timer = 0.0;
+    }
+    pub fn current_tex(&self) -> egui::TextureId {
+        self.frames[self.frame_idx].id()
+    }
 }
 
 // -- Entry ---------------------------------------------------------------------
@@ -102,9 +122,9 @@ impl GenomeStats {
         let has = |id: i32| modes.iter().any(|m| m.cell_type == id);
         let any_bool = |f: fn(&crate::genome::ModeSettings) -> bool| modes.iter().any(|m| f(m));
 
-        let has_photo   = has(12);
-        let has_devour  = has(9);
-        let has_phage   = has(2);
+        let has_photo = has(12);
+        let has_devour = has(9);
+        let has_phage = has(2);
 
         let mut tags: Vec<(&'static str, [u8; 3])> = Vec::new();
 
@@ -112,34 +132,52 @@ impl GenomeStats {
         // All 8 combinations of photo / devour / phage:
         let diet_tag: (&'static str, [u8; 3]) = match (has_photo, has_devour, has_phage) {
             // photo + devour + phage
-            (true,  true,  true)  => ("🌿🦷🌾 Apex",       [200, 220,  60]),
+            (true, true, true) => ("🌿🦷🌾 Apex", [200, 220, 60]),
             // photo + devour, no phage
-            (true,  true,  false) => ("🌿🦷 Photovore",    [180, 220,  80]),
+            (true, true, false) => ("🌿🦷 Photovore", [180, 220, 80]),
             // photo + phage, no devour
-            (true,  false, true)  => ("🌿🌾 Mixotroph",    [100, 220, 140]),
+            (true, false, true) => ("🌿🌾 Mixotroph", [100, 220, 140]),
             // photo only
-            (true,  false, false) => ("🌿 Autotroph",      [100, 220, 100]),
+            (true, false, false) => ("🌿 Autotroph", [100, 220, 100]),
             // devour + phage, no photo
-            (false, true,  true)  => ("🍖 Omnivore",       [220, 160,  60]),
+            (false, true, true) => ("🍖 Omnivore", [220, 160, 60]),
             // devour only
-            (false, true,  false) => ("🦷 Carnivore",      [220,  70,  70]),
+            (false, true, false) => ("🦷 Carnivore", [220, 70, 70]),
             // phage only
-            (false, false, true)  => ("🌾 Herbivore",      [140, 200, 100]),
+            (false, false, true) => ("🌾 Herbivore", [140, 200, 100]),
             // none of the three
-            (false, false, false) => ("🔬 Microbe",        [160, 160, 200]),
+            (false, false, false) => ("🔬 Microbe", [160, 160, 200]),
         };
         tags.push(diet_tag);
 
         // -- Trait tags -------------------------------------------------------
-        if has(10)  { tags.push(("🥚 Repro",    [100, 200, 120])); }
-        if has(7)   { tags.push(("👁 Sense",    [120, 180, 240])); }
-        if has(3)   { tags.push(("🏊 Swim",     [80,  160, 220])); }
-        if has(8)   { tags.push(("💪 Muscle",   [220, 140,  60])); }
-        if has(6)   { tags.push(("〰 Cilia",    [160, 200, 160])); }
-        if has(5)   { tags.push(("🔗 Glue",     [200, 160, 100])); }
-        if has(4)   { tags.push(("🫧 Buoy",     [100, 180, 220])); }
-        if has(11)  { tags.push(("🩸 Vascular", [180,  80, 120])); }
-        if has(1)   { tags.push(("🫙 Lipocyte", [180, 160, 100])); }
+        if has(10) {
+            tags.push(("🥚 Repro", [100, 200, 120]));
+        }
+        if has(7) {
+            tags.push(("👁 Sense", [120, 180, 240]));
+        }
+        if has(3) {
+            tags.push(("🏊 Swim", [80, 160, 220]));
+        }
+        if has(8) {
+            tags.push(("💪 Muscle", [220, 140, 60]));
+        }
+        if has(6) {
+            tags.push(("〰 Cilia", [160, 200, 160]));
+        }
+        if has(5) {
+            tags.push(("🔗 Glue", [200, 160, 100]));
+        }
+        if has(4) {
+            tags.push(("🫧 Buoy", [100, 180, 220]));
+        }
+        if has(11) {
+            tags.push(("🩸 Vascular", [180, 80, 120]));
+        }
+        if has(1) {
+            tags.push(("🫙 Lipocyte", [180, 160, 100]));
+        }
         if any_bool(|m| m.regulation_emit_channel >= 0) {
             tags.push(("📡 Signal", [160, 120, 220]));
         }
@@ -159,10 +197,17 @@ pub struct GenomeEntry {
 
 impl GenomeEntry {
     pub fn load(ctx: &egui::Context, path: PathBuf) -> Self {
-        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown").to_string();
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Unknown")
+            .to_string();
         let stats = match crate::genome::Genome::load_from_file(&path) {
             Ok(g) => GenomeStats::compute(&g),
-            Err(_) => GenomeStats { mode_count: 0, tags: vec![] },
+            Err(_) => GenomeStats {
+                mode_count: 0,
+                tags: vec![],
+            },
         };
         let modified_secs = std::fs::metadata(&path)
             .ok()
@@ -171,8 +216,18 @@ impl GenomeEntry {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let gif_path = path.with_extension("gif");
-        let thumbnail = if gif_path.exists() { GenomeThumbnail::load(ctx, &gif_path) } else { None };
-        Self { path, name, stats, thumbnail, modified_secs }
+        let thumbnail = if gif_path.exists() {
+            GenomeThumbnail::load(ctx, &gif_path)
+        } else {
+            None
+        };
+        Self {
+            path,
+            name,
+            stats,
+            thumbnail,
+            modified_secs,
+        }
     }
 }
 
@@ -211,40 +266,65 @@ pub enum BrowserSort {
 }
 
 impl Default for BrowserSort {
-    fn default() -> Self { BrowserSort::NameAsc }
+    fn default() -> Self {
+        BrowserSort::NameAsc
+    }
 }
 
 impl Default for GenomeBrowserState {
     fn default() -> Self {
-        Self { open: false, entries: Vec::new(), selected: None, search: String::new(),
-               needs_refresh: true, force_full_reload: false, confirm_delete: false,
-               status_msg: None, status_timer: 0.0,
-               sort_mode: BrowserSort::NameAsc, tag_filter: String::new(),
-               pending_load: std::collections::VecDeque::new(), is_loading: false,
-               confirm_new: false }
+        Self {
+            open: false,
+            entries: Vec::new(),
+            selected: None,
+            search: String::new(),
+            needs_refresh: true,
+            force_full_reload: false,
+            confirm_delete: false,
+            status_msg: None,
+            status_timer: 0.0,
+            sort_mode: BrowserSort::NameAsc,
+            tag_filter: String::new(),
+            pending_load: std::collections::VecDeque::new(),
+            is_loading: false,
+            confirm_new: false,
+        }
     }
 }
 
 impl Clone for GenomeBrowserState {
     fn clone(&self) -> Self {
-        Self { open: self.open, entries: Vec::new(), selected: self.selected,
-               search: self.search.clone(), needs_refresh: true, force_full_reload: false,
-               confirm_delete: false,
-               status_msg: self.status_msg.clone(), status_timer: self.status_timer,
-               sort_mode: self.sort_mode.clone(), tag_filter: self.tag_filter.clone(),
-               pending_load: std::collections::VecDeque::new(), is_loading: false,
-               confirm_new: false }
+        Self {
+            open: self.open,
+            entries: Vec::new(),
+            selected: self.selected,
+            search: self.search.clone(),
+            needs_refresh: true,
+            force_full_reload: false,
+            confirm_delete: false,
+            status_msg: self.status_msg.clone(),
+            status_timer: self.status_timer,
+            sort_mode: self.sort_mode.clone(),
+            tag_filter: self.tag_filter.clone(),
+            pending_load: std::collections::VecDeque::new(),
+            is_loading: false,
+            confirm_new: false,
+        }
     }
 }
 
 impl std::fmt::Debug for GenomeBrowserState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GenomeBrowserState").field("open", &self.open).finish()
+        f.debug_struct("GenomeBrowserState")
+            .field("open", &self.open)
+            .finish()
     }
 }
 
 impl PartialEq for GenomeBrowserState {
-    fn eq(&self, _: &Self) -> bool { false }
+    fn eq(&self, _: &Self) -> bool {
+        false
+    }
 }
 
 impl GenomeBrowserState {
@@ -286,7 +366,9 @@ impl GenomeBrowserState {
     pub fn tick(&mut self, dt: f32) {
         if self.status_timer > 0.0 {
             self.status_timer -= dt;
-            if self.status_timer <= 0.0 { self.status_msg = None; }
+            if self.status_timer <= 0.0 {
+                self.status_msg = None;
+            }
         }
     }
 }
@@ -300,10 +382,17 @@ pub fn render_genome_browser(
     editor_state: &mut crate::ui::panel_context::GenomeEditorState,
     dt: f32,
 ) -> Option<PathBuf> {
-    if !state.open { return None; }
+    if !state.open {
+        return None;
+    }
     state.tick(dt);
-    if state.needs_refresh { state.refresh(ctx); }
-    if state.is_loading { state.tick_load(ctx); ctx.request_repaint(); }
+    if state.needs_refresh {
+        state.refresh(ctx);
+    }
+    if state.is_loading {
+        state.tick_load(ctx);
+        ctx.request_repaint();
+    }
 
     let p = palette();
     let mut result: Option<PathBuf> = None;
@@ -336,21 +425,49 @@ pub fn render_genome_browser(
             // Header
             egui::Frame::new()
                 .fill(p.bg_panel)
-                .inner_margin(egui::Margin { left: 16, right: 12, top: 10, bottom: 10 })
+                .inner_margin(egui::Margin {
+                    left: 16,
+                    right: 12,
+                    top: 10,
+                    bottom: 10,
+                })
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("GENOME BROWSER").size(15.0).strong().color(p.text_primary));
+                        ui.label(
+                            egui::RichText::new("GENOME BROWSER")
+                                .size(15.0)
+                                .strong()
+                                .color(p.text_primary),
+                        );
                         ui.add_space(6.0);
                         let count_label = if state.is_loading {
-                            format!("— loading… ({}/{})", state.entries.len(), state.entries.len() + state.pending_load.len())
+                            format!(
+                                "— loading… ({}/{})",
+                                state.entries.len(),
+                                state.entries.len() + state.pending_load.len()
+                            )
                         } else {
                             format!("— {} genomes", state.entries.len())
                         };
-                        ui.label(egui::RichText::new(count_label).size(11.0).color(p.text_dim));
+                        ui.label(
+                            egui::RichText::new(count_label)
+                                .size(11.0)
+                                .color(p.text_dim),
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add(egui::Button::new(egui::RichText::new("✕").size(13.0).color(p.text_secondary))
-                                .fill(Color32::TRANSPARENT).stroke(egui::Stroke::NONE)
-                                .min_size(Vec2::new(24.0, 24.0))).clicked() { close = true; }
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("✕").size(13.0).color(p.text_secondary),
+                                    )
+                                    .fill(Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE)
+                                    .min_size(Vec2::new(24.0, 24.0)),
+                                )
+                                .clicked()
+                            {
+                                close = true;
+                            }
                         });
                     });
                 });
@@ -360,26 +477,57 @@ pub fn render_genome_browser(
             // Search + sort/filter bar
             egui::Frame::new()
                 .fill(p.bg_panel)
-                .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: 6 })
+                .inner_margin(egui::Margin {
+                    left: 12,
+                    right: 12,
+                    top: 6,
+                    bottom: 6,
+                })
                 .show(ui, |ui| {
                     // Row 1: search field
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("🔍").size(12.0).color(p.text_dim));
                         ui.add_space(4.0);
-                        let r = ui.add(egui::TextEdit::singleline(&mut state.search)
-                            .desired_width(260.0).hint_text("Filter by name or tag…")
-                            .font(egui::FontId::proportional(12.0)).text_color(p.text_primary).frame(false));
-                        if r.changed() { state.selected = None; }
+                        let r = ui.add(
+                            egui::TextEdit::singleline(&mut state.search)
+                                .desired_width(260.0)
+                                .hint_text("Filter by name or tag…")
+                                .font(egui::FontId::proportional(12.0))
+                                .text_color(p.text_primary)
+                                .frame(false),
+                        );
+                        if r.changed() {
+                            state.selected = None;
+                        }
                         if !state.search.is_empty() {
-                            if ui.add(egui::Button::new(egui::RichText::new("✕").size(10.0).color(p.text_dim))
-                                .fill(Color32::TRANSPARENT).stroke(egui::Stroke::NONE)).clicked() {
-                                state.search.clear(); state.selected = None;
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("✕").size(10.0).color(p.text_dim),
+                                    )
+                                    .fill(Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE),
+                                )
+                                .clicked()
+                            {
+                                state.search.clear();
+                                state.selected = None;
                             }
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add(egui::Button::new(egui::RichText::new("⟳ Refresh").size(11.0).color(p.text_secondary))
-                                .fill(p.bg_widget).stroke(egui::Stroke::new(1.0, p.border_subtle))
-                                .corner_radius(egui::CornerRadius::same(3))).clicked() {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("⟳ Refresh")
+                                            .size(11.0)
+                                            .color(p.text_secondary),
+                                    )
+                                    .fill(p.bg_widget)
+                                    .stroke(egui::Stroke::new(1.0, p.border_subtle))
+                                    .corner_radius(egui::CornerRadius::same(3)),
+                                )
+                                .clicked()
+                            {
                                 state.needs_refresh = true;
                             }
                         });
@@ -393,18 +541,34 @@ pub fn render_genome_browser(
 
                         // Sort buttons
                         let sorts: &[(&str, BrowserSort, &str)] = &[
-                            ("A→Z",    BrowserSort::NameAsc,  "Sort alphabetically A to Z"),
-                            ("Z→A",    BrowserSort::NameDesc, "Sort alphabetically Z to A"),
-                            ("Recent", BrowserSort::Recent,   "Sort by most recently saved"),
+                            ("A→Z", BrowserSort::NameAsc, "Sort alphabetically A to Z"),
+                            ("Z→A", BrowserSort::NameDesc, "Sort alphabetically Z to A"),
+                            ("Recent", BrowserSort::Recent, "Sort by most recently saved"),
                         ];
                         for (label, mode, tip) in sorts {
                             let active = &state.sort_mode == mode;
-                            let btn = egui::Button::new(egui::RichText::new(*label).size(10.5)
-                                .color(if active { p.bg_darkest } else { p.text_secondary }))
-                                .fill(if active { p.accent_primary } else { p.bg_widget })
-                                .stroke(egui::Stroke::new(1.0, if active { p.accent_primary } else { p.border_subtle }))
-                                .corner_radius(egui::CornerRadius::same(3))
-                                .min_size(Vec2::new(0.0, 18.0));
+                            let btn = egui::Button::new(
+                                egui::RichText::new(*label).size(10.5).color(if active {
+                                    p.bg_darkest
+                                } else {
+                                    p.text_secondary
+                                }),
+                            )
+                            .fill(if active {
+                                p.accent_primary
+                            } else {
+                                p.bg_widget
+                            })
+                            .stroke(egui::Stroke::new(
+                                1.0,
+                                if active {
+                                    p.accent_primary
+                                } else {
+                                    p.border_subtle
+                                },
+                            ))
+                            .corner_radius(egui::CornerRadius::same(3))
+                            .min_size(Vec2::new(0.0, 18.0));
                             if ui.add(btn).on_hover_text(*tip).clicked() {
                                 state.sort_mode = mode.clone();
                             }
@@ -417,27 +581,53 @@ pub fn render_genome_browser(
                         const EXCLUDED_TAGS: &[&str] = &["mixotroph", "herbivore"];
                         let diet_tags: Vec<String> = {
                             let mut seen = std::collections::HashSet::new();
-                            state.entries.iter()
+                            state
+                                .entries
+                                .iter()
                                 .filter_map(|e| e.stats.tags.first())
                                 .map(|(label, _)| {
-                                    label.trim_start_matches(|c: char| !c.is_alphabetic()).trim().to_string()
+                                    label
+                                        .trim_start_matches(|c: char| !c.is_alphabetic())
+                                        .trim()
+                                        .to_string()
                                 })
                                 .filter(|t| {
                                     let lower = t.to_lowercase();
-                                    !EXCLUDED_TAGS.contains(&lower.as_str()) && seen.insert(t.clone())
+                                    !EXCLUDED_TAGS.contains(&lower.as_str())
+                                        && seen.insert(t.clone())
                                 })
                                 .collect()
                         };
 
                         for tag in &diet_tags {
                             let active = state.tag_filter == *tag;
-                            let btn = egui::Button::new(egui::RichText::new(tag).size(10.0)
-                                .color(if active { p.bg_darkest } else { p.text_dim }))
-                                .fill(if active { p.accent_primary } else { Color32::TRANSPARENT })
-                                .stroke(egui::Stroke::new(1.0, if active { p.accent_primary } else { p.border_subtle }))
-                                .corner_radius(egui::CornerRadius::same(3))
-                                .min_size(Vec2::new(0.0, 18.0));
-                            if ui.add(btn).on_hover_text(format!("Show only {} genomes", tag)).clicked() {
+                            let btn = egui::Button::new(
+                                egui::RichText::new(tag).size(10.0).color(if active {
+                                    p.bg_darkest
+                                } else {
+                                    p.text_dim
+                                }),
+                            )
+                            .fill(if active {
+                                p.accent_primary
+                            } else {
+                                Color32::TRANSPARENT
+                            })
+                            .stroke(egui::Stroke::new(
+                                1.0,
+                                if active {
+                                    p.accent_primary
+                                } else {
+                                    p.border_subtle
+                                },
+                            ))
+                            .corner_radius(egui::CornerRadius::same(3))
+                            .min_size(Vec2::new(0.0, 18.0));
+                            if ui
+                                .add(btn)
+                                .on_hover_text(format!("Show only {} genomes", tag))
+                                .clicked()
+                            {
                                 if active {
                                     state.tag_filter.clear();
                                 } else {
@@ -449,8 +639,16 @@ pub fn render_genome_browser(
 
                         // Clear tag filter chip
                         if !state.tag_filter.is_empty() {
-                            if ui.add(egui::Button::new(egui::RichText::new("✕ Clear").size(10.0).color(p.text_dim))
-                                .fill(Color32::TRANSPARENT).stroke(egui::Stroke::NONE)).clicked() {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("✕ Clear").size(10.0).color(p.text_dim),
+                                    )
+                                    .fill(Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE),
+                                )
+                                .clicked()
+                            {
                                 state.tag_filter.clear();
                                 state.selected = None;
                             }
@@ -463,32 +661,60 @@ pub fn render_genome_browser(
             // Card grid - filter then sort
             let search_lower = state.search.to_lowercase();
             let tag_lower = state.tag_filter.to_lowercase();
-            let mut vis: Vec<usize> = state.entries.iter().enumerate()
+            let mut vis: Vec<usize> = state
+                .entries
+                .iter()
+                .enumerate()
                 .filter(|(_, e)| {
                     // Text search
                     if !search_lower.is_empty() {
                         let name_match = e.name.to_lowercase().contains(&search_lower);
                         let tag_match = e.stats.tags.iter().any(|(label, _)| {
-                            label.trim_start_matches(|c: char| !c.is_alphabetic()).to_lowercase().contains(&search_lower)
+                            label
+                                .trim_start_matches(|c: char| !c.is_alphabetic())
+                                .to_lowercase()
+                                .contains(&search_lower)
                         });
-                        if !name_match && !tag_match { return false; }
+                        if !name_match && !tag_match {
+                            return false;
+                        }
                     }
                     // Tag filter chip
                     if !tag_lower.is_empty() {
                         let has_tag = e.stats.tags.iter().any(|(label, _)| {
-                            label.trim_start_matches(|c: char| !c.is_alphabetic()).to_lowercase() == tag_lower
+                            label
+                                .trim_start_matches(|c: char| !c.is_alphabetic())
+                                .to_lowercase()
+                                == tag_lower
                         });
-                        if !has_tag { return false; }
+                        if !has_tag {
+                            return false;
+                        }
                     }
                     true
                 })
-                .map(|(i, _)| i).collect();
+                .map(|(i, _)| i)
+                .collect();
 
             // Apply sort
             match state.sort_mode {
-                BrowserSort::NameAsc  => vis.sort_by(|&a, &b| state.entries[a].name.to_lowercase().cmp(&state.entries[b].name.to_lowercase())),
-                BrowserSort::NameDesc => vis.sort_by(|&a, &b| state.entries[b].name.to_lowercase().cmp(&state.entries[a].name.to_lowercase())),
-                BrowserSort::Recent   => vis.sort_by(|&a, &b| state.entries[b].modified_secs.cmp(&state.entries[a].modified_secs)),
+                BrowserSort::NameAsc => vis.sort_by(|&a, &b| {
+                    state.entries[a]
+                        .name
+                        .to_lowercase()
+                        .cmp(&state.entries[b].name.to_lowercase())
+                }),
+                BrowserSort::NameDesc => vis.sort_by(|&a, &b| {
+                    state.entries[b]
+                        .name
+                        .to_lowercase()
+                        .cmp(&state.entries[a].name.to_lowercase())
+                }),
+                BrowserSort::Recent => vis.sort_by(|&a, &b| {
+                    state.entries[b]
+                        .modified_secs
+                        .cmp(&state.entries[a].modified_secs)
+                }),
             }
 
             let strip_h = 52.0;
@@ -502,15 +728,23 @@ pub fn render_genome_browser(
                     if vis.is_empty() {
                         ui.add_space(40.0);
                         ui.vertical_centered(|ui| {
-                            ui.label(egui::RichText::new(if state.search.is_empty() {
-                                "No genomes found.\nSave a genome to see it here."
-                            } else { "No genomes match your search." }).size(13.0).color(p.text_dim));
+                            ui.label(
+                                egui::RichText::new(if state.search.is_empty() {
+                                    "No genomes found.\nSave a genome to see it here."
+                                } else {
+                                    "No genomes match your search."
+                                })
+                                .size(13.0)
+                                .color(p.text_dim),
+                            );
                         });
                         return;
                     }
 
                     let pad = 14.0;
-                    let cols = ((ui.available_width() - pad * 2.0 + CARD_GAP) / (CARD_W + CARD_GAP)).floor().max(1.0) as usize;
+                    let cols = ((ui.available_width() - pad * 2.0 + CARD_GAP) / (CARD_W + CARD_GAP))
+                        .floor()
+                        .max(1.0) as usize;
                     let mut clicked: Option<usize> = None;
                     let mut dbl: Option<usize> = None;
                     let mut hovered: Vec<usize> = Vec::new();
@@ -523,11 +757,18 @@ pub fn render_genome_browser(
                             ui.add_space(pad);
                             for &idx in chunk {
                                 let sel = state.selected == Some(idx);
-                                let (r, resp) = ui.allocate_exact_size(Vec2::new(CARD_W, CARD_H), Sense::click());
+                                let (r, resp) = ui
+                                    .allocate_exact_size(Vec2::new(CARD_W, CARD_H), Sense::click());
                                 let is_hovered = resp.hovered();
-                                if is_hovered { hovered.push(idx); }
-                                if resp.clicked() { clicked = Some(idx); }
-                                if resp.double_clicked() { dbl = Some(idx); }
+                                if is_hovered {
+                                    hovered.push(idx);
+                                }
+                                if resp.clicked() {
+                                    clicked = Some(idx);
+                                }
+                                if resp.double_clicked() {
+                                    dbl = Some(idx);
+                                }
                                 draw_card(ui, r, &state.entries[idx], sel, is_hovered, p);
 
                                 ui.add_space(CARD_GAP);
@@ -537,13 +778,29 @@ pub fn render_genome_browser(
                     }
                     ui.add_space(pad);
 
-                    for &i in &hovered { if let Some(t) = state.entries[i].thumbnail.as_mut() { t.advance(dt); } }
-                    for (i, e) in state.entries.iter_mut().enumerate() {
-                        if !hovered.contains(&i) { if let Some(t) = e.thumbnail.as_mut() { t.reset(); } }
+                    for &i in &hovered {
+                        if let Some(t) = state.entries[i].thumbnail.as_mut() {
+                            t.advance(dt);
+                        }
                     }
-                    if !hovered.is_empty() { ui.ctx().request_repaint(); }
-                    if let Some(i) = clicked { state.selected = Some(i); }
-                    if let Some(i) = dbl { state.selected = Some(i); result = Some(state.entries[i].path.clone()); close = true; }
+                    for (i, e) in state.entries.iter_mut().enumerate() {
+                        if !hovered.contains(&i) {
+                            if let Some(t) = e.thumbnail.as_mut() {
+                                t.reset();
+                            }
+                        }
+                    }
+                    if !hovered.is_empty() {
+                        ui.ctx().request_repaint();
+                    }
+                    if let Some(i) = clicked {
+                        state.selected = Some(i);
+                    }
+                    if let Some(i) = dbl {
+                        state.selected = Some(i);
+                        result = Some(state.entries[i].path.clone());
+                        close = true;
+                    }
 
                     // Process delete after the loop (can't mutate entries while iterating)
                     if let Some(i) = delete_idx {
@@ -553,7 +810,9 @@ pub fn render_genome_browser(
                         let _ = std::fs::remove_file(path.with_extension("gif"));
                         let _ = std::fs::remove_file(path.with_extension("gif.meta"));
                         // Clear selection if we deleted the selected entry
-                        if state.selected == Some(i) { state.selected = None; }
+                        if state.selected == Some(i) {
+                            state.selected = None;
+                        }
                         state.needs_refresh = true;
                         state.force_full_reload = true;
                     }
@@ -563,29 +822,65 @@ pub fn render_genome_browser(
             ui.add(egui::Separator::default().spacing(0.0));
             egui::Frame::new()
                 .fill(p.bg_panel)
-                .inner_margin(egui::Margin { left: 16, right: 16, top: 10, bottom: 10 })
+                .inner_margin(egui::Margin {
+                    left: 16,
+                    right: 16,
+                    top: 10,
+                    bottom: 10,
+                })
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if let Some((msg, is_err)) = &state.status_msg {
                             let c = if *is_err { p.status_err } else { p.status_ok };
                             let a = (state.status_timer.min(1.0) * 255.0) as u8;
-                            ui.label(egui::RichText::new(msg).size(11.0)
-                                .color(Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)));
+                            ui.label(
+                                egui::RichText::new(msg)
+                                    .size(11.0)
+                                    .color(Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)),
+                            );
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add(egui::Button::new(egui::RichText::new("Cancel").size(12.0).color(p.text_secondary))
-                                .fill(p.bg_widget).stroke(egui::Stroke::new(1.0, p.border_normal))
-                                .min_size(Vec2::new(80.0, 28.0)).corner_radius(egui::CornerRadius::same(4))).clicked() {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("Cancel")
+                                            .size(12.0)
+                                            .color(p.text_secondary),
+                                    )
+                                    .fill(p.bg_widget)
+                                    .stroke(egui::Stroke::new(1.0, p.border_normal))
+                                    .min_size(Vec2::new(80.0, 28.0))
+                                    .corner_radius(egui::CornerRadius::same(4)),
+                                )
+                                .clicked()
+                            {
                                 close = true;
                             }
                             ui.add_space(8.0);
                             let can = state.selected.is_some();
-                            if ui.add_enabled(can, egui::Button::new(
-                                egui::RichText::new("📂  Load").size(12.0).strong()
-                                    .color(if can { p.bg_darkest } else { p.text_dim }))
-                                .fill(if can { p.accent_primary } else { p.bg_widget })
-                                .stroke(egui::Stroke::new(1.0, if can { p.accent_primary } else { p.border_subtle }))
-                                .min_size(Vec2::new(90.0, 28.0)).corner_radius(egui::CornerRadius::same(4))).clicked() {
+                            if ui
+                                .add_enabled(
+                                    can,
+                                    egui::Button::new(
+                                        egui::RichText::new("📂  Load")
+                                            .size(12.0)
+                                            .strong()
+                                            .color(if can { p.bg_darkest } else { p.text_dim }),
+                                    )
+                                    .fill(if can { p.accent_primary } else { p.bg_widget })
+                                    .stroke(egui::Stroke::new(
+                                        1.0,
+                                        if can {
+                                            p.accent_primary
+                                        } else {
+                                            p.border_subtle
+                                        },
+                                    ))
+                                    .min_size(Vec2::new(90.0, 28.0))
+                                    .corner_radius(egui::CornerRadius::same(4)),
+                                )
+                                .clicked()
+                            {
                                 if let Some(idx) = state.selected {
                                     let path = state.entries[idx].path.clone();
                                     match crate::genome::Genome::load_from_file(&path) {
@@ -597,20 +892,39 @@ pub fn render_genome_browser(
                                             result = Some(path);
                                             close = true;
                                         }
-                                        Err(e) => state.set_status(format!("Load failed: {}", e), true),
+                                        Err(e) => {
+                                            state.set_status(format!("Load failed: {}", e), true)
+                                        }
                                     }
                                 }
                             }
                             ui.add_space(8.0);
                             // Delete button - left side of action strip (right-to-left layout, so add last)
-                            if ui.add_enabled(can, egui::Button::new(
-                                egui::RichText::new("🗑  Delete").size(12.0)
-                                    .color(if can { Color32::from_rgb(220, 80, 80) } else { p.text_dim }))
-                                .fill(p.bg_widget)
-                                .stroke(egui::Stroke::new(1.0, if can { Color32::from_rgb(180, 60, 60) } else { p.border_subtle }))
-                                .min_size(Vec2::new(90.0, 28.0)).corner_radius(egui::CornerRadius::same(4)))
+                            if ui
+                                .add_enabled(
+                                    can,
+                                    egui::Button::new(
+                                        egui::RichText::new("🗑  Delete").size(12.0).color(if can {
+                                            Color32::from_rgb(220, 80, 80)
+                                        } else {
+                                            p.text_dim
+                                        }),
+                                    )
+                                    .fill(p.bg_widget)
+                                    .stroke(egui::Stroke::new(
+                                        1.0,
+                                        if can {
+                                            Color32::from_rgb(180, 60, 60)
+                                        } else {
+                                            p.border_subtle
+                                        },
+                                    ))
+                                    .min_size(Vec2::new(90.0, 28.0))
+                                    .corner_radius(egui::CornerRadius::same(4)),
+                                )
                                 .on_hover_text("Delete the selected genome and its thumbnail")
-                                .clicked() {
+                                .clicked()
+                            {
                                 state.confirm_delete = true;
                             }
                         });
@@ -618,12 +932,18 @@ pub fn render_genome_browser(
                 });
         });
 
-    if close { state.open = false; }
+    if close {
+        state.open = false;
+    }
 
     // Confirmation popup for delete
     if state.confirm_delete {
         if let Some(idx) = state.selected {
-            let name = state.entries.get(idx).map(|e| e.name.as_str()).unwrap_or("this genome");
+            let name = state
+                .entries
+                .get(idx)
+                .map(|e| e.name.as_str())
+                .unwrap_or("this genome");
             let mut do_delete = false;
             let mut cancel = false;
 
@@ -641,24 +961,60 @@ pub fn render_genome_browser(
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     ui.vertical_centered(|ui| {
-                        ui.label(egui::RichText::new("Delete Genome?").size(14.0).strong().color(Color32::from_rgb(220, 80, 80)));
+                        ui.label(
+                            egui::RichText::new("Delete Genome?")
+                                .size(14.0)
+                                .strong()
+                                .color(Color32::from_rgb(220, 80, 80)),
+                        );
                         ui.add_space(8.0);
-                        ui.label(egui::RichText::new(format!("\"{}\" will be permanently deleted.", name))
-                            .size(12.0).color(p.text_primary));
-                        ui.label(egui::RichText::new("This cannot be undone.")
-                            .size(11.0).color(p.text_dim));
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "\"{}\" will be permanently deleted.",
+                                name
+                            ))
+                            .size(12.0)
+                            .color(p.text_primary),
+                        );
+                        ui.label(
+                            egui::RichText::new("This cannot be undone.")
+                                .size(11.0)
+                                .color(p.text_dim),
+                        );
                         ui.add_space(14.0);
                         ui.horizontal(|ui| {
-                            if ui.add(egui::Button::new(egui::RichText::new("Cancel").size(12.0).color(p.text_secondary))
-                                .fill(p.bg_widget).stroke(egui::Stroke::new(1.0, p.border_normal))
-                                .min_size(Vec2::new(80.0, 28.0)).corner_radius(egui::CornerRadius::same(4))).clicked() {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("Cancel")
+                                            .size(12.0)
+                                            .color(p.text_secondary),
+                                    )
+                                    .fill(p.bg_widget)
+                                    .stroke(egui::Stroke::new(1.0, p.border_normal))
+                                    .min_size(Vec2::new(80.0, 28.0))
+                                    .corner_radius(egui::CornerRadius::same(4)),
+                                )
+                                .clicked()
+                            {
                                 cancel = true;
                             }
                             ui.add_space(8.0);
-                            if ui.add(egui::Button::new(egui::RichText::new("🗑  Delete").size(12.0).strong().color(Color32::WHITE))
-                                .fill(Color32::from_rgb(180, 40, 40))
-                                .stroke(egui::Stroke::new(1.0, Color32::from_rgb(220, 60, 60)))
-                                .min_size(Vec2::new(90.0, 28.0)).corner_radius(egui::CornerRadius::same(4))).clicked() {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("🗑  Delete")
+                                            .size(12.0)
+                                            .strong()
+                                            .color(Color32::WHITE),
+                                    )
+                                    .fill(Color32::from_rgb(180, 40, 40))
+                                    .stroke(egui::Stroke::new(1.0, Color32::from_rgb(220, 60, 60)))
+                                    .min_size(Vec2::new(90.0, 28.0))
+                                    .corner_radius(egui::CornerRadius::same(4)),
+                                )
+                                .clicked()
+                            {
                                 do_delete = true;
                             }
                         });
@@ -670,12 +1026,16 @@ pub fn render_genome_browser(
                 let _ = std::fs::remove_file(&path);
                 let _ = std::fs::remove_file(path.with_extension("gif"));
                 let _ = std::fs::remove_file(path.with_extension("gif.meta"));
-                if state.selected == Some(idx) { state.selected = None; }
+                if state.selected == Some(idx) {
+                    state.selected = None;
+                }
                 state.needs_refresh = true;
                 state.force_full_reload = true;
                 state.confirm_delete = false;
             }
-            if cancel { state.confirm_delete = false; }
+            if cancel {
+                state.confirm_delete = false;
+            }
         } else {
             state.confirm_delete = false;
         }
@@ -686,18 +1046,52 @@ pub fn render_genome_browser(
 
 // -- Card drawing --------------------------------------------------------------
 
-fn draw_card(ui: &mut egui::Ui, rect: Rect, entry: &GenomeEntry, selected: bool, hovered: bool, p: crate::ui::ui_system::ActivePalette) {
+fn draw_card(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    entry: &GenomeEntry,
+    selected: bool,
+    hovered: bool,
+    p: crate::ui::ui_system::ActivePalette,
+) {
     let painter = ui.painter();
 
-    let bg = if selected { p.bg_selected } else if hovered { p.bg_hover } else { p.bg_panel };
+    let bg = if selected {
+        p.bg_selected
+    } else if hovered {
+        p.bg_hover
+    } else {
+        p.bg_panel
+    };
     painter.rect_filled(rect, egui::CornerRadius::same(6), bg);
 
-    let (bc, bw) = if selected { (p.accent_primary, 1.5) } else if hovered { (p.border_normal, 1.0) } else { (p.border_subtle, 1.0) };
-    painter.rect_stroke(rect, egui::CornerRadius::same(6), egui::Stroke::new(bw, bc), egui::StrokeKind::Inside);
+    let (bc, bw) = if selected {
+        (p.accent_primary, 1.5)
+    } else if hovered {
+        (p.border_normal, 1.0)
+    } else {
+        (p.border_subtle, 1.0)
+    };
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(6),
+        egui::Stroke::new(bw, bc),
+        egui::StrokeKind::Inside,
+    );
 
     if selected {
-        let glow = Color32::from_rgba_unmultiplied(p.accent_primary.r(), p.accent_primary.g(), p.accent_primary.b(), 30);
-        painter.rect_stroke(rect.expand(2.0), egui::CornerRadius::same(8), egui::Stroke::new(2.0, glow), egui::StrokeKind::Outside);
+        let glow = Color32::from_rgba_unmultiplied(
+            p.accent_primary.r(),
+            p.accent_primary.g(),
+            p.accent_primary.b(),
+            30,
+        );
+        painter.rect_stroke(
+            rect.expand(2.0),
+            egui::CornerRadius::same(8),
+            egui::Stroke::new(2.0, glow),
+            egui::StrokeKind::Outside,
+        );
     }
 
     // Thumbnail - square, fills the top of the card edge-to-edge (1px inset for border).
@@ -714,13 +1108,22 @@ fn draw_card(ui: &mut egui::Ui, rect: Rect, entry: &GenomeEntry, selected: bool,
         );
     } else {
         painter.rect_filled(thumb, egui::CornerRadius::same(5), p.bg_widget);
-        painter.text(thumb.center(), egui::Align2::CENTER_CENTER, "🧬", egui::FontId::proportional(32.0), p.text_dim);
+        painter.text(
+            thumb.center(),
+            egui::Align2::CENTER_CENTER,
+            "🧬",
+            egui::FontId::proportional(32.0),
+            p.text_dim,
+        );
     }
 
     // Divider.
     let div_y = rect.min.y + CARD_THUMB_H;
     painter.line_segment(
-        [egui::pos2(rect.left() + 8.0, div_y), egui::pos2(rect.right() - 8.0, div_y)],
+        [
+            egui::pos2(rect.left() + 8.0, div_y),
+            egui::pos2(rect.right() - 8.0, div_y),
+        ],
         egui::Stroke::new(1.0, p.border_subtle),
     );
 
@@ -731,7 +1134,11 @@ fn draw_card(ui: &mut egui::Ui, rect: Rect, entry: &GenomeEntry, selected: bool,
         egui::Align2::LEFT_TOP,
         &entry.name,
         egui::FontId::proportional(12.0),
-        if selected { p.accent_primary } else { p.text_primary },
+        if selected {
+            p.accent_primary
+        } else {
+            p.text_primary
+        },
     );
 
     // Mode count - right-aligned on the same row as the name.
@@ -763,19 +1170,23 @@ fn draw_card(ui: &mut egui::Ui, rect: Rect, entry: &GenomeEntry, selected: bool,
 
         if tx + pill_w > tag_max_x {
             row += 1;
-            if row >= max_rows { break; }
+            if row >= max_rows {
+                break;
+            }
             tx = tag_x0;
             ty += pill_h + pill_gap;
         }
 
-        let pill_rect = Rect::from_min_size(
-            egui::pos2(tx, ty),
-            Vec2::new(pill_w, pill_h),
-        );
+        let pill_rect = Rect::from_min_size(egui::pos2(tx, ty), Vec2::new(pill_w, pill_h));
         let pill_bg = Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], 35);
         let pill_border = Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], 120);
         painter.rect_filled(pill_rect, egui::CornerRadius::same(3), pill_bg);
-        painter.rect_stroke(pill_rect, egui::CornerRadius::same(3), egui::Stroke::new(0.8, pill_border), egui::StrokeKind::Inside);
+        painter.rect_stroke(
+            pill_rect,
+            egui::CornerRadius::same(3),
+            egui::Stroke::new(0.8, pill_border),
+            egui::StrokeKind::Inside,
+        );
         painter.text(
             pill_rect.center(),
             egui::Align2::CENTER_CENTER,

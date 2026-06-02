@@ -31,11 +31,11 @@ use bytemuck::{Pod, Zeroable};
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct DeathParticle {
-    pub position: [f32; 3],   // World position at spawn
-    pub size: f32,             // Base size (cell radius at death)
-    pub color: [f32; 4],       // RGBA color
-    pub animation: [f32; 4],   // x=age, y=max_lifetime, z=vel_dir_x, w=vel_dir_y
-    pub velocity: [f32; 4],    // x=vel_dir_x, y=vel_dir_y, z=vel_dir_z, w=unused
+    pub position: [f32; 3],  // World position at spawn
+    pub size: f32,           // Base size (cell radius at death)
+    pub color: [f32; 4],     // RGBA color
+    pub animation: [f32; 4], // x=age, y=max_lifetime, z=vel_dir_x, w=vel_dir_y
+    pub velocity: [f32; 4],  // x=vel_dir_x, y=vel_dir_y, z=vel_dir_z, w=unused
 }
 
 /// Parameters for the death extract compute shaders.
@@ -272,11 +272,31 @@ impl DeathParticleRenderer {
             array_stride: std::mem::size_of::<DeathParticle>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &[
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0,  shader_location: 0 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32,   offset: 12, shader_location: 1 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 16, shader_location: 2 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 32, shader_location: 3 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 48, shader_location: 4 },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x3,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32,
+                    offset: 12,
+                    shader_location: 1,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 16,
+                    shader_location: 2,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 32,
+                    shader_location: 3,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 48,
+                    shader_location: 4,
+                },
             ],
         };
 
@@ -386,12 +406,30 @@ impl DeathParticleRenderer {
             label: Some("Death Extract Bind Group"),
             layout: &self.compute_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: death_flags_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: self.prev_death_flags_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: position_and_mass_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: self.particle_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: self.counter_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: self.params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: death_flags_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.prev_death_flags_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: position_and_mass_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.particle_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.counter_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
             ],
         })
     }

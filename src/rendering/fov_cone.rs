@@ -39,10 +39,7 @@ pub struct FovConeRenderer {
 }
 
 impl FovConeRenderer {
-    pub fn new(
-        device: &wgpu::Device,
-        config: &wgpu::SurfaceConfiguration,
-    ) -> Self {
+    pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
         let camera_uniform = CameraUniform {
             view_proj: Mat4::IDENTITY.to_cols_array_2d(),
             camera_pos: [0.0, 0.0, 0.0],
@@ -172,12 +169,7 @@ impl FovConeRenderer {
     }
 
     /// Queue a ray for a single oculocyte cell.
-    pub fn queue_ray(
-        &mut self,
-        cell_position: Vec3,
-        cell_rotation: Quat,
-        ray_length: f32,
-    ) {
+    pub fn queue_ray(&mut self, cell_position: Vec3, cell_rotation: Quat, ray_length: f32) {
         if self.pending_vertices.len() + VERTS_PER_RAY > MAX_VERTICES {
             return;
         }
@@ -187,8 +179,14 @@ impl FovConeRenderer {
 
         let ray_color = [0.3, 0.9, 1.0, 0.8];
 
-        self.pending_vertices.push(LineVertex { position: cell_position.to_array(), color: ray_color });
-        self.pending_vertices.push(LineVertex { position: ray_end.to_array(), color: ray_color });
+        self.pending_vertices.push(LineVertex {
+            position: cell_position.to_array(),
+            color: ray_color,
+        });
+        self.pending_vertices.push(LineVertex {
+            position: ray_end.to_array(),
+            color: ray_color,
+        });
     }
 
     /// Upload and render all queued cones.
@@ -208,8 +206,16 @@ impl FovConeRenderer {
             camera_pos: camera_position.to_array(),
             _padding: 0.0,
         };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
-        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.pending_vertices));
+        queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[camera_uniform]),
+        );
+        queue.write_buffer(
+            &self.vertex_buffer,
+            0,
+            bytemuck::cast_slice(&self.pending_vertices),
+        );
 
         render_pass.set_pipeline(&self.render_pipeline);
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);

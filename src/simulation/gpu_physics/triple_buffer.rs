@@ -1,33 +1,33 @@
 //! Triple Buffer System for GPU Physics
-//! 
+//!
 //! Manages three complete sets of simulation buffers to enable lock-free
 //! GPU computation with zero CPU synchronization stalls.
-//! 
+//!
 //! ## Buffer Layout
-//! 
+//!
 //! ### Cell Data (Triple Buffered)
 //! - `position_and_mass[3]`: Vec4(x, y, z, mass) per cell
 //! - `velocity[3]`: Vec4(x, y, z, 0) per cell
-//! 
+//!
 //! ### Spatial Grid (128^3 = 2,097,152 grid cells)
 //! - `spatial_grid_counts`: u32 per grid cell (how many cells in each grid cell)
 //! - `spatial_grid_offsets`: u32 per grid cell (prefix-sum for O(1) lookup)
 //! - `spatial_grid_cells`: u32 per cell (sorted cell indices by grid cell)
 //! - `cell_grid_indices`: u32 per cell (which grid cell each cell belongs to)
-//! 
+//!
 //! ### Uniforms
 //! - `physics_params`: 256-byte aligned PhysicsParams struct
-//! 
+//!
 //! ## Synchronization
 //! - `needs_sync`: Flag set when CPU data changes (cell insertion/removal)
 //! - `sync_from_canonical_state()`: Uploads CPU data to all 3 buffer sets
 //! - `output_buffer_index()`: Returns buffer with latest physics results
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::simulation::CanonicalState;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Deterministic slot allocation system for cell addition
-/// 
+///
 /// Maintains a sorted list of free slots and allocates them in deterministic order.
 /// Uses the same prefix-sum compaction pattern as the division system.
 #[derive(Debug, Clone)]
@@ -45,30 +45,30 @@ impl DeterministicSlotAllocator {
     pub fn new(capacity: u32) -> Self {
         // Initialize with all slots free (0..capacity)
         let free_slots: Vec<u32> = (0..capacity).collect();
-        
+
         Self {
             free_slots,
             capacity,
             next_cell_id: 1, // Start from 1 (0 reserved for invalid)
         }
     }
-    
+
     /// Allocate next available slot deterministically
     /// Returns (slot_index, cell_id) or None if no slots available
     pub fn allocate_slot(&mut self) -> Option<(u32, u32)> {
         if self.free_slots.is_empty() {
             return None; // No free slots
         }
-        
+
         // Always take the first (lowest) slot for deterministic allocation
         let slot = self.free_slots.remove(0);
         let cell_id = self.next_cell_id;
-        
+
         self.next_cell_id += 1;
-        
+
         Some((slot, cell_id))
     }
-    
+
     /// Free a slot (mark for reuse)
     pub fn free_slot(&mut self, slot: u32) {
         if slot < self.capacity && !self.free_slots.contains(&slot) {
@@ -76,33 +76,33 @@ impl DeterministicSlotAllocator {
             self.free_slots.push(slot);
         }
     }
-    
+
     /// Compact free slots using deterministic sorting (like prefix-sum)
     /// This ensures consistent allocation order across runs
     pub fn compact_free_slots(&mut self) {
         // Sort all free slots for deterministic order
         self.free_slots.sort_unstable();
-        
+
         // Remove duplicates while maintaining order
         self.free_slots.dedup();
     }
-    
+
     /// Get current allocated count
     pub fn allocated_count(&self) -> u32 {
         self.capacity - self.free_slots.len() as u32
     }
-    
+
     /// Get available slot count
     pub fn available_slots(&self) -> usize {
         self.free_slots.len()
     }
-    
+
     /// Reset allocator to initial state
     pub fn reset(&mut self) {
         self.free_slots = (0..self.capacity).collect();
         self.next_cell_id = 1;
     }
-    
+
     /// Set the next cell ID (for synchronization with canonical state)
     pub fn set_next_cell_id(&mut self, next_id: u32) {
         self.next_cell_id = next_id;
@@ -135,14 +135,14 @@ impl CellAdditionRequest {
         let z = (self.position.z * 1000.0) as i64;
         let g = self.genome_id as u64;
         let m = self.mode_index as u64;
-        
+
         // Combine into deterministic hash
         ((x as u64) << 32) ^ ((y as u64) << 16) ^ (z as u64) ^ (g << 8) ^ m
     }
 }
 
 /// Deterministic cell addition pipeline
-/// 
+///
 /// Processes cell additions in batches with deterministic ordering to ensure
 /// the same input produces the same output across runs.
 #[derive(Debug)]
@@ -158,17 +158,17 @@ impl DeterministicCellAddition {
             pending_requests: Vec::new(),
         }
     }
-    
+
     /// Queue a cell for addition
     pub fn queue_cell_addition(&mut self, request: CellAdditionRequest) {
         self.pending_requests.push(request);
     }
-    
+
     /// Get number of pending requests
     pub fn pending_count(&self) -> usize {
         self.pending_requests.len()
     }
-    
+
     /// Clear all pending requests
     pub fn clear_pending(&mut self) {
         self.pending_requests.clear();
@@ -179,69 +179,67 @@ impl DeterministicCellAddition {
 pub struct GpuTripleBufferSystem {
     /// Cell positions and masses: Vec4(x, y, z, mass) - triple buffered
     pub position_and_mass: [wgpu::Buffer; 3],
-    
+
     /// Cell velocities: Vec4(x, y, z, padding) - triple buffered  
     pub velocity: [wgpu::Buffer; 3],
-    
+
     /// Cell rotations: Vec4(x, y, z, w) quaternion - triple buffered
     pub rotations: [wgpu::Buffer; 3],
-    
+
     /// Previous frame accelerations for Verlet integration: Vec4(x, y, z, padding)
     /// Used to compute velocity_change = 0.5 * (old_accel + new_accel) * dt
     pub prev_accelerations: wgpu::Buffer,
-    
+
     /// Spatial grid cell counts (128^3 = 2,097,152 grid cells)
     /// spatial_grid_counts[grid_idx] = number of cells in that grid cell
     pub spatial_grid_counts: wgpu::Buffer,
-    
+
     /// Spatial grid offsets (prefix sum results)
     /// spatial_grid_offsets[grid_idx] = starting index in spatial_grid_cells
     pub spatial_grid_offsets: wgpu::Buffer,
-    
+
     /// Sorted cell indices by grid cell
     /// spatial_grid_cells[offset..offset+count] = cell indices in grid cell
     pub spatial_grid_cells: wgpu::Buffer,
-    
+
     /// Per-cell grid indices
     /// cell_grid_indices[cell_idx] = which grid cell this cell belongs to
     pub cell_grid_indices: wgpu::Buffer,
-    
+
     /// Physics parameters uniform buffer
     pub physics_params: wgpu::Buffer,
-    
+
     // === Lifecycle buffers for cell division ===
-    
     /// Death flags: 1 = dead (free slot), 0 = alive
     pub death_flags: wgpu::Buffer,
-    
+
     /// Nutrients buffer: fixed-point i32 with scale 1000 (100.0 nutrients = 100000 i32)
     /// Stored as atomic for safe concurrent updates from multiple shaders
     pub nutrients_buffer: wgpu::Buffer,
-    
+
     /// Mass deltas for nutrient transport (accumulates mass changes)
     pub mass_deltas_buffer: wgpu::Buffer,
-    
+
     /// Division flags: 1 = wants to divide, 0 = not dividing
     pub division_flags: wgpu::Buffer,
-    
+
     /// Compacted free slot indices (result of prefix-sum on death_flags)
     pub free_slot_indices: wgpu::Buffer,
-    
+
     /// Division slot assignments: maps dividing cell to its assigned free slot index
     pub division_slot_assignments: wgpu::Buffer,
-    
+
     /// Lifecycle counts: [0] = free slot count, [1] = division count (DEPRECATED - use ring buffer)
     pub lifecycle_counts: wgpu::Buffer,
-    
+
     /// Ring buffer for free slot recycling (persistent across frames)
     /// Capacity: 262144 slots (256K) to support up to 200K cells
     pub free_slot_ring: wgpu::Buffer,
-    
+
     /// Ring buffer state: [0]=head, [1]=tail, [2]=next_slot_id, [3]=reservation_count
     pub ring_state: wgpu::Buffer,
-    
+
     // === Cell state buffers for division ===
-    
     /// Birth times for each cell
     pub birth_times: wgpu::Buffer,
 
@@ -250,56 +248,54 @@ pub struct GpuTripleBufferSystem {
     /// Read by adhesion_physics.wgsl to extend the bond-break grace period
     /// so that maturation-triggered mode switches don't cause transient bond breaks.
     pub mode_switch_time: wgpu::Buffer,
-    
+
     /// Split intervals (time between divisions)
     pub split_intervals: wgpu::Buffer,
-    
+
     /// Split nutrient thresholds (nutrient level required for division)
     pub split_nutrient_thresholds: wgpu::Buffer,
-    
+
     /// Current split counts
     pub split_counts: wgpu::Buffer,
-    
+
     /// Split ready frame tracking (for nutrient transfer delay)
     /// -1 means cell is not ready to split
     /// >= 0 means cell is ready and this is the frame number when it became ready
     pub split_ready_frame: wgpu::Buffer,
-    
+
     /// Maximum splits allowed (0 = unlimited)
     pub max_splits: wgpu::Buffer,
-    
+
     /// Genome IDs for each cell
     pub genome_ids: wgpu::Buffer,
-    
+
     /// Cell types for each cell (0 = Test, 1 = Flagellocyte, etc.)
     /// Derived from mode settings during cell insertion
     pub cell_types: wgpu::Buffer,
-    
+
     /// Mode indices for each cell
     pub mode_indices: wgpu::Buffer,
-    
+
     /// Cell IDs (unique identifier)
     pub cell_ids: wgpu::Buffer,
-    
+
     /// Next cell ID counter
     pub next_cell_id: wgpu::Buffer,
-    
+
     /// Nutrient gain rates per cell (from genome mode)
     pub nutrient_gain_rates: wgpu::Buffer,
-    
+
     /// Max cell sizes per cell (from genome mode) - caps mass growth
     pub max_cell_sizes: wgpu::Buffer,
-    
+
     /// Membrane stiffnesses per cell (from genome mode)
     /// Used for collision repulsion strength
     pub stiffnesses: wgpu::Buffer,
-    
+
     /// GPU-side cell count buffer: [0] = total cells, [1] = live cells
     /// Updated by division shader, read by all other shaders
     pub cell_count_buffer: wgpu::Buffer,
-    
 
-    
     /// Genome mode data buffers for division (split into 5 vec4 sub-buffers to stay under wgpu 256 MB/buffer limit)
     /// Combined layout per mode: [child_a_orientation (v0), child_b_orientation (v1),
     ///                            child_a_split_orientation (v2), child_b_split_orientation (v3),
@@ -310,19 +306,19 @@ pub struct GpuTripleBufferSystem {
     pub genome_mode_data_v2: wgpu::Buffer,
     pub genome_mode_data_v3: wgpu::Buffer,
     pub genome_mode_data_v4: wgpu::Buffer,
-    
+
     /// Child mode indices buffer (two i32 per mode: child_a_mode, child_b_mode)
     /// Total size: num_modes * 8 bytes
     pub child_mode_indices: wgpu::Buffer,
-    
+
     /// Parent make adhesion flags buffer (one u32 per mode)
     /// Stores whether each mode allows sibling adhesion creation during division
     pub parent_make_adhesion_flags: wgpu::Buffer,
-    
+
     /// Child A keep adhesion flags buffer (one u32 per mode)
     /// Stores whether Child A should inherit adhesions during division
     pub child_a_keep_adhesion_flags: wgpu::Buffer,
-    
+
     /// Child B keep adhesion flags buffer (one u32 per mode)
     /// Stores whether Child B should inherit adhesions during division
     pub child_b_keep_adhesion_flags: wgpu::Buffer,
@@ -334,7 +330,7 @@ pub struct GpuTripleBufferSystem {
     /// Child B after-split keep adhesion flags buffer (one u32 per mode)
     /// Stores whether Child B should inherit adhesions when max_splits is reached
     pub child_b_after_split_keep_adhesion_flags: wgpu::Buffer,
-    
+
     /// Mode properties buffers (split into 5 vec4 sub-buffers to stay under wgpu 256 MB/buffer limit)
     /// v0: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval]
     /// v1: [split_mass, nutrient_priority, swim_force, prioritize_when_low]
@@ -347,13 +343,13 @@ pub struct GpuTripleBufferSystem {
     pub mode_properties_v2: wgpu::Buffer,
     pub mode_properties_v3: wgpu::Buffer,
     pub mode_properties_v4: wgpu::Buffer,
-    
+
     /// Mode properties v5-v6 for cilia parameters (16 bytes per mode each)
     /// v5: [cilia_speed, cilia_push_bonded as f32, cilia_use_signal as f32, cilia_signal_channel as f32]
     /// v6: [cilia_speed_below, cilia_speed_above, cilia_threshold, cilia_attract_force]
     pub mode_properties_v5: wgpu::Buffer,
     pub mode_properties_v6: wgpu::Buffer,
-    
+
     /// Mode properties v7 for myocyte parameters (16 bytes per mode)
     /// v7: [myocyte_contraction, myocyte_use_signal as f32, myocyte_signal_channel as f32, myocyte_threshold]
     /// v8: [myocyte_contraction_above, myocyte_contraction_below, myocyte_pulse_rate, myocyte_pulse_phase as f32]
@@ -387,10 +383,10 @@ pub struct GpuTripleBufferSystem {
     /// Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
     /// Used by shaders to derive cell_type from mode_index (always up-to-date with genome settings)
     pub mode_cell_types: wgpu::Buffer,
-    
+
     /// Current buffer index (atomic for lock-free rotation)
     current_index: AtomicUsize,
-    
+
     /// Cell capacity
     pub capacity: u32,
 
@@ -400,33 +396,31 @@ pub struct GpuTripleBufferSystem {
     /// child_mode_indices, flags, oculocyte_params, regulation_params, etc.) are always
     /// exactly this many modes in size.
     pub mode_pool_capacity: u64,
-    
+
     /// Whether buffers need full sync from canonical state (initial setup only)
     pub needs_sync: bool,
-    
+
     /// Pending cell insertions (cell indices to sync)
     pending_cell_insertions: Vec<usize>,
-    
 
-    
     /// Deterministic slot allocation system
     slot_allocator: DeterministicSlotAllocator,
-    
+
     /// Deterministic cell addition pipeline
     cell_addition_pipeline: DeterministicCellAddition,
-    
+
     /// Cell count readback buffer for async GPU-to-CPU transfer
     cell_count_readback_buffer: wgpu::Buffer,
-    
+
     /// Whether a cell count readback is pending
     cell_count_map_pending: bool,
-    
+
     /// Channel receiver for cell count map completion
     cell_count_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
-    
+
     /// Last known cell count from GPU readback
     last_cell_count: u32,
-    
+
     /// Behavior flags per cell type for parameterized shader logic
     pub behavior_flags: wgpu::Buffer,
 
@@ -480,7 +474,7 @@ pub struct GpuTripleBufferSystem {
     /// without any physics perturbation. Used by adhesion shaders for anchor transformation
     /// so that structures are defined purely by genome data.
     pub genome_orientations: wgpu::Buffer,
-    
+
     /// Indirect dispatch buffer for GPU-driven workgroup counts
     /// Layout: [workgroup_count_x, workgroup_count_y, workgroup_count_z, padding]
     /// Written by compute shader based on cell_count, used for indirect dispatch
@@ -491,57 +485,58 @@ impl GpuTripleBufferSystem {
     /// Create a new triple buffer system
     pub fn new(device: &wgpu::Device, capacity: u32) -> Self {
         let buffer_size = capacity as u64 * 16; // Vec4<f32> = 16 bytes
-        
+
         // Create triple-buffered simulation data
         let position_and_mass = [
             Self::create_storage_buffer(device, buffer_size, "Position Mass Buffer 0"),
-            Self::create_storage_buffer(device, buffer_size, "Position Mass Buffer 1"), 
+            Self::create_storage_buffer(device, buffer_size, "Position Mass Buffer 1"),
             Self::create_storage_buffer(device, buffer_size, "Position Mass Buffer 2"),
         ];
-        
+
         let velocity = [
             Self::create_storage_buffer(device, buffer_size, "Velocity Buffer 0"),
             Self::create_storage_buffer(device, buffer_size, "Velocity Buffer 1"),
             Self::create_storage_buffer(device, buffer_size, "Velocity Buffer 2"),
         ];
-        
+
         let rotations = [
             Self::create_storage_buffer(device, buffer_size, "Rotations Buffer 0"),
             Self::create_storage_buffer(device, buffer_size, "Rotations Buffer 1"),
             Self::create_storage_buffer(device, buffer_size, "Rotations Buffer 2"),
         ];
-        
+
         // Previous accelerations for Verlet integration (single buffer, not triple buffered)
-        let prev_accelerations = Self::create_storage_buffer(device, buffer_size, "Previous Accelerations");
-        
+        let prev_accelerations =
+            Self::create_storage_buffer(device, buffer_size, "Previous Accelerations");
+
         // Create spatial grid buffers (128^3 = 2,097,152 grid cells)
         let grid_size = 128 * 128 * 128;
         let spatial_grid_counts = Self::create_storage_buffer(
-            device, 
+            device,
             grid_size * 4, // u32 = 4 bytes
-            "Spatial Grid Counts"
+            "Spatial Grid Counts",
         );
-        
+
         let spatial_grid_offsets = Self::create_storage_buffer(
             device,
-            grid_size * 4, // u32 = 4 bytes  
-            "Spatial Grid Offsets"
+            grid_size * 4, // u32 = 4 bytes
+            "Spatial Grid Offsets",
         );
-        
+
         let cell_grid_indices = Self::create_storage_buffer(
             device,
             capacity as u64 * 4, // u32 per cell
-            "Cell Grid Indices"
+            "Cell Grid Indices",
         );
-        
+
         // Sorted cell indices by grid cell (16 cells max per grid cell * 128^3 grid cells)
         // This enables O(1) neighbor lookup in collision detection
         let spatial_grid_cells = Self::create_storage_buffer(
             device,
             16 * grid_size * 4, // 16 cells per grid cell * 2,097,152 grid cells * 4 bytes
-            "Spatial Grid Cells"
+            "Spatial Grid Cells",
         );
-        
+
         // Physics params uniform buffer (256 bytes aligned)
         let physics_params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Physics Params Uniform"),
@@ -549,7 +544,7 @@ impl GpuTripleBufferSystem {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // === Lifecycle buffers for cell division ===
         let u32_per_cell = capacity as u64 * 4; // u32 = 4 bytes
         let i32_per_cell = capacity as u64 * 4; // i32 = 4 bytes
@@ -557,29 +552,38 @@ impl GpuTripleBufferSystem {
 
         // death_flags must be zero-initialized to prevent cell_insertion shader from
         // finding false "dead" slots in uninitialized memory
-        let death_flags = Self::create_zero_initialized_storage_buffer(device, u32_per_cell, "Death Flags");
-        
+        let death_flags =
+            Self::create_zero_initialized_storage_buffer(device, u32_per_cell, "Death Flags");
+
         // Nutrients buffer: i32 with fixed-point scale 1000 (100.0 nutrients = 100000)
         // Pre-initialized to 100000 (full nutrients) for all slots
-        let nutrients_buffer = Self::create_zero_initialized_storage_buffer(device, i32_per_cell, "Nutrients Buffer");
-        
-        let mass_deltas_buffer = Self::create_storage_buffer(device, f32_per_cell, "Mass Deltas Buffer"); // i32 = 4 bytes, same as f32
+        let nutrients_buffer =
+            Self::create_zero_initialized_storage_buffer(device, i32_per_cell, "Nutrients Buffer");
+
+        let mass_deltas_buffer =
+            Self::create_storage_buffer(device, f32_per_cell, "Mass Deltas Buffer"); // i32 = 4 bytes, same as f32
         let division_flags = Self::create_storage_buffer(device, u32_per_cell, "Division Flags");
-        let free_slot_indices = Self::create_storage_buffer(device, u32_per_cell, "Free Slot Indices");
-        let division_slot_assignments = Self::create_max_u32_initialized_storage_buffer(device, u32_per_cell, "Division Slot Assignments");
-        
+        let free_slot_indices =
+            Self::create_storage_buffer(device, u32_per_cell, "Free Slot Indices");
+        let division_slot_assignments = Self::create_max_u32_initialized_storage_buffer(
+            device,
+            u32_per_cell,
+            "Division Slot Assignments",
+        );
+
         // Lifecycle counts: [0] = free slots, [1] = divisions, [2] = dead count (DEPRECATED)
         let lifecycle_counts = Self::create_storage_buffer(device, 12, "Lifecycle Counts");
-        
+
         // Ring buffer for free slot recycling: 262144 slots (256K u32s = 1MB)
         // Supports up to 200K cells with headroom for churn
         const RING_BUFFER_CAPACITY: u64 = 262144;
-        let free_slot_ring = Self::create_storage_buffer(device, RING_BUFFER_CAPACITY * 4, "Free Slot Ring");
-        
+        let free_slot_ring =
+            Self::create_storage_buffer(device, RING_BUFFER_CAPACITY * 4, "Free Slot Ring");
+
         // Ring state: [head, tail, next_slot_id, reservation_count] = 16 bytes
         // Zero-initialized so ring starts empty and next_slot_id starts at 0
         let ring_state = Self::create_zero_initialized_storage_buffer(device, 16, "Ring State");
-        
+
         // Cell state buffers
         let birth_times = Self::create_storage_buffer(device, f32_per_cell, "Birth Times");
         // Initialize mode_switch_time to -1000.0 so the grace period never fires on first frame.
@@ -587,40 +591,47 @@ impl GpuTripleBufferSystem {
         let mode_switch_time = {
             let size = (capacity as u64 * 4 + 15) & !15;
             let buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label:              Some("Mode Switch Time"),
+                label: Some("Mode Switch Time"),
                 size,
-                usage:              wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: true,
             });
             {
                 let mut view = buf.slice(..).get_mapped_range_mut();
                 let floats: &mut [f32] = bytemuck::cast_slice_mut(&mut view);
-                for v in floats.iter_mut() { *v = -1000.0_f32; }
+                for v in floats.iter_mut() {
+                    *v = -1000.0_f32;
+                }
             }
             buf.unmap();
             buf
         };
         let split_intervals = Self::create_storage_buffer(device, f32_per_cell, "Split Intervals");
-        let split_nutrient_thresholds = Self::create_storage_buffer(device, f32_per_cell, "Split Nutrient Thresholds");
+        let split_nutrient_thresholds =
+            Self::create_storage_buffer(device, f32_per_cell, "Split Nutrient Thresholds");
         let split_counts = Self::create_storage_buffer(device, u32_per_cell, "Split Counts");
-        let split_ready_frame = Self::create_storage_buffer(device, u32_per_cell, "Split Ready Frame");
+        let split_ready_frame =
+            Self::create_storage_buffer(device, u32_per_cell, "Split Ready Frame");
         let max_splits = Self::create_storage_buffer(device, u32_per_cell, "Max Splits");
         let genome_ids = Self::create_storage_buffer(device, u32_per_cell, "Genome IDs");
         // cell_types must be zero-initialized so build_instances shader fallback works correctly
         // (fallback uses mode_cell_types when cell_types[idx] == 0)
-        let cell_types = Self::create_zero_initialized_storage_buffer(device, u32_per_cell, "Cell Types");
+        let cell_types =
+            Self::create_zero_initialized_storage_buffer(device, u32_per_cell, "Cell Types");
         let mode_indices = Self::create_storage_buffer(device, u32_per_cell, "Mode Indices");
         let cell_ids = Self::create_storage_buffer(device, u32_per_cell, "Cell IDs");
         let next_cell_id = Self::create_storage_buffer(device, 4, "Next Cell ID");
-        let nutrient_gain_rates = Self::create_storage_buffer(device, f32_per_cell, "Nutrient Gain Rates");
+        let nutrient_gain_rates =
+            Self::create_storage_buffer(device, f32_per_cell, "Nutrient Gain Rates");
         let max_cell_sizes = Self::create_storage_buffer(device, f32_per_cell, "Max Cell Sizes");
         let stiffnesses = Self::create_storage_buffer(device, f32_per_cell, "Stiffnesses");
-        
+
         // GPU-side cell count: [0] = total cells, [1] = live cells, [2] = dragged cell index (0xFFFFFFFF = none)
         // Must be zero-initialized so shaders start with 0 cells
         // Slot [2] is written each frame by GpuScene::render() with the current dragged_cell_index
-        let cell_count_buffer = Self::create_zero_initialized_storage_buffer(device, 16, "Cell Count Buffer");
-        
+        let cell_count_buffer =
+            Self::create_zero_initialized_storage_buffer(device, 16, "Cell Count Buffer");
+
         // Cell count readback buffer for async GPU-to-CPU transfer
         let cell_count_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Cell Count Readback Buffer"),
@@ -629,7 +640,6 @@ impl GpuTripleBufferSystem {
             mapped_at_creation: false,
         });
 
-        
         // Mode pool: start small and grow on demand via grow_mode_pool_if_needed().
         // Initial size covers ~200 genomes x 80 modes = 16K modes (~26 MB total across all
         // sub-buffers), vs the old fixed 8M allocation (~4.8 GB).
@@ -637,57 +647,88 @@ impl GpuTripleBufferSystem {
         // MAX_TOTAL_MODES (8_000_000) which is the hard cap used by the mutation ring buffer.
         const INITIAL_MODE_POOL_SIZE: u64 = 16_384;
         let max_modes = INITIAL_MODE_POOL_SIZE;
-        let genome_mode_data_v0 = Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V0");
-        let genome_mode_data_v1 = Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V1");
-        let genome_mode_data_v2 = Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V2");
-        let genome_mode_data_v3 = Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V3");
-        let genome_mode_data_v4 = Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V4");
-        
+        let genome_mode_data_v0 =
+            Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V0");
+        let genome_mode_data_v1 =
+            Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V1");
+        let genome_mode_data_v2 =
+            Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V2");
+        let genome_mode_data_v3 =
+            Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V3");
+        let genome_mode_data_v4 =
+            Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V4");
+
         // Child mode indices: two i32 per mode (child_a_mode, child_b_mode)
-        let child_mode_indices = Self::create_storage_buffer(device, max_modes * 8, "Child Mode Indices");
-        
+        let child_mode_indices =
+            Self::create_storage_buffer(device, max_modes * 8, "Child Mode Indices");
+
         // Parent make adhesion flags: one u32 per mode
-        let parent_make_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Parent Make Adhesion Flags");
-        
+        let parent_make_adhesion_flags =
+            Self::create_storage_buffer(device, max_modes * 4, "Parent Make Adhesion Flags");
+
         // Child A keep adhesion flags: one u32 per mode
-        let child_a_keep_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Child A Keep Adhesion Flags");
-        
+        let child_a_keep_adhesion_flags =
+            Self::create_storage_buffer(device, max_modes * 4, "Child A Keep Adhesion Flags");
+
         // Child B keep adhesion flags: one u32 per mode
-        let child_b_keep_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Child B Keep Adhesion Flags");
+        let child_b_keep_adhesion_flags =
+            Self::create_storage_buffer(device, max_modes * 4, "Child B Keep Adhesion Flags");
 
         // Child A after-split keep adhesion flags: one u32 per mode
-        let child_a_after_split_keep_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Child A After Split Keep Adhesion Flags");
+        let child_a_after_split_keep_adhesion_flags = Self::create_storage_buffer(
+            device,
+            max_modes * 4,
+            "Child A After Split Keep Adhesion Flags",
+        );
 
         // Child B after-split keep adhesion flags: one u32 per mode
-        let child_b_after_split_keep_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Child B After Split Keep Adhesion Flags");
-        
+        let child_b_after_split_keep_adhesion_flags = Self::create_storage_buffer(
+            device,
+            max_modes * 4,
+            "Child B After Split Keep Adhesion Flags",
+        );
+
         // Mode properties split into 5 vec4 sub-buffers (16 bytes each)
-        let mode_properties_v0 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V0");
-        let mode_properties_v1 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V1");
-        let mode_properties_v2 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V2");
-        let mode_properties_v3 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V3");
-        let mode_properties_v4 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V4");
-        
+        let mode_properties_v0 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V0");
+        let mode_properties_v1 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V1");
+        let mode_properties_v2 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V2");
+        let mode_properties_v3 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V3");
+        let mode_properties_v4 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V4");
+
         // Mode properties v5-v6 for cilia parameters (16 bytes per mode each)
-        let mode_properties_v5 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V5");
-        let mode_properties_v6 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V6");
-        
+        let mode_properties_v5 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V5");
+        let mode_properties_v6 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V6");
+
         // Mode properties v7-v8 for myocyte parameters (16 bytes per mode each)
-        let mode_properties_v7 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V7");
-        let mode_properties_v8 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V8");
+        let mode_properties_v7 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V7");
+        let mode_properties_v8 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V8");
 
         // Mode properties v9-v10 for Embryocyte parameters (16 bytes per mode each)
-        let mode_properties_v9 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V9");
-        let mode_properties_v10 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V10");
+        let mode_properties_v9 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V9");
+        let mode_properties_v10 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V10");
 
         // Mode properties v11 for Devorocyte parameters (16 bytes per mode each)
-        let mode_properties_v11 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V11");
+        let mode_properties_v11 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V11");
 
         // Mode properties v12 for Vasculocyte parameters (16 bytes per mode each)
-        let mode_properties_v12 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V12");
+        let mode_properties_v12 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V12");
 
         // Mode properties v13 for Gametocyte parameters (16 bytes per mode each)
-        let mode_properties_v13 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V13");
+        let mode_properties_v13 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V13");
 
         // Per-cell Embryocyte reserve buffer (one u32 per cell, zero-initialized)
         let embryocyte_reserve_buffer = Self::create_zero_initialized_storage_buffer(
@@ -698,7 +739,7 @@ impl GpuTripleBufferSystem {
 
         // Mode cell types: one u32 per mode - lookup table for deriving cell_type from mode_index
         let mode_cell_types = Self::create_storage_buffer(device, max_modes * 4, "Mode Cell Types");
-        
+
         // Behavior flags per cell type for parameterized shader logic
         // Each GpuCellTypeBehaviorFlags struct is 64 bytes (6 u32 fields + 10 u32 padding)
         let behavior_flags = Self::create_storage_buffer(device, 30 * 64, "Behavior Flags"); // CellType::MAX_TYPES = 30
@@ -712,13 +753,16 @@ impl GpuTripleBufferSystem {
         );
 
         // Per-mode glueocyte env adhesion flags (one u32 per mode)
-        let glueocyte_env_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Glueocyte Env Adhesion Flags");
+        let glueocyte_env_adhesion_flags =
+            Self::create_storage_buffer(device, max_modes * 4, "Glueocyte Env Adhesion Flags");
         // Per-mode glueocyte boulder adhesion flags (one u32 per mode)
-        let glueocyte_boulder_adhesion_flags = Self::create_storage_buffer(device, max_modes * 4, "Glueocyte Boulder Adhesion Flags");
+        let glueocyte_boulder_adhesion_flags =
+            Self::create_storage_buffer(device, max_modes * 4, "Glueocyte Boulder Adhesion Flags");
 
         // Per-mode glueocyte cell-adhesion flags: 4 u32 per mode
         // [0]=enabled, [1]=signal_channel (0xFFFFFFFF=always active), [2]=signal_threshold bits, [3]=self_adhesion
-        let glueocyte_cell_adhesion_flags = Self::create_storage_buffer(device, max_modes * 16, "Glueocyte Cell Adhesion Flags");
+        let glueocyte_cell_adhesion_flags =
+            Self::create_storage_buffer(device, max_modes * 16, "Glueocyte Cell Adhesion Flags");
 
         // Per-cell muscle contraction value (one f32 per cell, zero-initialized = relaxed)
         let muscle_contraction_buffer = Self::create_zero_initialized_storage_buffer(
@@ -728,34 +772,45 @@ impl GpuTripleBufferSystem {
         );
 
         // Per-mode oculocyte parameters: vec4<u32> per mode (sense_type, sense_range_bits, signal_hops, signal_channel)
-        let oculocyte_params = Self::create_storage_buffer(device, max_modes * 16, "Oculocyte Params");
+        let oculocyte_params =
+            Self::create_storage_buffer(device, max_modes * 16, "Oculocyte Params");
 
         // Per-mode oculocyte signal values: one f32 per mode (value emitted when target detected)
-        let oculocyte_signal_values = Self::create_storage_buffer(device, max_modes * 4, "Oculocyte Signal Values");
+        let oculocyte_signal_values =
+            Self::create_storage_buffer(device, max_modes * 4, "Oculocyte Signal Values");
 
         // Per-mode regulation emission parameters: vec4<u32> per mode (emit_channel, emit_value_bits, emit_hops, padding)
-        let regulation_params = Self::create_storage_buffer(device, max_modes * 16, "Regulation Params");
+        let regulation_params =
+            Self::create_storage_buffer(device, max_modes * 16, "Regulation Params");
 
         // Per-mode signal-conditional settings: 5 vec4<f32> sub-buffers per mode
-        let signal_settings_v0 = Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V0");
-        let signal_settings_v1 = Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V1");
-        let signal_settings_v2 = Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V2");
-        let signal_settings_v3 = Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V3");
-        let signal_settings_v4 = Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V4");
+        let signal_settings_v0 =
+            Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V0");
+        let signal_settings_v1 =
+            Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V1");
+        let signal_settings_v2 =
+            Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V2");
+        let signal_settings_v3 =
+            Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V3");
+        let signal_settings_v4 =
+            Self::create_storage_buffer(device, max_modes * 16, "Signal Settings V4");
 
         // Per-cell genome orientation: vec4<f32> quaternion (identity = 0,0,0,1)
         // Tracks pure genome-derived orientation without physics perturbation
-        let genome_orientations = Self::create_storage_buffer(device, buffer_size, "Genome Orientations");
-        
+        let genome_orientations =
+            Self::create_storage_buffer(device, buffer_size, "Genome Orientations");
+
         // Indirect dispatch buffer: 3 x u32 for workgroup counts + padding
         // Used for GPU-driven dispatch that scales with actual cell count
         let indirect_dispatch_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Indirect Dispatch Buffer"),
             size: 16, // 4 x u32
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::INDIRECT
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         Self {
             position_and_mass,
             velocity,
@@ -847,7 +902,7 @@ impl GpuTripleBufferSystem {
             last_cell_count: 0,
         }
     }
-    
+
     /// Create a storage buffer with optimal settings for compute shaders
     fn create_storage_buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
         // Align size to 16-byte boundary for GPU compatibility
@@ -865,7 +920,11 @@ impl GpuTripleBufferSystem {
 
     /// Create a storage buffer that is zero-initialized
     /// Used for buffers like death_flags that need deterministic initial state
-    fn create_zero_initialized_storage_buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
+    fn create_zero_initialized_storage_buffer(
+        device: &wgpu::Device,
+        size: u64,
+        label: &str,
+    ) -> wgpu::Buffer {
         // Align size to 16-byte boundary for GPU compatibility
         let aligned_size = (size + 15) & !15; // Round up to nearest 16 bytes
 
@@ -887,10 +946,14 @@ impl GpuTripleBufferSystem {
 
         buffer
     }
-    
+
     /// Create a storage buffer that is initialized with 0xFFFFFFFFu (max u32)
     /// Used for division_slot_assignments to ensure sentinel values >= cell_capacity
-    pub fn create_max_u32_initialized_storage_buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
+    pub fn create_max_u32_initialized_storage_buffer(
+        device: &wgpu::Device,
+        size: u64,
+        label: &str,
+    ) -> wgpu::Buffer {
         // Align size to 16-byte boundary for GPU compatibility
         let aligned_size = (size + 15) & !15; // Round up to nearest 16 bytes
 
@@ -913,11 +976,17 @@ impl GpuTripleBufferSystem {
 
         buffer
     }
-    
+
     /// Upload canonical state data to all GPU buffer sets
     /// WARNING: This overwrites ALL GPU positions with CPU data.
     /// Only use for initial setup, not during simulation.
-    pub fn sync_from_canonical_state(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, state: &CanonicalState, genomes: &[crate::genome::Genome]) {
+    pub fn sync_from_canonical_state(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        state: &CanonicalState,
+        genomes: &[crate::genome::Genome],
+    ) {
         // Grow mode pool if needed before any genome data sync
         let total_modes: u64 = genomes.iter().map(|g| g.modes.len() as u64).sum();
         if total_modes > 0 {
@@ -926,16 +995,20 @@ impl GpuTripleBufferSystem {
 
         // Sync slot allocator with canonical state
         self.sync_slot_allocator_with_canonical(state);
-        
+
         // Always update GPU cell count buffer, even when cell_count is 0
         let cell_counts: [u32; 2] = [state.cell_count as u32, state.cell_count as u32];
-        queue.write_buffer(&self.cell_count_buffer, 0, bytemuck::cast_slice(&cell_counts));
-        
+        queue.write_buffer(
+            &self.cell_count_buffer,
+            0,
+            bytemuck::cast_slice(&cell_counts),
+        );
+
         if state.cell_count == 0 {
             self.needs_sync = false;
             return;
         }
-        
+
         // Build position_and_mass data: Vec4(x, y, z, mass)
         let mut position_mass_data: Vec<[f32; 4]> = Vec::with_capacity(state.cell_count);
         for i in 0..state.cell_count {
@@ -946,7 +1019,7 @@ impl GpuTripleBufferSystem {
                 state.masses[i],
             ]);
         }
-        
+
         // Build velocity data: Vec4(x, y, z, 0)
         let mut velocity_data: Vec<[f32; 4]> = Vec::with_capacity(state.cell_count);
         for i in 0..state.cell_count {
@@ -957,81 +1030,106 @@ impl GpuTripleBufferSystem {
                 0.0,
             ]);
         }
-        
+
         // Build rotation data: Vec4(x, y, z, w) quaternion
         let mut rotation_data: Vec<[f32; 4]> = Vec::with_capacity(state.cell_count);
         for i in 0..state.cell_count {
             let q = state.rotations[i];
             rotation_data.push([q.x, q.y, q.z, q.w]);
         }
-        
+
         // Build genome orientation data: Vec4(x, y, z, w) quaternion
         let mut genome_orientation_data: Vec<[f32; 4]> = Vec::with_capacity(state.cell_count);
         for i in 0..state.cell_count {
             let q = state.genome_orientations[i];
             genome_orientation_data.push([q.x, q.y, q.z, q.w]);
         }
-        
+
         // Upload to all three buffer sets
         let position_bytes = bytemuck::cast_slice(&position_mass_data);
         let velocity_bytes = bytemuck::cast_slice(&velocity_data);
         let rotation_bytes = bytemuck::cast_slice(&rotation_data);
-        
+
         for i in 0..3 {
             queue.write_buffer(&self.position_and_mass[i], 0, position_bytes);
             queue.write_buffer(&self.velocity[i], 0, velocity_bytes);
             queue.write_buffer(&self.rotations[i], 0, rotation_bytes);
         }
-        
+
         // Upload genome orientations (single buffer, not triple-buffered)
-        queue.write_buffer(&self.genome_orientations, 0, bytemuck::cast_slice(&genome_orientation_data));
-        
+        queue.write_buffer(
+            &self.genome_orientations,
+            0,
+            bytemuck::cast_slice(&genome_orientation_data),
+        );
+
         // Sync cell state buffers for division system
         self.sync_cell_state_buffers(queue, state, genomes);
-        
+
         self.needs_sync = false;
     }
-    
+
     /// Sync cell state buffers (birth times, split intervals, etc.) for division system
-    pub fn sync_cell_state_buffers(&self, queue: &wgpu::Queue, state: &CanonicalState, genomes: &[crate::genome::Genome]) {
+    pub fn sync_cell_state_buffers(
+        &self,
+        queue: &wgpu::Queue,
+        state: &CanonicalState,
+        genomes: &[crate::genome::Genome],
+    ) {
         if state.cell_count == 0 {
             return;
         }
-        
+
         // Birth times
         let birth_times: Vec<f32> = state.birth_times[..state.cell_count].to_vec();
         queue.write_buffer(&self.birth_times, 0, bytemuck::cast_slice(&birth_times));
-        
+
         // Split intervals
         let split_intervals: Vec<f32> = state.split_intervals[..state.cell_count].to_vec();
-        queue.write_buffer(&self.split_intervals, 0, bytemuck::cast_slice(&split_intervals));
-        
+        queue.write_buffer(
+            &self.split_intervals,
+            0,
+            bytemuck::cast_slice(&split_intervals),
+        );
+
         // Split nutrient thresholds
-        let split_nutrient_thresholds: Vec<f32> = state.split_nutrient_thresholds[..state.cell_count].to_vec();
-        queue.write_buffer(&self.split_nutrient_thresholds, 0, bytemuck::cast_slice(&split_nutrient_thresholds));
-        
+        let split_nutrient_thresholds: Vec<f32> =
+            state.split_nutrient_thresholds[..state.cell_count].to_vec();
+        queue.write_buffer(
+            &self.split_nutrient_thresholds,
+            0,
+            bytemuck::cast_slice(&split_nutrient_thresholds),
+        );
+
         // Nutrients - convert f32 to i32 fixed-point (scale 1000: 100.0 nutrients = 100000)
         let nutrients: Vec<i32> = state.nutrients[..state.cell_count]
             .iter()
             .map(|&n| (n * 1000.0) as i32)
             .collect();
         queue.write_buffer(&self.nutrients_buffer, 0, bytemuck::cast_slice(&nutrients));
-        
+
         // Split counts
-        let split_counts: Vec<u32> = state.split_counts[..state.cell_count].iter().map(|&x| x as u32).collect();
+        let split_counts: Vec<u32> = state.split_counts[..state.cell_count]
+            .iter()
+            .map(|&x| x as u32)
+            .collect();
         queue.write_buffer(&self.split_counts, 0, bytemuck::cast_slice(&split_counts));
-        
+
         // Split ready frame - initialize to -1 (not ready to split)
         let split_ready_frame: Vec<i32> = vec![-1; state.cell_count];
-        queue.write_buffer(&self.split_ready_frame, 0, bytemuck::cast_slice(&split_ready_frame));
-        
+        queue.write_buffer(
+            &self.split_ready_frame,
+            0,
+            bytemuck::cast_slice(&split_ready_frame),
+        );
+
         // Max splits, nutrient gain rates, max cell sizes, and stiffnesses (from genome modes)
         // Convert -1 (infinite) to 0 (unlimited in GPU)
         let mut max_splits_data: Vec<u32> = Vec::with_capacity(state.cell_count);
         let mut nutrient_gain_rates_data: Vec<f32> = Vec::with_capacity(state.cell_count);
         let mut max_cell_sizes_data: Vec<f32> = Vec::with_capacity(state.cell_count);
         let mut stiffnesses_data: Vec<f32> = Vec::with_capacity(state.cell_count);
-        
+
         for i in 0..state.cell_count {
             let genome_id = state.genome_ids[i];
             let mode_idx = state.mode_indices[i];
@@ -1065,14 +1163,29 @@ impl GpuTripleBufferSystem {
             }
         }
         queue.write_buffer(&self.max_splits, 0, bytemuck::cast_slice(&max_splits_data));
-        queue.write_buffer(&self.nutrient_gain_rates, 0, bytemuck::cast_slice(&nutrient_gain_rates_data));
-        queue.write_buffer(&self.max_cell_sizes, 0, bytemuck::cast_slice(&max_cell_sizes_data));
-        queue.write_buffer(&self.stiffnesses, 0, bytemuck::cast_slice(&stiffnesses_data));
-        
+        queue.write_buffer(
+            &self.nutrient_gain_rates,
+            0,
+            bytemuck::cast_slice(&nutrient_gain_rates_data),
+        );
+        queue.write_buffer(
+            &self.max_cell_sizes,
+            0,
+            bytemuck::cast_slice(&max_cell_sizes_data),
+        );
+        queue.write_buffer(
+            &self.stiffnesses,
+            0,
+            bytemuck::cast_slice(&stiffnesses_data),
+        );
+
         // Genome IDs
-        let genome_ids: Vec<u32> = state.genome_ids[..state.cell_count].iter().map(|&x| x as u32).collect();
+        let genome_ids: Vec<u32> = state.genome_ids[..state.cell_count]
+            .iter()
+            .map(|&x| x as u32)
+            .collect();
         queue.write_buffer(&self.genome_ids, 0, bytemuck::cast_slice(&genome_ids));
-        
+
         // Cell types - derived from mode settings
         let cell_types_data: Vec<u32> = (0..state.cell_count)
             .map(|i| {
@@ -1091,7 +1204,7 @@ impl GpuTripleBufferSystem {
             })
             .collect();
         queue.write_buffer(&self.cell_types, 0, bytemuck::cast_slice(&cell_types_data));
-        
+
         // Mode indices - store ABSOLUTE indices (with genome offset applied)
         // This matches how the instance builder's mode_visuals buffer is organized:
         // mode_visuals[0..genome0.modes.len()] = genome 0's modes
@@ -1105,7 +1218,7 @@ impl GpuTripleBufferSystem {
             }
             offsets
         };
-        
+
         let mode_indices: Vec<u32> = (0..state.cell_count)
             .map(|i| {
                 let genome_id = state.genome_ids[i];
@@ -1115,33 +1228,44 @@ impl GpuTripleBufferSystem {
             })
             .collect();
         queue.write_buffer(&self.mode_indices, 0, bytemuck::cast_slice(&mode_indices));
-        
+
         // Cell IDs
-        let cell_ids: Vec<u32> = state.cell_ids[..state.cell_count].iter().map(|&x| x as u32).collect();
+        let cell_ids: Vec<u32> = state.cell_ids[..state.cell_count]
+            .iter()
+            .map(|&x| x as u32)
+            .collect();
         queue.write_buffer(&self.cell_ids, 0, bytemuck::cast_slice(&cell_ids));
-        
+
         // Next cell ID
         let next_id: [u32; 1] = [state.next_cell_id as u32];
         queue.write_buffer(&self.next_cell_id, 0, bytemuck::cast_slice(&next_id));
-        
+
         // Initialize death flags to 0 (all alive)
         let death_flags: Vec<u32> = vec![0u32; state.cell_count];
         queue.write_buffer(&self.death_flags, 0, bytemuck::cast_slice(&death_flags));
-        
+
         // Initialize mass deltas to 0 (no transfers)
         let mass_deltas: Vec<f32> = vec![0.0f32; state.cell_count];
-        queue.write_buffer(&self.mass_deltas_buffer, 0, bytemuck::cast_slice(&mass_deltas));
-        
+        queue.write_buffer(
+            &self.mass_deltas_buffer,
+            0,
+            bytemuck::cast_slice(&mass_deltas),
+        );
+
         // Initialize division flags to 0
         let division_flags: Vec<u32> = vec![0u32; state.cell_count];
-        queue.write_buffer(&self.division_flags, 0, bytemuck::cast_slice(&division_flags));
-        
+        queue.write_buffer(
+            &self.division_flags,
+            0,
+            bytemuck::cast_slice(&division_flags),
+        );
+
         // Sync genome mode data for division (child orientations)
         self.sync_genome_mode_data(queue, genomes);
-        
+
         // Sync child mode indices for division
         self.sync_child_mode_indices(queue, genomes);
-        
+
         // Sync mode properties for division (nutrient_gain_rate, max_cell_size, etc.)
         self.sync_mode_properties(queue, genomes);
 
@@ -1158,12 +1282,12 @@ impl GpuTripleBufferSystem {
         // Sync behavior flags for all cell types (applies_swim_force, etc.)
         self.sync_behavior_flags(queue);
     }
-    
+
     /// Update cell_types buffer when genome mode cell_type settings change.
-    /// 
+    ///
     /// This should be called when a mode's cell_type is changed (e.g., from Test to Flagellocyte)
     /// to ensure existing cells are rendered with the correct pipeline.
-    /// 
+    ///
     /// # Arguments
     /// * `queue` - The wgpu queue for buffer writes
     /// * `genomes` - The current genomes with updated mode settings
@@ -1181,7 +1305,7 @@ impl GpuTripleBufferSystem {
         if cell_count == 0 {
             return;
         }
-        
+
         // Derive cell types from current genome mode settings
         let cell_types_data: Vec<u32> = (0..cell_count)
             .map(|i| {
@@ -1199,10 +1323,10 @@ impl GpuTripleBufferSystem {
                 }
             })
             .collect();
-        
+
         queue.write_buffer(&self.cell_types, 0, bytemuck::cast_slice(&cell_types_data));
     }
-    
+
     /// Grow all mode pool sub-buffers if the current pool is too small for `total_modes`.
     ///
     /// Call this before any sync that writes genome data to the GPU. The pool doubles
@@ -1237,8 +1361,8 @@ impl GpuTripleBufferSystem {
         // Reallocate every mode-indexed sub-buffer at the new capacity.
         // Buffers that are per-cell (position_and_mass, velocity, etc.) are NOT touched.
         let m16 = new_capacity * 16; // 16 bytes per mode (vec4)
-        let m8  = new_capacity * 8;  // 8 bytes per mode (2xi32)
-        let m4  = new_capacity * 4;  // 4 bytes per mode (1xu32)
+        let m8 = new_capacity * 8; // 8 bytes per mode (2xi32)
+        let m4 = new_capacity * 4; // 4 bytes per mode (1xu32)
 
         self.genome_mode_data_v0 = Self::create_storage_buffer(device, m16, "Genome Mode Data V0");
         self.genome_mode_data_v1 = Self::create_storage_buffer(device, m16, "Genome Mode Data V1");
@@ -1246,34 +1370,43 @@ impl GpuTripleBufferSystem {
         self.genome_mode_data_v3 = Self::create_storage_buffer(device, m16, "Genome Mode Data V3");
         self.genome_mode_data_v4 = Self::create_storage_buffer(device, m16, "Genome Mode Data V4");
 
-        self.child_mode_indices                    = Self::create_storage_buffer(device, m8,  "Child Mode Indices");
-        self.parent_make_adhesion_flags            = Self::create_storage_buffer(device, m4,  "Parent Make Adhesion Flags");
-        self.child_a_keep_adhesion_flags           = Self::create_storage_buffer(device, m4,  "Child A Keep Adhesion Flags");
-        self.child_b_keep_adhesion_flags           = Self::create_storage_buffer(device, m4,  "Child B Keep Adhesion Flags");
-        self.child_a_after_split_keep_adhesion_flags = Self::create_storage_buffer(device, m4, "Child A After Split Keep Adhesion Flags");
-        self.child_b_after_split_keep_adhesion_flags = Self::create_storage_buffer(device, m4, "Child B After Split Keep Adhesion Flags");
+        self.child_mode_indices = Self::create_storage_buffer(device, m8, "Child Mode Indices");
+        self.parent_make_adhesion_flags =
+            Self::create_storage_buffer(device, m4, "Parent Make Adhesion Flags");
+        self.child_a_keep_adhesion_flags =
+            Self::create_storage_buffer(device, m4, "Child A Keep Adhesion Flags");
+        self.child_b_keep_adhesion_flags =
+            Self::create_storage_buffer(device, m4, "Child B Keep Adhesion Flags");
+        self.child_a_after_split_keep_adhesion_flags =
+            Self::create_storage_buffer(device, m4, "Child A After Split Keep Adhesion Flags");
+        self.child_b_after_split_keep_adhesion_flags =
+            Self::create_storage_buffer(device, m4, "Child B After Split Keep Adhesion Flags");
 
-        self.mode_properties_v0  = Self::create_storage_buffer(device, m16, "Mode Properties V0");
-        self.mode_properties_v1  = Self::create_storage_buffer(device, m16, "Mode Properties V1");
-        self.mode_properties_v2  = Self::create_storage_buffer(device, m16, "Mode Properties V2");
-        self.mode_properties_v3  = Self::create_storage_buffer(device, m16, "Mode Properties V3");
-        self.mode_properties_v4  = Self::create_storage_buffer(device, m16, "Mode Properties V4");
-        self.mode_properties_v5  = Self::create_storage_buffer(device, m16, "Mode Properties V5");
-        self.mode_properties_v6  = Self::create_storage_buffer(device, m16, "Mode Properties V6");
-        self.mode_properties_v7  = Self::create_storage_buffer(device, m16, "Mode Properties V7");
-        self.mode_properties_v8  = Self::create_storage_buffer(device, m16, "Mode Properties V8");
-        self.mode_properties_v9  = Self::create_storage_buffer(device, m16, "Mode Properties V9");
+        self.mode_properties_v0 = Self::create_storage_buffer(device, m16, "Mode Properties V0");
+        self.mode_properties_v1 = Self::create_storage_buffer(device, m16, "Mode Properties V1");
+        self.mode_properties_v2 = Self::create_storage_buffer(device, m16, "Mode Properties V2");
+        self.mode_properties_v3 = Self::create_storage_buffer(device, m16, "Mode Properties V3");
+        self.mode_properties_v4 = Self::create_storage_buffer(device, m16, "Mode Properties V4");
+        self.mode_properties_v5 = Self::create_storage_buffer(device, m16, "Mode Properties V5");
+        self.mode_properties_v6 = Self::create_storage_buffer(device, m16, "Mode Properties V6");
+        self.mode_properties_v7 = Self::create_storage_buffer(device, m16, "Mode Properties V7");
+        self.mode_properties_v8 = Self::create_storage_buffer(device, m16, "Mode Properties V8");
+        self.mode_properties_v9 = Self::create_storage_buffer(device, m16, "Mode Properties V9");
         self.mode_properties_v10 = Self::create_storage_buffer(device, m16, "Mode Properties V10");
         self.mode_properties_v11 = Self::create_storage_buffer(device, m16, "Mode Properties V11");
         self.mode_properties_v12 = Self::create_storage_buffer(device, m16, "Mode Properties V12");
 
-        self.mode_cell_types              = Self::create_storage_buffer(device, m4,  "Mode Cell Types");
-        self.glueocyte_env_adhesion_flags = Self::create_storage_buffer(device, m4,  "Glueocyte Env Adhesion Flags");
-        self.glueocyte_boulder_adhesion_flags = Self::create_storage_buffer(device, m4, "Glueocyte Boulder Adhesion Flags");
-        self.glueocyte_cell_adhesion_flags = Self::create_storage_buffer(device, m16, "Glueocyte Cell Adhesion Flags");
-        self.oculocyte_params             = Self::create_storage_buffer(device, m16, "Oculocyte Params");
-        self.oculocyte_signal_values      = Self::create_storage_buffer(device, m4,  "Oculocyte Signal Values");
-        self.regulation_params            = Self::create_storage_buffer(device, m16, "Regulation Params");
+        self.mode_cell_types = Self::create_storage_buffer(device, m4, "Mode Cell Types");
+        self.glueocyte_env_adhesion_flags =
+            Self::create_storage_buffer(device, m4, "Glueocyte Env Adhesion Flags");
+        self.glueocyte_boulder_adhesion_flags =
+            Self::create_storage_buffer(device, m4, "Glueocyte Boulder Adhesion Flags");
+        self.glueocyte_cell_adhesion_flags =
+            Self::create_storage_buffer(device, m16, "Glueocyte Cell Adhesion Flags");
+        self.oculocyte_params = Self::create_storage_buffer(device, m16, "Oculocyte Params");
+        self.oculocyte_signal_values =
+            Self::create_storage_buffer(device, m4, "Oculocyte Signal Values");
+        self.regulation_params = Self::create_storage_buffer(device, m16, "Regulation Params");
 
         self.signal_settings_v0 = Self::create_storage_buffer(device, m16, "Signal Settings V0");
         self.signal_settings_v1 = Self::create_storage_buffer(device, m16, "Signal Settings V1");
@@ -1319,12 +1452,12 @@ impl GpuTripleBufferSystem {
             queue.write_buffer(&self.genome_mode_data_v4, 0, bytemuck::cast_slice(&v4));
         }
     }
-    
+
     /// Sync child mode indices for division shader
     pub fn sync_child_mode_indices(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
         // Layout per mode: [child_a_mode (i32), child_b_mode (i32)] = 8 bytes
         let mut mode_indices: Vec<[i32; 2]> = Vec::new();
-        
+
         let mut global_mode_offset = 0i32;
         for genome in genomes {
             for mode in &genome.modes {
@@ -1335,51 +1468,91 @@ impl GpuTripleBufferSystem {
             }
             global_mode_offset += genome.modes.len() as i32;
         }
-        
+
         if !mode_indices.is_empty() {
-            queue.write_buffer(&self.child_mode_indices, 0, bytemuck::cast_slice(&mode_indices));
+            queue.write_buffer(
+                &self.child_mode_indices,
+                0,
+                bytemuck::cast_slice(&mode_indices),
+            );
         }
     }
-    
+
     /// Sync parent make adhesion flags for division shader
-    pub fn sync_parent_make_adhesion_flags(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+    pub fn sync_parent_make_adhesion_flags(
+        &self,
+        queue: &wgpu::Queue,
+        genomes: &[crate::genome::Genome],
+    ) {
         let mut flags_data: Vec<u32> = Vec::new();
-        
+
         for genome in genomes {
             for mode in &genome.modes {
                 flags_data.push(if mode.parent_make_adhesion { 1 } else { 0 });
             }
         }
-        
+
         if !flags_data.is_empty() {
-            queue.write_buffer(&self.parent_make_adhesion_flags, 0, bytemuck::cast_slice(&flags_data));
+            queue.write_buffer(
+                &self.parent_make_adhesion_flags,
+                0,
+                bytemuck::cast_slice(&flags_data),
+            );
         }
     }
-    
+
     /// Sync child keep adhesion flags for division shader (zone-based inheritance)
-    pub fn sync_child_keep_adhesion_flags(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+    pub fn sync_child_keep_adhesion_flags(
+        &self,
+        queue: &wgpu::Queue,
+        genomes: &[crate::genome::Genome],
+    ) {
         let mut child_a_flags: Vec<u32> = Vec::new();
         let mut child_b_flags: Vec<u32> = Vec::new();
         let mut child_a_after_split_flags: Vec<u32> = Vec::new();
         let mut child_b_after_split_flags: Vec<u32> = Vec::new();
-        
+
         for genome in genomes {
             for mode in &genome.modes {
                 child_a_flags.push(if mode.child_a.keep_adhesion { 1 } else { 0 });
                 child_b_flags.push(if mode.child_b.keep_adhesion { 1 } else { 0 });
-                child_a_after_split_flags.push(if mode.child_a_after_split_keep_adhesion { 1 } else { 0 });
-                child_b_after_split_flags.push(if mode.child_b_after_split_keep_adhesion { 1 } else { 0 });
+                child_a_after_split_flags.push(if mode.child_a_after_split_keep_adhesion {
+                    1
+                } else {
+                    0
+                });
+                child_b_after_split_flags.push(if mode.child_b_after_split_keep_adhesion {
+                    1
+                } else {
+                    0
+                });
             }
         }
-        
+
         if !child_a_flags.is_empty() {
-            queue.write_buffer(&self.child_a_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_a_flags));
-            queue.write_buffer(&self.child_b_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_b_flags));
-            queue.write_buffer(&self.child_a_after_split_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_a_after_split_flags));
-            queue.write_buffer(&self.child_b_after_split_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_b_after_split_flags));
+            queue.write_buffer(
+                &self.child_a_keep_adhesion_flags,
+                0,
+                bytemuck::cast_slice(&child_a_flags),
+            );
+            queue.write_buffer(
+                &self.child_b_keep_adhesion_flags,
+                0,
+                bytemuck::cast_slice(&child_b_flags),
+            );
+            queue.write_buffer(
+                &self.child_a_after_split_keep_adhesion_flags,
+                0,
+                bytemuck::cast_slice(&child_a_after_split_flags),
+            );
+            queue.write_buffer(
+                &self.child_b_after_split_keep_adhesion_flags,
+                0,
+                bytemuck::cast_slice(&child_b_after_split_flags),
+            );
         }
     }
-    
+
     /// Sync mode properties for division shader.
     /// Data is written into 5 separate vec4 sub-buffers (v0..v4), each 16 bytes/mode.
     pub fn sync_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
@@ -1396,14 +1569,55 @@ impl GpuTripleBufferSystem {
                 log::debug!("[SYNC MODE PROPS] genome={} mode={} global={} nutrient_priority={} prioritize_when_low={} cell_type={:?}",
                     genome_idx, mode_idx, global_mode_idx, mode.nutrient_priority, mode.prioritize_when_low, mode.cell_type);
                 global_mode_idx += 1;
-                let gpu_max_splits = if mode.max_splits < 0 { -1.0 } else { mode.max_splits as f32 };
-                let gpu_mode_a_after = if mode.mode_a_after_splits < 0 { -1.0 } else { (global_mode_offset + mode.mode_a_after_splits.max(0)) as f32 };
-                let gpu_mode_b_after = if mode.mode_b_after_splits < 0 { -1.0 } else { (global_mode_offset + mode.mode_b_after_splits.max(0)) as f32 };
-                v0.push([mode.nutrient_gain_rate, mode.max_cell_size, mode.membrane_stiffness, mode.split_interval]);
-                v1.push([mode.split_mass, mode.nutrient_priority, mode.swim_force, if mode.prioritize_when_low { 1.0 } else { 0.0 }]);
-                v2.push([gpu_max_splits, mode.split_ratio, mode.flagellocyte_signal_channel as f32, mode.flagellocyte_speed_a]);
-                v3.push([mode.flagellocyte_speed_b, mode.flagellocyte_threshold_c, if mode.flagellocyte_use_signal { 1.0 } else { 0.0 }, mode.min_adhesions as f32]);
-                v4.push([mode.max_adhesions as f32, gpu_mode_a_after, gpu_mode_b_after, mode.buoyancy_force]);
+                let gpu_max_splits = if mode.max_splits < 0 {
+                    -1.0
+                } else {
+                    mode.max_splits as f32
+                };
+                let gpu_mode_a_after = if mode.mode_a_after_splits < 0 {
+                    -1.0
+                } else {
+                    (global_mode_offset + mode.mode_a_after_splits.max(0)) as f32
+                };
+                let gpu_mode_b_after = if mode.mode_b_after_splits < 0 {
+                    -1.0
+                } else {
+                    (global_mode_offset + mode.mode_b_after_splits.max(0)) as f32
+                };
+                v0.push([
+                    mode.nutrient_gain_rate,
+                    mode.max_cell_size,
+                    mode.membrane_stiffness,
+                    mode.split_interval,
+                ]);
+                v1.push([
+                    mode.split_mass,
+                    mode.nutrient_priority,
+                    mode.swim_force,
+                    if mode.prioritize_when_low { 1.0 } else { 0.0 },
+                ]);
+                v2.push([
+                    gpu_max_splits,
+                    mode.split_ratio,
+                    mode.flagellocyte_signal_channel as f32,
+                    mode.flagellocyte_speed_a,
+                ]);
+                v3.push([
+                    mode.flagellocyte_speed_b,
+                    mode.flagellocyte_threshold_c,
+                    if mode.flagellocyte_use_signal {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    mode.min_adhesions as f32,
+                ]);
+                v4.push([
+                    mode.max_adhesions as f32,
+                    gpu_mode_a_after,
+                    gpu_mode_b_after,
+                    mode.buoyancy_force,
+                ]);
             }
             global_mode_offset += genome.modes.len() as i32;
         }
@@ -1416,12 +1630,16 @@ impl GpuTripleBufferSystem {
             queue.write_buffer(&self.mode_properties_v4, 0, bytemuck::cast_slice(&v4));
         }
     }
-    
+
     /// Sync cilia mode properties for the cilia_force shader.
     /// Data is written into 2 separate vec4 sub-buffers (v5, v6), each 16 bytes/mode.
     /// v5: [cilia_speed, cilia_push_bonded as f32, cilia_use_signal as f32, cilia_signal_channel as f32]
     /// v6: [cilia_speed_below, cilia_speed_above, cilia_threshold, cilia_attract_force]
-    pub fn sync_cilia_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+    pub fn sync_cilia_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genomes: &[crate::genome::Genome],
+    ) {
         let mut v5: Vec<[f32; 4]> = Vec::new();
         let mut v6: Vec<[f32; 4]> = Vec::new();
 
@@ -1449,7 +1667,12 @@ impl GpuTripleBufferSystem {
     }
 
     /// Incremental sync of cilia mode properties for a single genome
-    pub fn incremental_sync_cilia_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
+    pub fn incremental_sync_cilia_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genome: &crate::genome::Genome,
+        global_start_index: usize,
+    ) {
         let mut v5: Vec<[f32; 4]> = Vec::new();
         let mut v6: Vec<[f32; 4]> = Vec::new();
 
@@ -1479,7 +1702,11 @@ impl GpuTripleBufferSystem {
     /// Data is written into 2 separate vec4 sub-buffers (v7, v8), each 16 bytes/mode.
     /// v7: [myocyte_contraction, myocyte_use_signal as f32, myocyte_signal_channel as f32, myocyte_threshold]
     /// v8: [myocyte_contraction_above, myocyte_contraction_below, myocyte_pulse_rate, myocyte_pulse_phase as f32]
-    pub fn sync_myocyte_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+    pub fn sync_myocyte_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genomes: &[crate::genome::Genome],
+    ) {
         let mut v7: Vec<[f32; 4]> = Vec::new();
         let mut v8: Vec<[f32; 4]> = Vec::new();
 
@@ -1507,7 +1734,12 @@ impl GpuTripleBufferSystem {
     }
 
     /// Incremental sync of myocyte mode properties for a single genome
-    pub fn incremental_sync_myocyte_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
+    pub fn incremental_sync_myocyte_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genome: &crate::genome::Genome,
+        global_start_index: usize,
+    ) {
         let mut v7: Vec<[f32; 4]> = Vec::new();
         let mut v8: Vec<[f32; 4]> = Vec::new();
 
@@ -1536,7 +1768,11 @@ impl GpuTripleBufferSystem {
     /// Sync Embryocyte mode properties for the lifecycle shaders.
     /// v9:  [use_timer as f32, release_timer, use_threshold as f32, threshold_value as f32]
     /// v10: [use_signal as f32, signal_channel as f32, signal_value, 0.0]
-    pub fn sync_embryocyte_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+    pub fn sync_embryocyte_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genomes: &[crate::genome::Genome],
+    ) {
         let mut v9: Vec<[f32; 4]> = Vec::new();
         let mut v10: Vec<[f32; 4]> = Vec::new();
 
@@ -1545,7 +1781,11 @@ impl GpuTripleBufferSystem {
                 v9.push([
                     if mode.embryocyte_use_timer { 1.0 } else { 0.0 },
                     mode.embryocyte_release_timer,
-                    if mode.embryocyte_use_threshold { 1.0 } else { 0.0 },
+                    if mode.embryocyte_use_threshold {
+                        1.0
+                    } else {
+                        0.0
+                    },
                     mode.embryocyte_threshold_value as f32,
                 ]);
                 v10.push([
@@ -1564,7 +1804,12 @@ impl GpuTripleBufferSystem {
     }
 
     /// Incremental sync of Embryocyte mode properties for a single genome.
-    pub fn incremental_sync_embryocyte_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
+    pub fn incremental_sync_embryocyte_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genome: &crate::genome::Genome,
+        global_start_index: usize,
+    ) {
         let mut v9: Vec<[f32; 4]> = Vec::new();
         let mut v10: Vec<[f32; 4]> = Vec::new();
 
@@ -1572,7 +1817,11 @@ impl GpuTripleBufferSystem {
             v9.push([
                 if mode.embryocyte_use_timer { 1.0 } else { 0.0 },
                 mode.embryocyte_release_timer,
-                if mode.embryocyte_use_threshold { 1.0 } else { 0.0 },
+                if mode.embryocyte_use_threshold {
+                    1.0
+                } else {
+                    0.0
+                },
                 mode.embryocyte_threshold_value as f32,
             ]);
             v10.push([
@@ -1586,17 +1835,30 @@ impl GpuTripleBufferSystem {
         if !v9.is_empty() {
             let offset = (global_start_index * 16) as u64;
             queue.write_buffer(&self.mode_properties_v9, offset, bytemuck::cast_slice(&v9));
-            queue.write_buffer(&self.mode_properties_v10, offset, bytemuck::cast_slice(&v10));
+            queue.write_buffer(
+                &self.mode_properties_v10,
+                offset,
+                bytemuck::cast_slice(&v10),
+            );
         }
     }
 
     /// Sync Devorocyte mode properties for the devorocyte_consume shader.
     /// v11: [consume_range, consume_rate, 0.0, 0.0]
-    pub fn sync_devorocyte_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+    pub fn sync_devorocyte_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genomes: &[crate::genome::Genome],
+    ) {
         let mut v11: Vec<[f32; 4]> = Vec::new();
         for genome in genomes {
             for mode in &genome.modes {
-                v11.push([mode.devorocyte_consume_range, mode.devorocyte_consume_rate, 0.0, 0.0]);
+                v11.push([
+                    mode.devorocyte_consume_range,
+                    mode.devorocyte_consume_rate,
+                    0.0,
+                    0.0,
+                ]);
             }
         }
         if !v11.is_empty() {
@@ -1605,19 +1867,41 @@ impl GpuTripleBufferSystem {
     }
 
     /// Incremental sync of Devorocyte mode properties for a single genome.
-    pub fn incremental_sync_devorocyte_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
-        let v11: Vec<[f32; 4]> = genome.modes.iter()
-            .map(|mode| [mode.devorocyte_consume_range, mode.devorocyte_consume_rate, 0.0, 0.0])
+    pub fn incremental_sync_devorocyte_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genome: &crate::genome::Genome,
+        global_start_index: usize,
+    ) {
+        let v11: Vec<[f32; 4]> = genome
+            .modes
+            .iter()
+            .map(|mode| {
+                [
+                    mode.devorocyte_consume_range,
+                    mode.devorocyte_consume_rate,
+                    0.0,
+                    0.0,
+                ]
+            })
             .collect();
         if !v11.is_empty() {
             let offset = (global_start_index * 16) as u64;
-            queue.write_buffer(&self.mode_properties_v11, offset, bytemuck::cast_slice(&v11));
+            queue.write_buffer(
+                &self.mode_properties_v11,
+                offset,
+                bytemuck::cast_slice(&v11),
+            );
         }
     }
 
     /// Sync Vasculocyte mode properties for the nutrient transport shader.
     /// v12: [vascular_outlet as f32, 0.0, 0.0, 0.0]
-    pub fn sync_vasculocyte_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+    pub fn sync_vasculocyte_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genomes: &[crate::genome::Genome],
+    ) {
         let mut v12: Vec<[f32; 4]> = Vec::new();
         for genome in genomes {
             for mode in &genome.modes {
@@ -1630,19 +1914,34 @@ impl GpuTripleBufferSystem {
     }
 
     /// Incremental sync of Vasculocyte mode properties for a single genome.
-    pub fn incremental_sync_vasculocyte_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
-        let v12: Vec<[f32; 4]> = genome.modes.iter()
+    pub fn incremental_sync_vasculocyte_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genome: &crate::genome::Genome,
+        global_start_index: usize,
+    ) {
+        let v12: Vec<[f32; 4]> = genome
+            .modes
+            .iter()
             .map(|mode| [if mode.vascular_outlet { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0])
             .collect();
         if !v12.is_empty() {
             let offset = (global_start_index * 16) as u64;
-            queue.write_buffer(&self.mode_properties_v12, offset, bytemuck::cast_slice(&v12));
+            queue.write_buffer(
+                &self.mode_properties_v12,
+                offset,
+                bytemuck::cast_slice(&v12),
+            );
         }
     }
 
     /// Sync Gametocyte mode properties.
     /// v13: [merge_range, 0.0, 0.0, 0.0]
-    pub fn sync_gametocyte_mode_properties(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+    pub fn sync_gametocyte_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genomes: &[crate::genome::Genome],
+    ) {
         let mut v13: Vec<[f32; 4]> = Vec::new();
         for genome in genomes {
             for mode in &genome.modes {
@@ -1655,24 +1954,44 @@ impl GpuTripleBufferSystem {
     }
 
     /// Incremental sync of Gametocyte mode properties for a single genome.
-    pub fn incremental_sync_gametocyte_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
-        let v13: Vec<[f32; 4]> = genome.modes.iter()
+    pub fn incremental_sync_gametocyte_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genome: &crate::genome::Genome,
+        global_start_index: usize,
+    ) {
+        let v13: Vec<[f32; 4]> = genome
+            .modes
+            .iter()
             .map(|mode| [mode.gametocyte_merge_range, 0.0, 0.0, 0.0])
             .collect();
         if !v13.is_empty() {
             let offset = (global_start_index * 16) as u64;
-            queue.write_buffer(&self.mode_properties_v13, offset, bytemuck::cast_slice(&v13));
+            queue.write_buffer(
+                &self.mode_properties_v13,
+                offset,
+                bytemuck::cast_slice(&v13),
+            );
         }
     }
 
     /// Upload Embryocyte reserve values from canonical state to GPU.
     /// Called during full sync and after any cell addition that involves an Embryocyte.
-    pub fn sync_embryocyte_reserves(&self, queue: &wgpu::Queue, reserves: &[u32], cell_count: usize) {
+    pub fn sync_embryocyte_reserves(
+        &self,
+        queue: &wgpu::Queue,
+        reserves: &[u32],
+        cell_count: usize,
+    ) {
         if cell_count == 0 {
             return;
         }
         let data = &reserves[..cell_count.min(reserves.len())];
-        queue.write_buffer(&self.embryocyte_reserve_buffer, 0, bytemuck::cast_slice(data));
+        queue.write_buffer(
+            &self.embryocyte_reserve_buffer,
+            0,
+            bytemuck::cast_slice(data),
+        );
     }
 
     /// Sync mode cell types lookup table (cell_type per mode)
@@ -1680,38 +1999,68 @@ impl GpuTripleBufferSystem {
     pub fn sync_mode_cell_types(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
         let mode_cell_types: Vec<u32> = genomes
             .iter()
-            .flat_map(|genome| {
-                genome.modes.iter().map(|mode| mode.cell_type as u32)
-            })
+            .flat_map(|genome| genome.modes.iter().map(|mode| mode.cell_type as u32))
             .collect();
 
         if !mode_cell_types.is_empty() {
-            queue.write_buffer(&self.mode_cell_types, 0, bytemuck::cast_slice(&mode_cell_types));
+            queue.write_buffer(
+                &self.mode_cell_types,
+                0,
+                bytemuck::cast_slice(&mode_cell_types),
+            );
         }
     }
 
     /// Sync glueocyte env adhesion flags (one u32 per mode across all genomes)
-    pub fn sync_glueocyte_env_adhesion_flags(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+    pub fn sync_glueocyte_env_adhesion_flags(
+        &self,
+        queue: &wgpu::Queue,
+        genomes: &[crate::genome::Genome],
+    ) {
         let flags: Vec<u32> = genomes
             .iter()
             .flat_map(|genome| {
-                genome.modes.iter().map(|mode| if mode.glueocyte_env_adhesion { 1u32 } else { 0u32 })
+                genome.modes.iter().map(|mode| {
+                    if mode.glueocyte_env_adhesion {
+                        1u32
+                    } else {
+                        0u32
+                    }
+                })
             })
             .collect();
         if !flags.is_empty() {
-            queue.write_buffer(&self.glueocyte_env_adhesion_flags, 0, bytemuck::cast_slice(&flags));
+            queue.write_buffer(
+                &self.glueocyte_env_adhesion_flags,
+                0,
+                bytemuck::cast_slice(&flags),
+            );
         }
     }
 
-    pub fn sync_glueocyte_boulder_adhesion_flags(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+    pub fn sync_glueocyte_boulder_adhesion_flags(
+        &self,
+        queue: &wgpu::Queue,
+        genomes: &[crate::genome::Genome],
+    ) {
         let flags: Vec<u32> = genomes
             .iter()
             .flat_map(|genome| {
-                genome.modes.iter().map(|mode| if mode.glueocyte_boulder_adhesion { 1u32 } else { 0u32 })
+                genome.modes.iter().map(|mode| {
+                    if mode.glueocyte_boulder_adhesion {
+                        1u32
+                    } else {
+                        0u32
+                    }
+                })
             })
             .collect();
         if !flags.is_empty() {
-            queue.write_buffer(&self.glueocyte_boulder_adhesion_flags, 0, bytemuck::cast_slice(&flags));
+            queue.write_buffer(
+                &self.glueocyte_boulder_adhesion_flags,
+                0,
+                bytemuck::cast_slice(&flags),
+            );
         }
     }
 
@@ -1719,12 +2068,20 @@ impl GpuTripleBufferSystem {
     /// Layout per mode: [enabled(u32), signal_channel(u32), signal_threshold_bits(u32), self_adhesion(u32)]
     /// signal_channel = 0xFFFFFFFF means "always active" (no signal gate).
     /// self_adhesion = 1 means the glueocyte bonds to cells of its own organism.
-    pub fn sync_glueocyte_cell_adhesion_flags(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+    pub fn sync_glueocyte_cell_adhesion_flags(
+        &self,
+        queue: &wgpu::Queue,
+        genomes: &[crate::genome::Genome],
+    ) {
         let data: Vec<u32> = genomes
             .iter()
             .flat_map(|genome| {
                 genome.modes.iter().flat_map(|mode| {
-                    let enabled = if mode.glueocyte_cell_adhesion { 1u32 } else { 0u32 };
+                    let enabled = if mode.glueocyte_cell_adhesion {
+                        1u32
+                    } else {
+                        0u32
+                    };
                     let channel = if mode.glueocyte_cell_adhesion_signal_channel >= 0
                         && mode.glueocyte_cell_adhesion_signal_channel <= 7
                     {
@@ -1733,14 +2090,26 @@ impl GpuTripleBufferSystem {
                         0xFFFF_FFFFu32 // disabled / always-active
                     };
                     let threshold_bits = mode.glueocyte_cell_adhesion_signal_threshold.to_bits();
-                    let self_adhesion = if mode.glueocyte_self_adhesion { 1u32 } else { 0u32 };
-                    let invert = if mode.glueocyte_signal_gate_invert { 2u32 } else { 0u32 };
+                    let self_adhesion = if mode.glueocyte_self_adhesion {
+                        1u32
+                    } else {
+                        0u32
+                    };
+                    let invert = if mode.glueocyte_signal_gate_invert {
+                        2u32
+                    } else {
+                        0u32
+                    };
                     [enabled, channel, threshold_bits, self_adhesion | invert]
                 })
             })
             .collect();
         if !data.is_empty() {
-            queue.write_buffer(&self.glueocyte_cell_adhesion_flags, 0, bytemuck::cast_slice(&data));
+            queue.write_buffer(
+                &self.glueocyte_cell_adhesion_flags,
+                0,
+                bytemuck::cast_slice(&data),
+            );
         }
     }
 
@@ -1768,13 +2137,18 @@ impl GpuTripleBufferSystem {
         let signal_values: Vec<f32> = genomes
             .iter()
             .flat_map(|genome| {
-                genome.modes.iter().map(|mode| {
-                    mode.oculocyte_signal_value.clamp(0.0, 2047.0)
-                })
+                genome
+                    .modes
+                    .iter()
+                    .map(|mode| mode.oculocyte_signal_value.clamp(0.0, 2047.0))
             })
             .collect();
         if !signal_values.is_empty() {
-            queue.write_buffer(&self.oculocyte_signal_values, 0, bytemuck::cast_slice(&signal_values));
+            queue.write_buffer(
+                &self.oculocyte_signal_values,
+                0,
+                bytemuck::cast_slice(&signal_values),
+            );
         }
     }
 
@@ -1820,18 +2194,30 @@ impl GpuTripleBufferSystem {
             for mode in &genome.modes {
                 // Remap local mode indices to absolute GPU mode indices
                 let remap = |local: i32| -> f32 {
-                    if local < 0 { -1.0 } else { (global_mode_offset + local.max(0)) as f32 }
+                    if local < 0 {
+                        -1.0
+                    } else {
+                        (global_mode_offset + local.max(0)) as f32
+                    }
                 };
 
                 v0.push([
                     mode.division_signal_channel as f32,
                     mode.division_signal_threshold,
-                    if mode.division_signal_invert { 1.0 } else { 0.0 },
+                    if mode.division_signal_invert {
+                        1.0
+                    } else {
+                        0.0
+                    },
                     mode.apoptosis_signal_channel as f32,
                 ]);
                 v1.push([
                     mode.apoptosis_signal_threshold,
-                    if mode.apoptosis_signal_invert { 1.0 } else { 0.0 },
+                    if mode.apoptosis_signal_invert {
+                        1.0
+                    } else {
+                        0.0
+                    },
                     mode.signal_child_a_channel as f32,
                     mode.signal_child_a_threshold,
                 ]);
@@ -1872,15 +2258,19 @@ impl GpuTripleBufferSystem {
     pub fn sync_behavior_flags(&self, queue: &wgpu::Queue) {
         use crate::cell::types::{CellType, GpuCellTypeBehaviorFlags};
 
-        let flags: Vec<GpuCellTypeBehaviorFlags> = CellType::iter()
-            .map(|t| t.behavior_flags())
-            .collect();
+        let flags: Vec<GpuCellTypeBehaviorFlags> =
+            CellType::iter().map(|t| t.behavior_flags()).collect();
 
         queue.write_buffer(&self.behavior_flags, 0, bytemuck::cast_slice(&flags));
     }
-    
+
     /// Incremental sync of mode properties for a single genome
-    pub fn incremental_sync_mode_properties(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
+    pub fn incremental_sync_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genome: &crate::genome::Genome,
+        global_start_index: usize,
+    ) {
         let mut v0: Vec<[f32; 4]> = Vec::new();
         let mut v1: Vec<[f32; 4]> = Vec::new();
         let mut v2: Vec<[f32; 4]> = Vec::new();
@@ -1889,14 +2279,55 @@ impl GpuTripleBufferSystem {
 
         let global_mode_offset = global_start_index as i32;
         for mode in &genome.modes {
-            let gpu_max_splits = if mode.max_splits < 0 { -1.0 } else { mode.max_splits as f32 };
-            let gpu_mode_a_after = if mode.mode_a_after_splits < 0 { -1.0 } else { (global_mode_offset + mode.mode_a_after_splits.max(0)) as f32 };
-            let gpu_mode_b_after = if mode.mode_b_after_splits < 0 { -1.0 } else { (global_mode_offset + mode.mode_b_after_splits.max(0)) as f32 };
-            v0.push([mode.nutrient_gain_rate, mode.max_cell_size, mode.membrane_stiffness, mode.split_interval]);
-            v1.push([mode.split_mass, mode.nutrient_priority, mode.swim_force, if mode.prioritize_when_low { 1.0 } else { 0.0 }]);
-            v2.push([gpu_max_splits, mode.split_ratio, mode.flagellocyte_signal_channel as f32, mode.flagellocyte_speed_a]);
-            v3.push([mode.flagellocyte_speed_b, mode.flagellocyte_threshold_c, if mode.flagellocyte_use_signal { 1.0 } else { 0.0 }, mode.min_adhesions as f32]);
-            v4.push([mode.max_adhesions as f32, gpu_mode_a_after, gpu_mode_b_after, 0.0]);
+            let gpu_max_splits = if mode.max_splits < 0 {
+                -1.0
+            } else {
+                mode.max_splits as f32
+            };
+            let gpu_mode_a_after = if mode.mode_a_after_splits < 0 {
+                -1.0
+            } else {
+                (global_mode_offset + mode.mode_a_after_splits.max(0)) as f32
+            };
+            let gpu_mode_b_after = if mode.mode_b_after_splits < 0 {
+                -1.0
+            } else {
+                (global_mode_offset + mode.mode_b_after_splits.max(0)) as f32
+            };
+            v0.push([
+                mode.nutrient_gain_rate,
+                mode.max_cell_size,
+                mode.membrane_stiffness,
+                mode.split_interval,
+            ]);
+            v1.push([
+                mode.split_mass,
+                mode.nutrient_priority,
+                mode.swim_force,
+                if mode.prioritize_when_low { 1.0 } else { 0.0 },
+            ]);
+            v2.push([
+                gpu_max_splits,
+                mode.split_ratio,
+                mode.flagellocyte_signal_channel as f32,
+                mode.flagellocyte_speed_a,
+            ]);
+            v3.push([
+                mode.flagellocyte_speed_b,
+                mode.flagellocyte_threshold_c,
+                if mode.flagellocyte_use_signal {
+                    1.0
+                } else {
+                    0.0
+                },
+                mode.min_adhesions as f32,
+            ]);
+            v4.push([
+                mode.max_adhesions as f32,
+                gpu_mode_a_after,
+                gpu_mode_b_after,
+                0.0,
+            ]);
         }
 
         if !v0.is_empty() {
@@ -1908,49 +2339,104 @@ impl GpuTripleBufferSystem {
             queue.write_buffer(&self.mode_properties_v4, offset, bytemuck::cast_slice(&v4));
         }
     }
-    
+
     /// Incremental sync of child mode indices for a single genome
-    pub fn incremental_sync_child_mode_indices(&self, _device: &wgpu::Device, genome_id: usize, global_start_index: usize, mode_count: usize) {
-        log::info!("Incremental sync of child mode indices for genome {} at index {} ({} modes)", 
-            genome_id, global_start_index, mode_count);
+    pub fn incremental_sync_child_mode_indices(
+        &self,
+        _device: &wgpu::Device,
+        genome_id: usize,
+        global_start_index: usize,
+        mode_count: usize,
+    ) {
+        log::info!(
+            "Incremental sync of child mode indices for genome {} at index {} ({} modes)",
+            genome_id,
+            global_start_index,
+            mode_count
+        );
     }
-    
+
     /// Incremental sync of genome mode data for a single genome
-    pub fn incremental_sync_genome_mode_data(&self, _device: &wgpu::Device, genome_id: usize, global_start_index: usize, mode_count: usize) {
-        log::info!("Incremental sync of genome mode data for genome {} at index {} ({} modes)", 
-            genome_id, global_start_index, mode_count);
+    pub fn incremental_sync_genome_mode_data(
+        &self,
+        _device: &wgpu::Device,
+        genome_id: usize,
+        global_start_index: usize,
+        mode_count: usize,
+    ) {
+        log::info!(
+            "Incremental sync of genome mode data for genome {} at index {} ({} modes)",
+            genome_id,
+            global_start_index,
+            mode_count
+        );
     }
-    
+
     /// Incremental sync of mode cell types for a single genome
-    pub fn incremental_sync_mode_cell_types(&self, queue: &wgpu::Queue, genome: &crate::genome::Genome, global_start_index: usize) {
-        let cell_types: Vec<u32> = genome.modes.iter()
+    pub fn incremental_sync_mode_cell_types(
+        &self,
+        queue: &wgpu::Queue,
+        genome: &crate::genome::Genome,
+        global_start_index: usize,
+    ) {
+        let cell_types: Vec<u32> = genome
+            .modes
+            .iter()
             .map(|mode| mode.cell_type as u32)
             .collect();
         if !cell_types.is_empty() {
             let offset = (global_start_index * 4) as u64; // u32 = 4 bytes per mode
-            queue.write_buffer(&self.mode_cell_types, offset, bytemuck::cast_slice(&cell_types));
+            queue.write_buffer(
+                &self.mode_cell_types,
+                offset,
+                bytemuck::cast_slice(&cell_types),
+            );
         }
     }
 
     /// Sync a single cell to all GPU buffer sets (for cell insertion during simulation)
-    pub fn sync_single_cell(&self, queue: &wgpu::Queue, cell_idx: usize, position: glam::Vec3, velocity: glam::Vec3, mass: f32, rotation: glam::Quat) {
+    pub fn sync_single_cell(
+        &self,
+        queue: &wgpu::Queue,
+        cell_idx: usize,
+        position: glam::Vec3,
+        velocity: glam::Vec3,
+        mass: f32,
+        rotation: glam::Quat,
+    ) {
         let position_mass: [f32; 4] = [position.x, position.y, position.z, mass];
         let velocity_data: [f32; 4] = [velocity.x, velocity.y, velocity.z, 0.0];
         let rotation_data: [f32; 4] = [rotation.x, rotation.y, rotation.z, rotation.w];
-        
+
         let offset = (cell_idx * 16) as u64; // Vec4<f32> = 16 bytes
-        
+
         // Upload to all three buffer sets
         for i in 0..3 {
-            queue.write_buffer(&self.position_and_mass[i], offset, bytemuck::bytes_of(&position_mass));
-            queue.write_buffer(&self.velocity[i], offset, bytemuck::bytes_of(&velocity_data));
-            queue.write_buffer(&self.rotations[i], offset, bytemuck::bytes_of(&rotation_data));
+            queue.write_buffer(
+                &self.position_and_mass[i],
+                offset,
+                bytemuck::bytes_of(&position_mass),
+            );
+            queue.write_buffer(
+                &self.velocity[i],
+                offset,
+                bytemuck::bytes_of(&velocity_data),
+            );
+            queue.write_buffer(
+                &self.rotations[i],
+                offset,
+                bytemuck::bytes_of(&rotation_data),
+            );
         }
-        
+
         // Also write genome orientation (same as initial rotation for new cells)
-        queue.write_buffer(&self.genome_orientations, offset, bytemuck::bytes_of(&rotation_data));
+        queue.write_buffer(
+            &self.genome_orientations,
+            offset,
+            bytemuck::bytes_of(&rotation_data),
+        );
     }
-    
+
     /// Sync a single cell's state data (for cell insertion during simulation)
     pub fn sync_single_cell_state(
         &self,
@@ -1969,31 +2455,71 @@ impl GpuTripleBufferSystem {
         cell_type: u32,
     ) {
         let offset = (cell_idx * 4) as u64; // f32/u32 = 4 bytes
-        
+
         queue.write_buffer(&self.birth_times, offset, bytemuck::bytes_of(&birth_time));
-        queue.write_buffer(&self.split_intervals, offset, bytemuck::bytes_of(&split_interval));
-        queue.write_buffer(&self.split_nutrient_thresholds, offset, bytemuck::bytes_of(&split_nutrient_threshold));
+        queue.write_buffer(
+            &self.split_intervals,
+            offset,
+            bytemuck::bytes_of(&split_interval),
+        );
+        queue.write_buffer(
+            &self.split_nutrient_thresholds,
+            offset,
+            bytemuck::bytes_of(&split_nutrient_threshold),
+        );
         queue.write_buffer(&self.split_counts, offset, bytemuck::bytes_of(&0u32));
-        
+
         // Convert max_splits: -1 (infinite) -> 0xFFFFFFFF (unlimited in GPU), 0+ stay as-is
-        let gpu_max_splits: u32 = if max_splits < 0 { u32::MAX } else { max_splits as u32 };
-        queue.write_buffer(&self.max_splits, offset, bytemuck::bytes_of(&gpu_max_splits));
-        
-        queue.write_buffer(&self.nutrient_gain_rates, offset, bytemuck::bytes_of(&nutrient_gain_rate));
-        queue.write_buffer(&self.max_cell_sizes, offset, bytemuck::bytes_of(&max_cell_size));
+        let gpu_max_splits: u32 = if max_splits < 0 {
+            u32::MAX
+        } else {
+            max_splits as u32
+        };
+        queue.write_buffer(
+            &self.max_splits,
+            offset,
+            bytemuck::bytes_of(&gpu_max_splits),
+        );
+
+        queue.write_buffer(
+            &self.nutrient_gain_rates,
+            offset,
+            bytemuck::bytes_of(&nutrient_gain_rate),
+        );
+        queue.write_buffer(
+            &self.max_cell_sizes,
+            offset,
+            bytemuck::bytes_of(&max_cell_size),
+        );
         queue.write_buffer(&self.stiffnesses, offset, bytemuck::bytes_of(&stiffness));
-        queue.write_buffer(&self.genome_ids, offset, bytemuck::bytes_of(&(genome_id as u32)));
+        queue.write_buffer(
+            &self.genome_ids,
+            offset,
+            bytemuck::bytes_of(&(genome_id as u32)),
+        );
         queue.write_buffer(&self.cell_types, offset, bytemuck::bytes_of(&cell_type));
-        queue.write_buffer(&self.mode_indices, offset, bytemuck::bytes_of(&(mode_index as u32)));
-        queue.write_buffer(&self.cell_ids, offset, bytemuck::bytes_of(&(cell_id as u32)));
+        queue.write_buffer(
+            &self.mode_indices,
+            offset,
+            bytemuck::bytes_of(&(mode_index as u32)),
+        );
+        queue.write_buffer(
+            &self.cell_ids,
+            offset,
+            bytemuck::bytes_of(&(cell_id as u32)),
+        );
         queue.write_buffer(&self.death_flags, offset, bytemuck::bytes_of(&0u32)); // Alive
         queue.write_buffer(&self.division_flags, offset, bytemuck::bytes_of(&0u32)); // Not dividing
-        
+
         // Initialize nutrients to 100.0 (full) = 100000 in fixed-point scale
         let initial_nutrients: i32 = 100_000;
-        queue.write_buffer(&self.nutrients_buffer, offset, bytemuck::bytes_of(&initial_nutrients));
+        queue.write_buffer(
+            &self.nutrients_buffer,
+            offset,
+            bytemuck::bytes_of(&initial_nutrients),
+        );
     }
-    
+
     /// Add cell with deterministic slot assignment
     /// Returns (slot_index, cell_id) if successful, None if no slots available
     pub fn add_cell_deterministic(
@@ -2004,7 +2530,7 @@ impl GpuTripleBufferSystem {
     ) -> Option<(u32, u32)> {
         // Allocate slot deterministically
         let (slot, cell_id) = self.slot_allocator.allocate_slot()?;
-        
+
         // Sync position/velocity/rotation to all buffer sets
         // Derive mass from nutrients: mass = 1.0 + nutrients / 100.0
         let mass = 1.0 + request.nutrients / 100.0;
@@ -2016,32 +2542,35 @@ impl GpuTripleBufferSystem {
             mass,
             request.rotation,
         );
-        
+
         // Calculate absolute mode index (with genome offset)
-        let absolute_mode_idx = self.calculate_absolute_mode_index(
-            request.genome_id,
-            request.mode_index,
-            genomes,
-        );
-        
+        let absolute_mode_idx =
+            self.calculate_absolute_mode_index(request.genome_id, request.mode_index, genomes);
+
         // Get cell properties from genome mode settings
-        let (cell_type, nutrient_gain_rate, max_cell_size, max_splits) = if request.genome_id < genomes.len() {
-            let genome = &genomes[request.genome_id];
-            if request.mode_index < genome.modes.len() {
-                let mode = &genome.modes[request.mode_index];
-                // Only Test cells (cell_type == 0) auto-generate nutrients
-                let nutrient_rate = if mode.cell_type == 0 {
-                    mode.nutrient_gain_rate
+        let (cell_type, nutrient_gain_rate, max_cell_size, max_splits) =
+            if request.genome_id < genomes.len() {
+                let genome = &genomes[request.genome_id];
+                if request.mode_index < genome.modes.len() {
+                    let mode = &genome.modes[request.mode_index];
+                    // Only Test cells (cell_type == 0) auto-generate nutrients
+                    let nutrient_rate = if mode.cell_type == 0 {
+                        mode.nutrient_gain_rate
+                    } else {
+                        0.0
+                    };
+                    (
+                        mode.cell_type as u32,
+                        nutrient_rate,
+                        mode.max_cell_size,
+                        mode.max_splits,
+                    )
                 } else {
-                    0.0
-                };
-                (mode.cell_type as u32, nutrient_rate, mode.max_cell_size, mode.max_splits)
+                    (0, 0.2, 2.0, -1) // Defaults if mode not found
+                }
             } else {
-                (0, 0.2, 2.0, -1) // Defaults if mode not found
-            }
-        } else {
-            (0, 0.2, 2.0, -1) // Defaults if genome not found
-        };
+                (0, 0.2, 2.0, -1) // Defaults if genome not found
+            };
 
         // Sync cell state for division system
         self.sync_single_cell_state(
@@ -2059,14 +2588,14 @@ impl GpuTripleBufferSystem {
             request.stiffness,
             cell_type,
         );
-        
+
         // Update GPU cell count
         let new_count = self.slot_allocator.allocated_count();
         self.update_gpu_cell_count(queue, new_count);
-        
+
         Some((slot, cell_id))
     }
-    
+
     /// Calculate absolute mode index with genome offset
     fn calculate_absolute_mode_index(
         &self,
@@ -2083,13 +2612,17 @@ impl GpuTripleBufferSystem {
         }
         offset + local_mode_idx // Fallback if genome not found
     }
-    
+
     /// Update GPU cell count buffer
     pub fn update_gpu_cell_count(&self, queue: &wgpu::Queue, new_count: u32) {
         let cell_counts: [u32; 2] = [new_count, new_count];
-        queue.write_buffer(&self.cell_count_buffer, 0, bytemuck::cast_slice(&cell_counts));
+        queue.write_buffer(
+            &self.cell_count_buffer,
+            0,
+            bytemuck::cast_slice(&cell_counts),
+        );
     }
-    
+
     /// Start an async read of cell count from GPU.
     /// Call poll_cell_count() to check if the read is complete.
     /// This is non-blocking and won't cause frame spikes.
@@ -2098,7 +2631,7 @@ impl GpuTripleBufferSystem {
         if self.cell_count_map_pending {
             return;
         }
-        
+
         // Copy cell count buffer to readback buffer
         encoder.copy_buffer_to_buffer(
             &self.cell_count_buffer,
@@ -2108,7 +2641,7 @@ impl GpuTripleBufferSystem {
             8, // 2 x u32
         );
     }
-    
+
     /// Initiate the async map operation after command buffer submission.
     /// Call this after queue.submit() to start the async readback.
     pub fn initiate_cell_count_map(&mut self) {
@@ -2116,18 +2649,18 @@ impl GpuTripleBufferSystem {
         if self.cell_count_map_pending {
             return;
         }
-        
+
         let buffer_slice = self.cell_count_readback_buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
-        
+
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
-        
+
         self.cell_count_map_pending = true;
         self.cell_count_receiver = Some(rx);
     }
-    
+
     /// Poll for async cell count read completion.
     /// Returns Some((total, live)) if new count is available, None if still pending or no read started.
     /// This is non-blocking.
@@ -2135,10 +2668,10 @@ impl GpuTripleBufferSystem {
         if !self.cell_count_map_pending {
             return None;
         }
-        
+
         // Do a non-blocking poll to push GPU work forward
         let _ = device.poll(wgpu::PollType::Poll);
-        
+
         // Check if the map operation completed
         if let Some(ref rx) = self.cell_count_receiver {
             match rx.try_recv() {
@@ -2147,17 +2680,17 @@ impl GpuTripleBufferSystem {
                     let buffer_slice = self.cell_count_readback_buffer.slice(..);
                     let data = buffer_slice.get_mapped_range();
                     let counts: &[u32] = bytemuck::cast_slice(&data);
-                    
+
                     // counts[0] = total cells (high water mark), counts[1] = live cells
                     let total = counts[0];
                     let live = counts[1];
-                    
+
                     // Use live cells count for display
                     self.last_cell_count = live;
-                    
+
                     drop(data);
                     self.cell_count_readback_buffer.unmap();
-                    
+
                     self.cell_count_map_pending = false;
                     self.cell_count_receiver = None;
                     return Some((total, live));
@@ -2180,46 +2713,60 @@ impl GpuTripleBufferSystem {
                 }
             }
         }
-        
+
         None
     }
-    
+
     /// Get the last known cell count from GPU readback.
     pub fn last_cell_count(&self) -> u32 {
         self.last_cell_count
     }
-    
+
+    /// Clear cached cell-count readback state.
+    ///
+    /// Scene reset writes a fresh zero count to the GPU buffer. If an async
+    /// readback from before the reset completes later, it must not overwrite the
+    /// CPU-side display with stale counts.
+    pub fn reset_cell_count_readback(&mut self) {
+        if self.cell_count_map_pending {
+            self.cell_count_readback_buffer.unmap();
+        }
+        self.cell_count_map_pending = false;
+        self.cell_count_receiver = None;
+        self.last_cell_count = 0;
+    }
+
     /// Check if a cell count readback is pending.
     pub fn is_cell_count_read_pending(&self) -> bool {
         self.cell_count_map_pending
     }
-    
+
     /// Free a cell slot (for cell death)
     pub fn free_cell_slot(&mut self, slot: u32) {
         self.slot_allocator.free_slot(slot);
     }
-    
+
     /// Compact free slots for deterministic allocation
     pub fn compact_free_slots(&mut self) {
         self.slot_allocator.compact_free_slots();
     }
-    
+
     /// Get current allocated cell count
     pub fn allocated_cell_count(&self) -> u32 {
         self.slot_allocator.allocated_count()
     }
-    
+
     /// Get available slot count
     pub fn available_slots(&self) -> usize {
         self.slot_allocator.available_slots()
     }
-    
+
     /// Reset slot allocator (for scene reset)
     pub fn reset_slot_allocator(&mut self) {
         self.slot_allocator.reset();
         self.cell_addition_pipeline.clear_pending();
     }
-    
+
     /// Reset ring buffers to empty state (for scene reset)
     /// Clears ring_state to [0, 0, 0, 0] (head=0, tail=0, next_slot_id=0, reservation_count=0)
     /// Also clears death_flags, division_flags, and lifecycle_counts so stale state
@@ -2229,27 +2776,32 @@ impl GpuTripleBufferSystem {
     pub fn reset_ring_buffers(&self, queue: &wgpu::Queue) {
         let ring_state_data: [u32; 4] = [0, 0, 0, 0];
         queue.write_buffer(&self.ring_state, 0, bytemuck::cast_slice(&ring_state_data));
-        
+
         // Clear death_flags so no slots appear "already dead" after reset
         let zeros = vec![0u8; self.capacity as usize * 4];
         queue.write_buffer(&self.death_flags, 0, &zeros);
-        
+
         // Clear division_flags to prevent stale division attempts
         queue.write_buffer(&self.division_flags, 0, &zeros);
-        
+
         // Clear lifecycle_counts (3 x u32 = 12 bytes)
         let lifecycle_zeros: [u32; 3] = [0, 0, 0];
-        queue.write_buffer(&self.lifecycle_counts, 0, bytemuck::cast_slice(&lifecycle_zeros));
+        queue.write_buffer(
+            &self.lifecycle_counts,
+            0,
+            bytemuck::cast_slice(&lifecycle_zeros),
+        );
     }
-    
+
     /// Synchronize slot allocator with canonical state
     pub fn sync_slot_allocator_with_canonical(&mut self, canonical_state: &CanonicalState) {
         // Reset allocator
         self.slot_allocator.reset();
-        
+
         // Set next cell ID to match canonical state
-        self.slot_allocator.set_next_cell_id(canonical_state.next_cell_id as u32);
-        
+        self.slot_allocator
+            .set_next_cell_id(canonical_state.next_cell_id as u32);
+
         // Mark slots as allocated for existing cells
         for i in 0..canonical_state.cell_count {
             if let Some((slot, _)) = self.slot_allocator.allocate_slot() {
@@ -2258,17 +2810,17 @@ impl GpuTripleBufferSystem {
             }
         }
     }
-    
+
     /// Queue a cell for deterministic addition
-    /// 
+    ///
     /// The cell will be added during the next call to `process_pending_cell_additions()`.
     /// This ensures all additions are processed in deterministic order.
     pub fn queue_cell_addition(&mut self, request: CellAdditionRequest) {
         self.cell_addition_pipeline.queue_cell_addition(request);
     }
-    
+
     /// Process all pending cell additions in deterministic order
-    /// 
+    ///
     /// Returns list of (slot_index, cell_id) pairs for successfully added cells.
     /// This method should be called once per frame to process queued additions.
     pub fn process_pending_cell_additions(
@@ -2278,24 +2830,23 @@ impl GpuTripleBufferSystem {
         genomes: &[crate::genome::Genome],
     ) -> Vec<(u32, u32)> {
         // Extract pending requests to avoid borrowing issues
-        let mut pending_requests = std::mem::take(&mut self.cell_addition_pipeline.pending_requests);
-        
+        let mut pending_requests =
+            std::mem::take(&mut self.cell_addition_pipeline.pending_requests);
+
         if pending_requests.is_empty() {
             return Vec::new();
         }
-        
+
         // Sort requests by deterministic hash for consistent ordering
         pending_requests.sort_by_key(|req| req.deterministic_hash());
-        
+
         let mut added_cells = Vec::new();
-        
+
         // Process each request in sorted order
         for request in pending_requests {
-            if let Some((slot, cell_id)) = self.add_cell_deterministic(
-                queue,
-                request.clone(),
-                genomes,
-            ) {
+            if let Some((slot, cell_id)) =
+                self.add_cell_deterministic(queue, request.clone(), genomes)
+            {
                 // Also add to canonical state at the same slot
                 if let Some(_canonical_index) = canonical_state.add_cell_at_slot(
                     slot as usize,
@@ -2320,20 +2871,20 @@ impl GpuTripleBufferSystem {
                 }
             }
         }
-        
+
         added_cells
     }
-    
+
     /// Get number of pending cell additions
     pub fn pending_cell_addition_count(&self) -> usize {
         self.cell_addition_pipeline.pending_count()
     }
-    
+
     /// Clear all pending cell additions
     pub fn clear_pending_cell_additions(&mut self) {
         self.cell_addition_pipeline.clear_pending();
     }
-    
+
     /// Create a cell addition request from basic parameters
     pub fn create_cell_addition_request(
         position: glam::Vec3,
@@ -2350,17 +2901,21 @@ impl GpuTripleBufferSystem {
             let genome = &genomes[genome_id];
             if mode_index < genome.modes.len() {
                 let mode = &genome.modes[mode_index];
-                (mode.split_interval, mode.split_mass, mode.membrane_stiffness)
+                (
+                    mode.split_interval,
+                    mode.split_mass,
+                    mode.membrane_stiffness,
+                )
             } else {
                 (10.0, 2.0, 50.0) // Default values
             }
         } else {
             (10.0, 2.0, 50.0) // Default values
         };
-        
+
         // Convert split_mass to nutrient threshold
         let split_nutrient_threshold = (split_mass - 1.0) * 100.0;
-        
+
         CellAdditionRequest {
             position,
             velocity,
@@ -2376,29 +2931,34 @@ impl GpuTripleBufferSystem {
             angular_velocity: glam::Vec3::ZERO,
         }
     }
-    
+
     /// Mark that buffers need to be synced from canonical state
     pub fn mark_needs_sync(&mut self) {
         self.needs_sync = true;
     }
-    
+
     /// Queue a cell insertion to be synced on next physics step
     pub fn queue_cell_insertion(&mut self, cell_idx: usize) {
         self.pending_cell_insertions.push(cell_idx);
     }
-    
+
     /// Check if there are pending cell insertions
     pub fn has_pending_insertions(&self) -> bool {
         !self.pending_cell_insertions.is_empty()
     }
-    
+
     /// Get the number of pending cell insertions
     pub fn pending_insertion_count(&self) -> usize {
         self.pending_cell_insertions.len()
     }
-    
+
     /// Sync pending cell insertions to GPU buffers
-    pub fn sync_pending_insertions(&mut self, queue: &wgpu::Queue, state: &crate::simulation::CanonicalState, genomes: &[crate::genome::Genome]) {
+    pub fn sync_pending_insertions(
+        &mut self,
+        queue: &wgpu::Queue,
+        state: &crate::simulation::CanonicalState,
+        genomes: &[crate::genome::Genome],
+    ) {
         // Pre-calculate genome mode offsets for absolute mode index calculation
         let genome_mode_offsets: Vec<usize> = {
             let mut offsets = Vec::with_capacity(genomes.len());
@@ -2409,41 +2969,49 @@ impl GpuTripleBufferSystem {
             }
             offsets
         };
-        
+
         for &cell_idx in &self.pending_cell_insertions {
             if cell_idx < state.cell_count {
                 let position = state.positions[cell_idx];
                 let velocity = state.velocities[cell_idx];
                 let mass = state.masses[cell_idx];
                 let rotation = state.rotations[cell_idx];
-                
+
                 self.sync_single_cell(queue, cell_idx, position, velocity, mass, rotation);
-                
+
                 // Get max_splits, nutrient_gain_rate, max_cell_size, and stiffness from genome mode
                 let genome_id = state.genome_ids[cell_idx];
                 let local_mode_idx = state.mode_indices[cell_idx];
-                let (max_splits, nutrient_gain_rate, max_cell_size, stiffness, cell_type) = if genome_id < genomes.len() {
-                    let genome = &genomes[genome_id];
-                    if local_mode_idx < genome.modes.len() {
-                        let mode = &genome.modes[local_mode_idx];
-                        // Only Test cells (cell_type == 0) auto-generate nutrients
-                        // All other cells rely on specialized functions (e.g., photosynthesis) or nutrient transport
-                        let nutrient_rate = if mode.cell_type == 0 {
-                            mode.nutrient_gain_rate
+                let (max_splits, nutrient_gain_rate, max_cell_size, stiffness, cell_type) =
+                    if genome_id < genomes.len() {
+                        let genome = &genomes[genome_id];
+                        if local_mode_idx < genome.modes.len() {
+                            let mode = &genome.modes[local_mode_idx];
+                            // Only Test cells (cell_type == 0) auto-generate nutrients
+                            // All other cells rely on specialized functions (e.g., photosynthesis) or nutrient transport
+                            let nutrient_rate = if mode.cell_type == 0 {
+                                mode.nutrient_gain_rate
+                            } else {
+                                0.0
+                            };
+                            (
+                                mode.max_splits,
+                                nutrient_rate,
+                                mode.max_cell_size,
+                                mode.membrane_stiffness,
+                                mode.cell_type as u32,
+                            )
                         } else {
-                            0.0
-                        };
-                        (mode.max_splits, nutrient_rate, mode.max_cell_size, mode.membrane_stiffness, mode.cell_type as u32)
+                            (-1, 0.2, 2.0, 50.0, 0) // Defaults if mode not found
+                        }
                     } else {
-                        (-1, 0.2, 2.0, 50.0, 0) // Defaults if mode not found
-                    }
-                } else {
-                    (-1, 0.2, 2.0, 50.0, 0) // Defaults if genome not found
-                };
-                
+                        (-1, 0.2, 2.0, 50.0, 0) // Defaults if genome not found
+                    };
+
                 // Calculate absolute mode index (with genome offset)
-                let absolute_mode_idx = genome_mode_offsets.get(genome_id).copied().unwrap_or(0) + local_mode_idx;
-                
+                let absolute_mode_idx =
+                    genome_mode_offsets.get(genome_id).copied().unwrap_or(0) + local_mode_idx;
+
                 // Also sync cell state for division system
                 self.sync_single_cell_state(
                     queue,
@@ -2462,16 +3030,20 @@ impl GpuTripleBufferSystem {
                 );
             }
         }
-        
+
         // Update GPU cell count buffer after insertions
         if !self.pending_cell_insertions.is_empty() {
             let cell_counts: [u32; 2] = [state.cell_count as u32, state.cell_count as u32];
-            queue.write_buffer(&self.cell_count_buffer, 0, bytemuck::cast_slice(&cell_counts));
+            queue.write_buffer(
+                &self.cell_count_buffer,
+                0,
+                bytemuck::cast_slice(&cell_counts),
+            );
         }
-        
+
         self.pending_cell_insertions.clear();
     }
-    
+
     /// Rotate to the next buffer set (lock-free)
     pub fn rotate_buffers(&self) -> usize {
         let current = self.current_index.load(Ordering::Acquire);
@@ -2479,30 +3051,34 @@ impl GpuTripleBufferSystem {
         self.current_index.store(next, Ordering::Release);
         next
     }
-    
+
     /// Get the current buffer index
     pub fn current_index(&self) -> usize {
         self.current_index.load(Ordering::Acquire)
     }
-    
+
     /// Get the output buffer index (where physics results are written)
     /// This is (current_index + 1) % 3 since physics reads from current and writes to next
     pub fn output_buffer_index(&self) -> usize {
         let current = self.current_index.load(Ordering::Acquire);
         (current + 1) % 3
     }
-    
 
-    
     /// DEBUG: Blocking readback of position/mass data from a specific buffer.
     /// This is expensive and should only be used for debugging!
-    pub fn debug_read_positions_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue, buffer_index: usize, cell_count: usize) -> Vec<[f32; 4]> {
+    pub fn debug_read_positions_blocking(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        buffer_index: usize,
+        cell_count: usize,
+    ) -> Vec<[f32; 4]> {
         if cell_count == 0 || buffer_index >= 3 {
             return Vec::new();
         }
-        
+
         let read_size = (cell_count * 16) as u64; // Vec4<f32> = 16 bytes
-        
+
         // Create staging buffer for readback
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Debug Position Staging"),
@@ -2510,7 +3086,7 @@ impl GpuTripleBufferSystem {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // Copy from GPU buffer to staging
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Debug Readback Encoder"),
@@ -2523,7 +3099,7 @@ impl GpuTripleBufferSystem {
             read_size,
         );
         queue.submit(std::iter::once(encoder.finish()));
-        
+
         // Map and read (blocking)
         let slice = staging.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
@@ -2534,7 +3110,7 @@ impl GpuTripleBufferSystem {
             submission_index: None,
             timeout: None,
         });
-        
+
         if rx.recv().ok().and_then(|r| r.ok()).is_some() {
             let view = slice.get_mapped_range();
             let data: Vec<[f32; 4]> = bytemuck::cast_slice(&view).to_vec();
@@ -2545,24 +3121,28 @@ impl GpuTripleBufferSystem {
             Vec::new()
         }
     }
-    
+
     /// DEBUG: Blocking readback of cell_count_buffer [total, live].
-    pub fn debug_read_cell_count_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> [u32; 2] {
+    pub fn debug_read_cell_count_blocking(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> [u32; 2] {
         let read_size = 8u64; // 2 x u32
-        
+
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Debug Cell Count Staging"),
             size: read_size,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Debug Cell Count Readback"),
         });
         encoder.copy_buffer_to_buffer(&self.cell_count_buffer, 0, &staging, 0, read_size);
         queue.submit(std::iter::once(encoder.finish()));
-        
+
         let slice = staging.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -2572,7 +3152,7 @@ impl GpuTripleBufferSystem {
             submission_index: None,
             timeout: None,
         });
-        
+
         if rx.recv().ok().and_then(|r| r.ok()).is_some() {
             let view = slice.get_mapped_range();
             let data: &[u32] = bytemuck::cast_slice(&view);
@@ -2584,28 +3164,33 @@ impl GpuTripleBufferSystem {
             [0, 0]
         }
     }
-    
+
     /// DEBUG: Blocking readback of mode_indices buffer.
-    pub fn debug_read_mode_indices_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue, count: usize) -> Vec<u32> {
+    pub fn debug_read_mode_indices_blocking(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        count: usize,
+    ) -> Vec<u32> {
         if count == 0 {
             return Vec::new();
         }
-        
+
         let read_size = (count * 4) as u64; // u32 = 4 bytes
-        
+
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Debug Mode Indices Staging"),
             size: read_size,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Debug Mode Indices Readback"),
         });
         encoder.copy_buffer_to_buffer(&self.mode_indices, 0, &staging, 0, read_size);
         queue.submit(std::iter::once(encoder.finish()));
-        
+
         let slice = staging.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -2615,7 +3200,7 @@ impl GpuTripleBufferSystem {
             submission_index: None,
             timeout: None,
         });
-        
+
         if rx.recv().ok().and_then(|r| r.ok()).is_some() {
             let view = slice.get_mapped_range();
             let data: Vec<u32> = bytemuck::cast_slice(&view).to_vec();
@@ -2631,49 +3216,49 @@ impl GpuTripleBufferSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::{Vec3, Quat};
-    
+    use glam::{Quat, Vec3};
+
     #[test]
     fn test_deterministic_slot_allocator() {
         let mut allocator = DeterministicSlotAllocator::new(10);
-        
+
         // Test initial state
         assert_eq!(allocator.allocated_count(), 0);
         assert_eq!(allocator.available_slots(), 10);
-        
+
         // Allocate some slots
         let (slot1, id1) = allocator.allocate_slot().unwrap();
         let (slot2, id2) = allocator.allocate_slot().unwrap();
         let (slot3, id3) = allocator.allocate_slot().unwrap();
-        
+
         // Should allocate in order
         assert_eq!(slot1, 0);
         assert_eq!(slot2, 1);
         assert_eq!(slot3, 2);
-        
+
         // IDs should increment
         assert_eq!(id1, 1);
         assert_eq!(id2, 2);
         assert_eq!(id3, 3);
-        
+
         // Check counts
         assert_eq!(allocator.allocated_count(), 3);
         assert_eq!(allocator.available_slots(), 7);
-        
+
         // Free a slot
         allocator.free_slot(1);
         assert_eq!(allocator.available_slots(), 8); // Now 8 (1 freed + 7 remaining)
-        
+
         // Compact and check (should still be 8)
         allocator.compact_free_slots();
         assert_eq!(allocator.available_slots(), 8); // Still 8 after compaction
-        
+
         // Next allocation should use slot 1 (freed slot, lowest available)
         let (slot4, id4) = allocator.allocate_slot().unwrap();
         assert_eq!(slot4, 1); // Reused freed slot
-        assert_eq!(id4, 4);   // ID continues incrementing
+        assert_eq!(id4, 4); // ID continues incrementing
     }
-    
+
     #[test]
     fn test_cell_addition_request_deterministic_hash() {
         let request1 = CellAdditionRequest {
@@ -2690,28 +3275,28 @@ mod tests {
             genome_orientation: Quat::IDENTITY,
             angular_velocity: Vec3::ZERO,
         };
-        
+
         let request2 = CellAdditionRequest {
             position: Vec3::new(1.0, 2.0, 3.0), // Same position
             velocity: Vec3::new(1.0, 0.0, 0.0), // Different velocity (shouldn't affect hash)
-            nutrients: 50.0,                     // Different nutrients (shouldn't affect hash)
+            nutrients: 50.0,                    // Different nutrients (shouldn't affect hash)
             rotation: Quat::IDENTITY,
-            genome_id: 0,                        // Same genome/mode
+            genome_id: 0, // Same genome/mode
             mode_index: 0,
-            birth_time: 5.0,                     // Different time (shouldn't affect hash)
+            birth_time: 5.0, // Different time (shouldn't affect hash)
             split_interval: 15.0,
             split_nutrient_threshold: 75.0,
             stiffness: 75.0,
             genome_orientation: Quat::IDENTITY,
             angular_velocity: Vec3::ZERO,
         };
-        
+
         let request3 = CellAdditionRequest {
             position: Vec3::new(1.0, 2.0, 3.0), // Same position
             velocity: Vec3::ZERO,
             nutrients: 100.0,
             rotation: Quat::IDENTITY,
-            genome_id: 1,                        // Different genome (should affect hash)
+            genome_id: 1, // Different genome (should affect hash)
             mode_index: 0,
             birth_time: 0.0,
             split_interval: 10.0,
@@ -2720,18 +3305,18 @@ mod tests {
             genome_orientation: Quat::IDENTITY,
             angular_velocity: Vec3::ZERO,
         };
-        
+
         // Same position and genome should have same hash
         assert_eq!(request1.deterministic_hash(), request2.deterministic_hash());
-        
+
         // Different genome should have different hash
         assert_ne!(request1.deterministic_hash(), request3.deterministic_hash());
     }
-    
+
     #[test]
     fn test_deterministic_cell_addition_sorting() {
         let mut pipeline = DeterministicCellAddition::new();
-        
+
         // Add requests in non-deterministic order
         let request_high_hash = CellAdditionRequest {
             position: Vec3::new(10.0, 10.0, 10.0), // High coordinates = high hash
@@ -2747,7 +3332,7 @@ mod tests {
             genome_orientation: Quat::IDENTITY,
             angular_velocity: Vec3::ZERO,
         };
-        
+
         let request_low_hash = CellAdditionRequest {
             position: Vec3::new(1.0, 1.0, 1.0), // Low coordinates = low hash
             velocity: Vec3::ZERO,
@@ -2762,13 +3347,13 @@ mod tests {
             genome_orientation: Quat::IDENTITY,
             angular_velocity: Vec3::ZERO,
         };
-        
+
         // Add high hash first, then low hash
         pipeline.queue_cell_addition(request_high_hash.clone());
         pipeline.queue_cell_addition(request_low_hash.clone());
-        
+
         assert_eq!(pipeline.pending_count(), 2);
-        
+
         // Verify they get sorted by hash (low hash should come first)
         assert!(request_low_hash.deterministic_hash() < request_high_hash.deterministic_hash());
     }

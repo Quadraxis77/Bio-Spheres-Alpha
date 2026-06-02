@@ -477,7 +477,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let child_b_slot = division_slot_assignments[cell_idx];
     
     // Validate slot assignment
-    if (child_b_slot >= params.cell_capacity) {
+    let effective_capacity = min(params.cell_capacity, arrayLength(&positions_out));
+    if (child_b_slot >= effective_capacity) {
+        atomicSub(&cell_count_buffer[1], 1u);
+        division_flags[cell_idx] = 0u;
         return; // Invalid slot, skip division
     }
 
@@ -781,9 +784,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // mass to these small newborn children via pressure-based transport.
     split_ready_frame[cell_idx] = params.current_frame;
     split_ready_frame[child_b_slot] = params.current_frame;
-    
-    // Increment live cell count (one parent became two children)
-    atomicAdd(&cell_count_buffer[1], 1u);
     
     // Update total cell count if we used a new slot beyond current count
     atomicMax(&cell_count_buffer[0], child_b_slot + 1u);

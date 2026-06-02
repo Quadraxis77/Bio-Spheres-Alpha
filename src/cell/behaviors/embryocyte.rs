@@ -12,8 +12,8 @@
 //! - Once released (all adhesions dropped), reserve burns at 10 units/sec
 //! - Division halves reserve; children cannot themselves be Embryocytes
 
-use crate::genome::ModeSettings;
 use super::{CellBehavior, TypeSpecificInstanceData};
+use crate::genome::ModeSettings;
 
 /// Behavior implementation for Embryocyte cells.
 ///

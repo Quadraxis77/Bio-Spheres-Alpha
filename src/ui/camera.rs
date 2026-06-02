@@ -1,6 +1,6 @@
 use glam::{Quat, Vec3};
-use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta};
 use winit::dpi::PhysicalPosition;
+use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
 /// Camera mode - matches BioSpheres-Q
@@ -26,9 +26,10 @@ pub struct CameraController {
     pub rotation: Quat,
     pub target_rotation: Quat,
     pub mode: CameraMode,
-    pub scene_type: SceneType,  // Add scene type for different behaviors
+    pub scene_type: SceneType, // Add scene type for different behaviors
 
-    // Up direction for orbit mode (opposite of gravity direction)
+    // Stable yaw/up axis for orbit mode. This follows the selected gravity axis,
+    // not the gravity sign, so orbit controls never flip upside down.
     pub up_direction: Vec3,
     // Current gravity mode (0=X, 1=Y, 2=Z, 3=radial)
     pub gravity_mode: u32,
@@ -85,8 +86,8 @@ impl CameraController {
             rotation: initial_rotation,
             target_rotation: initial_rotation,
             mode: CameraMode::FreeFly,
-            scene_type: SceneType::GpuScene,  // Default to GPU scene
-            up_direction: Vec3::Y, // Default up is +Y (gravity pulls down in -Y)
+            scene_type: SceneType::GpuScene, // Default to GPU scene
+            up_direction: Vec3::Y,           // Default up is +Y (gravity pulls down in -Y)
             gravity_mode: 1,
             is_dragging: false,
             last_mouse_pos: None,
@@ -111,11 +112,11 @@ impl CameraController {
 
         Self {
             center: Vec3::ZERO,
-            distance: 500.0,      // Orbit at 500 units
+            distance: 500.0, // Orbit at 500 units
             target_distance: 500.0,
             rotation: initial_rotation,
             target_rotation: initial_rotation,
-            mode: CameraMode::Orbit,  // GPU scene now defaults to Orbit mode
+            mode: CameraMode::Orbit, // GPU scene now defaults to Orbit mode
             scene_type: SceneType::GpuScene,
             up_direction: Vec3::Y,
             gravity_mode: 1,
@@ -142,11 +143,11 @@ impl CameraController {
 
         Self {
             center: Vec3::ZERO,
-            distance: 50.0,       // Orbit at 50 units
+            distance: 50.0, // Orbit at 50 units
             target_distance: 50.0,
             rotation: initial_rotation,
             target_rotation: initial_rotation,
-            mode: CameraMode::Orbit,  // Preview starts in Orbit mode
+            mode: CameraMode::Orbit, // Preview starts in Orbit mode
             scene_type: SceneType::PreviewScene,
             up_direction: Vec3::Y,
             gravity_mode: 1,
@@ -166,41 +167,26 @@ impl CameraController {
         }
     }
 
-    /// Set up direction from gravity mode.
+    /// Set yaw/up axis from gravity mode.
     /// gravity_mode: 0=X axis, 1=Y axis, 2=Z axis, 3=radial
-    /// For axial modes, up = the gravity axis (camera orbits with that axis as "up").
-    /// For radial mode, up = outward from origin based on camera position (quaternion-based).
-    pub fn set_gravity_direction(&mut self, gravity: f32, gravity_mode: u32) {
+    /// For axial modes, yaw is aligned to the selected gravity axis without
+    /// flipping when gravity changes sign. For radial mode, keep the current
+    /// stable axis because there is no single global yaw axis.
+    pub fn set_gravity_direction(&mut self, _gravity: f32, gravity_mode: u32) {
         // Store gravity mode so orbit rotation can use it
         self.gravity_mode = gravity_mode;
 
-        // In radial mode, don't realign - there is no fixed "up" axis.
+        // In radial mode, don't realign - there is no fixed yaw axis.
         // Recomputing up from camera position every frame causes a feedback spin loop.
         if gravity_mode == 3 {
             return;
         }
 
-        let new_up = if gravity.abs() < 0.001 {
-            Vec3::Y // no gravity -> default Y up
-        } else {
-            // For axial modes, up points along the positive axis direction
-            // Camera doesn't flip when gravity magnitude changes sign
-            match gravity_mode {
-                0 => Vec3::X,
-                1 => Vec3::Y,
-                2 => Vec3::Z,
-                3 => {
-                    // Radial orbit: up = outward from origin to camera position
-                    let cam_pos = self.rotation * Vec3::new(0.0, 0.0, self.distance) + self.center;
-                    let outward = cam_pos - self.center;
-                    if outward.length_squared() > 0.001 {
-                        outward.normalize()
-                    } else {
-                        Vec3::Y
-                    }
-                }
-                _ => Vec3::Y, // fallback
-            }
+        let new_up = match gravity_mode {
+            0 => Vec3::X,
+            1 => Vec3::Y,
+            2 => Vec3::Z,
+            _ => Vec3::Y,
         };
 
         if self.up_direction != new_up {
@@ -237,20 +223,40 @@ impl CameraController {
         self.rotation = new_rotation;
         self.target_rotation = new_rotation;
     }
-    
+
+    /// Remove roll while preserving the current look direction as much as possible.
+    fn rotation_without_roll(forward: Vec3, up: Vec3) -> Quat {
+        let forward = forward.normalize_or_zero();
+        let projected_forward = (forward - up * forward.dot(up)).normalize_or_zero();
+        let stable_forward = if projected_forward.length_squared() < 0.001 {
+            if up.y.abs() < 0.9 {
+                Vec3::Y.cross(up).normalize()
+            } else {
+                Vec3::X.cross(up).normalize()
+            }
+        } else {
+            forward
+        };
+
+        let right = stable_forward.cross(up).normalize();
+        let corrected_forward = up.cross(right).normalize();
+        let rot_matrix = glam::Mat3::from_cols(right, up, -corrected_forward);
+        Quat::from_mat3(&rot_matrix).normalize()
+    }
+
     /// Get the current camera position in world space
     pub fn position(&self) -> Vec3 {
         let offset = self.rotation * Vec3::new(0.0, 0.0, self.distance);
         self.center + offset
     }
-    
+
     /// Handle mouse button input
     pub fn handle_mouse_button(&mut self, button: MouseButton, state: ElementState) {
         let control_button = match self.mode {
             CameraMode::Orbit => MouseButton::Right,
             CameraMode::FreeFly => MouseButton::Right,
         };
-        
+
         if button == control_button {
             self.is_dragging = state == ElementState::Pressed;
             if !self.is_dragging {
@@ -263,35 +269,35 @@ impl CameraController {
     pub fn is_dragging(&self) -> bool {
         self.is_dragging
     }
-    
+
     /// Handle mouse movement
     pub fn handle_mouse_move(&mut self, position: PhysicalPosition<f64>) {
         if self.is_dragging {
             if let Some(last_pos) = self.last_mouse_pos {
                 let delta_x = (position.x - last_pos.x) as f32;
                 let delta_y = (position.y - last_pos.y) as f32;
-                
+
                 self.accumulated_mouse_delta.x += delta_x;
                 self.accumulated_mouse_delta.y += delta_y;
             }
             self.last_mouse_pos = Some(position);
         }
     }
-    
+
     /// Handle mouse scroll for zooming (Orbit mode) or focal plane (FreeFly mode)
     pub fn handle_scroll(&mut self, delta: MouseScrollDelta) {
         let scroll_amount = match delta {
             MouseScrollDelta::LineDelta(_x, y) => y,
             MouseScrollDelta::PixelDelta(pos) => (pos.y / 100.0) as f32,
         };
-        
+
         self.accumulated_scroll += scroll_amount;
     }
-    
+
     /// Handle keyboard input
     pub fn handle_keyboard(&mut self, event: &KeyEvent) {
         let pressed = event.state == ElementState::Pressed;
-        
+
         if let PhysicalKey::Code(keycode) = event.physical_key {
             match keycode {
                 KeyCode::KeyW => self.keys_pressed.w = pressed,
@@ -314,7 +320,7 @@ impl CameraController {
             }
         }
     }
-    
+
     /// Toggle between Orbit and FreeFly modes
     fn toggle_mode(&mut self) {
         match self.mode {
@@ -335,23 +341,23 @@ impl CameraController {
                 };
                 self.distance = orbit_distance;
                 self.target_distance = orbit_distance;
-                
+
                 // Remove roll component when switching to Orbit mode
                 // Extract forward direction and create clean orbit rotation
                 let forward = (self.rotation * Vec3::NEG_Z).normalize();
                 let up = self.up_direction;
                 let right = forward.cross(up).normalize();
                 let corrected_forward = up.cross(right).normalize();
-                
+
                 let rot_matrix = glam::Mat3::from_cols(right, up, -corrected_forward);
                 self.target_rotation = Quat::from_mat3(&rot_matrix).normalize();
                 self.rotation = self.target_rotation;
-                
+
                 self.mode = CameraMode::Orbit;
             }
         }
     }
-    
+
     /// Update camera state (call once per frame)
     pub fn update(&mut self, dt: f32) {
         // 1. ZOOM (scroll) - Only in Orbit mode
@@ -361,7 +367,7 @@ impl CameraController {
             self.target_distance = self.target_distance.max(0.1);
         }
         self.accumulated_scroll = 0.0;
-        
+
         // Apply spring interpolation to distance and rotation in orbit mode
         if self.mode == CameraMode::Orbit {
             if self.enable_spring {
@@ -369,29 +375,29 @@ impl CameraController {
                 let distance_error = self.target_distance - self.distance;
                 let velocity = distance_error * self.spring_stiffness * dt;
                 self.distance += velocity * (1.0 - self.spring_damping);
-                
+
                 // Spring for rotation
                 self.rotation = self.rotation.slerp(
                     self.target_rotation,
-                    self.spring_stiffness * dt * (1.0 - self.spring_damping)
+                    self.spring_stiffness * dt * (1.0 - self.spring_damping),
                 );
             } else {
                 self.distance = self.target_distance;
                 self.rotation = self.target_rotation;
             }
         }
-        
+
         // 2. ROTATION (mouse)
         if self.accumulated_mouse_delta.length_squared() > 0.0 {
             let delta = self.accumulated_mouse_delta.truncate() * self.mouse_sensitivity;
-            
+
             if self.mode == CameraMode::Orbit {
                 if self.gravity_mode == 3 {
                     // Radial mode: fully quaternion-based orbit - no fixed axis.
                     // Yaw around camera's local Y, pitch around camera's local X.
                     let local_y = self.target_rotation * Vec3::Y;
                     let local_x = self.target_rotation * Vec3::X;
-                    let yaw   = Quat::from_axis_angle(local_y, -delta.x);
+                    let yaw = Quat::from_axis_angle(local_y, -delta.x);
                     let pitch = Quat::from_axis_angle(local_x, -delta.y);
                     self.target_rotation = (yaw * pitch * self.target_rotation).normalize();
                 } else {
@@ -400,31 +406,39 @@ impl CameraController {
                     self.target_rotation = yaw_rotation * self.target_rotation;
 
                     let camera_right = self.target_rotation * Vec3::X;
-                    let right_axis = (camera_right - self.up_direction * camera_right.dot(self.up_direction)).normalize_or_zero();
+                    let right_axis = (camera_right
+                        - self.up_direction * camera_right.dot(self.up_direction))
+                    .normalize_or_zero();
                     if right_axis.length_squared() > 0.001 {
                         let pitch_rotation = Quat::from_axis_angle(right_axis, -delta.y);
-                        self.target_rotation = pitch_rotation * self.target_rotation;
+                        let proposed_rotation = (pitch_rotation * self.target_rotation).normalize();
+                        let proposed_forward = proposed_rotation * Vec3::NEG_Z;
+                        const MAX_UP_DOT: f32 = 0.98;
+                        if proposed_forward.dot(self.up_direction).abs() < MAX_UP_DOT {
+                            self.target_rotation = proposed_rotation;
+                        }
                     }
-                    self.target_rotation = self.target_rotation.normalize();
+                    let forward = self.target_rotation * Vec3::NEG_Z;
+                    self.target_rotation = Self::rotation_without_roll(forward, self.up_direction);
                 }
             } else {
                 // FreeFly mode: free rotation
                 let pitch = Quat::from_axis_angle(self.target_rotation * Vec3::X, -delta.y);
                 let local_up = self.target_rotation * Vec3::Y;
                 let free_yaw = Quat::from_axis_angle(local_up, -delta.x);
-                
+
                 self.target_rotation = (free_yaw * pitch) * self.target_rotation;
                 self.target_rotation = self.target_rotation.normalize();
             }
         }
         self.accumulated_mouse_delta = Vec3::ZERO;
-        
+
         // Apply spring interpolation to rotation in free fly mode
         if self.mode == CameraMode::FreeFly {
             // Direct rotation - no spring damping for free fly
             self.rotation = self.target_rotation;
         }
-        
+
         // 3. ROLL (Q/E) - Only in FreeFly mode
         if self.mode == CameraMode::FreeFly {
             let mut roll_amount = 0.0;
@@ -434,23 +448,23 @@ impl CameraController {
             if self.keys_pressed.e {
                 roll_amount -= 1.0;
             }
-            
+
             if roll_amount != 0.0 {
                 let roll_axis = self.target_rotation * Vec3::Z;
                 let roll = Quat::from_axis_angle(roll_axis, roll_amount * self.roll_speed * dt);
                 self.target_rotation = (roll * self.target_rotation).normalize();
             }
         }
-        
+
         // 4. MOVEMENT (WASD + Space + C) - Only in FreeFly mode
         if self.mode == CameraMode::FreeFly {
             let mut speed = self.move_speed * dt;
             if self.keys_pressed.shift {
                 speed *= self.sprint_multiplier;
             }
-            
+
             let mut move_vec = Vec3::ZERO;
-            
+
             if self.keys_pressed.w {
                 move_vec += self.rotation * Vec3::Z * -1.0; // forward
             }
@@ -469,10 +483,14 @@ impl CameraController {
             if self.keys_pressed.c {
                 move_vec += self.rotation * Vec3::Y * -1.0; // down
             }
-            
+
             if move_vec.length_squared() > 0.0 {
                 self.center += move_vec.normalize() * speed;
-                log::debug!("FreeFly movement: center={:?}, speed={}", self.center, speed);
+                log::debug!(
+                    "FreeFly movement: center={:?}, speed={}",
+                    self.center,
+                    speed
+                );
             }
         }
     }

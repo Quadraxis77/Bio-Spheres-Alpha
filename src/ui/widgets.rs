@@ -26,15 +26,15 @@ pub mod math_utils {
     /// Validates: Requirements 9.2 - Spherical Coordinate Edge Case Handling
     pub fn vec3_to_spherical(v: Vec3) -> (f32, f32) {
         let v = v.normalize();
-        
+
         // Handle edge case: zero vector
         if v.length_squared() < f32::EPSILON {
             return (0.0, 0.0);
         }
-        
+
         // Latitude: angle from XY plane to point (-pi/2 to pi/2)
         let lat = v.z.clamp(-1.0, 1.0).asin();
-        
+
         // Longitude: angle in XY plane from X axis (-pi to pi)
         let lon = if v.x.abs() < f32::EPSILON && v.y.abs() < f32::EPSILON {
             // Handle pole case: longitude is undefined, use 0
@@ -42,7 +42,7 @@ pub mod math_utils {
         } else {
             v.y.atan2(v.x)
         };
-        
+
         (lat, lon)
     }
 
@@ -51,13 +51,9 @@ pub mod math_utils {
     pub fn spherical_to_vec3(lat: f32, lon: f32) -> Vec3 {
         let lat = clamp_angle_range(lat, -PI / 2.0, PI / 2.0);
         let lon = normalize_angle(lon);
-        
+
         let cos_lat = lat.cos();
-        Vec3::new(
-            cos_lat * lon.cos(),
-            cos_lat * lon.sin(),
-            lat.sin()
-        )
+        Vec3::new(cos_lat * lon.cos(), cos_lat * lon.sin(), lat.sin())
     }
 
     /// Normalize angle to (-180, 180] range with proper wrapping
@@ -110,20 +106,14 @@ pub mod math_utils {
     /// Validates: Requirements 9.7 - 3D Coordinate System Conversions
     pub fn screen_to_widget_coords(screen_pos: Pos2, widget_rect: Rect) -> Vec2 {
         let center = widget_rect.center();
-        Vec2::new(
-            screen_pos.x - center.x,
-            screen_pos.y - center.y
-        )
+        Vec2::new(screen_pos.x - center.x, screen_pos.y - center.y)
     }
 
     /// Transform coordinates from widget space to screen space
     /// Validates: Requirements 9.7 - 3D Coordinate System Conversions
     pub fn widget_to_screen_coords(widget_pos: Vec2, widget_rect: Rect) -> Pos2 {
         let center = widget_rect.center();
-        Pos2::new(
-            center.x + widget_pos.x,
-            center.y + widget_pos.y
-        )
+        Pos2::new(center.x + widget_pos.x, center.y + widget_pos.y)
     }
 
     /// Ensure numerical stability in vector operations
@@ -171,9 +161,9 @@ pub mod color_utils {
         let r = bg_color.r() as f32;
         let g = bg_color.g() as f32;
         let b = bg_color.b() as f32;
-        
+
         let brightness = r * 0.299 + g * 0.587 + b * 0.114;
-        
+
         if brightness > 127.5 {
             Color32::BLACK
         } else {
@@ -242,142 +232,134 @@ pub fn circular_slider_float(
     radius: f32,
     enable_snapping: bool,
 ) -> Response {
-    
     // Container sizing: only allocate the width we need (diameter + small margin)
     let container_width = radius * 2.0 + 4.0; // Minimal horizontal margin
     let container_height = radius * 2.0 + 4.0; // Minimal vertical margin
     let desired_size = Vec2::new(container_width, container_height);
-    
+
     let (rect, mut response) = ui.allocate_exact_size(desired_size, Sense::click_and_drag());
-    
+
     // Always render the widget - remove the visibility check that might be causing issues
     let painter = ui.painter();
     let center = rect.center();
-    
+
     // Clamp value to specified range
     let clamped_value = value.clamp(v_min, v_max);
     let mut new_value = clamped_value;
     let mut value_changed = false;
-    
+
     // Convert value to angle (match reference implementation)
     let handle_angle = -PI / 2.0 + (clamped_value / 180.0) * PI;
-        
-        // Handle mouse interaction
-        if response.dragged() || response.clicked() {
-            if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
-                let mouse_rel = mouse_pos - center;
-                let distance = mouse_rel.length();
-                
-                // Grab zones: inner radius 15.0, outer radius radius + 25.0
-                let inner_grab_radius = 15.0;
-                let outer_grab_radius = radius + 25.0;
-                
-                if distance >= inner_grab_radius && distance <= outer_grab_radius {
-                    // Calculate angle from mouse position - match reference implementation
-                    let mouse_rel_x = mouse_rel.x;
-                    let mouse_rel_y = mouse_rel.y;
-                    let mouse_angle = mouse_rel_y.atan2(mouse_rel_x) + PI / 2.0;
-                    
-                    // Convert to degrees and normalize like the reference
-                    let mut degrees = mouse_angle * 180.0 / PI;
-                    if degrees > 180.0 {
-                        degrees -= 360.0;
-                    }
-                    
-                    // Apply grid snapping to degrees if enabled
-                    if enable_snapping {
-                        degrees = (degrees / 15.0).round() * 15.0;
-                    }
-                    
-                    // Clamp to range and set new value
-                    new_value = degrees.clamp(v_min, v_max);
-                    
-                    if (new_value - clamped_value).abs() > f32::EPSILON {
-                        value_changed = true;
-                    }
-                }
-            }
-        }
-        
-        // Visual rendering
-        let visuals = ui.style().interact(&response);
-        
-        // Background circle stroke with 3.0 thickness
-        painter.circle_stroke(
-            center,
-            radius,
-            egui::Stroke::new(3.0, visuals.bg_fill)
-        );
-        
-        // Handle position on track circumference
-        let handle_pos = center + Vec2::new(
-            radius * handle_angle.cos(),
-            radius * handle_angle.sin()
-        );
-        
-        // Directional arc visualization with thickness 8.0
-        if clamped_value.abs() > 0.001 {
-            let start_angle = -PI / 2.0; // Start from top
-            let end_angle = handle_angle;
-            let num_segments = (radius * 0.5).max(32.0) as usize;
-            
-            // Draw arc segments
-            let angle_step = (end_angle - start_angle) / num_segments as f32;
-            for i in 0..num_segments {
-                let a1 = start_angle + i as f32 * angle_step;
-                let a2 = start_angle + (i + 1) as f32 * angle_step;
-                
-                let p1 = center + Vec2::new(radius * a1.cos(), radius * a1.sin());
-                let p2 = center + Vec2::new(radius * a2.cos(), radius * a2.sin());
-                
-                painter.line_segment(
-                    [Pos2::from(p1), Pos2::from(p2)],
-                    egui::Stroke::new(8.0, visuals.fg_stroke.color)
-                );
-            }
-        }
-        
-        // Draggable handle with 6.0 radius
-        let handle_color = if response.hovered() {
-            visuals.bg_fill.gamma_multiply(1.2)
-        } else {
-            visuals.bg_fill
-        };
-        
-        painter.circle_filled(Pos2::from(handle_pos), 6.0, handle_color);
-        painter.circle_stroke(
-            Pos2::from(handle_pos),
-            6.0,
-            egui::Stroke::new(1.0, visuals.fg_stroke.color)
-        );
-        
-        // Central text display showing current value
-        ui.painter().text(
-            center,
-            egui::Align2::CENTER_CENTER,
-            format!("{:.1}°", clamped_value),
-            egui::FontId::default(),
-            ui.visuals().text_color(),
-        );
-        
-        // Update value and mark response as changed
-        if value_changed {
-            *value = new_value;
-            response.mark_changed();
-        }
-        
-        // Hover feedback for grab zone
+
+    // Handle mouse interaction
+    if response.dragged() || response.clicked() {
         if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
             let mouse_rel = mouse_pos - center;
             let distance = mouse_rel.length();
+
+            // Grab zones: inner radius 15.0, outer radius radius + 25.0
             let inner_grab_radius = 15.0;
             let outer_grab_radius = radius + 25.0;
-            
+
             if distance >= inner_grab_radius && distance <= outer_grab_radius {
-                response = response.on_hover_cursor(egui::CursorIcon::Grab);
+                // Calculate angle from mouse position - match reference implementation
+                let mouse_rel_x = mouse_rel.x;
+                let mouse_rel_y = mouse_rel.y;
+                let mouse_angle = mouse_rel_y.atan2(mouse_rel_x) + PI / 2.0;
+
+                // Convert to degrees and normalize like the reference
+                let mut degrees = mouse_angle * 180.0 / PI;
+                if degrees > 180.0 {
+                    degrees -= 360.0;
+                }
+
+                // Apply grid snapping to degrees if enabled
+                if enable_snapping {
+                    degrees = (degrees / 15.0).round() * 15.0;
+                }
+
+                // Clamp to range and set new value
+                new_value = degrees.clamp(v_min, v_max);
+
+                if (new_value - clamped_value).abs() > f32::EPSILON {
+                    value_changed = true;
+                }
             }
         }
-    
+    }
+
+    // Visual rendering
+    let visuals = ui.style().interact(&response);
+
+    // Background circle stroke with 3.0 thickness
+    painter.circle_stroke(center, radius, egui::Stroke::new(3.0, visuals.bg_fill));
+
+    // Handle position on track circumference
+    let handle_pos = center + Vec2::new(radius * handle_angle.cos(), radius * handle_angle.sin());
+
+    // Directional arc visualization with thickness 8.0
+    if clamped_value.abs() > 0.001 {
+        let start_angle = -PI / 2.0; // Start from top
+        let end_angle = handle_angle;
+        let num_segments = (radius * 0.5).max(32.0) as usize;
+
+        // Draw arc segments
+        let angle_step = (end_angle - start_angle) / num_segments as f32;
+        for i in 0..num_segments {
+            let a1 = start_angle + i as f32 * angle_step;
+            let a2 = start_angle + (i + 1) as f32 * angle_step;
+
+            let p1 = center + Vec2::new(radius * a1.cos(), radius * a1.sin());
+            let p2 = center + Vec2::new(radius * a2.cos(), radius * a2.sin());
+
+            painter.line_segment(
+                [Pos2::from(p1), Pos2::from(p2)],
+                egui::Stroke::new(8.0, visuals.fg_stroke.color),
+            );
+        }
+    }
+
+    // Draggable handle with 6.0 radius
+    let handle_color = if response.hovered() {
+        visuals.bg_fill.gamma_multiply(1.2)
+    } else {
+        visuals.bg_fill
+    };
+
+    painter.circle_filled(Pos2::from(handle_pos), 6.0, handle_color);
+    painter.circle_stroke(
+        Pos2::from(handle_pos),
+        6.0,
+        egui::Stroke::new(1.0, visuals.fg_stroke.color),
+    );
+
+    // Central text display showing current value
+    ui.painter().text(
+        center,
+        egui::Align2::CENTER_CENTER,
+        format!("{:.1}°", clamped_value),
+        egui::FontId::default(),
+        ui.visuals().text_color(),
+    );
+
+    // Update value and mark response as changed
+    if value_changed {
+        *value = new_value;
+        response.mark_changed();
+    }
+
+    // Hover feedback for grab zone
+    if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
+        let mouse_rel = mouse_pos - center;
+        let distance = mouse_rel.length();
+        let inner_grab_radius = 15.0;
+        let outer_grab_radius = radius + 25.0;
+
+        if distance >= inner_grab_radius && distance <= outer_grab_radius {
+            response = response.on_hover_cursor(egui::CursorIcon::Grab);
+        }
+    }
+
     response
 }
 
@@ -401,119 +383,119 @@ pub fn quaternion_ball(
     // Container sizing: only allocate the width we need (diameter + small margin)
     let container_width = radius * 2.0 + 4.0; // Minimal horizontal margin
     let container_height = radius * 2.0 + 4.0; // Minimal vertical margin
-    
+
     let (rect, mut response) = ui.allocate_exact_size(
         Vec2::new(container_width, container_height),
         Sense::click_and_drag(),
     );
-    
+
     let center = Pos2::new(
         rect.left() + container_width / 2.0,
         rect.top() + container_height / 2.0,
     );
-    
+
     let painter = ui.painter();
-    
+
     // Get colors - match reference implementation exactly
     let col_ball = ui.visuals().widgets.inactive.weak_bg_fill;
     let col_ball_hovered = ui.visuals().widgets.hovered.weak_bg_fill;
     let col_axes_x = Color32::from_rgb(79, 120, 255); // Blue for X
-    let col_axes_y = Color32::from_rgb(79, 255, 79);  // Green for Y
-    let col_axes_z = Color32::from_rgb(255, 79, 79);  // Red for Z
-    
+    let col_axes_y = Color32::from_rgb(79, 255, 79); // Green for Y
+    let col_axes_z = Color32::from_rgb(255, 79, 79); // Red for Z
+
     // Check mouse position
     let mouse_pos = ui.input(|i| i.pointer.hover_pos()).unwrap_or(Pos2::ZERO);
     let distance_from_center = (mouse_pos - center).length();
     let is_mouse_in_ball = distance_from_center <= radius && response.hovered();
-    
+
     // Draw filled circle with exact transparency from reference
-    painter.circle_filled(center, radius, Color32::from_rgba_unmultiplied(51, 51, 64, 77));
-    
+    painter.circle_filled(
+        center,
+        radius,
+        Color32::from_rgba_unmultiplied(51, 51, 64, 77),
+    );
+
     // Draw grid lines (only if snapping is enabled) - match reference implementation
     if enable_snapping {
         let col_grid = Color32::from_rgba_unmultiplied(100, 100, 120, 120);
         let grid_divisions = 12; // 360 deg / 30 deg = 12 divisions
         let angle_step = 360.0f32 / grid_divisions as f32;
-        
+
         // Draw longitude lines
         for i in 0..grid_divisions {
             let angle_deg = i as f32 * angle_step;
             let angle_rad = angle_deg.to_radians();
-            
+
             for j in 0..32 {
                 let t1 = (j as f32 / 32.0) * 2.0 * PI;
                 let t2 = ((j + 1) as f32 / 32.0) * 2.0 * PI;
-                
+
                 let x1 = t1.sin() * angle_rad.cos();
                 let y1 = t1.cos();
                 let z1 = t1.sin() * angle_rad.sin();
-                
+
                 let x2 = t2.sin() * angle_rad.cos();
                 let y2 = t2.cos();
                 let z2 = t2.sin() * angle_rad.sin();
-                
+
                 let p1 = Pos2::new(center.x + x1 * radius, center.y - y1 * radius);
                 let p2 = Pos2::new(center.x + x2 * radius, center.y - y2 * radius);
-                
+
                 if z1 > 0.0 && z2 > 0.0 {
                     painter.line_segment([p1, p2], egui::Stroke::new(1.0, col_grid));
                 }
             }
         }
-        
+
         // Draw latitude lines
         for i in 1..grid_divisions {
             let angle_deg = i as f32 * angle_step;
             let angle_rad = (angle_deg - 180.0).to_radians();
-            
+
             let circle_y = angle_rad.sin();
             let circle_radius = angle_rad.cos();
-            
+
             for j in 0..32 {
                 let t1 = (j as f32 / 32.0) * 2.0 * PI;
                 let t2 = ((j + 1) as f32 / 32.0) * 2.0 * PI;
-                
+
                 let x1 = t1.cos() * circle_radius;
                 let z1 = t1.sin() * circle_radius;
                 let x2 = t2.cos() * circle_radius;
                 let z2 = t2.sin() * circle_radius;
-                
+
                 let p1 = Pos2::new(center.x + x1 * radius, center.y - circle_y * radius);
                 let p2 = Pos2::new(center.x + x2 * radius, center.y - circle_y * radius);
-                
+
                 if z1 > 0.0 && z2 > 0.0 {
                     painter.line_segment([p1, p2], egui::Stroke::new(1.0, col_grid));
                 }
             }
         }
     }
-    
+
     // Get current axis directions from quaternion
     let rotation_matrix = glam::Mat3::from_quat(*orientation);
     let x_axis = rotation_matrix * glam::Vec3::X;
     let y_axis = rotation_matrix * glam::Vec3::Y;
     let z_axis = rotation_matrix * glam::Vec3::Z;
-    
+
     // Helper to draw axis with depth-based brightness - match reference exactly
     let draw_axis = |axis: glam::Vec3, color: Color32, axis_length: f32| {
         let behind_threshold = -0.01;
         let is_behind = axis.z < behind_threshold;
-        
+
         let end = Pos2::new(
             center.x + axis.x * axis_length,
             center.y - axis.y * axis_length,
         );
-        
+
         let alpha = ((axis.z + 1.0) / 2.0).clamp(0.2, 1.0) * 0.8 + 0.2;
         let line_thickness = (2.0 + alpha * 2.0).clamp(2.0, 4.0);
-        
-        let faded_color = Color32::from_rgba_unmultiplied(
-            color.r(),
-            color.g(),
-            color.b(),
-            (alpha * 255.0) as u8,
-        );
-        
+
+        let faded_color =
+            Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), (alpha * 255.0) as u8);
+
         if is_behind {
             // Draw dotted line for axes behind the plane
             let num_dots = 10;
@@ -531,17 +513,20 @@ pub fn quaternion_ball(
                 painter.line_segment([p1, p2], egui::Stroke::new(line_thickness, faded_color));
             }
         } else {
-            painter.line_segment([center, end], egui::Stroke::new(line_thickness, faded_color));
+            painter.line_segment(
+                [center, end],
+                egui::Stroke::new(line_thickness, faded_color),
+            );
         }
-        
+
         let circle_radius = (4.0 + alpha * 2.0).clamp(4.0, 6.0) * 0.5; // Reduced by 50%
         painter.circle_filled(end, circle_radius, faded_color);
     };
-    
+
     draw_axis(x_axis, col_axes_x, radius);
     draw_axis(y_axis, col_axes_y, radius);
     draw_axis(z_axis, col_axes_z, radius);
-    
+
     // Draw outer circle
     let ball_color = if is_mouse_in_ball {
         col_ball_hovered
@@ -578,7 +563,7 @@ pub fn quaternion_ball(
             // direction: +1.0 = arc goes counter-clockwise (arrow points CCW), -1.0 = CW
             let draw_arc_arrow = |center_angle: f32, direction: f32| {
                 let start_angle = center_angle - arc_half_angle * direction;
-                let end_angle   = center_angle + arc_half_angle * direction;
+                let end_angle = center_angle + arc_half_angle * direction;
 
                 // Arc polyline
                 let mut pts: Vec<egui::Pos2> = Vec::with_capacity(segments + 1);
@@ -602,13 +587,19 @@ pub fn quaternion_ball(
                 let ty = tangent_angle.sin();
                 // Perpendicular to tangent for arrowhead wings
                 let px = -ty;
-                let py =  tx;
+                let py = tx;
                 let base = egui::pos2(tip.x - tx * arrow_size, tip.y - ty * arrow_size);
                 painter.add(egui::Shape::convex_polygon(
                     vec![
                         tip,
-                        egui::pos2(base.x + px * arrow_size * 0.45, base.y + py * arrow_size * 0.45),
-                        egui::pos2(base.x - px * arrow_size * 0.45, base.y - py * arrow_size * 0.45),
+                        egui::pos2(
+                            base.x + px * arrow_size * 0.45,
+                            base.y + py * arrow_size * 0.45,
+                        ),
+                        egui::pos2(
+                            base.x - px * arrow_size * 0.45,
+                            base.y - py * arrow_size * 0.45,
+                        ),
                     ],
                     arc_color,
                     egui::Stroke::NONE,
@@ -621,22 +612,22 @@ pub fn quaternion_ball(
             draw_arc_arrow(std::f32::consts::FRAC_PI_2, -1.0);
         }
     }
-    
+
     // Handle mouse interaction - rotate quaternion and track relative lat/lon changes
     let mut orientation_changed = false;
-    
+
     if response.dragged() {
         let drag_delta = response.drag_delta();
-        
+
         if drag_delta.x.abs() > 0.001 || drag_delta.y.abs() > 0.001 {
             // Determine axis lock on first drag
             if *locked_axis == -1 {
                 let mouse_start_x = mouse_pos.x - center.x;
                 let mouse_start_y = mouse_pos.y - center.y;
                 *initial_distance = (mouse_start_x.powi(2) + mouse_start_y.powi(2)).sqrt();
-                
+
                 let perimeter_threshold = radius * 0.7;
-                
+
                 if *initial_distance >= perimeter_threshold {
                     *locked_axis = 2; // Roll (Z-axis)
                 } else {
@@ -647,34 +638,31 @@ pub fn quaternion_ball(
                     }
                 }
             }
-            
+
             // Store previous axis positions to calculate movement
             let prev_x = x_axis;
             let prev_y = y_axis;
             let prev_z = z_axis;
-            
+
             // Apply rotation to quaternion
             let sensitivity = 0.02;
-            
+
             if *locked_axis == 2 {
                 // Roll rotation around screen Z-axis (view direction)
                 let current_pos = [mouse_pos.x - center.x, mouse_pos.y - center.y];
-                let prev_pos = [
-                    current_pos[0] - drag_delta.x,
-                    current_pos[1] - drag_delta.y,
-                ];
-                
+                let prev_pos = [current_pos[0] - drag_delta.x, current_pos[1] - drag_delta.y];
+
                 let current_angle = current_pos[1].atan2(current_pos[0]);
                 let prev_angle = prev_pos[1].atan2(prev_pos[0]);
                 let mut angle_delta = current_angle - prev_angle;
-                
+
                 while angle_delta > PI {
                     angle_delta -= 2.0 * PI;
                 }
                 while angle_delta < -PI {
                     angle_delta += 2.0 * PI;
                 }
-                
+
                 // Rotate around screen Z-axis (world space)
                 let rotation = glam::Quat::from_axis_angle(glam::Vec3::Z, -angle_delta);
                 *orientation = (rotation * *orientation).normalize();
@@ -689,34 +677,34 @@ pub fn quaternion_ball(
                     let angle_x = drag_delta.y * sensitivity;
                     glam::Quat::from_axis_angle(glam::Vec3::X, angle_x)
                 };
-                
+
                 // Apply world-space rotation (multiply on the left)
                 *orientation = (rotation * *orientation).normalize();
                 orientation_changed = true;
             }
-            
+
             // Calculate new axis positions after rotation
             let new_rotation_matrix = glam::Mat3::from_quat(*orientation);
             let new_x = new_rotation_matrix * glam::Vec3::X;
             let new_y = new_rotation_matrix * glam::Vec3::Y;
             let new_z = new_rotation_matrix * glam::Vec3::Z;
-            
+
             // Helper to calculate spherical coordinate change
             let calc_spherical_delta = |prev: glam::Vec3, new: glam::Vec3| -> (f32, f32) {
                 // Clamp z values to avoid NaN from asin
                 let prev_z = prev.z.clamp(-1.0, 1.0);
                 let new_z = new.z.clamp(-1.0, 1.0);
-                
+
                 // Calculate latitude change (vertical angle)
                 let prev_lat = prev_z.asin();
                 let new_lat = new_z.asin();
                 let lat_delta = (new_lat - prev_lat).to_degrees();
-                
+
                 // Calculate longitude change (horizontal angle in XY plane)
                 let prev_lon = prev.y.atan2(prev.x);
                 let new_lon = new.y.atan2(new.x);
                 let mut lon_delta = (new_lon - prev_lon).to_degrees();
-                
+
                 // Normalize longitude delta to avoid jumps at 180 deg
                 while lon_delta > 180.0 {
                     lon_delta -= 360.0;
@@ -724,23 +712,23 @@ pub fn quaternion_ball(
                 while lon_delta < -180.0 {
                     lon_delta += 360.0;
                 }
-                
+
                 (lat_delta, lon_delta)
             };
-            
+
             // Update all axis coordinates based on their movement
             let (x_lat_d, x_lon_d) = calc_spherical_delta(prev_x, new_x);
             *x_axis_lat += x_lat_d;
             *x_axis_lon += x_lon_d;
-            
+
             let (y_lat_d, y_lon_d) = calc_spherical_delta(prev_y, new_y);
             *y_axis_lat += y_lat_d;
             *y_axis_lon += y_lon_d;
-            
+
             let (z_lat_d, z_lon_d) = calc_spherical_delta(prev_z, new_z);
             *z_axis_lat += z_lat_d;
             *z_axis_lon += z_lon_d;
-            
+
             // Normalize all coordinates to keep them in reasonable ranges
             let normalize_coords = |lat: &mut f32, lon: &mut f32| {
                 // Normalize longitude to -180 to 180
@@ -750,7 +738,7 @@ pub fn quaternion_ball(
                 while *lon < -180.0 {
                     *lon += 360.0;
                 }
-                
+
                 // Handle latitude wrapping at poles
                 if *lat > 90.0 {
                     *lat = 180.0 - *lat;
@@ -768,7 +756,7 @@ pub fn quaternion_ball(
                     }
                 }
             };
-            
+
             normalize_coords(x_axis_lat, x_axis_lon);
             normalize_coords(y_axis_lat, y_axis_lon);
             normalize_coords(z_axis_lat, z_axis_lon);
@@ -779,30 +767,30 @@ pub fn quaternion_ball(
             let identity_x = glam::Vec3::X;
             let identity_y = glam::Vec3::Y;
             let identity_z = glam::Vec3::Z;
-            
+
             // Snap quaternion to grid
             *orientation = snap_quaternion_to_grid(*orientation, 15.0);
-            
+
             // Recalculate relative coordinates after snapping
             let rotation_matrix = glam::Mat3::from_quat(*orientation);
             let snapped_x = rotation_matrix * glam::Vec3::X;
             let snapped_y = rotation_matrix * glam::Vec3::Y;
             let snapped_z = rotation_matrix * glam::Vec3::Z;
-            
+
             // Helper to calculate offset from identity position
             let calc_offset = |current: glam::Vec3, identity: glam::Vec3| -> (f32, f32) {
                 // Clamp z values to avoid NaN
                 let current_z = current.z.clamp(-1.0, 1.0);
                 let identity_z = identity.z.clamp(-1.0, 1.0);
-                
+
                 let current_lat = current_z.asin().to_degrees();
                 let identity_lat = identity_z.asin().to_degrees();
                 let lat_offset = current_lat - identity_lat;
-                
+
                 let current_lon = current.y.atan2(current.x).to_degrees();
                 let identity_lon = identity.y.atan2(identity.x).to_degrees();
                 let mut lon_offset = current_lon - identity_lon;
-                
+
                 // Normalize to -180 to 180
                 while lon_offset > 180.0 {
                     lon_offset -= 360.0;
@@ -810,32 +798,32 @@ pub fn quaternion_ball(
                 while lon_offset < -180.0 {
                     lon_offset += 360.0;
                 }
-                
+
                 (lat_offset, lon_offset)
             };
-            
+
             let (x_lat, x_lon) = calc_offset(snapped_x, identity_x);
             let (y_lat, y_lon) = calc_offset(snapped_y, identity_y);
             let (z_lat, z_lon) = calc_offset(snapped_z, identity_z);
-            
+
             *x_axis_lat = x_lat;
             *x_axis_lon = x_lon;
             *y_axis_lat = y_lat;
             *y_axis_lon = y_lon;
             *z_axis_lat = z_lat;
             *z_axis_lon = z_lon;
-            
+
             orientation_changed = true;
         }
         *locked_axis = -1;
         *initial_distance = 0.0;
     }
-    
+
     // Mark response as changed if orientation was modified
     if orientation_changed {
         response.mark_changed();
     }
-    
+
     response
 }
 
@@ -844,25 +832,25 @@ fn snap_quaternion_to_grid(q: glam::Quat, grid_angle_deg: f32) -> glam::Quat {
     let rotation_matrix = glam::Mat3::from_quat(q);
     let y_axis = rotation_matrix * glam::Vec3::Y;
     let z_axis = rotation_matrix * glam::Vec3::Z;
-    
+
     let grid_rad = grid_angle_deg.to_radians();
     let divisions = (360.0 / grid_angle_deg) as i32;
-    
+
     // Find closest grid-aligned direction for Z-axis first
     let mut best_z_axis = z_axis;
     let mut best_z_dot = -1.0;
-    
+
     for lat in (-divisions / 4)..=(divisions / 4) {
         let theta = lat as f32 * grid_rad;
         for lon in 0..divisions {
             let phi = lon as f32 * grid_rad;
-            
+
             let test_dir = glam::Vec3::new(
                 theta.cos() * phi.cos(),
                 theta.cos() * phi.sin(),
                 theta.sin(),
             );
-            
+
             let dot = z_axis.dot(test_dir);
             if dot > best_z_dot {
                 best_z_dot = dot;
@@ -871,22 +859,22 @@ fn snap_quaternion_to_grid(q: glam::Quat, grid_angle_deg: f32) -> glam::Quat {
         }
     }
     best_z_axis = best_z_axis.normalize();
-    
+
     // Find closest grid-aligned direction for Y-axis
     let mut best_y_axis = y_axis;
     let mut best_y_dot = -1.0;
-    
+
     for lat in (-divisions / 4)..=(divisions / 4) {
         let theta = lat as f32 * grid_rad;
         for lon in 0..divisions {
             let phi = lon as f32 * grid_rad;
-            
+
             let test_dir = glam::Vec3::new(
                 theta.cos() * phi.cos(),
                 theta.cos() * phi.sin(),
                 theta.sin(),
             );
-            
+
             let perpendicularity = best_z_axis.dot(test_dir).abs();
             if perpendicularity < 0.1 {
                 let dot = y_axis.dot(test_dir);
@@ -897,7 +885,7 @@ fn snap_quaternion_to_grid(q: glam::Quat, grid_angle_deg: f32) -> glam::Quat {
             }
         }
     }
-    
+
     // Project Y onto plane perpendicular to Z if needed
     if best_y_dot < 0.0 {
         best_y_axis = y_axis - best_z_axis * y_axis.dot(best_z_axis);
@@ -909,13 +897,13 @@ fn snap_quaternion_to_grid(q: glam::Quat, grid_angle_deg: f32) -> glam::Quat {
         }
     }
     best_y_axis = best_y_axis.normalize();
-    
+
     // Compute X-axis as cross product
     let best_x_axis = best_y_axis.cross(best_z_axis).normalize();
-    
+
     // Construct rotation matrix from orthonormal basis
     let snapped_matrix = glam::Mat3::from_cols(best_x_axis, best_y_axis, best_z_axis);
-    
+
     glam::Quat::from_mat3(&snapped_matrix).normalize()
 }
 
@@ -930,22 +918,22 @@ pub fn modes_buttons(
 ) -> (bool, bool) {
     let mut copy_into_clicked = false;
     let mut reset_clicked = false;
-    
+
     // More compact button layout
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0; // Reduce spacing between buttons
-        
+
         // Copy Into button - smaller
         if ui.small_button("Copy Into").clicked() {
             copy_into_clicked = true;
         }
-        
+
         // Reset button with "" character - smaller
         if ui.small_button("⟲").on_hover_text("Reset mode").clicked() {
             reset_clicked = true;
         }
     });
-    
+
     (copy_into_clicked, reset_clicked)
 }
 
@@ -965,7 +953,14 @@ pub fn modes_list_items(
     color_picker_state: &mut Option<(usize, egui::ecolor::Hsva)>,
     renaming_mode: &mut Option<usize>,
     rename_buffer: &mut String,
-) -> (bool, bool, Option<(usize, String)>, Option<(usize, (u8, u8, u8))>, Vec<egui::Rect>, Option<(usize, usize)>) {
+) -> (
+    bool,
+    bool,
+    Option<(usize, String)>,
+    Option<(usize, (u8, u8, u8))>,
+    Vec<egui::Rect>,
+    Option<(usize, usize)>,
+) {
     let mut selection_changed = false;
     let mut initial_changed = false;
     let mut rename_completed = None;
@@ -978,15 +973,14 @@ pub fn modes_list_items(
     // drop_target is the slot *before* which the dragged item will be inserted.
     // has_moved becomes true once the mouse has moved enough to be a real drag.
     let drag_state_id = egui::Id::new("mode_list_drag_state");
-    let drag_state: Option<(usize, usize, bool)> =
-        ui.ctx().data(|d| d.get_temp(drag_state_id));
+    let drag_state: Option<(usize, usize, bool)> = ui.ctx().data(|d| d.get_temp(drag_state_id));
     let _is_dragging = drag_state.is_some();
-    
+
     // Handle color picker if open - take ownership to avoid borrowing issues
     let picker_state = color_picker_state.take();
     if let Some((picker_index, mut hsva)) = picker_state {
         let mut should_close = false;
-        
+
         let window_response = egui::Window::new("Color Picker")
             .resizable(false)
             .default_size([280.0, 320.0]) // Set specific size to minimize dead space
@@ -995,55 +989,69 @@ pub fn modes_list_items(
                 ui.spacing_mut().item_spacing.y = 6.0;
                 ui.spacing_mut().indent = 4.0;
                 ui.spacing_mut().button_padding = egui::Vec2::new(8.0, 4.0);
-                
+
                 // Create a larger color picker by allocating more space
                 let picker_size = egui::Vec2::new(240.0, 240.0); // Much larger picker area
-                
+
                 // Use the proper color picker widget with larger size
-                ui.allocate_ui_with_layout(picker_size, egui::Layout::top_down(egui::Align::Center), |ui| {
-                    egui::widgets::color_picker::color_picker_hsva_2d(ui, &mut hsva, egui::widgets::color_picker::Alpha::Opaque);
-                });
-                
+                ui.allocate_ui_with_layout(
+                    picker_size,
+                    egui::Layout::top_down(egui::Align::Center),
+                    |ui| {
+                        egui::widgets::color_picker::color_picker_hsva_2d(
+                            ui,
+                            &mut hsva,
+                            egui::widgets::color_picker::Alpha::Opaque,
+                        );
+                    },
+                );
+
                 ui.add_space(8.0); // Small spacing before buttons
-                
+
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 12.0; // Reasonable button spacing
-                    
+
                     // Center the buttons
                     let available_width = ui.available_width();
                     let button_width = 60.0;
                     let total_button_width = button_width * 2.0 + 12.0; // 2 buttons + spacing
                     let padding = (available_width - total_button_width) / 2.0;
-                    
+
                     if padding > 0.0 {
                         ui.add_space(padding);
                     }
-                    
-                    if ui.add_sized([button_width, 24.0], egui::Button::new("OK")).clicked() {
+
+                    if ui
+                        .add_sized([button_width, 24.0], egui::Button::new("OK"))
+                        .clicked()
+                    {
                         let egui_color = egui::Color32::from(hsva);
                         let rgb_tuple = (egui_color.r(), egui_color.g(), egui_color.b());
                         color_change = Some((picker_index, rgb_tuple));
                         should_close = true;
                     }
-                    
-                    if ui.add_sized([button_width, 24.0], egui::Button::new("Cancel")).clicked() {
+
+                    if ui
+                        .add_sized([button_width, 24.0], egui::Button::new("Cancel"))
+                        .clicked()
+                    {
                         should_close = true;
                     }
                 });
             });
-        
+
         // Keep the picker open unless explicitly closed or window was closed
         if !should_close && window_response.is_some() {
             *color_picker_state = Some((picker_index, hsva));
         }
     }
-    
+
     // Render mode list
     for (index, (name, rgb_color)) in modes.iter().enumerate() {
         let row_resp = ui.horizontal(|ui| {
             // Convert RGB tuple to Color32 for UI
             let color = egui::Color32::from_rgb(rgb_color.0, rgb_color.1, rgb_color.2);
-            
+
             // Radio button for initial mode (hidden in copy-into mode)
             if !copy_into_mode {
                 let is_initial = *initial_mode == index;
@@ -1052,60 +1060,58 @@ pub fn modes_list_items(
                     initial_changed = true;
                 }
             }
-            
+
             // Mode button with color and selection indicator
             let is_selected = *selected_index == index;
             let is_renaming = renaming_mode.map_or(false, |idx| idx == index);
-            
+
             // Calculate button colors based on selection state
             let button_color = color; // Always full color
 
             let hovered_color = color_utils::color_with_brightness(color, 1.1);
-            
+
             // Calculate text color for readability
             let text_color = color_utils::text_color_for_background(button_color);
-            
+
             if is_renaming {
                 // Show inline text editor
-                let button_rect = egui::Rect::from_min_size(
-                    ui.cursor().min,
-                    egui::Vec2::new(width - 30.0, 20.0)
-                );
-                
+                let button_rect =
+                    egui::Rect::from_min_size(ui.cursor().min, egui::Vec2::new(width - 30.0, 20.0));
+
                 // Draw button background for text editor
-                ui.painter().rect_filled(
-                    button_rect,
-                    egui::CornerRadius::same(4),
-                    button_color
-                );
-                
+                ui.painter()
+                    .rect_filled(button_rect, egui::CornerRadius::same(4), button_color);
+
                 // Draw dashed border for selected mode
                 if is_selected {
                     draw_dashed_border(ui, button_rect);
                 }
-                
+
                 // Create text editor for inline editing
                 let text_edit = egui::TextEdit::singleline(rename_buffer)
                     .desired_width(width - 30.0)
                     .font(egui::FontId::default());
-                
+
                 let text_response = ui.add(text_edit);
-                
+
                 // Auto-focus the text editor when it first appears
                 if text_response.gained_focus() {
                     // Select all text for easy replacement
-                    if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), text_response.id) {
-                        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
-                            egui::text::CCursor::new(0),
-                            egui::text::CCursor::new(rename_buffer.len())
-                        )));
+                    if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), text_response.id)
+                    {
+                        state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::two(
+                                egui::text::CCursor::new(0),
+                                egui::text::CCursor::new(rename_buffer.len()),
+                            )));
                         state.store(ui.ctx(), text_response.id);
                     }
                 } else if !text_response.has_focus() {
                     // Request focus if not already focused
                     text_response.request_focus();
                 }
-                
+
                 // Handle Enter key to confirm rename (check this first, before focus loss)
                 if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     // Always save when Enter is pressed, even if empty (will be handled by caller)
@@ -1129,10 +1135,10 @@ pub fn modes_list_items(
                     egui::Vec2::new(width - 30.0, 20.0),
                     egui::Sense::click_and_drag(),
                 );
-                
+
                 // Draw button background
                 let button_rect = button_response.rect;
-                
+
                 // Determine visual state: primary selected, multi-selected, or normal
                 let is_multi_selected = selected_indices.contains(&index);
                 let fill_color = if button_response.hovered() {
@@ -1140,13 +1146,10 @@ pub fn modes_list_items(
                 } else {
                     button_color // Full color always
                 };
-                
-                ui.painter().rect_filled(
-                    button_rect,
-                    egui::CornerRadius::same(4),
-                    fill_color
-                );
-                
+
+                ui.painter()
+                    .rect_filled(button_rect, egui::CornerRadius::same(4), fill_color);
+
                 // Draw dashed border for primary selected mode
                 if is_selected {
                     draw_dashed_border(ui, button_rect);
@@ -1159,28 +1162,27 @@ pub fn modes_list_items(
                         egui::StrokeKind::Inside,
                     );
                 }
-                
+
                 // Draw text - marquee scroll on hover if text is too long, else truncate.
                 let text_max_width = button_rect.width() - 6.0; // 3px padding each side
                 let font_id = egui::FontId::default();
-                let full_galley = ui.painter().layout_no_wrap(
-                    name.clone(),
-                    font_id.clone(),
-                    text_color,
-                );
+                let full_galley =
+                    ui.painter()
+                        .layout_no_wrap(name.clone(), font_id.clone(), text_color);
                 let text_overflows = full_galley.rect.width() > text_max_width;
 
                 if text_overflows {
                     // Marquee state: (scroll_offset_px, hover_timer_secs)
                     // scroll_offset_px: how many pixels the text has scrolled left
                     // hover_timer_secs: accumulated hover time (used for start delay + loop pause)
-                    let marquee_id = button_rect.min.x.to_bits() as u64 ^ (index as u64 * 0x9e3779b97f4a7c15);
+                    let marquee_id =
+                        button_rect.min.x.to_bits() as u64 ^ (index as u64 * 0x9e3779b97f4a7c15);
                     let marquee_id = egui::Id::new(("marquee", marquee_id));
 
                     // Scroll speed and timing constants
-                    const START_DELAY_SECS: f32 = 0.6;  // pause before scrolling starts
-                    const SCROLL_SPEED: f32 = 40.0;     // pixels per second
-                    const END_PAUSE_SECS: f32 = 0.8;    // pause at end before looping
+                    const START_DELAY_SECS: f32 = 0.6; // pause before scrolling starts
+                    const SCROLL_SPEED: f32 = 40.0; // pixels per second
+                    const END_PAUSE_SECS: f32 = 0.8; // pause at end before looping
 
                     let dt = ui.input(|i| i.stable_dt).min(0.1);
                     let is_hovered = button_response.hovered();
@@ -1218,7 +1220,8 @@ pub fn modes_list_items(
                     }
 
                     // Save state
-                    ui.ctx().data_mut(|d| d.insert_temp(marquee_id, (offset, timer)));
+                    ui.ctx()
+                        .data_mut(|d| d.insert_temp(marquee_id, (offset, timer)));
 
                     // Paint clipped text at the scrolled position
                     let clip_rect = button_rect.shrink2(egui::vec2(3.0, 0.0));
@@ -1238,7 +1241,7 @@ pub fn modes_list_items(
                         text_color,
                     );
                 }
-                
+
                 // Handle button interactions
                 if button_response.clicked() {
                     let ctrl_held = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
@@ -1283,13 +1286,13 @@ pub fn modes_list_items(
                         selection_changed = true;
                     }
                 }
-                
+
                 // Handle double-click for rename (not in copy-into mode)
                 if button_response.double_clicked() && !copy_into_mode {
                     *renaming_mode = Some(index);
                     *rename_buffer = name.clone();
                 }
-                
+
                 // Handle right-click for color picker
                 if button_response.secondary_clicked() {
                     let hsva = egui::ecolor::Hsva::from(color);
@@ -1299,7 +1302,8 @@ pub fn modes_list_items(
                 // Handle drag start - drag_started() already implies the threshold was crossed,
                 // so set has_moved = true immediately.
                 if !copy_into_mode && button_response.drag_started() {
-                    ui.ctx().data_mut(|d| d.insert_temp(drag_state_id, (index, index, true)));
+                    ui.ctx()
+                        .data_mut(|d| d.insert_temp(drag_state_id, (index, index, true)));
                     ui.ctx().request_repaint();
                 }
 
@@ -1331,7 +1335,8 @@ pub fn modes_list_items(
                     break;
                 }
             }
-            ui.ctx().data_mut(|d| d.insert_temp(drag_state_id, (src, best_target, has_moved)));
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(drag_state_id, (src, best_target, has_moved)));
         }
 
         if mouse_down {
@@ -1350,13 +1355,26 @@ pub fn modes_list_items(
                     }
                 }
             }
-            ui.ctx().data_mut(|d| d.remove::<(usize, usize, bool)>(drag_state_id));
+            ui.ctx()
+                .data_mut(|d| d.remove::<(usize, usize, bool)>(drag_state_id));
         }
     } // end if let Some((src, _old_tgt, has_moved)) = drag_state
 
     // Draw drop indicator line and ghost row while dragging
-    if let Some((src, tgt, has_moved)) = ui.ctx().data(|d| d.get_temp::<(usize, usize, bool)>(drag_state_id)) {
-        if !has_moved { return (selection_changed, initial_changed, rename_completed, color_change, row_rects, reorder); }
+    if let Some((src, tgt, has_moved)) = ui
+        .ctx()
+        .data(|d| d.get_temp::<(usize, usize, bool)>(drag_state_id))
+    {
+        if !has_moved {
+            return (
+                selection_changed,
+                initial_changed,
+                rename_completed,
+                color_change,
+                row_rects,
+                reorder,
+            );
+        }
         // Ghost: dim the dragged row (and all selected rows if dragging a selection)
         let ghost_indices: Vec<usize> = if selected_indices.contains(&src) {
             selected_indices.clone()
@@ -1392,16 +1410,28 @@ pub fn modes_list_items(
             let x_min = first.min.x;
             let x_max = first.max.x;
             ui.painter().line_segment(
-                [egui::pos2(x_min, indicator_y), egui::pos2(x_max, indicator_y)],
+                [
+                    egui::pos2(x_min, indicator_y),
+                    egui::pos2(x_max, indicator_y),
+                ],
                 egui::Stroke::new(2.0, egui::Color32::WHITE),
             );
             // Small triangular nubs at each end
-            ui.painter().circle_filled(egui::pos2(x_min, indicator_y), 3.0, egui::Color32::WHITE);
-            ui.painter().circle_filled(egui::pos2(x_max, indicator_y), 3.0, egui::Color32::WHITE);
+            ui.painter()
+                .circle_filled(egui::pos2(x_min, indicator_y), 3.0, egui::Color32::WHITE);
+            ui.painter()
+                .circle_filled(egui::pos2(x_max, indicator_y), 3.0, egui::Color32::WHITE);
         }
     }
 
-    (selection_changed, initial_changed, rename_completed, color_change, row_rects, reorder)
+    (
+        selection_changed,
+        initial_changed,
+        rename_completed,
+        color_change,
+        row_rects,
+        reorder,
+    )
 }
 
 /// Draw dashed border selection indicator with 6.0 pixel segments
@@ -1410,46 +1440,43 @@ fn draw_dashed_border(ui: &mut egui::Ui, rect: egui::Rect) {
     let painter = ui.painter();
     let dash_length = 6.0;
     let colors = [egui::Color32::BLACK, egui::Color32::WHITE];
-    
+
     // Draw dashed lines for each side of the rectangle
     let sides = [
         // Top
         (rect.left_top(), rect.right_top()),
-        // Right  
+        // Right
         (rect.right_top(), rect.right_bottom()),
         // Bottom
         (rect.right_bottom(), rect.left_bottom()),
         // Left
         (rect.left_bottom(), rect.left_top()),
     ];
-    
+
     for (start, end) in sides {
         let line_vec = end - start;
         let line_length = line_vec.length();
         let num_segments = (line_length / dash_length).ceil() as usize;
-        
+
         for i in 0..num_segments {
             let t1 = (i as f32 * dash_length) / line_length;
             let t2 = ((i + 1) as f32 * dash_length).min(line_length) / line_length;
-            
+
             let p1 = start + line_vec * t1;
             let p2 = start + line_vec * t2;
-            
+
             // Alternate between black and white
             let color = colors[i % 2];
-            
-            painter.line_segment(
-                [p1, p2],
-                egui::Stroke::new(2.0, color)
-            );
+
+            painter.line_segment([p1, p2], egui::Stroke::new(2.0, color));
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::math_utils::*;
+    use super::*;
     use proptest::prelude::*;
 
     #[test]
@@ -1457,7 +1484,7 @@ mod tests {
         let q = Quat::from_rotation_y(PI / 4.0);
         let m = quat_to_mat3(q);
         let q2 = mat3_to_quat(m);
-        
+
         // Quaternions q and -q represent the same rotation
         assert!((q.dot(q2).abs() - 1.0).abs() < 1e-6);
     }
@@ -1467,7 +1494,7 @@ mod tests {
         let v = Vec3::new(1.0, 0.0, 0.0);
         let (lat, lon) = vec3_to_spherical(v);
         let v2 = spherical_to_vec3(lat, lon);
-        
+
         assert!((v - v2).length() < 1e-6);
     }
 
@@ -1476,19 +1503,31 @@ mod tests {
         // Test basic normalization - matches reference implementation behavior
         // Reference only handles > 180 case, subtracting 360
         let result = normalize_angle(270.0);
-        assert!((result - (-90.0)).abs() < 1e-6, "270° should normalize to -90°, got {}", result);
-        
+        assert!(
+            (result - (-90.0)).abs() < 1e-6,
+            "270° should normalize to -90°, got {}",
+            result
+        );
+
         let result = normalize_angle(180.0);
-        assert!((result - 180.0).abs() < 1e-6, "180° should stay 180°, got {}", result);
-        
+        assert!(
+            (result - 180.0).abs() < 1e-6,
+            "180° should stay 180°, got {}",
+            result
+        );
+
         // Test that values <= 180 are unchanged
         assert!((normalize_angle(90.0) - 90.0).abs() < 1e-6);
         assert!((normalize_angle(-90.0) - (-90.0)).abs() < 1e-6);
         assert!((normalize_angle(0.0) - 0.0).abs() < 1e-6);
-        
+
         // Test edge case
         let result = normalize_angle(181.0);
-        assert!((result - (-179.0)).abs() < 1e-6, "181° should normalize to -179°, got {}", result);
+        assert!(
+            (result - (-179.0)).abs() < 1e-6,
+            "181° should normalize to -179°, got {}",
+            result
+        );
     }
 
     #[test]
@@ -1503,10 +1542,10 @@ mod tests {
     fn test_coordinate_transformations() {
         let rect = Rect::from_center_size(Pos2::new(100.0, 100.0), Vec2::new(50.0, 50.0));
         let screen_pos = Pos2::new(110.0, 90.0);
-        
+
         let widget_pos = screen_to_widget_coords(screen_pos, rect);
         let back_to_screen = widget_to_screen_coords(widget_pos, rect);
-        
+
         assert!((screen_pos.x - back_to_screen.x).abs() < 1e-6);
         assert!((screen_pos.y - back_to_screen.y).abs() < 1e-6);
     }
@@ -1516,7 +1555,7 @@ mod tests {
         let zero_vec = Vec3::new(0.0, 0.0, 0.0);
         let nan_vec = Vec3::new(f32::NAN, 1.0, 2.0);
         let tiny_vec = Vec3::new(1e-10, 1e-10, 1e-10);
-        
+
         assert_eq!(stabilize_vector(zero_vec), Vec3::ZERO);
         assert_eq!(stabilize_vector(nan_vec), Vec3::ZERO);
         assert_eq!(stabilize_vector(tiny_vec), Vec3::ZERO);
@@ -1526,24 +1565,30 @@ mod tests {
     fn test_text_color_calculation() {
         let bright_bg = Color32::from_rgb(200, 200, 200);
         let dark_bg = Color32::from_rgb(50, 50, 50);
-        
-        assert_eq!(color_utils::text_color_for_background(bright_bg), Color32::BLACK);
-        assert_eq!(color_utils::text_color_for_background(dark_bg), Color32::WHITE);
+
+        assert_eq!(
+            color_utils::text_color_for_background(bright_bg),
+            Color32::BLACK
+        );
+        assert_eq!(
+            color_utils::text_color_for_background(dark_bg),
+            Color32::WHITE
+        );
     }
 
     #[test]
     fn test_modes_buttons_basic_functionality() {
         // Test that the modes_buttons function can be called with valid parameters
         // This is a basic smoke test to ensure the function signature is correct
-        
+
         let modes_count = 3;
         let selected_index = 0;
         let initial_mode = 0;
-        
+
         // We can't easily test the full UI widget without egui context,
         // but we can test that the function exists and has the right signature
         // The actual UI testing would require a full egui test harness
-        
+
         // This test mainly validates that the function compiles and can be called
         assert!(modes_count > 0);
         assert!(selected_index < modes_count);
@@ -1556,28 +1601,42 @@ mod tests {
         let test_cases = vec![
             // (r, g, b, expected_brightness)
             (255, 255, 255, 255.0), // White - maximum brightness
-            (0, 0, 0, 0.0),          // Black - minimum brightness
-            (128, 128, 128, 128.0),  // Gray - middle brightness
-            (255, 0, 0, 76.245),     // Red - weighted brightness
-            (0, 255, 0, 149.685),    // Green - weighted brightness (highest weight)
-            (0, 0, 255, 29.07),      // Blue - weighted brightness (lowest weight) - corrected
+            (0, 0, 0, 0.0),         // Black - minimum brightness
+            (128, 128, 128, 128.0), // Gray - middle brightness
+            (255, 0, 0, 76.245),    // Red - weighted brightness
+            (0, 255, 0, 149.685),   // Green - weighted brightness (highest weight)
+            (0, 0, 255, 29.07),     // Blue - weighted brightness (lowest weight) - corrected
         ];
-        
+
         for (r, g, b, expected) in test_cases {
             let color = Color32::from_rgb(r, g, b);
             let calculated = r as f32 * 0.299 + g as f32 * 0.587 + b as f32 * 0.114;
-            
+
             // Allow for small floating point differences
-            assert!((calculated - expected).abs() < 0.1, 
-                "Brightness calculation failed for RGB({}, {}, {}): got {}, expected {}", 
-                r, g, b, calculated, expected);
-            
+            assert!(
+                (calculated - expected).abs() < 0.1,
+                "Brightness calculation failed for RGB({}, {}, {}): got {}, expected {}",
+                r,
+                g,
+                b,
+                calculated,
+                expected
+            );
+
             // Test text color selection
             let text_color = color_utils::text_color_for_background(color);
             if calculated > 127.5 {
-                assert_eq!(text_color, Color32::BLACK, "Should use black text for bright background");
+                assert_eq!(
+                    text_color,
+                    Color32::BLACK,
+                    "Should use black text for bright background"
+                );
             } else {
-                assert_eq!(text_color, Color32::WHITE, "Should use white text for dark background");
+                assert_eq!(
+                    text_color,
+                    Color32::WHITE,
+                    "Should use white text for dark background"
+                );
             }
         }
     }
@@ -1585,26 +1644,26 @@ mod tests {
     #[test]
     fn test_color_brightness_modification() {
         let base_color = Color32::from_rgb(100, 150, 200);
-        
+
         // Test dimming (factor < 1.0)
         let dimmed = color_utils::color_with_brightness(base_color, 0.8);
         assert!(dimmed.r() <= base_color.r());
         assert!(dimmed.g() <= base_color.g());
         assert!(dimmed.b() <= base_color.b());
-        
+
         // Test brightening (factor > 1.0)
         let brightened = color_utils::color_with_brightness(base_color, 1.2);
         assert!(brightened.r() >= base_color.r());
         assert!(brightened.g() >= base_color.g());
         assert!(brightened.b() >= base_color.b());
-        
+
         // Test clamping at extremes
         let max_bright = color_utils::color_with_brightness(base_color, 10.0);
         // Values are already u8, so they're automatically clamped to 255
         assert!(max_bright.r() as u16 <= 255);
         assert!(max_bright.g() as u16 <= 255);
         assert!(max_bright.b() as u16 <= 255);
-        
+
         let min_bright = color_utils::color_with_brightness(base_color, 0.0);
         assert_eq!(min_bright, Color32::from_rgb(0, 0, 0));
     }
@@ -1615,15 +1674,15 @@ mod tests {
         // The widget starts from top (-pi/2) and goes clockwise
         let test_cases = vec![
             (0.0, 0.0, 1.0, 3.0 * PI / 2.0), // value=0 should give -pi/2, normalized to 3pi/2
-            (0.5, 0.0, 1.0, PI / 2.0), // value=0.5 should give pi/2
+            (0.5, 0.0, 1.0, PI / 2.0),       // value=0.5 should give pi/2
             (1.0, 0.0, 1.0, 3.0 * PI / 2.0), // value=1 should wrap back to start
         ];
-        
+
         for (value, v_min, v_max, expected_normalized) in test_cases {
             let value_range = v_max - v_min;
             let normalized_value = (value - v_min) / value_range;
             let angle = normalized_value * 2.0 * PI - PI / 2.0;
-            
+
             // Normalize to 0-2pi range like the widget does
             let mut normalized_angle = angle;
             while normalized_angle < 0.0 {
@@ -1632,12 +1691,16 @@ mod tests {
             while normalized_angle >= 2.0 * PI {
                 normalized_angle -= 2.0 * PI;
             }
-            
+
             // Allow for floating point precision
             let diff = (normalized_angle - expected_normalized).abs();
-            assert!(diff < 1e-5, 
-                "Angle calculation failed for value {}: got {}, expected {}", 
-                value, normalized_angle, expected_normalized);
+            assert!(
+                diff < 1e-5,
+                "Angle calculation failed for value {}: got {}, expected {}",
+                value,
+                normalized_angle,
+                expected_normalized
+            );
         }
     }
 
@@ -1646,15 +1709,17 @@ mod tests {
         // Test that values are properly clamped to range
         let v_min = -10.0;
         let v_max = 10.0;
-        
+
         let test_values: Vec<f32> = vec![-20.0, -10.0, 0.0, 10.0, 20.0];
         let expected: Vec<f32> = vec![-10.0, -10.0, 0.0, 10.0, 10.0];
-        
+
         for (test_val, expected_val) in test_values.iter().zip(expected.iter()) {
             let clamped = test_val.clamp(v_min, v_max);
-            assert_eq!(clamped, *expected_val, 
-                "Value clamping failed for {}: got {}, expected {}", 
-                test_val, clamped, expected_val);
+            assert_eq!(
+                clamped, *expected_val,
+                "Value clamping failed for {}: got {}, expected {}",
+                test_val, clamped, expected_val
+            );
         }
     }
 
@@ -1662,7 +1727,7 @@ mod tests {
     fn test_circular_slider_widget_basic_functionality() {
         // Test that the circular slider widget can be created and used
         // This is a basic smoke test to ensure the function signature is correct
-        
+
         // We can't easily test the full UI widget without egui context,
         // but we can test the mathematical components
         let test_value = 45.0f32;
@@ -1670,19 +1735,19 @@ mod tests {
         let v_max = 180.0f32;
         let _radius = 30.0f32; // Unused in this test but kept for completeness
         let _enable_snapping = true;
-        
+
         // Test value clamping logic
         let clamped = test_value.clamp(v_min, v_max);
         assert_eq!(clamped, 45.0f32);
-        
+
         // Test angle to value conversion logic
         let value_range = v_max - v_min;
         let normalized_value = (test_value - v_min) / value_range;
         let angle = normalized_value * 2.0 * PI - PI / 2.0;
-        
+
         // Verify the angle is reasonable
         assert!(angle > -PI && angle < PI);
-        
+
         // Test grid snapping
         if _enable_snapping {
             let grid_increment = PI / 12.0; // 15 degrees
@@ -1705,10 +1770,10 @@ mod tests {
             let q = Quat::from_xyzw(x, y, z, w).normalize();
             let m = quat_to_mat3(q);
             let q2 = mat3_to_quat(m);
-            
+
             // Quaternions q and -q represent the same rotation, so dot product should be 1
             let dot_product = q.dot(q2).abs();
-            prop_assert!((dot_product - 1.0).abs() < 1e-5, 
+            prop_assert!((dot_product - 1.0).abs() < 1e-5,
                 "Quaternion-matrix round trip failed: dot={}, q={:?}, q2={:?}", dot_product, q, q2);
         }
     }
@@ -1723,38 +1788,38 @@ mod tests {
         ) {
             // **Validates: Requirements 9.2**
             let v = Vec3::new(x, y, z);
-            
+
             // Skip zero vector as it's handled as special case
             if v.length_squared() < f32::EPSILON {
                 return Ok(());
             }
-            
+
             let (lat, lon) = vec3_to_spherical(v);
             let v2 = spherical_to_vec3(lat, lon);
-            
+
             // Check latitude is in valid range
-            prop_assert!(lat >= -PI/2.0 && lat <= PI/2.0, 
+            prop_assert!(lat >= -PI/2.0 && lat <= PI/2.0,
                 "Latitude out of range: {}", lat);
-            
-            // Check longitude is in valid range  
-            prop_assert!(lon >= -PI && lon <= PI, 
+
+            // Check longitude is in valid range
+            prop_assert!(lon >= -PI && lon <= PI,
                 "Longitude out of range: {}", lon);
-            
+
             // Check round trip accuracy (normalized vectors should match)
             let v_norm = v.normalize();
             let error = (v_norm - v2).length();
-            prop_assert!(error < 1e-5, 
+            prop_assert!(error < 1e-5,
                 "Spherical coordinate round trip failed: error={}, v={:?}, v2={:?}", error, v_norm, v2);
         }
     }
 
-    // Feature: genome-editor-widgets, Property 18: Angle Normalization Correctness  
+    // Feature: genome-editor-widgets, Property 18: Angle Normalization Correctness
     proptest! {
         #[test]
         fn prop_angle_normalization_correctness(angle in -3600.0f32..3600.0) {
             // **Validates: Requirements 9.4**
             let normalized = normalize_angle(angle);
-            
+
             // Reference implementation only handles > 180 case
             if angle > 180.0 {
                 let expected = angle - 360.0;
@@ -1775,11 +1840,11 @@ mod tests {
             // **Validates: Requirements 9.5**
             let asin_result = safe_asin(x);
             let acos_result = safe_acos(x);
-            
+
             // Results should always be finite and in valid ranges
             prop_assert!(asin_result.is_finite(), "safe_asin produced non-finite result for {}", x);
             prop_assert!(acos_result.is_finite(), "safe_acos produced non-finite result for {}", x);
-            
+
             prop_assert!(asin_result >= -PI/2.0 && asin_result <= PI/2.0,
                 "safe_asin out of range: {} for input {}", asin_result, x);
             prop_assert!(acos_result >= 0.0 && acos_result <= PI,
@@ -1795,7 +1860,7 @@ mod tests {
         ) {
             // **Validates: Requirements 9.5**
             let result = safe_atan2(y, x);
-            
+
             if y.is_finite() && x.is_finite() {
                 prop_assert!(result.is_finite(), "safe_atan2 should be finite for finite inputs");
                 prop_assert!(result >= -PI && result <= PI, "safe_atan2 out of range: {}", result);
@@ -1819,21 +1884,21 @@ mod tests {
             // **Validates: Requirements 9.7**
             let rect = Rect::from_center_size(Pos2::new(center_x, center_y), Vec2::new(width, height));
             let screen_pos = Pos2::new(screen_x, screen_y);
-            
+
             let widget_pos = screen_to_widget_coords(screen_pos, rect);
             let back_to_screen = widget_to_screen_coords(widget_pos, rect);
-            
+
             // Round trip should be accurate (allow for floating-point precision)
             let error_x = (screen_pos.x - back_to_screen.x).abs();
             let error_y = (screen_pos.y - back_to_screen.y).abs();
-            
+
             prop_assert!(error_x < 1e-4, "X coordinate conversion error: {}", error_x);
             prop_assert!(error_y < 1e-4, "Y coordinate conversion error: {}", error_y);
-            
+
             // Widget coordinates should be relative to center
             let expected_widget_x = screen_x - center_x;
             let expected_widget_y = screen_y - center_y;
-            
+
             prop_assert!((widget_pos.x - expected_widget_x).abs() < 1e-4,
                 "Widget X coordinate incorrect: got {}, expected {}", widget_pos.x, expected_widget_x);
             prop_assert!((widget_pos.y - expected_widget_y).abs() < 1e-4,
@@ -1852,16 +1917,16 @@ mod tests {
             // **Validates: Requirements 9.8**
             let v = Vec3::new(x, y, z);
             let stabilized = stabilize_vector(v);
-            
+
             // Result should always be finite
             prop_assert!(stabilized.is_finite(), "Stabilized vector not finite: {:?}", stabilized);
-            
+
             // If input is finite and non-tiny, output should equal input
             if v.is_finite() && v.length_squared() >= f32::EPSILON * f32::EPSILON {
                 let error = (v - stabilized).length();
                 prop_assert!(error < 1e-5, "Vector stabilization changed valid vector: error={}", error);
             }
-            
+
             // If input is invalid, output should be zero
             if !v.is_finite() || v.length_squared() < f32::EPSILON * f32::EPSILON {
                 prop_assert_eq!(stabilized, Vec3::ZERO, "Invalid vector not stabilized to zero");
@@ -1880,19 +1945,19 @@ mod tests {
             // **Validates: Requirements 9.8**
             let q = Quat::from_xyzw(x, y, z, w);
             let stabilized = stabilize_quaternion(q);
-            
+
             // Result should always be finite and normalized
             prop_assert!(stabilized.is_finite(), "Stabilized quaternion not finite: {:?}", stabilized);
             prop_assert!((stabilized.length_squared() - 1.0).abs() < 1e-5,
                 "Stabilized quaternion not normalized: length_sq={}", stabilized.length_squared());
-            
+
             // If input is valid, output should be normalized version
             if q.is_finite() && q.length_squared() >= f32::EPSILON {
                 let expected = q.normalize();
                 let error = (stabilized - expected).length();
                 prop_assert!(error < 1e-5, "Quaternion stabilization incorrect: error={}", error);
             }
-            
+
             // If input is invalid, output should be identity
             if !q.is_finite() || q.length_squared() < f32::EPSILON {
                 prop_assert_eq!(stabilized, Quat::IDENTITY, "Invalid quaternion not stabilized to identity");
@@ -1912,18 +1977,18 @@ mod tests {
             let a = Vec2::new(ax, ay);
             let b = Vec2::new(bx, by);
             let distance = safe_distance(a, b);
-            
+
             // Result should always be finite and non-negative
             prop_assert!(distance.is_finite(), "Distance not finite");
             prop_assert!(distance >= 0.0, "Distance negative: {}", distance);
-            
+
             // If inputs are finite, should match standard distance calculation
             if a.is_finite() && b.is_finite() {
                 let expected = (a - b).length();
                 let error = (distance - expected).abs();
                 prop_assert!(error < 1e-5, "Safe distance incorrect: got {}, expected {}", distance, expected);
             }
-            
+
             // If inputs are invalid, should return 0
             if !a.is_finite() || !b.is_finite() {
                 prop_assert_eq!(distance, 0.0, "Invalid input should return 0 distance");

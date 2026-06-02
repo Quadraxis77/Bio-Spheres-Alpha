@@ -152,10 +152,12 @@ impl BoulderBuffers {
 
         // Boulder state: MAX_BOULDERS x 80 bytes
         // Initialize with identity quaternions (orientation w=1)
-        let cpu_boulders: Vec<GpuBoulder> = (0..n).map(|_| GpuBoulder {
-            orientation: [0.0, 0.0, 0.0, 1.0],
-            ..GpuBoulder::zeroed()
-        }).collect();
+        let cpu_boulders: Vec<GpuBoulder> = (0..n)
+            .map(|_| GpuBoulder {
+                orientation: [0.0, 0.0, 0.0, 1.0],
+                ..GpuBoulder::zeroed()
+            })
+            .collect();
         let boulder_state = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Boulder State"),
             contents: bytemuck::cast_slice(&cpu_boulders),
@@ -190,8 +192,7 @@ impl BoulderBuffers {
         let boulder_eat_dir_accum = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Boulder Eat Dir Accum"),
             contents: bytemuck::cast_slice(&eat_dir_data),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
         // Boulder force accumulator: MAX_BOULDERS x 3 x 4 bytes (atomic<i32> x 3)
@@ -200,16 +201,16 @@ impl BoulderBuffers {
         let boulder_force_accum = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Boulder Force Accum"),
             contents: bytemuck::cast_slice(&force_accum_data),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
         // Boulder buoyancy params: [gravity_multiplier, drag_coeff, 0, 0] = 16 bytes
-        let boulder_buoyancy_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Boulder Buoyancy Params"),
-            contents: bytemuck::cast_slice(&[0.08f32, 40.0f32, 0.0f32, 0.0f32]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let boulder_buoyancy_params =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Boulder Buoyancy Params"),
+                contents: bytemuck::cast_slice(&[0.08f32, 40.0f32, 0.0f32, 0.0f32]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
 
         // Boulder count: 16 bytes (4 x u32, only [0] used)
         let boulder_count = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -250,7 +251,11 @@ impl BoulderBuffers {
     pub fn set_buoyancy(&self, queue: &wgpu::Queue, gravity_multiplier: f32) {
         let drag_coeff = 40.0f32; // fixed drag coefficient
         let data = [gravity_multiplier, drag_coeff, 0.0f32, 0.0f32];
-        queue.write_buffer(&self.boulder_buoyancy_params, 0, bytemuck::cast_slice(&data));
+        queue.write_buffer(
+            &self.boulder_buoyancy_params,
+            0,
+            bytemuck::cast_slice(&data),
+        );
     }
 
     /// Spawn a boulder into the next free slot with the default moss store.
@@ -274,7 +279,10 @@ impl BoulderBuffers {
         moss_fixed: i32,
     ) -> Option<u32> {
         // Find a dead or zeroed slot
-        let slot = self.cpu_boulders.iter().position(|b| b.dead != 0 || b.radius == 0.0)?;
+        let slot = self
+            .cpu_boulders
+            .iter()
+            .position(|b| b.dead != 0 || b.radius == 0.0)?;
         let slot = slot as u32;
 
         let boulder = GpuBoulder {
@@ -315,7 +323,11 @@ impl BoulderBuffers {
         );
 
         // Update active count
-        self.active_count = self.cpu_boulders.iter().filter(|b| b.dead == 0 && b.radius > 0.0).count() as u32;
+        self.active_count = self
+            .cpu_boulders
+            .iter()
+            .filter(|b| b.dead == 0 && b.radius > 0.0)
+            .count() as u32;
         let count_data = [self.active_count, 0u32, 0u32, 0u32];
         queue.write_buffer(&self.boulder_count, 0, bytemuck::cast_slice(&count_data));
 

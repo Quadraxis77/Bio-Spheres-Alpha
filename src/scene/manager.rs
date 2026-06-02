@@ -50,9 +50,17 @@ impl SceneManager {
         cell_capacity: u32,
         editor_state: &crate::ui::panel_context::GenomeEditorState,
     ) -> bool {
-        self.switch_mode_with_capacity(mode, device, queue, config, world_diameter, cell_capacity, editor_state)
+        self.switch_mode_with_capacity(
+            mode,
+            device,
+            queue,
+            config,
+            world_diameter,
+            cell_capacity,
+            editor_state,
+        )
     }
-    
+
     /// Switch to a different simulation mode with specified GPU scene capacity.
     pub fn switch_mode_with_capacity(
         &mut self,
@@ -83,45 +91,57 @@ impl SceneManager {
             }
             SimulationMode::Gpu => {
                 if self.gpu_scene.is_none() {
-                    let mut gpu_scene = GpuScene::with_capacity_and_radius(device, queue, config, cell_capacity, world_diameter * 0.5);
+                    let mut gpu_scene = GpuScene::with_capacity_and_radius(
+                        device,
+                        queue,
+                        config,
+                        cell_capacity,
+                        world_diameter * 0.5,
+                    );
                     // Initialize cave system automatically
-                    let cave_initialized = gpu_scene.initialize_cave_system(device, queue, config.format, world_diameter);
-                    
+                    let cave_initialized = gpu_scene.initialize_cave_system(
+                        device,
+                        queue,
+                        config.format,
+                        world_diameter,
+                    );
+
                     // Initialize fluid system automatically
                     // Create camera bind group layout for voxel rendering
-                    let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                        label: Some("Voxel Camera Layout"),
-                        entries: &[wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        }],
-                    });
-                    
+                    let camera_bind_group_layout =
+                        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                            label: Some("Voxel Camera Layout"),
+                            entries: &[wgpu::BindGroupLayoutEntry {
+                                binding: 0,
+                                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Uniform,
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            }],
+                        });
+
                     let fluid_initialized = gpu_scene.initialize_fluid_system(
                         device,
                         queue,
                         config.format,
                         &camera_bind_group_layout,
                     );
-                    
+
                     if fluid_initialized {
                         log::info!("Fluid system auto-initialized on GPU scene creation");
                         // Generate test voxels
                         gpu_scene.generate_test_voxels(queue);
-                        
+
                         // Update solid mask after fluid system is initialized
                         gpu_scene.update_solid_mask(queue);
                     }
-                    
+
                     // Initialize GPU surface nets for density mesh rendering
                     gpu_scene.initialize_gpu_surface_nets(device, config.format);
-                    
+
                     // Set initial render parameters from editor state
                     if let Some(ref surface_nets) = gpu_scene.gpu_surface_nets {
                         surface_nets.set_initial_params(queue, &editor_state);
@@ -143,7 +163,7 @@ impl SceneManager {
         self.current_mode = mode;
         false
     }
-    
+
     /// Recreate the GPU scene with a new capacity.
     /// Used when switching between normal and point cloud mode.
     pub fn recreate_gpu_scene_with_capacity(
@@ -157,36 +177,49 @@ impl SceneManager {
     ) {
         // Only recreate if capacity or world radius actually changed
         if let Some(ref scene) = self.gpu_scene {
-            if scene.capacity() == capacity && (scene.config.sphere_radius - world_diameter * 0.5).abs() < 0.5 {
+            if scene.capacity() == capacity
+                && (scene.config.sphere_radius - world_diameter * 0.5).abs() < 0.5
+            {
                 return;
             }
         }
-        
+
         log::info!("Recreating GPU scene with capacity: {}", capacity);
-        let mut gpu_scene = GpuScene::with_capacity_and_radius(device, queue, config, capacity, world_diameter * 0.5);
+        let mut gpu_scene = GpuScene::with_capacity_and_radius(
+            device,
+            queue,
+            config,
+            capacity,
+            world_diameter * 0.5,
+        );
         // Initialize cave system automatically
-        let _cave_initialized = gpu_scene.initialize_cave_system(device, queue, config.format, world_diameter);
-        
+        let _cave_initialized =
+            gpu_scene.initialize_cave_system(device, queue, config.format, world_diameter);
+
         // Transfer fluid simulator from old scene if it exists - preserves water state
         // across cells-only resets. Only initialize fresh if there was no prior fluid.
-        let had_fluid = self.gpu_scene.as_ref().map(|s| s.fluid_simulator.is_some()).unwrap_or(false);
+        let had_fluid = self
+            .gpu_scene
+            .as_ref()
+            .map(|s| s.fluid_simulator.is_some())
+            .unwrap_or(false);
         if had_fluid {
             // Move the fluid simulator and all visual renderers from the old scene.
             // Without this, light field / fog / DOF / sun / voxel systems remain None
             // on the new scene, causing them to disappear after a capacity/radius reset.
             if let Some(ref mut old_scene) = self.gpu_scene {
-                gpu_scene.fluid_simulator        = old_scene.fluid_simulator.take();
-                gpu_scene.fluid_buffers          = old_scene.fluid_buffers.take();
-                gpu_scene.light_field_system     = old_scene.light_field_system.take();
+                gpu_scene.fluid_simulator = old_scene.fluid_simulator.take();
+                gpu_scene.fluid_buffers = old_scene.fluid_buffers.take();
+                gpu_scene.light_field_system = old_scene.light_field_system.take();
                 gpu_scene.volumetric_fog_renderer = old_scene.volumetric_fog_renderer.take();
-                gpu_scene.dof_renderer           = old_scene.dof_renderer.take();
-                gpu_scene.sun_renderer           = old_scene.sun_renderer.take();
-                gpu_scene.voxel_renderer         = old_scene.voxel_renderer.take();
-                gpu_scene.solid_mask_generator   = old_scene.solid_mask_generator.take();
-                gpu_scene.moss_system            = old_scene.moss_system.take();
-                gpu_scene.show_moss              = old_scene.show_moss;
-                gpu_scene.show_sun               = old_scene.show_sun;
-                gpu_scene.show_dof               = old_scene.show_dof;
+                gpu_scene.dof_renderer = old_scene.dof_renderer.take();
+                gpu_scene.sun_renderer = old_scene.sun_renderer.take();
+                gpu_scene.voxel_renderer = old_scene.voxel_renderer.take();
+                gpu_scene.solid_mask_generator = old_scene.solid_mask_generator.take();
+                gpu_scene.moss_system = old_scene.moss_system.take();
+                gpu_scene.show_moss = old_scene.show_moss;
+                gpu_scene.show_sun = old_scene.show_sun;
+                gpu_scene.show_dof = old_scene.show_dof;
                 // Rebuild bind groups that reference fluid buffers in the new scene
                 if let Some(ref simulator) = gpu_scene.fluid_simulator {
                     gpu_scene.cached_bind_groups.update_water_buffers(
@@ -202,21 +235,25 @@ impl SceneManager {
             }
         } else {
             // No prior fluid - initialize fresh
-            let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Voxel Camera Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
+            let camera_bind_group_layout =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("Voxel Camera Layout"),
+                    entries: &[wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    }],
+                });
             let fluid_initialized = gpu_scene.initialize_fluid_system(
-                device, queue, config.format, &camera_bind_group_layout,
+                device,
+                queue,
+                config.format,
+                &camera_bind_group_layout,
             );
             if fluid_initialized {
                 log::info!("Fluid system auto-initialized on GPU scene recreation");
@@ -229,30 +266,30 @@ impl SceneManager {
         // Preserve user-configurable settings across scene resets (capacity/radius changes).
         // These are independent of fluid state and must always be carried over.
         if let Some(ref old_scene) = self.gpu_scene {
-            gpu_scene.show_adhesion_lines      = old_scene.show_adhesion_lines;
-            gpu_scene.show_world_sphere        = old_scene.show_world_sphere;
-            gpu_scene.constraint_iterations    = old_scene.constraint_iterations;
-            gpu_scene.gravity                  = old_scene.gravity;
-            gpu_scene.gravity_mode             = old_scene.gravity_mode;
-            gpu_scene.surface_pressure         = old_scene.surface_pressure;
-            gpu_scene.acceleration_damping     = old_scene.acceleration_damping;
-            gpu_scene.water_viscosity          = old_scene.water_viscosity;
+            gpu_scene.show_adhesion_lines = old_scene.show_adhesion_lines;
+            gpu_scene.show_world_sphere = old_scene.show_world_sphere;
+            gpu_scene.constraint_iterations = old_scene.constraint_iterations;
+            gpu_scene.gravity = old_scene.gravity;
+            gpu_scene.gravity_mode = old_scene.gravity_mode;
+            gpu_scene.surface_pressure = old_scene.surface_pressure;
+            gpu_scene.acceleration_damping = old_scene.acceleration_damping;
+            gpu_scene.water_viscosity = old_scene.water_viscosity;
             gpu_scene.solo_metabolism_multiplier = old_scene.solo_metabolism_multiplier;
-            gpu_scene.radiation_level          = old_scene.radiation_level;
-            gpu_scene.subtle_mutations         = old_scene.subtle_mutations;
-            gpu_scene.lod_scale_factor         = old_scene.lod_scale_factor;
-            gpu_scene.lod_threshold_low        = old_scene.lod_threshold_low;
-            gpu_scene.lod_threshold_medium     = old_scene.lod_threshold_medium;
-            gpu_scene.lod_threshold_high       = old_scene.lod_threshold_high;
-            gpu_scene.lod_debug_colors         = old_scene.lod_debug_colors;
+            gpu_scene.radiation_level = old_scene.radiation_level;
+            gpu_scene.subtle_mutations = old_scene.subtle_mutations;
+            gpu_scene.lod_scale_factor = old_scene.lod_scale_factor;
+            gpu_scene.lod_threshold_low = old_scene.lod_threshold_low;
+            gpu_scene.lod_threshold_medium = old_scene.lod_threshold_medium;
+            gpu_scene.lod_threshold_high = old_scene.lod_threshold_high;
+            gpu_scene.lod_debug_colors = old_scene.lod_debug_colors;
             gpu_scene.lateral_flow_probabilities = old_scene.lateral_flow_probabilities;
             gpu_scene.condensation_probability = old_scene.condensation_probability;
             gpu_scene.vaporization_probability = old_scene.vaporization_probability;
-            gpu_scene.nutrient_density         = old_scene.nutrient_density;
-            gpu_scene.nutrient_epoch_duration  = old_scene.nutrient_epoch_duration;
-            gpu_scene.nutrient_epoch_spacing   = old_scene.nutrient_epoch_spacing;
-            gpu_scene.nutrient_spawn_end       = old_scene.nutrient_spawn_end;
-            gpu_scene.nutrient_despawn_start   = old_scene.nutrient_despawn_start;
+            gpu_scene.nutrient_density = old_scene.nutrient_density;
+            gpu_scene.nutrient_epoch_duration = old_scene.nutrient_epoch_duration;
+            gpu_scene.nutrient_epoch_spacing = old_scene.nutrient_epoch_spacing;
+            gpu_scene.nutrient_spawn_end = old_scene.nutrient_spawn_end;
+            gpu_scene.nutrient_despawn_start = old_scene.nutrient_despawn_start;
         }
 
         // Initialize GPU surface nets for density mesh rendering (always needed)
@@ -348,11 +385,11 @@ impl SceneManager {
 
     /// Render the active scene.
     pub fn render(
-        &mut self, 
-        device: &wgpu::Device, 
-        queue: &wgpu::Queue, 
-        view: &wgpu::TextureView, 
-        cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>, 
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+        cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
         world_diameter: f32,
         lod_scale_factor: f32,
         lod_threshold_low: f32,
@@ -362,10 +399,10 @@ impl SceneManager {
         outline_width: f32,
     ) {
         self.active_scene_mut().render(
-            device, 
-            queue, 
-            view, 
-            cell_type_visuals, 
+            device,
+            queue,
+            view,
+            cell_type_visuals,
             world_diameter,
             lod_scale_factor,
             lod_threshold_low,
@@ -377,7 +414,7 @@ impl SceneManager {
     }
 
     /// Insert a cell from genome using GPU operations (GPU scene only).
-    /// 
+    ///
     /// This method provides access to GPU-specific cell insertion that requires
     /// device, encoder, and queue parameters for direct GPU buffer operations.
     /// For preview scene, this method does nothing and returns None.
@@ -392,7 +429,15 @@ impl SceneManager {
         match self.current_mode {
             crate::ui::SimulationMode::Gpu => {
                 if let Some(gpu_scene) = self.gpu_scene.as_mut() {
-                    gpu_scene.insert_cell_from_genome(device, encoder, queue, world_position, genome, 0, 0)
+                    gpu_scene.insert_cell_from_genome(
+                        device,
+                        encoder,
+                        queue,
+                        world_position,
+                        genome,
+                        0,
+                        0,
+                    )
                 } else {
                     None
                 }
@@ -405,7 +450,7 @@ impl SceneManager {
     }
 
     /// Extract cell data using GPU operations (GPU scene only).
-    /// 
+    ///
     /// This method provides access to GPU-specific cell data extraction that requires
     /// device, encoder, and queue parameters for GPU compute shader execution.
     /// For preview scene, this method does nothing.
@@ -431,7 +476,7 @@ impl SceneManager {
             }
         }
     }
-    
+
     /// Clear the dragged cell so physics resumes for all cells (GPU scene only).
     pub fn clear_dragged_cell(&mut self) {
         if self.current_mode == crate::ui::SimulationMode::Gpu {
@@ -440,9 +485,9 @@ impl SceneManager {
             }
         }
     }
-    
+
     /// Update cell position using GPU operations (GPU scene only).
-    /// 
+    ///
     /// This method provides access to GPU-specific position updates that operate
     /// directly on GPU buffers without CPU canonical state involvement.
     /// For preview scene, this method does nothing.
@@ -455,7 +500,7 @@ impl SceneManager {
     }
 
     /// Start GPU spatial query for cell selection (GPU scene only).
-    /// 
+    ///
     /// This method queues a GPU spatial query to find the closest cell to the given screen position.
     /// The query will be executed during the next render phase when GPU resources are available.
     /// For preview scene, this method does nothing.
@@ -468,7 +513,7 @@ impl SceneManager {
     }
 
     /// Start GPU spatial query for drag tool (GPU scene only).
-    /// 
+    ///
     /// This method queues a GPU spatial query to find the closest cell for dragging.
     /// The query will be executed during the next render phase when GPU resources are available.
     /// For preview scene, this method does nothing.
@@ -481,7 +526,7 @@ impl SceneManager {
     }
 
     /// Start GPU spatial query for remove tool (GPU scene only).
-    /// 
+    ///
     /// This method queues a GPU spatial query to find the closest cell for removal.
     /// The query will be executed during the next render phase when GPU resources are available.
     /// For preview scene, this method does nothing.
@@ -494,7 +539,7 @@ impl SceneManager {
     }
 
     /// Start GPU spatial query for boost tool (GPU scene only).
-    /// 
+    ///
     /// This method queues a GPU spatial query to find the closest cell for boosting.
     /// The query will be executed during the next render phase when GPU resources are available.
     /// For preview scene, this method does nothing.
@@ -528,7 +573,10 @@ impl SceneManager {
     /// Returns true if the GPU scene camera is currently locked to an organism.
     pub fn is_following_organism(&self) -> bool {
         if self.current_mode == crate::ui::SimulationMode::Gpu {
-            self.gpu_scene.as_ref().map(|s| s.is_following_organism()).unwrap_or(false)
+            self.gpu_scene
+                .as_ref()
+                .map(|s| s.is_following_organism())
+                .unwrap_or(false)
         } else {
             false
         }
@@ -541,16 +589,21 @@ impl SceneManager {
     }
 
     /// Poll for tool operation results (GPU scene only).
-    /// 
+    ///
     /// This method checks for completed spatial query results and updates tool states.
     /// It should be called each frame to process async tool operation completions.
     /// For preview scene, this method does nothing.
-    pub fn poll_tool_operation_results(&mut self, radial_menu: &mut crate::ui::radial_menu::RadialMenuState, drag_distance: &mut f32, _queue: &wgpu::Queue) {
+    pub fn poll_tool_operation_results(
+        &mut self,
+        radial_menu: &mut crate::ui::radial_menu::RadialMenuState,
+        drag_distance: &mut f32,
+        _queue: &wgpu::Queue,
+    ) {
         if self.current_mode == crate::ui::SimulationMode::Gpu {
             if let Some(gpu_scene) = self.gpu_scene.as_mut() {
                 // First poll for spatial query results from GPU
                 gpu_scene.poll_spatial_query_results();
-                
+
                 // Then process the results for each tool
                 gpu_scene.poll_inspect_tool_results(radial_menu);
                 gpu_scene.poll_drag_tool_results(radial_menu, drag_distance);
@@ -561,7 +614,7 @@ impl SceneManager {
     }
 
     /// Convert screen coordinates to world position (GPU scene only).
-    /// 
+    ///
     /// This method provides access to GPU scene's screen-to-world conversion for tool operations.
     /// For preview scene, returns a default position.
     pub fn screen_to_world(&self, screen_x: f32, screen_y: f32) -> glam::Vec3 {
@@ -581,10 +634,15 @@ impl SceneManager {
     }
 
     /// Convert screen coordinates to world position at distance (GPU scene only).
-    /// 
+    ///
     /// This method provides access to GPU scene's screen-to-world conversion at a specific distance.
     /// For preview scene, returns a default position.
-    pub fn screen_to_world_at_distance(&self, screen_x: f32, screen_y: f32, distance: f32) -> glam::Vec3 {
+    pub fn screen_to_world_at_distance(
+        &self,
+        screen_x: f32,
+        screen_y: f32,
+        distance: f32,
+    ) -> glam::Vec3 {
         match self.current_mode {
             crate::ui::SimulationMode::Gpu => {
                 if let Some(gpu_scene) = self.gpu_scene.as_ref() {
@@ -601,7 +659,10 @@ impl SceneManager {
     }
 
     /// Update gizmo configuration for all existing scenes.
-    pub fn update_gizmo_config(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
+    pub fn update_gizmo_config(
+        &mut self,
+        editor_state: &crate::ui::panel_context::GenomeEditorState,
+    ) {
         // Only preview scene has gizmos
         if let Some(scene) = &mut self.preview_scene {
             scene.update_gizmo_config(editor_state);
@@ -609,7 +670,10 @@ impl SceneManager {
     }
 
     /// Update split ring configuration for all existing scenes.
-    pub fn update_split_ring_config(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
+    pub fn update_split_ring_config(
+        &mut self,
+        editor_state: &crate::ui::panel_context::GenomeEditorState,
+    ) {
         // Only preview scene has split rings
         if let Some(scene) = &mut self.preview_scene {
             scene.update_split_ring_config(editor_state);

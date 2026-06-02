@@ -71,6 +71,11 @@ var<storage, read> signal_settings_v3: array<vec4<f32>>;
 @group(1) @binding(2)
 var<storage, read> signal_settings_v4: array<vec4<f32>>;
 
+// Per-mode regulation emission params: [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding]
+// Used to detect self-trigger: skip mode switch if this cell is itself emitting on the switch channel.
+@group(1) @binding(3)
+var<storage, read> regulation_params: array<vec4<u32>>;
+
 // Per-mode properties (indexed by global mode index)
 // v0: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval]
 @group(2) @binding(0)
@@ -122,6 +127,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let ch = clamp(u32(switch_channel), 8u, 15u);
     let raw_signal = signal_flags[cell_idx * SIGNAL_CHANNELS + ch];
     let signal_value = f32(raw_signal & 0x7FFu);
+
+    // Self-trigger guard: if this cell itself emits on the switch channel, its own emission
+    // populates its signal slot every frame and would fire the switch unconditionally.
+    // Skip if the only source of signal could be the cell's own regulation emit.
+    // We detect this by checking: is the cell an emitter on this channel AND the signal has
+    // the source flag set (bit 16), meaning it originated here rather than arriving from a neighbor.
+    if (mode_idx < arrayLength(&regulation_params)) {
+        let reg_ch = regulation_params[mode_idx].x;
+        if (reg_ch == ch) {
+            // Cell emits on the same channel it watches for mode switching.
+            // Require the source flag (bit 16) to be CLEAR — meaning the signal arrived
+            // from at least one propagation hop away (an external source).
+            // If bit 16 is set, the signal is from this cell's own sense pass; ignore it.
+            if ((raw_signal & (1u << 16u)) != 0u) { return; }
+        }
+    }
 
     // Compare against threshold
     let above = signal_value >= switch_threshold;

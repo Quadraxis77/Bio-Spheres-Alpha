@@ -3,8 +3,8 @@
 //! Devorocytes are predatory cells that steal nutrients from and kill foreign cells
 //! they come into contact with. They ignore cells of the same organism ID or genome ID.
 
-use crate::genome::ModeSettings;
 use super::{CellBehavior, TypeSpecificInstanceData};
+use crate::genome::ModeSettings;
 
 /// Behavior implementation for Devorocyte cells.
 pub struct DevorocyteBehavior;

@@ -13,6 +13,10 @@
 // 16 channels per cell: signal_flags[cell_idx * 16 + channel]
 // Each channel is independently propagated.
 // Signal word format: bit16 = source flag, bits 11-15 = hops remaining, bits 0-10 = value
+//
+// Summation semantics: contributions from multiple neighbors are SUMMED (clamped to 2047),
+// and hops is the MAX across all contributing neighbors. This enables quorum-sensing patterns
+// where a cell crossing a threshold only when many neighbours are emitting.
 
 struct AdhesionConnection {
     cell_a_index: u32,
@@ -88,16 +92,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         // Start with whatever this cell already has (from the sense pass or a prior hop).
-        // We keep the best of: the cell's own current signal vs. what any neighbor can offer.
         let own_signal = signal_flags[my_base + ch];
         let own_hops  = (own_signal >> 11u) & 31u;
         let own_value = own_signal & 2047u;
 
-        // Find the best neighbor for this channel: highest remaining hops, then highest value.
-        var best_hops        = own_hops;
-        var best_value       = own_value;
-        var best_source_flag = own_signal & (1u << 16u);
-        let adhesion_base    = idx * MAX_ADHESIONS_PER_CELL;
+        // Accumulate contributions from all neighbors:
+        //   summed_value  – sum of each neighbor's attenuated value (clamped to 2047)
+        //   best_hops     – max hops across contributing neighbors (determines reach)
+        //   any_source    – true if any contributing neighbor is a direct emitter (bit 16)
+        //
+        // The cell's own current signal is included as the starting sum so that a cell
+        // which is itself an emitter (or already accumulated signal) carries it forward.
+        var summed_value: u32 = own_value;
+        var best_hops:    u32 = own_hops;
+        var any_source:   u32 = own_signal & (1u << 16u);
+        let adhesion_base = idx * MAX_ADHESIONS_PER_CELL;
 
         for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
             let adh_idx = cell_adhesion_indices[adhesion_base + i];
@@ -116,42 +125,40 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
             if (neighbor >= cell_count) { continue; }
 
-            let neighbor_signal      = signal_flags[neighbor * SIGNAL_CHANNELS + ch];
+            let neighbor_signal = signal_flags[neighbor * SIGNAL_CHANNELS + ch];
             // Decode signal word: bit16 = source flag, bits 11-15 = hops, bits 0-10 = value
             let neighbor_hops        = (neighbor_signal >> 11u) & 31u;
             let neighbor_value       = neighbor_signal & 2047u;
             let neighbor_source_flag = neighbor_signal & (1u << 16u);
 
-            // A neighbor can only relay if it has hops remaining and a non-zero value.
+            // Only accept contributions from neighbors with signal remaining to relay.
             if (neighbor_hops > 0u && neighbor_value > 0u) {
-                if (neighbor_hops > best_hops ||
-                    (neighbor_hops == best_hops && neighbor_value > best_value)) {
-                    best_hops        = neighbor_hops;
-                    best_value       = neighbor_value;
-                    best_source_flag = neighbor_source_flag;
+                // Attenuate: direct sources pass full strength; relays lose 50% per hop.
+                let contrib = select(
+                    max(1u, neighbor_value * u32(SIGNAL_ATTENUATION_PER_HOP * 1000.0) / 1000u),
+                    neighbor_value,
+                    neighbor_source_flag != 0u
+                );
+                // Sum contributions; clamp to 11-bit max.
+                summed_value = min(summed_value + contrib, 2047u);
+                // Track max hops so the furthest-reaching signal governs propagation distance.
+                if (neighbor_hops > best_hops) {
+                    best_hops = neighbor_hops;
                 }
+                // If any contributor is a direct source, mark result as source-adjacent.
+                any_source = any_source | neighbor_source_flag;
             }
         }
 
         // Determine what to write to signal_flags_next for this cell/channel.
-        if (best_value > 0u && best_hops > 0u) {
-            // If the best signal comes from a direct source (bit 16 set on the neighbor),
-            // the relay cell receives full strength - no attenuation yet.
-            // Otherwise apply 50% attenuation per hop, matching the CPU BFS.
-            let is_direct_source = (best_source_flag != 0u);
-            let propagated_value = select(
-                max(1u, best_value * u32(SIGNAL_ATTENUATION_PER_HOP * 1000.0) / 1000u),
-                best_value,
-                is_direct_source
-            );
-
-            // Decrement hop count; clear source flag (bit 16) so downstream cells attenuate.
-            let new_hops     = best_hops - 1u;
-            let encoded      = (new_hops << 11u) | propagated_value;
+        if (summed_value > 0u && best_hops > 0u) {
+            // Decrement hop count; clear source flag so downstream cells attenuate normally.
+            let new_hops = best_hops - 1u;
+            let encoded  = (new_hops << 11u) | summed_value;
             signal_flags_next[my_base + ch] = encoded;
         } else {
             // No propagatable signal - preserve whatever this cell already had
-            // (e.g. its own emission from the sense pass).
+            // (e.g. its own emission from the sense pass, or zero after clear).
             signal_flags_next[my_base + ch] = own_signal;
         }
     }

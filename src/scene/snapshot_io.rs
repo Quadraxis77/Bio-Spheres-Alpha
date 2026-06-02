@@ -27,10 +27,10 @@
 use std::path::Path;
 use std::sync::mpsc;
 
-use crate::genome::Genome;
-use crate::simulation::CanonicalState;
 use super::gpu_scene::GpuScene;
 use super::snapshot::{GpuSceneSnapshot, SnapshotError};
+use crate::genome::Genome;
+use crate::simulation::CanonicalState;
 
 // --- helpers -----------------------------------------------------------------
 
@@ -132,31 +132,56 @@ impl GpuScene {
         // snapshot compact.
 
         let positions_and_mass: Vec<[f32; 4]> = if slots > 0 {
-            readback_typed(device, queue, &self.gpu_triple_buffers.position_and_mass[buf_idx], slots)?
+            readback_typed(
+                device,
+                queue,
+                &self.gpu_triple_buffers.position_and_mass[buf_idx],
+                slots,
+            )?
         } else {
             Vec::new()
         };
 
         let velocities: Vec<[f32; 4]> = if slots > 0 {
-            readback_typed(device, queue, &self.gpu_triple_buffers.velocity[buf_idx], slots)?
+            readback_typed(
+                device,
+                queue,
+                &self.gpu_triple_buffers.velocity[buf_idx],
+                slots,
+            )?
         } else {
             Vec::new()
         };
 
         let rotations: Vec<[f32; 4]> = if slots > 0 {
-            readback_typed(device, queue, &self.gpu_triple_buffers.rotations[buf_idx], slots)?
+            readback_typed(
+                device,
+                queue,
+                &self.gpu_triple_buffers.rotations[buf_idx],
+                slots,
+            )?
         } else {
             Vec::new()
         };
 
         let genome_orientations: Vec<[f32; 4]> = if slots > 0 {
-            readback_typed(device, queue, &self.gpu_triple_buffers.genome_orientations, slots)?
+            readback_typed(
+                device,
+                queue,
+                &self.gpu_triple_buffers.genome_orientations,
+                slots,
+            )?
         } else {
             Vec::new()
         };
 
         let nutrients: Vec<i32> = if slots > 0 {
-            readback_typed(device, queue, &self.gpu_triple_buffers.nutrients_buffer, slots)?
+            readback_typed(
+                device,
+                queue,
+                &self.gpu_triple_buffers.nutrients_buffer,
+                slots,
+            )?
         } else {
             Vec::new()
         };
@@ -168,13 +193,23 @@ impl GpuScene {
         };
 
         let split_intervals: Vec<f32> = if slots > 0 {
-            readback_typed(device, queue, &self.gpu_triple_buffers.split_intervals, slots)?
+            readback_typed(
+                device,
+                queue,
+                &self.gpu_triple_buffers.split_intervals,
+                slots,
+            )?
         } else {
             Vec::new()
         };
 
         let split_nutrient_thresholds: Vec<f32> = if slots > 0 {
-            readback_typed(device, queue, &self.gpu_triple_buffers.split_nutrient_thresholds, slots)?
+            readback_typed(
+                device,
+                queue,
+                &self.gpu_triple_buffers.split_nutrient_thresholds,
+                slots,
+            )?
         } else {
             Vec::new()
         };
@@ -210,7 +245,12 @@ impl GpuScene {
         };
 
         let embryocyte_reserves: Vec<u32> = if slots > 0 {
-            readback_typed(device, queue, &self.gpu_triple_buffers.embryocyte_reserve_buffer, slots)?
+            readback_typed(
+                device,
+                queue,
+                &self.gpu_triple_buffers.embryocyte_reserve_buffer,
+                slots,
+            )?
         } else {
             Vec::new()
         };
@@ -232,15 +272,30 @@ impl GpuScene {
 
         // -- Cave parameters ---------------------------------------------------
         let cave_active = self.cave_renderer.is_some();
-        let (cave_density, cave_scale, cave_octaves, cave_persistence,
-             cave_threshold, cave_smoothness, cave_seed, cave_resolution) =
-            if let Some(ref cave) = self.cave_renderer {
-                let p = cave.params();
-                (p.density, p.scale, p.octaves, p.persistence,
-                 p.threshold, p.smoothness, p.seed, p.grid_resolution)
-            } else {
-                (0.5, 100.0, 2, 0.5, 1.0, 0.0, 12345, 128)
-            };
+        let (
+            cave_density,
+            cave_scale,
+            cave_octaves,
+            cave_persistence,
+            cave_threshold,
+            cave_smoothness,
+            cave_seed,
+            cave_resolution,
+        ) = if let Some(ref cave) = self.cave_renderer {
+            let p = cave.params();
+            (
+                p.density,
+                p.scale,
+                p.octaves,
+                p.persistence,
+                p.threshold,
+                p.smoothness,
+                p.seed,
+                p.grid_resolution,
+            )
+        } else {
+            (0.5, 100.0, 2, 0.5, 1.0, 0.0, 12345, 128)
+        };
 
         // -- Fluid / water state -----------------------------------------------
         let fluid_active = self.fluid_simulator.is_some();
@@ -248,7 +303,13 @@ impl GpuScene {
             if let Some(ref sim) = self.fluid_simulator {
                 log::info!("[Snapshot] Reading back fluid voxels (2 × 8 MB)…");
                 let (fv, nv) = sim.snapshot_voxels(device, queue);
-                (fv, nv, sim.time(), sim.get_fluid_type(), sim.is_continuous_spawn_enabled())
+                (
+                    fv,
+                    nv,
+                    sim.time(),
+                    sim.get_fluid_type(),
+                    sim.is_continuous_spawn_enabled(),
+                )
             } else {
                 (Vec::new(), Vec::new(), 0.0, 1, false)
             };
@@ -405,7 +466,8 @@ impl GpuScene {
         self.max_signal_hops = 0;
         for genome in &self.genomes {
             for mode in &genome.modes {
-                self.parent_make_adhesion_flags.push(mode.parent_make_adhesion);
+                self.parent_make_adhesion_flags
+                    .push(mode.parent_make_adhesion);
                 if mode.cell_type == 7 {
                     // Oculocyte
                     self.has_oculocytes = true;
@@ -468,13 +530,20 @@ impl GpuScene {
             canonical.next_cell_id = snapshot.next_cell_id;
 
             // Push canonical state to all three GPU buffer sets.
-            self.gpu_triple_buffers
-                .sync_from_canonical_state(device, queue, &canonical, &self.genomes);
+            self.gpu_triple_buffers.sync_from_canonical_state(
+                device,
+                queue,
+                &canonical,
+                &self.genomes,
+            );
 
             // Sync embryocyte reserve buffer to GPU (sync_from_canonical_state doesn't cover it)
             if !snapshot.embryocyte_reserves.is_empty() {
-                self.gpu_triple_buffers
-                    .sync_embryocyte_reserves(queue, &snapshot.embryocyte_reserves, slots);
+                self.gpu_triple_buffers.sync_embryocyte_reserves(
+                    queue,
+                    &snapshot.embryocyte_reserves,
+                    slots,
+                );
             }
         }
 
@@ -493,7 +562,8 @@ impl GpuScene {
             // Ensure mode pool is large enough (sync_from_canonical_state may have grown it,
             // but call again here in case genomes changed between the two sync paths)
             let total_modes: u64 = self.genomes.iter().map(|g| g.modes.len() as u64).sum();
-            self.gpu_triple_buffers.grow_mode_pool_if_needed(device, total_modes);
+            self.gpu_triple_buffers
+                .grow_mode_pool_if_needed(device, total_modes);
 
             self.gpu_triple_buffers
                 .sync_genome_mode_data(queue, &self.genomes);
@@ -522,17 +592,17 @@ impl GpuScene {
         if snapshot.cave_active {
             if let Some(ref mut cave) = self.cave_renderer {
                 let mut p = *cave.params();
-                p.density        = snapshot.cave_density;
-                p.scale          = snapshot.cave_scale;
-                p.octaves        = snapshot.cave_octaves;
-                p.persistence    = snapshot.cave_persistence;
-                p.threshold      = snapshot.cave_threshold;
-                p.smoothness     = snapshot.cave_smoothness;
-                p.seed           = snapshot.cave_seed;
+                p.density = snapshot.cave_density;
+                p.scale = snapshot.cave_scale;
+                p.octaves = snapshot.cave_octaves;
+                p.persistence = snapshot.cave_persistence;
+                p.threshold = snapshot.cave_threshold;
+                p.smoothness = snapshot.cave_smoothness;
+                p.seed = snapshot.cave_seed;
                 p.grid_resolution = snapshot.cave_resolution;
                 // world_center and world_radius are always derived from config.
-                p.world_center   = [0.0, 0.0, 0.0];
-                p.world_radius   = self.config.sphere_radius;
+                p.world_center = [0.0, 0.0, 0.0];
+                p.world_radius = self.config.sphere_radius;
                 *cave.params_mut() = p;
                 self.cave_params_dirty = true;
             }
@@ -549,7 +619,10 @@ impl GpuScene {
                 sim.set_time(snapshot.fluid_time);
                 sim.set_fluid_type(snapshot.fluid_type);
                 sim.set_continuous_spawn(snapshot.fluid_continuous_spawn);
-                log::info!("[Snapshot] Fluid voxels restored ({} voxels).", snapshot.fluid_voxels.len());
+                log::info!(
+                    "[Snapshot] Fluid voxels restored ({} voxels).",
+                    snapshot.fluid_voxels.len()
+                );
             }
         }
 

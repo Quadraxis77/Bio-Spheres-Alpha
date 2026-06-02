@@ -1,6 +1,6 @@
-use glam::{Vec3, Quat};
-use crate::genome::AdhesionSettings;
 use super::adhesion::AdhesionConnections;
+use crate::genome::AdhesionSettings;
+use glam::{Quat, Vec3};
 
 /// Numerical precision constants (matching GPU/C++)
 #[allow(dead_code)]
@@ -40,25 +40,33 @@ pub fn compute_adhesion_forces(
         if connections.is_active[i] == 0 {
             continue;
         }
-        
+
         let cell_a_idx = connections.cell_a_index[i];
         let cell_b_idx = connections.cell_b_index[i];
         let mode_idx = connections.mode_index[i];
-        
+
         // Validate indices
         if cell_a_idx >= positions.len() || cell_b_idx >= positions.len() {
             continue;
         }
-        
+
         if mode_idx >= mode_settings.len() {
             continue;
         }
-        
+
         let settings = &mode_settings[mode_idx];
-        
-        let genome_rot_a = if cell_a_idx < genome_orientations.len() { genome_orientations[cell_a_idx] } else { rotations[cell_a_idx] };
-        let genome_rot_b = if cell_b_idx < genome_orientations.len() { genome_orientations[cell_b_idx] } else { rotations[cell_b_idx] };
-        
+
+        let genome_rot_a = if cell_a_idx < genome_orientations.len() {
+            genome_orientations[cell_a_idx]
+        } else {
+            rotations[cell_a_idx]
+        };
+        let genome_rot_b = if cell_b_idx < genome_orientations.len() {
+            genome_orientations[cell_b_idx]
+        } else {
+            rotations[cell_b_idx]
+        };
+
         // Calculate forces and torques
         let (force_a, torque_a, force_b, torque_b, spring_force_mag) = compute_adhesion_force_pair(
             positions[cell_a_idx],
@@ -96,8 +104,16 @@ pub fn compute_adhesion_forces(
         // in large blobs where spring errors across many bonds don't cancel.
         let fa_mag = force_a.length();
         let fb_mag = force_b.length();
-        let capped_a = if fa_mag > MAX_BOND_FORCE { force_a * (MAX_BOND_FORCE / fa_mag) } else { force_a };
-        let capped_b = if fb_mag > MAX_BOND_FORCE { force_b * (MAX_BOND_FORCE / fb_mag) } else { force_b };
+        let capped_a = if fa_mag > MAX_BOND_FORCE {
+            force_a * (MAX_BOND_FORCE / fa_mag)
+        } else {
+            force_a
+        };
+        let capped_b = if fb_mag > MAX_BOND_FORCE {
+            force_b * (MAX_BOND_FORCE / fb_mag)
+        } else {
+            force_b
+        };
 
         forces[cell_a_idx] += capped_a;
         forces[cell_b_idx] += capped_b;
@@ -107,7 +123,6 @@ pub fn compute_adhesion_forces(
 
     bonds_to_break
 }
-
 
 /// Compute adhesion forces for all active connections - Parallel version.
 /// Returns a list of connection indices whose spring force exceeded break_force
@@ -130,7 +145,7 @@ pub fn compute_adhesion_forces_parallel(
 ) -> Vec<usize> {
     const BREAK_GRACE_PERIOD: f32 = 0.5;
     use rayon::prelude::*;
-    
+
     // Compute force contributions in parallel.
     // Each entry is either a force contribution or a break signal (empty forces).
     // Tag: (connection_idx_if_break: Option<usize>, cell_idx, force, torque)
@@ -141,46 +156,63 @@ pub fn compute_adhesion_forces_parallel(
             let cell_a_idx = connections.cell_a_index[i];
             let cell_b_idx = connections.cell_b_index[i];
             let mode_idx = connections.mode_index[i];
-            
+
             if cell_a_idx >= positions.len() || cell_b_idx >= positions.len() {
                 return vec![];
             }
             if mode_idx >= mode_settings.len() {
                 return vec![];
             }
-            
-            let genome_rot_a = if cell_a_idx < genome_orientations.len() { genome_orientations[cell_a_idx] } else { rotations[cell_a_idx] };
-            let genome_rot_b = if cell_b_idx < genome_orientations.len() { genome_orientations[cell_b_idx] } else { rotations[cell_b_idx] };
-            
+
+            let genome_rot_a = if cell_a_idx < genome_orientations.len() {
+                genome_orientations[cell_a_idx]
+            } else {
+                rotations[cell_a_idx]
+            };
+            let genome_rot_b = if cell_b_idx < genome_orientations.len() {
+                genome_orientations[cell_b_idx]
+            } else {
+                rotations[cell_b_idx]
+            };
+
             let settings = &mode_settings[mode_idx];
-            
+
             // Get per-cell muscle contraction values
-            let contraction_a = if cell_a_idx < muscle_contractions.len() { muscle_contractions[cell_a_idx] } else { 0.0 };
-            let contraction_b = if cell_b_idx < muscle_contractions.len() { muscle_contractions[cell_b_idx] } else { 0.0 };
-            
-            let (force_a, torque_a, force_b, torque_b, spring_force_mag) = compute_adhesion_force_pair(
-                positions[cell_a_idx],
-                velocities[cell_a_idx],
-                rotations[cell_a_idx],
-                angular_velocities[cell_a_idx],
-                masses[cell_a_idx],
-                positions[cell_b_idx],
-                velocities[cell_b_idx],
-                rotations[cell_b_idx],
-                angular_velocities[cell_b_idx],
-                masses[cell_b_idx],
-                genome_rot_a,
-                genome_rot_b,
-                connections.anchor_direction_a[i],
-                connections.anchor_direction_b[i],
-                connections.twist_reference_a[i],
-                connections.twist_reference_b[i],
-                settings,
-                contraction_a,
-                contraction_b,
-                dt,
-                (current_time - connections.birth_time[i]).max(0.0),
-            );
+            let contraction_a = if cell_a_idx < muscle_contractions.len() {
+                muscle_contractions[cell_a_idx]
+            } else {
+                0.0
+            };
+            let contraction_b = if cell_b_idx < muscle_contractions.len() {
+                muscle_contractions[cell_b_idx]
+            } else {
+                0.0
+            };
+
+            let (force_a, torque_a, force_b, torque_b, spring_force_mag) =
+                compute_adhesion_force_pair(
+                    positions[cell_a_idx],
+                    velocities[cell_a_idx],
+                    rotations[cell_a_idx],
+                    angular_velocities[cell_a_idx],
+                    masses[cell_a_idx],
+                    positions[cell_b_idx],
+                    velocities[cell_b_idx],
+                    rotations[cell_b_idx],
+                    angular_velocities[cell_b_idx],
+                    masses[cell_b_idx],
+                    genome_rot_a,
+                    genome_rot_b,
+                    connections.anchor_direction_a[i],
+                    connections.anchor_direction_b[i],
+                    connections.twist_reference_a[i],
+                    connections.twist_reference_b[i],
+                    settings,
+                    contraction_a,
+                    contraction_b,
+                    dt,
+                    (current_time - connections.birth_time[i]).max(0.0),
+                );
 
             // Bond breaks: signal with Some(i), zero forces
             // Skip break check during grace period after bond creation
@@ -188,12 +220,20 @@ pub fn compute_adhesion_forces_parallel(
             if settings.can_break && !in_grace && spring_force_mag > settings.break_force {
                 return vec![(Some(i), 0, Vec3::ZERO, Vec3::ZERO)];
             }
-            
+
             // Cap per-bond force before accumulating
             let fa_mag = force_a.length();
             let fb_mag = force_b.length();
-            let capped_a = if fa_mag > MAX_BOND_FORCE { force_a * (MAX_BOND_FORCE / fa_mag) } else { force_a };
-            let capped_b = if fb_mag > MAX_BOND_FORCE { force_b * (MAX_BOND_FORCE / fb_mag) } else { force_b };
+            let capped_a = if fa_mag > MAX_BOND_FORCE {
+                force_a * (MAX_BOND_FORCE / fa_mag)
+            } else {
+                force_a
+            };
+            let capped_b = if fb_mag > MAX_BOND_FORCE {
+                force_b * (MAX_BOND_FORCE / fb_mag)
+            } else {
+                force_b
+            };
 
             vec![
                 (None, cell_a_idx, capped_a, torque_a),
@@ -201,7 +241,7 @@ pub fn compute_adhesion_forces_parallel(
             ]
         })
         .collect();
-    
+
     let mut bonds_to_break = Vec::new();
     for (break_idx, idx, force, torque) in results {
         if let Some(conn_idx) = break_idx {
@@ -257,21 +297,24 @@ fn compute_adhesion_force_pair(
 
     let adhesion_dir = delta_pos / dist;
     let rest_length = settings.rest_length;
-    
+
     // Per-cell contraction: each cell's contraction reduces the total rest length by half.
     // One myocyte at full contraction (1.0) shortens the bond by 50%.
     // Two myocytes at full contraction shorten it to zero.
-    let effective_rest_length = rest_length * (1.0 - contraction_a * 0.5 - contraction_b * 0.5).max(0.0);
+    let effective_rest_length =
+        rest_length * (1.0 - contraction_a * 0.5 - contraction_b * 0.5).max(0.0);
 
     // Transform anchor directions to world space using physics rotations.
     // Both the geometric spring and orientation spring use physics rotations so the
     // structure moves freely with the creature.
-    let anchor_a = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
+    let anchor_a = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON
+    {
         Vec3::X
     } else {
         rotate_vector_by_quaternion(anchor_dir_a, rot_a)
     };
-    let anchor_b = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
+    let anchor_b = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON
+    {
         -Vec3::X
     } else {
         rotate_vector_by_quaternion(anchor_dir_b, rot_b)
@@ -320,7 +363,8 @@ fn compute_adhesion_force_pair(
     }
     // Damp spin around the bond axis itself - the orientation spring's axis is always
     // perpendicular to adhesion_dir so it cannot see bond-axis spin. This plugs that gap.
-    torque_a -= adhesion_dir * ang_vel_a.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
+    torque_a -=
+        adhesion_dir * ang_vel_a.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
 
     // Orientation spring for cell B: aligns B's anchor toward -adhesion_dir (toward A)
     let axis_b = anchor_b.cross(-adhesion_dir);
@@ -333,7 +377,8 @@ fn compute_adhesion_force_pair(
         torque_b += -axis_b_norm * ang_vel_b.dot(axis_b_norm) * settings.orientation_spring_damping;
     }
     // Same bond-axis damping for cell B.
-    torque_b -= adhesion_dir * ang_vel_b.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
+    torque_b -=
+        adhesion_dir * ang_vel_b.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
 
     // Relative twist constraint: constrains A's rotation relative to B about the bond axis.
     // This allows the whole structure to spin freely while preventing cells from
@@ -353,7 +398,9 @@ fn compute_adhesion_force_pair(
         // the spring to fire in the wrong direction when the error crosses the hemisphere.
         // twist_scalar ~= sin(half_angle) * sign, which is monotone in [-1, 1] for 180 deg.
         let twist_imag = Vec3::new(twist_error_quat.x, twist_error_quat.y, twist_error_quat.z);
-        let twist_error_scalar = twist_imag.dot(adhesion_axis).clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
+        let twist_error_scalar = twist_imag
+            .dot(adhesion_axis)
+            .clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
 
         let angular_vel_a_proj = ang_vel_a.dot(adhesion_axis);
         let angular_vel_b_proj = ang_vel_b.dot(adhesion_axis);
@@ -369,7 +416,7 @@ fn compute_adhesion_force_pair(
         let twist_spring = adhesion_axis * twist_error_scalar * settings.twist_constraint_stiffness;
         let twist_damp = adhesion_axis * relative_angular_vel * damp;
         torque_a += -twist_spring - twist_damp;
-        torque_b +=  twist_spring + twist_damp;
+        torque_b += twist_spring + twist_damp;
     }
 
     (force_a, torque_a, force_b, torque_b, spring_force_mag)
@@ -403,13 +450,10 @@ fn rotate_vector_by_quaternion(v: Vec3, q: Quat) -> Vec3 {
     let s = q.w;
     let u_dot_v = u.dot(v);
     let u_dot_u = u.dot(u);
-    
+
     // Optimized: reuse computed values
     u * (2.0 * u_dot_v) + v * (s * s - u_dot_u) + u.cross(v) * (2.0 * s)
 }
-
-
-
 
 /// Compute one adhesion constraint substep iteration (mirrors GPU adhesion_substep.wgsl).
 ///
@@ -462,9 +506,17 @@ pub fn compute_adhesion_substep(
         let settings = &mode_settings[mode_idx];
 
         // Compute substep forces for this pair
-        let contraction_a = if cell_a_idx < muscle_contractions.len() { muscle_contractions[cell_a_idx] } else { 0.0 };
-        let contraction_b = if cell_b_idx < muscle_contractions.len() { muscle_contractions[cell_b_idx] } else { 0.0 };
-        
+        let contraction_a = if cell_a_idx < muscle_contractions.len() {
+            muscle_contractions[cell_a_idx]
+        } else {
+            0.0
+        };
+        let contraction_b = if cell_b_idx < muscle_contractions.len() {
+            muscle_contractions[cell_b_idx]
+        } else {
+            0.0
+        };
+
         let (force_a, torque_a, force_b, torque_b) = compute_substep_force_pair(
             positions[cell_a_idx],
             velocities[cell_a_idx],
@@ -542,7 +594,8 @@ pub fn compute_adhesion_substep(
             // consistent regardless of substep dt. Without the * 100.0 the substep
             // damps ~100x less than the main pass.
             let angular_damping_factor = angular_damping.powf(dt * 100.0);
-            new_ang_vel = (angular_velocities[idx] + angular_acceleration * dt) * angular_damping_factor;
+            new_ang_vel =
+                (angular_velocities[idx] + angular_acceleration * dt) * angular_damping_factor;
         }
 
         // Integrate rotation
@@ -603,19 +656,22 @@ fn compute_substep_force_pair(
 
     let adhesion_dir = delta_pos / dist;
     let rest_length = settings.rest_length;
-    let effective_rest_length = rest_length * (1.0 - contraction_a * 0.5 - contraction_b * 0.5).max(0.0);
+    let effective_rest_length =
+        rest_length * (1.0 - contraction_a * 0.5 - contraction_b * 0.5).max(0.0);
 
     // Geometric spring using GENOME orientations (matches GPU)
-    let genome_anchor_a = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
-        Vec3::X
-    } else {
-        rotate_vector_by_quaternion(anchor_dir_a, genome_rot_a)
-    };
-    let genome_anchor_b = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
-        -Vec3::X
-    } else {
-        rotate_vector_by_quaternion(anchor_dir_b, genome_rot_b)
-    };
+    let genome_anchor_a =
+        if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
+            Vec3::X
+        } else {
+            rotate_vector_by_quaternion(anchor_dir_a, genome_rot_a)
+        };
+    let genome_anchor_b =
+        if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
+            -Vec3::X
+        } else {
+            rotate_vector_by_quaternion(anchor_dir_b, genome_rot_b)
+        };
 
     // Anchor-based geometric spring force (matches GPU, NOT the simple distance spring)
     let target_b = pos_a + genome_anchor_a * effective_rest_length;
@@ -633,16 +689,18 @@ fn compute_substep_force_pair(
     force_b -= geo_force + damping_force;
 
     // Physics-based anchors for orientation/twist springs (detects actual rotation)
-    let phys_anchor_a = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
-        Vec3::X
-    } else {
-        rotate_vector_by_quaternion(anchor_dir_a, rot_a)
-    };
-    let phys_anchor_b = if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
-        -Vec3::X
-    } else {
-        rotate_vector_by_quaternion(anchor_dir_b, rot_b)
-    };
+    let phys_anchor_a =
+        if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
+            Vec3::X
+        } else {
+            rotate_vector_by_quaternion(anchor_dir_a, rot_a)
+        };
+    let phys_anchor_b =
+        if anchor_dir_a.length() < ANGLE_EPSILON && anchor_dir_b.length() < ANGLE_EPSILON {
+            -Vec3::X
+        } else {
+            rotate_vector_by_quaternion(anchor_dir_b, rot_b)
+        };
 
     // Orientation spring for cell A: aligns A's anchor toward the live adhesion direction.
     // Matches GPU adhesion_physics.wgsl orientation spring logic.
@@ -657,7 +715,8 @@ fn compute_substep_force_pair(
     }
     // Damp spin around the bond axis itself - the orientation spring's axis is always
     // perpendicular to adhesion_dir so it cannot see bond-axis spin. This plugs that gap.
-    torque_a -= adhesion_dir * ang_vel_a.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
+    torque_a -=
+        adhesion_dir * ang_vel_a.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
 
     // Orientation spring for cell B: aligns B's anchor toward -adhesion_dir (toward A)
     let axis_b = phys_anchor_b.cross(-adhesion_dir);
@@ -670,7 +729,8 @@ fn compute_substep_force_pair(
         torque_b += -axis_b_norm * ang_vel_b.dot(axis_b_norm) * settings.orientation_spring_damping;
     }
     // Same bond-axis damping for cell B.
-    torque_b -= adhesion_dir * ang_vel_b.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
+    torque_b -=
+        adhesion_dir * ang_vel_b.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
 
     // Relative twist constraint: constrains A's rotation relative to B about the bond axis.
     if settings.enable_twist_constraint
@@ -686,23 +746,27 @@ fn compute_substep_force_pair(
         // Extract twist component about the adhesion axis directly from the quaternion's
         // imaginary part, avoiding the axis-angle double-cover ambiguity.
         let twist_imag = Vec3::new(twist_error_quat.x, twist_error_quat.y, twist_error_quat.z);
-        let twist_error_scalar = twist_imag.dot(adhesion_axis).clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
+        let twist_error_scalar = twist_imag
+            .dot(adhesion_axis)
+            .clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
 
         let angular_vel_a_proj = ang_vel_a.dot(adhesion_axis);
         let angular_vel_b_proj = ang_vel_b.dot(adhesion_axis);
         let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
 
         let twist_spring = adhesion_axis * twist_error_scalar * settings.twist_constraint_stiffness;
-        let twist_damp = adhesion_axis * relative_angular_vel * stable_twist_damping(settings.twist_constraint_damping, mass_a, mass_b, dt);
+        let twist_damp = adhesion_axis
+            * relative_angular_vel
+            * stable_twist_damping(settings.twist_constraint_damping, mass_a, mass_b, dt);
         torque_a += -twist_spring - twist_damp;
-        torque_b +=  twist_spring + twist_damp;
+        torque_b += twist_spring + twist_damp;
     }
 
     (force_a, torque_a, force_b, torque_b)
 }
 
 /// Compute adhesion forces with improved cache locality
-/// 
+///
 /// This version processes connections in batches to improve CPU cache utilization.
 /// By grouping connections that access nearby cells, we reduce cache misses.
 #[allow(clippy::too_many_arguments)]
@@ -724,61 +788,70 @@ pub fn compute_adhesion_forces_batched(
     // Batch size tuned for L1 cache (typically 32KB)
     // Each cell needs ~200 bytes of data, so batch of 32 cells fits in L1
     const BATCH_SIZE: usize = 32;
-    
+
     // Process connections in batches
     let mut batch_start = 0;
     while batch_start < connections.active_count {
         let batch_end = (batch_start + BATCH_SIZE).min(connections.active_count);
-        
+
         // Process batch
         for i in batch_start..batch_end {
             if connections.is_active[i] == 0 {
                 continue;
             }
-            
+
             let cell_a_idx = connections.cell_a_index[i];
             let cell_b_idx = connections.cell_b_index[i];
             let mode_idx = connections.mode_index[i];
-            
+
             // Validate indices
             if cell_a_idx >= positions.len() || cell_b_idx >= positions.len() {
                 continue;
             }
-            
+
             if mode_idx >= mode_settings.len() {
                 continue;
             }
-            
+
             let settings = &mode_settings[mode_idx];
-            
-            let genome_rot_a = if cell_a_idx < genome_orientations.len() { genome_orientations[cell_a_idx] } else { rotations[cell_a_idx] };
-            let genome_rot_b = if cell_b_idx < genome_orientations.len() { genome_orientations[cell_b_idx] } else { rotations[cell_b_idx] };
-            
+
+            let genome_rot_a = if cell_a_idx < genome_orientations.len() {
+                genome_orientations[cell_a_idx]
+            } else {
+                rotations[cell_a_idx]
+            };
+            let genome_rot_b = if cell_b_idx < genome_orientations.len() {
+                genome_orientations[cell_b_idx]
+            } else {
+                rotations[cell_b_idx]
+            };
+
             // Calculate forces and torques
-            let (force_a, torque_a, force_b, torque_b, spring_force_mag) = compute_adhesion_force_pair(
-                positions[cell_a_idx],
-                velocities[cell_a_idx],
-                rotations[cell_a_idx],
-                angular_velocities[cell_a_idx],
-                masses[cell_a_idx],
-                positions[cell_b_idx],
-                velocities[cell_b_idx],
-                rotations[cell_b_idx],
-                angular_velocities[cell_b_idx],
-                masses[cell_b_idx],
-                genome_rot_a,
-                genome_rot_b,
-                connections.anchor_direction_a[i],
-                connections.anchor_direction_b[i],
-                connections.twist_reference_a[i],
-                connections.twist_reference_b[i],
-                settings,
-                0.0,
-                0.0,
-                dt,
-                (current_time - connections.birth_time[i]).max(0.0),
-            );
-            
+            let (force_a, torque_a, force_b, torque_b, spring_force_mag) =
+                compute_adhesion_force_pair(
+                    positions[cell_a_idx],
+                    velocities[cell_a_idx],
+                    rotations[cell_a_idx],
+                    angular_velocities[cell_a_idx],
+                    masses[cell_a_idx],
+                    positions[cell_b_idx],
+                    velocities[cell_b_idx],
+                    rotations[cell_b_idx],
+                    angular_velocities[cell_b_idx],
+                    masses[cell_b_idx],
+                    genome_rot_a,
+                    genome_rot_b,
+                    connections.anchor_direction_a[i],
+                    connections.anchor_direction_b[i],
+                    connections.twist_reference_a[i],
+                    connections.twist_reference_b[i],
+                    settings,
+                    0.0,
+                    0.0,
+                    dt,
+                    (current_time - connections.birth_time[i]).max(0.0),
+                );
+
             // Skip bond if it exceeds break force (but not during grace period)
             let in_grace = current_time - connections.birth_time[i] < BREAK_GRACE_PERIOD;
             if settings.can_break && !in_grace && spring_force_mag > settings.break_force {
@@ -788,8 +861,16 @@ pub fn compute_adhesion_forces_batched(
             // Cap per-bond force before accumulating
             let fa_mag = force_a.length();
             let fb_mag = force_b.length();
-            let capped_a = if fa_mag > MAX_BOND_FORCE { force_a * (MAX_BOND_FORCE / fa_mag) } else { force_a };
-            let capped_b = if fb_mag > MAX_BOND_FORCE { force_b * (MAX_BOND_FORCE / fb_mag) } else { force_b };
+            let capped_a = if fa_mag > MAX_BOND_FORCE {
+                force_a * (MAX_BOND_FORCE / fa_mag)
+            } else {
+                force_a
+            };
+            let capped_b = if fb_mag > MAX_BOND_FORCE {
+                force_b * (MAX_BOND_FORCE / fb_mag)
+            } else {
+                force_b
+            };
 
             forces[cell_a_idx] += capped_a;
             forces[cell_b_idx] += capped_b;

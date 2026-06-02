@@ -107,7 +107,10 @@ impl DockManager {
 
     /// Reset current scene to embedded default layout.
     pub fn reset_current_to_embedded_default(&mut self) {
-        log::info!("Resetting {} layout to embedded default", self.current_mode.display_name());
+        log::info!(
+            "Resetting {} layout to embedded default",
+            self.current_mode.display_name()
+        );
         let default_state = Self::load_default_layout(self.current_mode);
         self.scene_trees.insert(self.current_mode, default_state);
         self.dirty = true;
@@ -129,7 +132,10 @@ impl DockManager {
 
     /// Reset current scene to default layout.
     pub fn reset_current_to_default(&mut self) {
-        log::info!("Resetting {} layout to default", self.current_mode.display_name());
+        log::info!(
+            "Resetting {} layout to default",
+            self.current_mode.display_name()
+        );
         let default_state = Self::load_default_layout(self.current_mode);
         self.scene_trees.insert(self.current_mode, default_state);
         self.dirty = true;
@@ -168,14 +174,21 @@ impl DockManager {
         for (mode, state) in &self.scene_trees {
             let default_path = Self::default_layout_file_path(*mode);
             Self::save_to_file(&default_path, state)?;
-            log::info!("Saved current {} layout as new default to {:?}", mode.display_name(), default_path);
+            log::info!(
+                "Saved current {} layout as new default to {:?}",
+                mode.display_name(),
+                default_path
+            );
         }
         Ok(())
     }
 
     /// Get the path for the default layout file for a mode.
     fn default_layout_file_path(mode: SimulationMode) -> PathBuf {
-        crate::app_dirs::config_file(&format!("default_dock_state_{}.ron", mode.dock_file_suffix()))
+        crate::app_dirs::config_file(&format!(
+            "default_dock_state_{}.ron",
+            mode.dock_file_suffix()
+        ))
     }
 
     /// Load default layout from embedded resources or create hardcoded default if not available.
@@ -185,13 +198,22 @@ impl DockManager {
             SimulationMode::Preview => include_str!("../../default_dock_state_preview.ron"),
             SimulationMode::Gpu => include_str!("../../default_dock_state_gpu.ron"),
         };
-        
-        log::info!("Attempting to load embedded default layout for {}", mode.display_name());
-        log::debug!("Embedded content length: {} characters", embedded_content.len());
-        
+
+        log::info!(
+            "Attempting to load embedded default layout for {}",
+            mode.display_name()
+        );
+        log::debug!(
+            "Embedded content length: {} characters",
+            embedded_content.len()
+        );
+
         match ron::from_str::<DockState<Panel>>(embedded_content) {
             Ok(state) => {
-                log::info!("Successfully loaded embedded default layout for {}", mode.display_name());
+                log::info!(
+                    "Successfully loaded embedded default layout for {}",
+                    mode.display_name()
+                );
                 return state;
             }
             Err(e) => {
@@ -200,10 +222,13 @@ impl DockManager {
                     mode.display_name(),
                     e
                 );
-                log::debug!("Embedded content preview: {}", &embedded_content[..embedded_content.len().min(200)]);
+                log::debug!(
+                    "Embedded content preview: {}",
+                    &embedded_content[..embedded_content.len().min(200)]
+                );
             }
         }
-        
+
         // Fall back to hardcoded default
         log::info!("Using hardcoded default layout for {}", mode.display_name());
         Self::create_hardcoded_default_layout(mode)
@@ -216,7 +241,11 @@ impl DockManager {
         if path.exists() {
             match Self::load_from_file(&path) {
                 Ok(state) => {
-                    log::info!("Loaded dock layout for {} from {:?}", mode.display_name(), path);
+                    log::info!(
+                        "Loaded dock layout for {} from {:?}",
+                        mode.display_name(),
+                        path
+                    );
                     return state;
                 }
                 Err(e) => {
@@ -228,7 +257,10 @@ impl DockManager {
                 }
             }
         } else {
-            log::info!("No saved dock layout found for {}, using embedded default", mode.display_name());
+            log::info!(
+                "No saved dock layout found for {}, using embedded default",
+                mode.display_name()
+            );
         }
 
         // Use embedded default layout (this will be used for first-time users)
@@ -283,10 +315,18 @@ impl DockManager {
             let path = Self::dock_file_path(*mode);
             match Self::save_to_file(&path, state) {
                 Ok(()) => {
-                    log::debug!("Saved dock layout for {} to {:?}", mode.display_name(), path);
+                    log::debug!(
+                        "Saved dock layout for {} to {:?}",
+                        mode.display_name(),
+                        path
+                    );
                 }
                 Err(e) => {
-                    log::warn!("Failed to save dock layout for {}: {}", mode.display_name(), e);
+                    log::warn!(
+                        "Failed to save dock layout for {}: {}",
+                        mode.display_name(),
+                        e
+                    );
                 }
             }
         }
@@ -331,7 +371,6 @@ pub enum DockSaveError {
     #[error("RON serialize error: {0}")]
     Ron(#[from] ron::Error),
 }
-
 
 /// Create the default dock layout for Preview mode (Genome Editor).
 ///
@@ -398,7 +437,11 @@ pub fn create_default_gpu_layout() -> DockState<Panel> {
     let [_left_top, left_bottom] = tree.split_below(left, 0.5, vec![Panel::SceneManager]);
 
     // Add WorldSettings and LightSettings tabs below Scene Manager
-    tree.split_below(left_bottom, 0.5, vec![Panel::WorldSettings, Panel::LightSettings]);
+    tree.split_below(
+        left_bottom,
+        0.5,
+        vec![Panel::WorldSettings, Panel::LightSettings],
+    );
 
     // Split right panel (20% width) from the center
     let [center, right] = tree.split_right(NodeIndex::root(), 0.80, vec![Panel::RenderingControls]);
@@ -484,7 +527,9 @@ mod tests {
         let mut manager = DockManager::new();
 
         // Modify the layout
-        manager.current_tree_mut().push_to_focused_leaf(Panel::ThemeEditor);
+        manager
+            .current_tree_mut()
+            .push_to_focused_leaf(Panel::ThemeEditor);
 
         // Reset to default
         manager.reset_current_to_default();

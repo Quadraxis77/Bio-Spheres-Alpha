@@ -90,19 +90,19 @@ pub struct ShadowFieldParams {
     pub moss_parallax_depth: f32,
     pub moss_scale: f32,
     // Moss appearance parameters
-    pub moss_noise_type: u32,        // 0=value, 1=worley/cellular, 2=ridged
-    pub moss_noise_frequency: f32,   // primary noise frequency (default 18.0)
-    pub moss_noise_lacunarity: f32,  // frequency multiplier between octaves (default 2.5)
-    pub moss_height_sharpness_low: f32,  // smoothstep lower bound (default 0.25)
+    pub moss_noise_type: u32,       // 0=value, 1=worley/cellular, 2=ridged
+    pub moss_noise_frequency: f32,  // primary noise frequency (default 18.0)
+    pub moss_noise_lacunarity: f32, // frequency multiplier between octaves (default 2.5)
+    pub moss_height_sharpness_low: f32, // smoothstep lower bound (default 0.25)
     pub moss_height_sharpness_high: f32, // smoothstep upper bound (default 0.7)
-    pub moss_bump_strength: f32,     // normal map intensity (default 5.0)
+    pub moss_bump_strength: f32,    // normal map intensity (default 5.0)
     pub moss_color_dark_r: f32,
     pub moss_color_dark_g: f32,
     pub moss_color_dark_b: f32,
     pub moss_color_bright_r: f32,
     pub moss_color_bright_g: f32,
     pub moss_color_bright_b: f32,
-    pub _pad_moss: [f32; 2],         // padding for alignment
+    pub _pad_moss: [f32; 2], // padding for alignment
 }
 
 /// GPU Light Field System
@@ -242,55 +242,56 @@ impl LightFieldSystem {
         });
 
         // Light field bind group layout (group 0 for compute_light_field)
-        let light_field_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Light Field Layout"),
-            entries: &[
-                // Binding 0: LightFieldParams (uniform)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let light_field_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Light Field Layout"),
+                entries: &[
+                    // Binding 0: LightFieldParams (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Binding 1: solid_mask (read-only storage)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Binding 1: solid_mask (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Binding 2: cell_occupancy (read-only storage)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Binding 2: cell_occupancy (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Binding 3: light_field (read-write storage)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Binding 3: light_field (read-write storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
+                ],
+            });
 
         let light_field_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -875,7 +876,12 @@ impl LightFieldSystem {
     }
 
     /// Create the cave shadow bind group (includes water density for caustics and moss density)
-    pub fn create_cave_shadow_bind_group(&self, device: &wgpu::Device, water_density_buffer: &wgpu::Buffer, moss_density_buffer: &wgpu::Buffer) -> wgpu::BindGroup {
+    pub fn create_cave_shadow_bind_group(
+        &self,
+        device: &wgpu::Device,
+        water_density_buffer: &wgpu::Buffer,
+        moss_density_buffer: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cave Shadow Field Bind Group"),
             layout: &self.cave_shadow_bind_group_layout,
@@ -937,7 +943,11 @@ impl LightFieldSystem {
             moss_color_bright_b: self.moss_color_bright[2],
             _pad_moss: [0.0; 2],
         };
-        queue.write_buffer(&self.shadow_field_params_buffer, 0, bytemuck::bytes_of(&params));
+        queue.write_buffer(
+            &self.shadow_field_params_buffer,
+            0,
+            bytemuck::bytes_of(&params),
+        );
     }
 
     /// Get the dummy water density buffer (all zeros, for when surface nets isn't available)

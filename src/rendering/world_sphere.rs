@@ -74,14 +74,16 @@ impl WorldSphereRenderer {
         // Create shader module
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("World Sphere Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/world_sphere.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/world_sphere.wgsl").into(),
+            ),
         });
 
         // Create camera bind group layout (camera only)
-        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("World Sphere Camera Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("World Sphere Camera Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
@@ -90,24 +92,24 @@ impl WorldSphereRenderer {
                         min_binding_size: None,
                     },
                     count: None,
-                },
-            ],
-        });
+                }],
+            });
 
         // Create params bind group layout
-        let params_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("World Sphere Params Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
+        let params_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("World Sphere Params Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
 
         // Create pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -189,7 +191,7 @@ impl WorldSphereRenderer {
 
         // Generate icosphere mesh (subdivision level 4 matching reference)
         let (vertices, indices) = generate_icosphere(4);
-        
+
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("World Sphere Vertex Buffer"),
             contents: bytemuck::cast_slice(&vertices),
@@ -213,12 +215,10 @@ impl WorldSphereRenderer {
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("World Sphere Camera Bind Group"),
             layout: &camera_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
         });
 
         // Create params uniform buffer
@@ -309,7 +309,11 @@ impl WorldSphereRenderer {
             camera_pos: camera_pos.to_array(),
             _padding: 0.0,
         };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
+        queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[camera_uniform]),
+        );
 
         // Begin render pass
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -358,7 +362,7 @@ fn generate_icosphere(subdivisions: u32) -> (Vec<Vertex>, Vec<u32>) {
     // Golden ratio for icosahedron
     let phi = (1.0 + 5.0_f32.sqrt()) / 2.0;
     let inv_len = 1.0 / (1.0 + phi * phi).sqrt();
-    
+
     // Initial icosahedron vertices (normalized to unit sphere)
     let mut vertices: Vec<Vec3> = vec![
         Vec3::new(-1.0, phi, 0.0) * inv_len,
@@ -374,7 +378,7 @@ fn generate_icosphere(subdivisions: u32) -> (Vec<Vertex>, Vec<u32>) {
         Vec3::new(-phi, 0.0, -1.0) * inv_len,
         Vec3::new(-phi, 0.0, 1.0) * inv_len,
     ];
-    
+
     // Initial icosahedron faces (20 triangles)
     let mut indices: Vec<[u32; 3]> = vec![
         // 5 faces around point 0
@@ -402,34 +406,34 @@ fn generate_icosphere(subdivisions: u32) -> (Vec<Vertex>, Vec<u32>) {
         [8, 6, 7],
         [9, 8, 1],
     ];
-    
+
     // Subdivide
     use std::collections::HashMap;
-    
+
     for _ in 0..subdivisions {
         let mut new_indices = Vec::with_capacity(indices.len() * 4);
         let mut midpoint_cache: HashMap<(u32, u32), u32> = HashMap::new();
-        
+
         for tri in &indices {
             let v0 = tri[0];
             let v1 = tri[1];
             let v2 = tri[2];
-            
+
             // Get or create midpoints
             let a = get_midpoint(&mut vertices, &mut midpoint_cache, v0, v1);
             let b = get_midpoint(&mut vertices, &mut midpoint_cache, v1, v2);
             let c = get_midpoint(&mut vertices, &mut midpoint_cache, v2, v0);
-            
+
             // Create 4 new triangles (matching reference: v1,a,c, v2,b,a, v3,c,b, a,b,c)
             new_indices.push([v0, a, c]);
             new_indices.push([v1, b, a]);
             new_indices.push([v2, c, b]);
             new_indices.push([a, b, c]);
         }
-        
+
         indices = new_indices;
     }
-    
+
     // Convert to vertex format with outward-facing normals (matching reference)
     let output_vertices: Vec<Vertex> = vertices
         .iter()
@@ -438,10 +442,10 @@ fn generate_icosphere(subdivisions: u32) -> (Vec<Vertex>, Vec<u32>) {
             normal: v.normalize().to_array(), // Outward-facing normals
         })
         .collect();
-    
+
     // Flatten indices
     let output_indices: Vec<u32> = indices.iter().flat_map(|tri| tri.iter().copied()).collect();
-    
+
     (output_vertices, output_indices)
 }
 
@@ -454,19 +458,19 @@ fn get_midpoint(
 ) -> u32 {
     // Ensure consistent key ordering
     let key = if v0 < v1 { (v0, v1) } else { (v1, v0) };
-    
+
     if let Some(&idx) = cache.get(&key) {
         return idx;
     }
-    
+
     // Create new midpoint vertex
     let p0 = vertices[v0 as usize];
     let p1 = vertices[v1 as usize];
     let midpoint = ((p0 + p1) / 2.0).normalize(); // Project onto unit sphere
-    
+
     let idx = vertices.len() as u32;
     vertices.push(midpoint);
     cache.insert(key, idx);
-    
+
     idx
 }

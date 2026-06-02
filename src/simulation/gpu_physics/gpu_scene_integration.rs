@@ -1,7 +1,7 @@
 //! GPU Scene Integration
-//! 
+//!
 //! Executes the GPU physics pipeline using compute shaders.
-//! 
+//!
 //! ## Pipeline Stages (all use 256-thread workgroups for optimal GPU occupancy)
 //! 0. DMA zero-fill: spatial grid counts + force/torque accumulators + mass deltas
 //! 1. Build spatial grid (combined assign + insert, skips dead cells)
@@ -12,13 +12,13 @@
 //! 5. Velocity integration
 //! 6. Mass accumulation - nutrient growth based on nutrient_gain_rate
 //! 7. Nutrient transport - consumption, transport between cells, death detection
-//! 
+//!
 //! ## Lifecycle Pipeline (128-thread workgroups)
 //! 1. Death scan - identify dead cells
 //! 1.5. Adhesion cleanup - remove adhesions for dead cells, update per-cell indices
 //! 2. Division scan - identify dividing cells
 //! 3. Division execute - create child cells
-//! 
+//!
 //! ## Performance Optimizations
 //! - DMA zero-fill replaces clear_forces compute dispatch (GPU DMA engine vs shader overhead)
 //! - Combined spatial grid build (assign + insert in one dispatch, skips dead cells)
@@ -35,7 +35,7 @@ use super::{CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem};
 // MAX_ADHESION_CONNECTIONS is now dynamic (adhesion_buffers.max_connections)
 
 /// Physics parameters for GPU uniform buffer (256-byte aligned)
-/// 
+///
 /// Must match PhysicsParams struct in all WGSL shaders exactly.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -45,25 +45,25 @@ struct PhysicsParams {
     current_time: f32,
     current_frame: i32,
     cell_count: u32,
-    
+
     // World and physics settings (16 bytes)
     world_size: f32,
     boundary_stiffness: f32,
     gravity: f32,
     acceleration_damping: f32,
-    
+
     // Grid settings (16 bytes)
-    grid_resolution: i32,      // 64 for 64^3 grid
-    grid_cell_size: f32,       // world_size / 64
+    grid_resolution: i32, // 64 for 64^3 grid
+    grid_cell_size: f32,  // world_size / 64
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
-    
+
     // Capacity and gravity mode (16 bytes)
-    cell_capacity: u32,        // Maximum cells that can exist
-    gravity_mode: u32,         // 0=X, 1=Y, 2=Z, 3=radial (toward origin)
-    angular_damping: f32,      // fraction of angular velocity retained per second (velocity_update.wgsl _pad1)
+    cell_capacity: u32,              // Maximum cells that can exist
+    gravity_mode: u32,               // 0=X, 1=Y, 2=Z, 3=radial (toward origin)
+    angular_damping: f32, // fraction of angular velocity retained per second (velocity_update.wgsl _pad1)
     solo_metabolism_multiplier: f32, // Metabolism multiplier for solo cells (1.0 = off, >1.0 = increased drain)
-    
+
     // Padding to 256 bytes (192 bytes = 48 floats)
     _padding: [f32; 47],
 }
@@ -142,8 +142,12 @@ pub fn execute_gpu_physics_step(
         solo_metabolism_multiplier,
         _padding: [0.0; 47],
     };
-    queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
-    
+    queue.write_buffer(
+        &triple_buffers.physics_params,
+        0,
+        bytemuck::bytes_of(&params),
+    );
+
     // DMA zero-fill all buffers that need clearing before the compute pass.
     // This replaces the clear_forces compute dispatch and is significantly faster
     // because the GPU's DMA engine handles bulk zeroing without compute shader overhead.
@@ -162,14 +166,15 @@ pub fn execute_gpu_physics_step(
             encoder.clear_buffer(bfa, 0, None);
         }
     }
-    
+
     // Use cached bind groups (no per-frame allocation!)
     let physics_bind_group = &cached_bind_groups.physics[current_index];
     let spatial_grid_bind_group = &cached_bind_groups.spatial_grid;
     let adhesion_rotations_bind_group = &cached_bind_groups.rotations[current_index];
-    let position_update_rotations_bind_group = &cached_bind_groups.position_update_rotations[current_index];
+    let position_update_rotations_bind_group =
+        &cached_bind_groups.position_update_rotations[current_index];
     let mass_accum_bind_group = &cached_bind_groups.mass_accum;
-    
+
     // IDLE EARLY-OUT: Skip all compute dispatches when there are no cells.
     // With 0 cells every shader would early-exit on the first thread, but the dispatch
     // overhead, pipeline barrier cost, and DMA clears above still consume GPU time.
@@ -187,7 +192,7 @@ pub fn execute_gpu_physics_step(
     // running, so they'd never lose nutrients and never die.
     let effective_cell_count = (_cell_count_hint + 255) / 256 * 256; // Round up to workgroup boundary
     let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
-    
+
     // Muscle contraction pass: compute per-cell contraction values BEFORE the main physics pass.
     // Running in a separate compute pass ensures a pipeline barrier so all writes to
     // muscle_contraction_buffer are visible to adhesion_physics and adhesion_substep.
@@ -210,7 +215,7 @@ pub fn execute_gpu_physics_step(
             label: Some("GPU Physics Pipeline"),
             timestamp_writes: None,
         });
-        
+
         // Stage 2+3: Build spatial grid (combined assign + insert + dead cell skip)
         // Single dispatch replaces the previous two-pass approach, and skips dead cells
         // to avoid wasting grid slots and collision checks against dead neighbors.
@@ -218,12 +223,16 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-        
+
         // Stage 4: Collision detection
         compute_pass.set_pipeline(&pipelines.collision_detection);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
-        compute_pass.set_bind_group(2, &cached_bind_groups.collision_force_accum[current_index], &[]);
+        compute_pass.set_bind_group(
+            2,
+            &cached_bind_groups.collision_force_accum[current_index],
+            &[],
+        );
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 5: Adhesion physics
@@ -233,13 +242,17 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
         compute_pass.set_bind_group(3, &cached_bind_groups.force_accum, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-        
+
         // Stage 5.5: Swim force (256 threads) - applies thrust for Flagellocyte cells
         // Accumulates swim force to force buffers based on cell rotation and mode swim_force setting
         if features.has_flagellocytes {
             compute_pass.set_pipeline(&pipelines.swim_force);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
-            compute_pass.set_bind_group(1, &cached_bind_groups.swim_force_force_accum[current_index], &[]);
+            compute_pass.set_bind_group(
+                1,
+                &cached_bind_groups.swim_force_force_accum[current_index],
+                &[],
+            );
             compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
@@ -248,7 +261,11 @@ pub fn execute_gpu_physics_step(
         if features.has_buoyocytes {
             compute_pass.set_pipeline(&pipelines.buoyancy_force);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
-            compute_pass.set_bind_group(1, &cached_bind_groups.swim_force_force_accum[current_index], &[]);
+            compute_pass.set_bind_group(
+                1,
+                &cached_bind_groups.swim_force_force_accum[current_index],
+                &[],
+            );
             compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
@@ -258,7 +275,11 @@ pub fn execute_gpu_physics_step(
         if features.has_ciliocytes && cave_renderer.is_some() {
             compute_pass.set_pipeline(&pipelines.cilia_force);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
-            compute_pass.set_bind_group(1, &cached_bind_groups.cilia_force_force_accum[current_index], &[]);
+            compute_pass.set_bind_group(
+                1,
+                &cached_bind_groups.cilia_force_force_accum[current_index],
+                &[],
+            );
             compute_pass.set_bind_group(2, &cached_bind_groups.cilia_force_cell_data, &[]);
             compute_pass.set_bind_group(3, &cached_bind_groups.cilia_force_spatial, &[]);
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
@@ -277,7 +298,11 @@ pub fn execute_gpu_physics_step(
                 };
                 compute_pass.set_pipeline(&pipelines.glueocyte_env_adhesion);
                 compute_pass.set_bind_group(0, physics_bind_group, &[]);
-                compute_pass.set_bind_group(1, &cached_bind_groups.env_adhesion_force_accum[current_index], &[]);
+                compute_pass.set_bind_group(
+                    1,
+                    &cached_bind_groups.env_adhesion_force_accum[current_index],
+                    &[],
+                );
                 compute_pass.set_bind_group(2, &cached_bind_groups.env_adhesion_mode_data, &[]);
                 compute_pass.set_bind_group(3, cave_bg, &[]);
                 compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
@@ -313,9 +338,11 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(3, &cached_bind_groups.position_update_spatial_grid, &[]);
         // Water buffers are now part of bind group 2 (position_update_force_accum)
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-        
+
         // Stage 6.5: Cave collision (if enabled) - corrects positions using SDF
-        if let (Some(cave_renderer), Some(cave_bind_groups)) = (cave_renderer, cave_physics_bind_groups) {
+        if let (Some(cave_renderer), Some(cave_bind_groups)) =
+            (cave_renderer, cave_physics_bind_groups)
+        {
             if cave_renderer.params().collision_enabled != 0 {
                 // SDF-based collision - no spatial grid building needed
                 compute_pass.set_pipeline(cave_renderer.collision_pipeline());
@@ -327,14 +354,18 @@ pub fn execute_gpu_physics_step(
 
         // Stage 6.6: Boulder physics is now in a separate pass after nutrient apply.
         // (Moved to avoid buffer aliasing with cell_count_buffer.)
-        
+
         // Stage 7: Angular velocity integration (256 threads)
         // Applies accumulated torques to angular velocities and rotations.
         // Must use the bind group that targets rotations[current_index] so that
         // angular integration runs on the same buffer physics is processing this frame.
         compute_pass.set_pipeline(&pipelines.velocity_update);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.velocity_update_angular[current_index], &[]);
+        compute_pass.set_bind_group(
+            1,
+            &cached_bind_groups.velocity_update_angular[current_index],
+            &[],
+        );
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 7.5: Adhesion constraint sub-stepping (N additional iterations)
@@ -349,9 +380,11 @@ pub fn execute_gpu_physics_step(
             compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
             compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-            
+
             // Re-apply cave collision after each substep to enforce cave boundaries
-            if let (Some(cave_renderer), Some(cave_bind_groups)) = (cave_renderer, cave_physics_bind_groups) {
+            if let (Some(cave_renderer), Some(cave_bind_groups)) =
+                (cave_renderer, cave_physics_bind_groups)
+            {
                 if cave_renderer.params().collision_enabled != 0 {
                     compute_pass.set_pipeline(cave_renderer.collision_pipeline());
                     compute_pass.set_bind_group(0, &cave_bind_groups[current_index], &[]);
@@ -360,13 +393,13 @@ pub fn execute_gpu_physics_step(
                 }
             }
         }
-        
+
         // Stage 8: Mass accumulation (256 threads) - nutrient growth only
         compute_pass.set_pipeline(&pipelines.mass_accum);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, mass_accum_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-        
+
         // Stage 9a: Nutrient transport (256 threads) - consumption + transport accumulation only
         // This dispatch accumulates mass deltas via atomics but does NOT apply them.
         compute_pass.set_pipeline(&pipelines.nutrient_transport);
@@ -374,8 +407,9 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(1, &cached_bind_groups.nutrient_system, &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.adhesion, &[]);
         compute_pass.set_bind_group(3, &cached_bind_groups.nutrient_transport, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);    }
-    
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+    }
+
     // Stage 9b: Nutrient apply (separate compute pass)
     // CRITICAL: Must be a separate pass so all nutrient_transport workgroups finish
     // their atomic writes to mass_deltas before any thread reads the accumulated result.
@@ -386,7 +420,7 @@ pub fn execute_gpu_physics_step(
             label: Some("Nutrient Apply"),
             timestamp_writes: None,
         });
-        
+
         compute_pass.set_pipeline(&pipelines.nutrient_apply);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, &cached_bind_groups.nutrient_apply, &[]);
@@ -409,15 +443,15 @@ pub fn execute_gpu_physics_step(
         #[repr(C)]
         #[derive(bytemuck::Pod, bytemuck::Zeroable, Copy, Clone)]
         struct BoulderConsumeParams {
-            delta_time:      f32,
-            world_size:      f32,
-            grid_cell_size:  f32,
+            delta_time: f32,
+            world_size: f32,
+            grid_cell_size: f32,
             grid_resolution: i32,
         }
         let boulder_params = BoulderConsumeParams {
-            delta_time:      params.delta_time,
-            world_size:      params.world_size,
-            grid_cell_size:  params.grid_cell_size,
+            delta_time: params.delta_time,
+            world_size: params.world_size,
+            grid_cell_size: params.grid_cell_size,
             grid_resolution: params.grid_resolution,
         };
         queue.write_buffer(
@@ -436,7 +470,11 @@ pub fn execute_gpu_physics_step(
             boulder_pass.set_pipeline(&pipelines.boulder_consume);
             boulder_pass.set_bind_group(0, &cached_bind_groups.boulder_consume_params, &[]);
             boulder_pass.set_bind_group(1, &cached_bind_groups.boulder_consume_spatial, &[]);
-            boulder_pass.set_bind_group(2, &cached_bind_groups.boulder_consume_cell_data[input_index], &[]);
+            boulder_pass.set_bind_group(
+                2,
+                &cached_bind_groups.boulder_consume_cell_data[input_index],
+                &[],
+            );
             boulder_pass.set_bind_group(3, &cached_bind_groups.boulder_consume_buffers, &[]);
             boulder_pass.dispatch_workgroups(boulder_workgroups, 1, 1);
 
@@ -513,12 +551,17 @@ pub fn execute_gpu_mechanics_step(
         solo_metabolism_multiplier: 1.0, // Not used in mechanics step
         _padding: [0.0; 47],
     };
-    queue.write_buffer(&triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
+    queue.write_buffer(
+        &triple_buffers.physics_params,
+        0,
+        bytemuck::bytes_of(&params),
+    );
 
     let physics_bind_group = &cached_bind_groups.physics[current_index];
     let spatial_grid_bind_group = &cached_bind_groups.spatial_grid;
     let adhesion_rotations_bind_group = &cached_bind_groups.rotations[current_index];
-    let position_update_rotations_bind_group = &cached_bind_groups.position_update_rotations[current_index];
+    let position_update_rotations_bind_group =
+        &cached_bind_groups.position_update_rotations[current_index];
 
     // PERFORMANCE: Dispatch based on actual cell count, not full capacity
     let effective_cell_count = (_cell_count_hint.max(1) + 255) / 256 * 256;
@@ -566,7 +609,11 @@ pub fn execute_gpu_mechanics_step(
         compute_pass.set_pipeline(&pipelines.collision_detection);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
-        compute_pass.set_bind_group(2, &cached_bind_groups.collision_force_accum[current_index], &[]);
+        compute_pass.set_bind_group(
+            2,
+            &cached_bind_groups.collision_force_accum[current_index],
+            &[],
+        );
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 5: Adhesion physics
@@ -581,7 +628,11 @@ pub fn execute_gpu_mechanics_step(
         if features.has_flagellocytes {
             compute_pass.set_pipeline(&pipelines.swim_force);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
-            compute_pass.set_bind_group(1, &cached_bind_groups.swim_force_force_accum[current_index], &[]);
+            compute_pass.set_bind_group(
+                1,
+                &cached_bind_groups.swim_force_force_accum[current_index],
+                &[],
+            );
             compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
@@ -590,7 +641,11 @@ pub fn execute_gpu_mechanics_step(
         if features.has_buoyocytes {
             compute_pass.set_pipeline(&pipelines.buoyancy_force);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
-            compute_pass.set_bind_group(1, &cached_bind_groups.swim_force_force_accum[current_index], &[]);
+            compute_pass.set_bind_group(
+                1,
+                &cached_bind_groups.swim_force_force_accum[current_index],
+                &[],
+            );
             compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
@@ -600,7 +655,11 @@ pub fn execute_gpu_mechanics_step(
         if features.has_ciliocytes && cave_renderer.is_some() {
             compute_pass.set_pipeline(&pipelines.cilia_force);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
-            compute_pass.set_bind_group(1, &cached_bind_groups.cilia_force_force_accum[current_index], &[]);
+            compute_pass.set_bind_group(
+                1,
+                &cached_bind_groups.cilia_force_force_accum[current_index],
+                &[],
+            );
             compute_pass.set_bind_group(2, &cached_bind_groups.cilia_force_cell_data, &[]);
             compute_pass.set_bind_group(3, &cached_bind_groups.cilia_force_spatial, &[]);
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
@@ -619,7 +678,11 @@ pub fn execute_gpu_mechanics_step(
                 };
                 compute_pass.set_pipeline(&pipelines.glueocyte_env_adhesion);
                 compute_pass.set_bind_group(0, physics_bind_group, &[]);
-                compute_pass.set_bind_group(1, &cached_bind_groups.env_adhesion_force_accum[current_index], &[]);
+                compute_pass.set_bind_group(
+                    1,
+                    &cached_bind_groups.env_adhesion_force_accum[current_index],
+                    &[],
+                );
                 compute_pass.set_bind_group(2, &cached_bind_groups.env_adhesion_mode_data, &[]);
                 compute_pass.set_bind_group(3, cave_bg, &[]);
                 compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
@@ -652,7 +715,9 @@ pub fn execute_gpu_mechanics_step(
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 6.5: Cave collision (if enabled)
-        if let (Some(cave_renderer), Some(cave_bind_groups)) = (cave_renderer, cave_physics_bind_groups) {
+        if let (Some(cave_renderer), Some(cave_bind_groups)) =
+            (cave_renderer, cave_physics_bind_groups)
+        {
             if cave_renderer.params().collision_enabled != 0 {
                 compute_pass.set_pipeline(cave_renderer.collision_pipeline());
                 compute_pass.set_bind_group(0, &cave_bind_groups[current_index], &[]);
@@ -664,7 +729,11 @@ pub fn execute_gpu_mechanics_step(
         // Stage 7: Angular velocity integration
         compute_pass.set_pipeline(&pipelines.velocity_update);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.velocity_update_angular[current_index], &[]);
+        compute_pass.set_bind_group(
+            1,
+            &cached_bind_groups.velocity_update_angular[current_index],
+            &[],
+        );
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 7.5: Adhesion constraint sub-stepping (N additional iterations)
@@ -676,9 +745,11 @@ pub fn execute_gpu_mechanics_step(
             compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
             compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-            
+
             // Re-apply cave collision after each substep to enforce cave boundaries
-            if let (Some(cave_renderer), Some(cave_bind_groups)) = (cave_renderer, cave_physics_bind_groups) {
+            if let (Some(cave_renderer), Some(cave_bind_groups)) =
+                (cave_renderer, cave_physics_bind_groups)
+            {
                 if cave_renderer.params().collision_enabled != 0 {
                     compute_pass.set_pipeline(cave_renderer.collision_pipeline());
                     compute_pass.set_bind_group(0, &cave_bind_groups[current_index], &[]);
@@ -708,13 +779,13 @@ pub fn execute_lifecycle_pipeline(
 ) {
     // Get current buffer index (already rotated by physics pipeline)
     let current_index = triple_buffers.current_index();
-    
+
     // Use cached bind groups (no per-frame allocation!)
     let physics_bind_group = &cached_bind_groups.physics[current_index];
     let lifecycle_bind_group = &cached_bind_groups.lifecycle;
     let cell_state_read_bind_group = &cached_bind_groups.cell_state_read;
     let cell_state_write_bind_group = &cached_bind_groups.cell_state_write[current_index];
-    
+
     // Dispatch lifecycle based on the high-water mark (total_cell_slots), not full capacity.
     // total_cell_slots is the highest slot index ever used - dead cells can be at any index
     // up to this mark, so we must cover all of them. Using full capacity when only a fraction
@@ -726,8 +797,9 @@ pub fn execute_lifecycle_pipeline(
         return;
     }
     let effective_slots = total_cell_slots.min(triple_buffers.capacity);
-    let cell_workgroups_lifecycle = (effective_slots + WORKGROUP_SIZE_LIFECYCLE - 1) / WORKGROUP_SIZE_LIFECYCLE;
-    
+    let cell_workgroups_lifecycle =
+        (effective_slots + WORKGROUP_SIZE_LIFECYCLE - 1) / WORKGROUP_SIZE_LIFECYCLE;
+
     // Execute 3-stage lifecycle pipeline with ring buffer for slot recycling
     // Stage 1: Death scan - detects dead cells and pushes slots to ring buffer
     // Must complete BEFORE division scan so recycled slots are available
@@ -736,33 +808,34 @@ pub fn execute_lifecycle_pipeline(
             label: Some("Lifecycle Pipeline - Death Scan"),
             timestamp_writes: None,
         });
-        
+
         compute_pass.set_pipeline(&pipelines.lifecycle_death_scan);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.set_bind_group(2, cell_state_read_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
-        
+
         drop(compute_pass);
     }
-    
+
     // Stage 1.5: Adhesion cleanup (after death detection completes)
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Lifecycle Pipeline - Adhesion Cleanup"),
             timestamp_writes: None,
         });
-        
+
         compute_pass.set_pipeline(&pipelines.adhesion_cleanup);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.lifecycle_adhesion, &[]);
-        let adhesion_workgroups = (adhesion_buffers.max_connections + WORKGROUP_SIZE_ADHESION - 1) / WORKGROUP_SIZE_ADHESION;
+        let adhesion_workgroups = (adhesion_buffers.max_connections + WORKGROUP_SIZE_ADHESION - 1)
+            / WORKGROUP_SIZE_ADHESION;
         compute_pass.dispatch_workgroups(adhesion_workgroups, 1, 1);
-        
+
         drop(compute_pass);
     }
-    
+
     // Stage 2: Division scan - allocates slots from ring buffer for dividing cells
     // Runs AFTER death scan so recycled slots are available
     {
@@ -770,24 +843,24 @@ pub fn execute_lifecycle_pipeline(
             label: Some("Lifecycle Pipeline - Division Scan"),
             timestamp_writes: None,
         });
-        
+
         compute_pass.set_pipeline(&pipelines.lifecycle_division_scan);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.set_bind_group(2, cell_state_read_bind_group, &[]);
         compute_pass.set_bind_group(3, &cached_bind_groups.division_scan_adhesion, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
-        
+
         drop(compute_pass);
     }
-    
+
     // Stage 3: Division execute (uses pre-allocated slots from division scan)
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Lifecycle Pipeline - Division Execute Ring"),
             timestamp_writes: None,
         });
-        
+
         compute_pass.set_pipeline(&pipelines.lifecycle_division_execute);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
@@ -795,7 +868,7 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.set_bind_group(3, &cached_bind_groups.division_execute_adhesion, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
     }
-    
+
     // Signal system moved to execute_signal_system() - runs once per frame, not per physics step
     // This prevents 4x over-dispatch when running 4 physics steps per frame
 
@@ -809,21 +882,27 @@ pub fn execute_lifecycle_pipeline(
     // stale data at higher indices, causing explosive teleportation when those slots rotate
     // back into positions_in two steps later.
     let output_idx = (current_index + 1) % 3;
-    let stale_idx  = (current_index + 2) % 3;
-    let buf_size   = triple_buffers.capacity as u64 * 16; // Vec4<f32> = 16 bytes per slot
+    let stale_idx = (current_index + 2) % 3;
+    let buf_size = triple_buffers.capacity as u64 * 16; // Vec4<f32> = 16 bytes per slot
     encoder.copy_buffer_to_buffer(
-        &triple_buffers.position_and_mass[output_idx], 0,
-        &triple_buffers.position_and_mass[stale_idx],  0,
+        &triple_buffers.position_and_mass[output_idx],
+        0,
+        &triple_buffers.position_and_mass[stale_idx],
+        0,
         buf_size,
     );
     encoder.copy_buffer_to_buffer(
-        &triple_buffers.velocity[output_idx], 0,
-        &triple_buffers.velocity[stale_idx],  0,
+        &triple_buffers.velocity[output_idx],
+        0,
+        &triple_buffers.velocity[stale_idx],
+        0,
         buf_size,
     );
     encoder.copy_buffer_to_buffer(
-        &triple_buffers.rotations[output_idx], 0,
-        &triple_buffers.rotations[stale_idx],  0,
+        &triple_buffers.rotations[output_idx],
+        0,
+        &triple_buffers.rotations[stale_idx],
+        0,
         buf_size,
     );
 
@@ -834,8 +913,8 @@ pub fn execute_lifecycle_pipeline(
         &adhesion_buffers.next_adhesion_id,
         0,
         &adhesion_buffers.adhesion_counts,
-        0,  // offset 0 = total_adhesion_count
-        4,  // 4 bytes (u32)
+        0, // offset 0 = total_adhesion_count
+        4, // 4 bytes (u32)
     );
 }
 
@@ -852,26 +931,26 @@ pub fn rebuild_spatial_grid_after_lifecycle(
     let current_index = triple_buffers.current_index();
     let physics_bind_group = &cached_bind_groups.physics[current_index];
     let spatial_grid_bind_group = &cached_bind_groups.spatial_grid;
-    
+
     // Dispatch over live cell slots only - shaders check cell_count_buffer[0] internally.
     let effective_slots = _cell_count_hint.min(triple_buffers.capacity).max(1);
     let cell_workgroups = (effective_slots + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
-    
+
     // Stage 1: Clear spatial grid counts using DMA zero-fill
     encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
-    
+
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Spatial Grid Rebuild After Lifecycle"),
             timestamp_writes: None,
         });
-        
+
         // Stage 2: Assign cells to grid (now only live cells)
         compute_pass.set_pipeline(&pipelines.spatial_grid_assign);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-        
+
         // Stage 3: Insert cells into grid
         compute_pass.set_pipeline(&pipelines.spatial_grid_insert);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
@@ -881,10 +960,10 @@ pub fn rebuild_spatial_grid_after_lifecycle(
 }
 
 /// Execute the signal system (clear -> sense -> propagate)
-/// 
+///
 /// This runs ONCE PER FRAME, not per physics step, to avoid 4x over-dispatch.
 /// Should be called after lifecycle pipeline so adhesion state is up-to-date.
-/// 
+///
 /// # Arguments
 /// * `has_oculocytes` - If false, skip entire signal system (no genomes have oculocyte modes)
 /// * `cell_count_hint` - Live cell count for dispatch scaling
@@ -903,9 +982,9 @@ pub fn execute_signal_system(
     if !has_oculocytes {
         return;
     }
-    
+
     let current_index = triple_buffers.current_index();
-    
+
     // Dispatch size: round up to workgroup boundary (workgroup_size = 256, matching all other cell passes)
     let signal_workgroups = (cell_count_hint.max(1) + 255) / 256;
 
@@ -928,7 +1007,11 @@ pub fn execute_signal_system(
         });
         compute_pass.set_pipeline(&pipelines.signal_sense);
         compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.signal_sense_cell_data[current_index], &[]);
+        compute_pass.set_bind_group(
+            1,
+            &cached_bind_groups.signal_sense_cell_data[current_index],
+            &[],
+        );
         compute_pass.set_bind_group(2, &cached_bind_groups.signal_sense_world_data, &[]);
         compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
     }

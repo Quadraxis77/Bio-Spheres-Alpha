@@ -16,11 +16,11 @@
 
 use glam::Vec3;
 
-use crate::rendering::boulder_renderer::BoulderRenderer;
+use super::boulder_buffers::{BoulderBuffers, BoulderSpawnRequest};
 use crate::rendering::boulder_bubbles::BoulderBubbleSystem;
+use crate::rendering::boulder_renderer::BoulderRenderer;
 use crate::rendering::cave_system::CaveParams;
 use crate::simulation::fluid_simulation::SolidMaskGenerator;
-use super::boulder_buffers::{BoulderBuffers, BoulderSpawnRequest};
 
 /// How many boulders to maintain in the world at any time.
 const DEFAULT_TARGET_BOULDER_COUNT: u32 = 32;
@@ -32,9 +32,9 @@ const SPAWN_INTERVAL: f32 = 5.0;
 const DEFAULT_BOULDER_RADIUS: f32 = 4.0;
 
 pub struct BoulderSystem {
-    pub buffers:  BoulderBuffers,
+    pub buffers: BoulderBuffers,
     pub renderer: BoulderRenderer,
-    pub bubbles:  BoulderBubbleSystem,
+    pub bubbles: BoulderBubbleSystem,
     /// Cached compute bind group for bubbles - rebuilt when water system initializes.
     pub bubble_compute_bg: Option<wgpu::BindGroup>,
 
@@ -92,13 +92,11 @@ impl BoulderSystem {
         world_radius: f32,
         gravity_mode: u32,
     ) -> Self {
-        let buffers  = BoulderBuffers::new(device);
-        let renderer = BoulderRenderer::new(
-            device, queue, surface_format, depth_format, width, height,
-        );
-        let bubbles = BoulderBubbleSystem::new(
-            device, queue, surface_format, depth_format, width, height,
-        );
+        let buffers = BoulderBuffers::new(device);
+        let renderer =
+            BoulderRenderer::new(device, queue, surface_format, depth_format, width, height);
+        let bubbles =
+            BoulderBubbleSystem::new(device, queue, surface_format, depth_format, width, height);
 
         let anti_gravity_dir = anti_gravity_direction(gravity_mode, Vec3::ZERO);
         let ceiling_positions = find_ceiling_voxels(cave_params, world_radius, gravity_mode);
@@ -110,7 +108,9 @@ impl BoulderSystem {
 
         let mut rng = 0xDEADBEEFu32;
         // xorshift32 once to get initial random offset
-        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
         let initial_offset = (rng >> 8) as f32 / 16_777_216.0 * SPAWN_INTERVAL;
 
         Self {
@@ -138,12 +138,7 @@ impl BoulderSystem {
     }
 
     /// Call once per frame. Spawns new boulders as needed.
-    pub fn update(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        delta_time: f32,
-    ) {
+    pub fn update(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, delta_time: f32) {
         // Poll for dead boulders (non-blocking)
         self.buffers.poll_dead_readback(device);
 
@@ -154,7 +149,10 @@ impl BoulderSystem {
         }
 
         // Count live boulders
-        let live = self.buffers.cpu_boulders.iter()
+        let live = self
+            .buffers
+            .cpu_boulders
+            .iter()
             .filter(|b| b.dead == 0 && b.radius > 0.0)
             .count() as u32;
 
@@ -177,7 +175,14 @@ impl BoulderSystem {
         gravity_mode: u32,
     ) {
         if let Some(ref bg) = self.bubble_compute_bg {
-            self.bubbles.update(encoder, queue, bg, self.buffers.active_count, delta_time, gravity_mode);
+            self.bubbles.update(
+                encoder,
+                queue,
+                bg,
+                self.buffers.active_count,
+                delta_time,
+                gravity_mode,
+            );
         }
     }
 
@@ -193,13 +198,25 @@ impl BoulderSystem {
         current_time: f32,
     ) {
         self.renderer.render(
-            encoder, queue, color_view, depth_view,
-            camera_pos, camera_rotation, current_time,
+            encoder,
+            queue,
+            color_view,
+            depth_view,
+            camera_pos,
+            camera_rotation,
+            current_time,
             self.buffers.active_count,
         );
         // Render bubbles after boulders (additive-ish blending, depth test only)
         if self.bubble_compute_bg.is_some() {
-            self.bubbles.render(encoder, queue, color_view, depth_view, camera_pos, camera_rotation);
+            self.bubbles.render(
+                encoder,
+                queue,
+                color_view,
+                depth_view,
+                camera_pos,
+                camera_rotation,
+            );
         }
     }
 
@@ -231,8 +248,12 @@ impl BoulderSystem {
         for b in &mut self.buffers.cpu_boulders {
             *b = bytemuck::Zeroable::zeroed();
         }
-        for m in &mut self.buffers.cpu_moss { *m = 0; }
-        for d in &mut self.buffers.cpu_moss_dir { *d = [0.0, 1.0, 0.0, 0.0]; }
+        for m in &mut self.buffers.cpu_moss {
+            *m = 0;
+        }
+        for d in &mut self.buffers.cpu_moss_dir {
+            *d = [0.0, 1.0, 0.0, 0.0];
+        }
         self.buffers.active_count = 0;
 
         // Upload zeroed state to GPU
@@ -242,9 +263,17 @@ impl BoulderSystem {
             bytemuck::cast_slice(&self.buffers.cpu_boulders),
         );
         let zero_moss = vec![0i32; n];
-        queue.write_buffer(&self.buffers.boulder_moss, 0, bytemuck::cast_slice(&zero_moss));
+        queue.write_buffer(
+            &self.buffers.boulder_moss,
+            0,
+            bytemuck::cast_slice(&zero_moss),
+        );
         let zero_count = [0u32, 0u32, 0u32, 0u32];
-        queue.write_buffer(&self.buffers.boulder_count, 0, bytemuck::cast_slice(&zero_count));
+        queue.write_buffer(
+            &self.buffers.boulder_count,
+            0,
+            bytemuck::cast_slice(&zero_count),
+        );
 
         // Reset spawn timer so boulders start spawning again after the reset
         self.spawn_timer = self.spawn_interval;
@@ -271,7 +300,8 @@ impl BoulderSystem {
         // Randomize moss within [moss_min, moss_max]
         let t_moss = self.rand_f32();
         let moss_nutrients = self.moss_min + (self.moss_max - self.moss_min) * t_moss;
-        let moss_fixed = (moss_nutrients * super::boulder_buffers::BOULDER_FIXED_POINT_SCALE) as i32;
+        let moss_fixed =
+            (moss_nutrients * super::boulder_buffers::BOULDER_FIXED_POINT_SCALE) as i32;
 
         let seed = self.rand_u32();
         let req = BoulderSpawnRequest {
@@ -281,10 +311,15 @@ impl BoulderSystem {
             seed,
         };
 
-        if let Some(slot) = self.buffers.spawn_with_moss(queue, req, self.anti_gravity_dir, moss_fixed) {
+        if let Some(slot) =
+            self.buffers
+                .spawn_with_moss(queue, req, self.anti_gravity_dir, moss_fixed)
+        {
             log::debug!(
                 "[BoulderSystem] Spawned boulder at slot {} radius={:.1} moss={:.0}",
-                slot, radius, moss_nutrients
+                slot,
+                radius,
+                moss_nutrients
             );
         }
     }
@@ -308,10 +343,10 @@ impl BoulderSystem {
 /// Returns the world-space "up" direction (opposite of gravity).
 fn anti_gravity_direction(gravity_mode: u32, _pos: Vec3) -> Vec3 {
     match gravity_mode {
-        0 => Vec3::X,          // gravity pulls -X, ceiling faces +X
-        2 => Vec3::Z,          // gravity pulls -Z, ceiling faces +Z
-        3 => Vec3::Y,          // radial: use +Y as default anti-gravity for spawning
-        _ => Vec3::Y,          // default Y gravity, ceiling faces +Y
+        0 => Vec3::X, // gravity pulls -X, ceiling faces +X
+        2 => Vec3::Z, // gravity pulls -Z, ceiling faces +Z
+        3 => Vec3::Y, // radial: use +Y as default anti-gravity for spawning
+        _ => Vec3::Y, // default Y gravity, ceiling faces +Y
     }
 }
 
@@ -379,11 +414,12 @@ fn find_ceiling_voxels(
                 }
 
                 // Must be inside the world sphere (not outer shell)
-                let world_pos = grid_origin + Vec3::new(
-                    x as f32 * cell_size + cell_size * 0.5,
-                    y as f32 * cell_size + cell_size * 0.5,
-                    z as f32 * cell_size + cell_size * 0.5,
-                );
+                let world_pos = grid_origin
+                    + Vec3::new(
+                        x as f32 * cell_size + cell_size * 0.5,
+                        y as f32 * cell_size + cell_size * 0.5,
+                        z as f32 * cell_size + cell_size * 0.5,
+                    );
                 if world_pos.length() > world_radius * 0.95 {
                     continue; // skip outer shell voxels
                 }

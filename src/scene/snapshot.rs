@@ -34,8 +34,8 @@
 //! readability and easy debugging.  The extension is `.bss` (Bio-Spheres
 //! Snapshot).
 
+use crate::simulation::gpu_physics::adhesion::{CellAdhesionIndices, GpuAdhesionConnection};
 use serde::{Deserialize, Serialize};
-use crate::simulation::gpu_physics::adhesion::{GpuAdhesionConnection, CellAdhesionIndices};
 
 // --- Per-cell data ------------------------------------------------------------
 
@@ -212,7 +212,10 @@ impl std::fmt::Display for SnapshotError {
             Self::Deserialise(e) => write!(f, "Deserialisation error: {e}"),
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::IncompatibleVersion { found, expected } => {
-                write!(f, "Snapshot version {found} is not compatible (expected {expected})")
+                write!(
+                    f,
+                    "Snapshot version {found} is not compatible (expected {expected})"
+                )
             }
             Self::CapacityMismatch { snapshot, scene } => {
                 write!(

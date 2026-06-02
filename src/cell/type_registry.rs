@@ -132,11 +132,11 @@ pub struct CellTypeRegistry {
     /// Render pipelines indexed by CellType.
     /// Each pipeline uses the type-specific appearance shader.
     pipelines: Vec<wgpu::RenderPipeline>,
-    
+
     /// Bind group layout shared by all cell type pipelines.
     /// Contains camera uniforms and lighting data.
     pub bind_group_layout: wgpu::BindGroupLayout,
-    
+
     /// Shadow field bind group layout (group 1) for surface shadows.
     pub shadow_bind_group_layout: wgpu::BindGroupLayout,
 }
@@ -156,13 +156,13 @@ impl CellTypeRegistry {
     ) -> Self {
         // Create shared bind group layout for camera and lighting
         let bind_group_layout = Self::create_bind_group_layout(device);
-        
+
         // Create shadow field bind group layout (always included for pipeline compatibility)
         let shadow_bind_group_layout = Self::create_shadow_bind_group_layout(device);
-        
+
         // Create pipelines for all registered cell types
         let mut pipelines = Vec::with_capacity(CellType::COUNT);
-        
+
         for cell_type in CellType::iter() {
             let pipeline = Self::create_pipeline(
                 device,
@@ -174,14 +174,14 @@ impl CellTypeRegistry {
             );
             pipelines.push(pipeline);
         }
-        
+
         Self {
             pipelines,
             bind_group_layout,
             shadow_bind_group_layout,
         }
     }
-    
+
     /// Get the render pipeline for a specific cell type.
     ///
     /// # Arguments
@@ -194,7 +194,7 @@ impl CellTypeRegistry {
     pub fn get_pipeline(&self, cell_type: CellType) -> &wgpu::RenderPipeline {
         &self.pipelines[cell_type as usize]
     }
-    
+
     /// Create the shared bind group layout for all cell type pipelines.
     ///
     /// Layout:
@@ -247,7 +247,7 @@ impl CellTypeRegistry {
             ],
         })
     }
-    
+
     /// Create the shadow field bind group layout (group 1).
     fn create_shadow_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -278,7 +278,7 @@ impl CellTypeRegistry {
             ],
         })
     }
-    
+
     /// Create a render pipeline for a specific cell type.
     fn create_pipeline(
         device: &wgpu::Device,
@@ -294,14 +294,14 @@ impl CellTypeRegistry {
             label: Some(&format!("{:?} Cell Shader", cell_type)),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
-        
+
         // Create pipeline layout (always includes shadow bind group layout)
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&format!("{:?} Cell Pipeline Layout", cell_type)),
             bind_group_layouts: &[bind_group_layout, shadow_bind_group_layout],
             push_constant_ranges: &[],
         });
-        
+
         // Create render pipeline
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(&format!("{:?} Cell Pipeline", cell_type)),
@@ -345,7 +345,7 @@ impl CellTypeRegistry {
             cache: None,
         })
     }
-    
+
     /// Load shader source for a cell type.
     ///
     /// All cell types use the unified 3-layer procedural shader.
@@ -353,7 +353,7 @@ impl CellTypeRegistry {
     fn load_shader_source(_cell_type: CellType) -> &'static str {
         include_str!("../../shaders/cells/cell_unified.wgsl")
     }
-    
+
     /// Get the vertex buffer layout for cell instances.
     ///
     /// This layout matches the CellInstance struct:

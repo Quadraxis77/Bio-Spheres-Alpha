@@ -21,11 +21,11 @@ pub const MAX_BUBBLES: u32 = 4096;
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct BubbleParticle {
     pub position: [f32; 3],
-    pub size:     f32,
+    pub size: f32,
     pub velocity: [f32; 3],
-    pub age:      f32,
-    pub max_age:  f32,
-    pub _pad:     [f32; 3],
+    pub age: f32,
+    pub max_age: f32,
+    pub _pad: [f32; 3],
 }
 
 const _: () = assert!(std::mem::size_of::<BubbleParticle>() == 48);
@@ -34,19 +34,19 @@ const _: () = assert!(std::mem::size_of::<BubbleParticle>() == 48);
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct BubbleParams {
-    delta_time:     f32,
-    current_time:   f32,
-    current_frame:  u32,
-    max_particles:  u32,
-    boulder_count:  u32,
-    min_speed:      f32,
-    emit_rate:      f32,
+    delta_time: f32,
+    current_time: f32,
+    current_frame: u32,
+    max_particles: u32,
+    boulder_count: u32,
+    min_speed: f32,
+    emit_rate: f32,
     burst_duration: f32,
-    gravity_mode:   u32,
-    _pad0:          u32,
-    _pad1:          u32,
-    _pad2:          u32,
-    _pad3:          [f32; 4],
+    gravity_mode: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: [f32; 4],
 }
 
 const _: () = assert!(std::mem::size_of::<BubbleParams>() == 64);
@@ -55,37 +55,37 @@ const _: () = assert!(std::mem::size_of::<BubbleParams>() == 64);
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct CameraUniform {
-    view_proj:  [[f32; 4]; 4],
+    view_proj: [[f32; 4]; 4],
     camera_pos: [f32; 3],
-    _pad:       f32,
+    _pad: f32,
 }
 
 pub struct BoulderBubbleSystem {
     // Compute pipelines
     spawn_pipeline: wgpu::ComputePipeline,
-    age_pipeline:   wgpu::ComputePipeline,
-    compute_bgl:    wgpu::BindGroupLayout,
+    age_pipeline: wgpu::ComputePipeline,
+    compute_bgl: wgpu::BindGroupLayout,
 
     // Render pipeline
     render_pipeline: wgpu::RenderPipeline,
-    camera_buffer:   wgpu::Buffer,
+    camera_buffer: wgpu::Buffer,
     #[allow(dead_code)]
-    render_bgl:      wgpu::BindGroupLayout,
-    render_bg:       wgpu::BindGroup,
+    render_bgl: wgpu::BindGroupLayout,
+    render_bg: wgpu::BindGroup,
 
     // Shared buffers
-    particle_buffer:  wgpu::Buffer,
-    counter_buffer:   wgpu::Buffer,
-    params_buffer:    wgpu::Buffer,
-    prev_in_water:    wgpu::Buffer,
-    entry_timer:      wgpu::Buffer,
+    particle_buffer: wgpu::Buffer,
+    counter_buffer: wgpu::Buffer,
+    params_buffer: wgpu::Buffer,
+    prev_in_water: wgpu::Buffer,
+    entry_timer: wgpu::Buffer,
 
-    current_time:   f32,
-    current_frame:  u32,
+    current_time: f32,
+    current_frame: u32,
     #[allow(dead_code)]
     particle_count: u32,
 
-    pub width:  u32,
+    pub width: u32,
     pub height: u32,
 }
 
@@ -136,13 +136,21 @@ impl BoulderBubbleSystem {
 
         let prev_in_water = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Bubble Prev In Water"),
-            contents: bytemuck::cast_slice(&vec![0u32; crate::simulation::gpu_physics::boulder_buffers::MAX_BOULDERS as usize]),
+            contents: bytemuck::cast_slice(&vec![
+                0u32;
+                crate::simulation::gpu_physics::boulder_buffers::MAX_BOULDERS
+                    as usize
+            ]),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
         let entry_timer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Bubble Entry Timer"),
-            contents: bytemuck::cast_slice(&vec![0.0f32; crate::simulation::gpu_physics::boulder_buffers::MAX_BOULDERS as usize]),
+            contents: bytemuck::cast_slice(&vec![
+                0.0f32;
+                crate::simulation::gpu_physics::boulder_buffers::MAX_BOULDERS
+                    as usize
+            ]),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
         let ro = |b: u32| wgpu::BindGroupLayoutEntry {
@@ -243,12 +251,36 @@ impl BoulderBubbleSystem {
             array_stride: std::mem::size_of::<BubbleParticle>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &[
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0,  shader_location: 0 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32,   offset: 12, shader_location: 1 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 16, shader_location: 2 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32,   offset: 28, shader_location: 3 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32,   offset: 32, shader_location: 4 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 36, shader_location: 5 },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x3,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32,
+                    offset: 12,
+                    shader_location: 1,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x3,
+                    offset: 16,
+                    shader_location: 2,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32,
+                    offset: 28,
+                    shader_location: 3,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32,
+                    offset: 32,
+                    shader_location: 4,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x3,
+                    offset: 36,
+                    shader_location: 5,
+                },
             ],
         };
 
@@ -301,16 +333,19 @@ impl BoulderBubbleSystem {
 
         // Write default params so the buffer is valid before first frame
         let default_params = BubbleParams {
-            delta_time:     0.016,
-            current_time:   0.0,
-            current_frame:  0,
-            max_particles:  MAX_BUBBLES,
-            boulder_count:  0,
-            min_speed:      0.5,
-            emit_rate:      12.0,
+            delta_time: 0.016,
+            current_time: 0.0,
+            current_frame: 0,
+            max_particles: MAX_BUBBLES,
+            boulder_count: 0,
+            min_speed: 0.5,
+            emit_rate: 12.0,
             burst_duration: 0.6,
-            gravity_mode:   1,
-            _pad0: 0, _pad1: 0, _pad2: 0, _pad3: [0.0; 4],
+            gravity_mode: 1,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+            _pad3: [0.0; 4],
         };
         queue.write_buffer(&params_buffer, 0, bytemuck::bytes_of(&default_params));
 
@@ -348,14 +383,38 @@ impl BoulderBubbleSystem {
             label: Some("Bubble Compute BG"),
             layout: &self.compute_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.params_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: boulder_buffers.boulder_state.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: self.particle_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: self.counter_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: water_params_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: water_bitfield_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: self.prev_in_water.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 7, resource: self.entry_timer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: boulder_buffers.boulder_state.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.particle_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.counter_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: water_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: water_bitfield_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.prev_in_water.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: self.entry_timer.as_entire_binding(),
+                },
             ],
         })
     }
@@ -370,20 +429,23 @@ impl BoulderBubbleSystem {
         dt: f32,
         gravity_mode: u32,
     ) {
-        self.current_time  += dt;
+        self.current_time += dt;
         self.current_frame += 1;
 
         let params = BubbleParams {
-            delta_time:     dt,
-            current_time:   self.current_time,
-            current_frame:  self.current_frame,
-            max_particles:  MAX_BUBBLES,
+            delta_time: dt,
+            current_time: self.current_time,
+            current_frame: self.current_frame,
+            max_particles: MAX_BUBBLES,
             boulder_count,
-            min_speed:      0.5,
-            emit_rate:      12.0,
+            min_speed: 0.5,
+            emit_rate: 12.0,
             burst_duration: 0.6,
             gravity_mode,
-            _pad0: 0, _pad1: 0, _pad2: 0, _pad3: [0.0; 4],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+            _pad3: [0.0; 4],
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 
@@ -425,9 +487,9 @@ impl BoulderBubbleSystem {
         let aspect = self.width as f32 / self.height as f32;
         let proj = glam::Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 1000.0);
         let cam = CameraUniform {
-            view_proj:  (proj * view).to_cols_array_2d(),
+            view_proj: (proj * view).to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),
-            _pad:       0.0,
+            _pad: 0.0,
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&cam));
 
@@ -436,12 +498,18 @@ impl BoulderBubbleSystem {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: color_view,
                 resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
                 depth_slice: None,
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth_view,
-                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
                 stencil_ops: None,
             }),
             timestamp_writes: None,

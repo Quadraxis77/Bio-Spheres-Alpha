@@ -84,7 +84,8 @@ struct MutationParamEntry {
     //            2 = boolean (flip), 3 = integer with mode_count clamp,
     //            4 = chain_extend, 5 = chain_close, 6 = loop_branch,
     //            7 = loop_merge, 8 = signal_wire (correlated emitter+receiver),
-    //            9 = quat_snap (replace whole quaternion with snapped orientation)
+    //            9 = quat_snap (replace whole quaternion with snapped orientation),
+    //            10 = mode_append, 11 = mode_trim
     data_type: u32,
 }
 
@@ -561,13 +562,12 @@ fn apply_mutation(
     cell_id: u32,        // for RNG
     salt_base: u32,      // salt offset for RNG chain
     new_genome_id: u32,  // allocated genome id (needed for genome_meta mutations)
+    param_idx: u32,      // pre-selected vulnerability table entry
 ) -> u32 {  // returns param_entry_idx for logging
     // Pick which mode to mutate
     let mode_local = rng_u32(cell_id, salt_base + 100u) % mode_count;
     let mode_abs = dst_base + mode_local;
 
-    // Pick which parameter to mutate (weighted)
-    let param_idx = select_param(cell_id, salt_base + 200u);
     let entry = vulnerability_table[param_idx];
 
     // Generate perturbation
@@ -1255,8 +1255,10 @@ fn apply_mutation(
                 let new_abs   = dst_base + mode_count;
                 let new_abs_i = i32(new_abs);
 
-                // Inherit cell type and basic physics from last mode
-                mode_cell_types[new_abs] = mode_cell_types[last_abs];
+                // Inherit cell type and basic physics from last mode, but never
+                // create new Test modes through radiation.
+                let inherited_cell_type = mode_cell_types[last_abs];
+                mode_cell_types[new_abs] = select(inherited_cell_type, 2u, inherited_cell_type == 0u);
                 mode_properties_v0[new_abs] = mode_properties_v0[last_abs];
                 mode_properties_v1[new_abs] = mode_properties_v1[last_abs];
                 // Zero out the remaining sub-buffers (safe defaults)
@@ -1387,17 +1389,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // Allocate a new genome slot from the ring buffer
-    let head = atomicAdd(&genome_ring_state[0], 1u);
-    let ring_idx = head % mutation_params.genome_ring_capacity;
-    let new_genome_id = genome_free_ring[ring_idx];
+    // Pick the mutation before reserving mode storage so MODE_APPEND can claim
+    // the extra slot it will write.
+    let param_idx = select_param(candidate_idx, 200u);
+    let selected_entry = vulnerability_table[param_idx];
+    let appends_mode = selected_entry.buffer_id == 14u
+                    && selected_entry.data_type == 10u
+                    && parent_mode_count < mutation_params.max_modes_per_genome;
+    let reserved_mode_count = parent_mode_count + select(0u, 1u, appends_mode);
+
+    let new_genome_id = allocate_genome_slot();
+    if (new_genome_id == 0xFFFFFFFFu) {
+        return;
+    }
 
     // Allocate mode data range for the new genome
     var new_base_offset = 0u;
     var allocated = false;
     for (var attempt = 0u; attempt < 100u; attempt++) {
         let current_offset = atomicLoad(&genome_ring_state[3]);
-        if (current_offset + parent_mode_count > mutation_params.total_mode_count) {
+        if (current_offset + reserved_mode_count > mutation_params.total_mode_count) {
             // No space - return slot to ring
             let tail = atomicAdd(&genome_ring_state[1], 1u);
             let ring_idx2 = tail % mutation_params.genome_ring_capacity;
@@ -1406,7 +1417,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         // Try to atomically claim this range
-        let old_offset = atomicCompareExchangeWeak(&genome_ring_state[3], current_offset, current_offset + parent_mode_count).old_value;
+        let old_offset = atomicCompareExchangeWeak(&genome_ring_state[3], current_offset, current_offset + reserved_mode_count).old_value;
         if (old_offset == current_offset) {
             new_base_offset = current_offset;
             allocated = true;
@@ -1432,7 +1443,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     clone_genome_modes(parent_base_offset, new_base_offset, parent_mode_count);
 
     // Apply one mutation
-    let param_idx = apply_mutation(new_base_offset, parent_mode_count, candidate_idx, 0u, new_genome_id);
+    let applied_param_idx = apply_mutation(new_base_offset, parent_mode_count, candidate_idx, 0u, new_genome_id, param_idx);
 
     // Update cell's genome_id
     genome_ids[cell_idx] = new_genome_id;
@@ -1454,7 +1465,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Log mutation event (if log buffer has space)
     let log_idx = atomicAdd(&mutation_log_count[0], 1u);
     if (log_idx < arrayLength(&mutation_log)) {
-        mutation_log[log_idx] = vec4<u32>(cell_idx, new_genome_id, param_idx, mutation_params.current_frame);
+        mutation_log[log_idx] = vec4<u32>(cell_idx, new_genome_id, applied_param_idx, mutation_params.current_frame);
     }
 
     // Sync per-cell cell_types from the (possibly mutated) mode_cell_types

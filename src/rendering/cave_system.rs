@@ -7,8 +7,8 @@
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
-use wgpu::util::DeviceExt;
 use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 /// Camera uniform structure matching the shader
 #[repr(C)]
@@ -27,7 +27,7 @@ pub struct CaveParams {
     pub world_center: [f32; 3],
     /// World radius
     pub world_radius: f32,
-    
+
     /// Cave density (0.0 = no caves, 1.0 = maximum caves)
     pub density: f32,
     /// Cave scale (larger = bigger caves)
@@ -36,7 +36,7 @@ pub struct CaveParams {
     pub octaves: u32,
     /// Noise persistence (detail falloff)
     pub persistence: f32,
-    
+
     /// Threshold for cave/solid boundary
     pub threshold: f32,
     /// Smoothness of cave boundaries
@@ -45,7 +45,7 @@ pub struct CaveParams {
     pub seed: u32,
     /// Grid resolution for marching cubes
     pub grid_resolution: u32,
-    
+
     /// Triangle count (for collision)
     pub triangle_count: u32,
     /// Collision enabled flag
@@ -56,7 +56,7 @@ pub struct CaveParams {
     pub collision_damping: f32,
     /// XPBD substeps
     pub substeps: u32,
-    
+
     /// Padding to 256-byte alignment (68 bytes used, need 188 bytes padding = 47 vec4s)
     _padding: [f32; 188],
 }
@@ -65,15 +65,15 @@ impl Default for CaveParams {
     fn default() -> Self {
         Self {
             world_center: [0.0, 0.0, 0.0],
-            world_radius: 200.0,  // Updated for 400-unit world diameter
+            world_radius: 200.0, // Updated for 400-unit world diameter
             density: 0.5,
-            scale: 100.0,  // Updated to 100 as requested
-            octaves: 2,  // Updated to 2 as requested
+            scale: 100.0, // Updated to 100 as requested
+            octaves: 2,   // Updated to 2 as requested
             persistence: 0.5,
             threshold: 1.0,
-            smoothness: 0.0,  // Updated to 0.0 as requested
+            smoothness: 0.0, // Updated to 0.0 as requested
             seed: 12345,
-            grid_resolution: 128,  // Updated to 128 as requested
+            grid_resolution: 128, // Updated to 128 as requested
             triangle_count: 0,
             collision_enabled: 1,
             collision_stiffness: 10000.0,
@@ -132,12 +132,12 @@ pub struct CaveSystemRenderer {
     params: CaveParams,
     width: u32,
     height: u32,
-    
+
     // SDF collision (no mesh buffers needed)
     collision_bind_group: wgpu::BindGroup,
     collision_pipeline: wgpu::ComputePipeline,
     collision_layout: Arc<wgpu::BindGroupLayout>,
-    
+
     // Shadow field bind group (set each frame from light field system)
     shadow_bind_group: Option<wgpu::BindGroup>,
 }
@@ -151,27 +151,27 @@ impl CaveSystemRenderer {
         world_radius: f32,
     ) -> Self {
         let mut params = CaveParams::default();
-        
+
         // Set world dimensions before generating mesh
         params.world_center = [0.0, 0.0, 0.0];
         params.world_radius = world_radius;
-        
+
         // Generate initial cave mesh with correct world size
         let (vertices, indices) = Self::generate_cave_mesh(&params);
         params.triangle_count = (indices.len() / 3) as u32;
-        
+
         // Create parameter buffer
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Cave Params Buffer"),
             contents: bytemuck::cast_slice(&[params]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        
+
         // Create camera bind group layout
-        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Cave Camera Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Cave Camera Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
@@ -180,10 +180,9 @@ impl CaveSystemRenderer {
                         min_binding_size: None,
                     },
                     count: None,
-                },
-            ],
-        });
-        
+                }],
+            });
+
         // Create camera uniform buffer
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Cave Camera Buffer"),
@@ -191,24 +190,22 @@ impl CaveSystemRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // Create camera bind group
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cave Camera Bind Group"),
             layout: &camera_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
         });
-        
+
         // Create bind group layout for cave params
-        let params_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Cave Params Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let params_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Cave Params Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
@@ -217,20 +214,17 @@ impl CaveSystemRenderer {
                         min_binding_size: None,
                     },
                     count: None,
-                },
-            ],
-        });
-        
+                }],
+            });
+
         // Create params bind group
         let params_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cave Params Bind Group"),
             layout: &params_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            }],
         });
 
         // Create shader
@@ -238,61 +232,66 @@ impl CaveSystemRenderer {
             label: Some("Cave Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cave_system.wgsl").into()),
         });
-        
+
         // Create shadow field bind group layout (group 2) - includes water bitfield for caustics
-        let shadow_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Cave Shadow Field Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let shadow_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Cave Shadow Field Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
-        
+                ],
+            });
+
         // Create pipeline layout (always includes shadow bind group layout)
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Cave Pipeline Layout"),
-            bind_group_layouts: &[&camera_bind_group_layout, &params_bind_group_layout, &shadow_bind_group_layout],
+            bind_group_layouts: &[
+                &camera_bind_group_layout,
+                &params_bind_group_layout,
+                &shadow_bind_group_layout,
+            ],
             push_constant_ranges: &[],
         });
-        
+
         // Create render pipeline
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Cave Pipeline"),
@@ -344,7 +343,7 @@ impl CaveSystemRenderer {
             multiview: None,
             cache: None,
         });
-        
+
         // Create physics bind group layout for cave collision
         // This matches what the cave_collision.wgsl shader expects in group(0)
         let physics_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -396,13 +395,13 @@ impl CaveSystemRenderer {
                 },
             ],
         });
-        
+
         // Create collision bind group layout (simplified for SDF-based collision)
         // Only needs cave params - no mesh data required
-        let collision_layout = Arc::new(device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Cave Collision Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let collision_layout = Arc::new(device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Cave Collision Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
@@ -411,54 +410,56 @@ impl CaveSystemRenderer {
                         min_binding_size: None,
                     },
                     count: None,
-                },
-            ],
-        }));
-        
+                }],
+            },
+        ));
+
         // Create collision bind group (simplified - only cave params)
         let collision_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cave Collision Bind Group"),
             layout: &collision_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            }],
         });
-        
+
         // Create collision compute shader (SDF-based)
         let collision_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Cave Collision Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cave_collision.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/cave_collision.wgsl").into(),
+            ),
         });
-        
+
         // Create collision pipeline (SDF-based, no spatial grid needed)
         let collision_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Cave Collision Pipeline"),
-            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Cave Collision Layout"),
-                bind_group_layouts: &[&physics_layout, &collision_layout],
-                push_constant_ranges: &[],
-            })),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Cave Collision Layout"),
+                    bind_group_layouts: &[&physics_layout, &collision_layout],
+                    push_constant_ranges: &[],
+                }),
+            ),
             module: &collision_shader,
             entry_point: Some("main"),
             compilation_options: Default::default(),
             cache: None,
         });
-        
+
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Cave Vertex Buffer"),
             contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
-        
+
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Cave Index Buffer"),
             contents: bytemuck::cast_slice(&indices),
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
         });
-        
+
         Self {
             pipeline,
             vertex_buffer,
@@ -477,30 +478,33 @@ impl CaveSystemRenderer {
             shadow_bind_group: None,
         }
     }
-    
+
     /// Update cave parameters and regenerate mesh
-    pub fn update_params(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, mut params: CaveParams) {
+    pub fn update_params(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mut params: CaveParams,
+    ) {
         // Regenerate mesh
         let (vertices, indices) = Self::generate_cave_mesh(&params);
         params.triangle_count = (indices.len() / 3) as u32;
-        
+
         self.params = params;
-        
+
         // Update uniform buffer
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
-        
+
         // Recreate collision bind group (just params, no mesh data needed for SDF)
         self.collision_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cave Collision Bind Group"),
             layout: &self.collision_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.params_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.params_buffer.as_entire_binding(),
+            }],
         });
-        
+
         // Recreate rendering buffers if size changed
         if vertices.len() * std::mem::size_of::<CaveVertex>() > self.vertex_buffer.size() as usize {
             self.vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -511,7 +515,7 @@ impl CaveSystemRenderer {
         } else {
             queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         }
-        
+
         if indices.len() * std::mem::size_of::<u32>() > self.index_buffer.size() as usize {
             self.index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Cave Index Buffer"),
@@ -521,17 +525,22 @@ impl CaveSystemRenderer {
         } else {
             queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&indices));
         }
-        
+
         self.index_count = indices.len() as u32;
     }
-    
+
     /// Update cave world radius and regenerate mesh
-    pub fn update_world_radius(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, world_radius: f32) {
+    pub fn update_world_radius(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        world_radius: f32,
+    ) {
         let mut params = self.params;
         params.world_radius = world_radius;
         self.update_params(device, queue, params);
     }
-    
+
     /// Resize the renderer
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
@@ -564,7 +573,11 @@ impl CaveSystemRenderer {
             camera_pos: camera_position.to_array(),
             _padding: 0.0,
         };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
+        queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[camera_uniform]),
+        );
 
         // Begin render pass
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -619,7 +632,11 @@ impl CaveSystemRenderer {
             camera_pos: camera_pos.to_array(),
             _padding: 0.0,
         };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
+        queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[camera_uniform]),
+        );
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Cave Cubemap Face Pass"),
@@ -656,40 +673,40 @@ impl CaveSystemRenderer {
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.draw_indexed(0..self.index_count, 0, 0..1);
     }
-    
+
     /// Set the shadow bind group (called each frame from gpu_scene)
     pub fn set_shadow_bind_group(&mut self, bind_group: wgpu::BindGroup) {
         self.shadow_bind_group = Some(bind_group);
     }
-    
+
     pub fn params(&self) -> &CaveParams {
         &self.params
     }
-    
+
     pub fn params_mut(&mut self) -> &mut CaveParams {
         &mut self.params
     }
-    
+
     /// Build spatial grid for collision detection
     /// This should be called after mesh generation or parameter updates
     // Spatial grid building is no longer needed with SDF-based collision
     // The SDF is evaluated directly at runtime without precomputation
-    
+
     /// Get collision bind group for physics integration
     pub fn collision_bind_group(&self) -> &wgpu::BindGroup {
         &self.collision_bind_group
     }
-    
+
     /// Get cave params buffer for bind group creation (e.g. cilia force spatial group)
     pub fn cave_params_buffer(&self) -> &wgpu::Buffer {
         &self.params_buffer
     }
-    
+
     /// Get collision pipeline for physics integration
     pub fn collision_pipeline(&self) -> &wgpu::ComputePipeline {
         &self.collision_pipeline
     }
-    
+
     /// Get triangle count for collision
     pub fn triangle_count(&self) -> u32 {
         self.params.triangle_count
@@ -723,7 +740,9 @@ pub fn cave_sdf_push_out(pos: glam::Vec3, params: &CaveParams, camera_radius: f3
         h as f32 / u32::MAX as f32
     }
 
-    fn smoothstep(t: f32) -> f32 { t * t * (3.0 - 2.0 * t) }
+    fn smoothstep(t: f32) -> f32 {
+        t * t * (3.0 - 2.0 * t)
+    }
 
     fn value_noise_3d(p: glam::Vec3, seed: u32) -> f32 {
         let ix = p.x.floor() as i32;
@@ -735,47 +754,55 @@ pub fn cave_sdf_push_out(pos: glam::Vec3, params: &CaveParams, camera_radius: f3
         let ux = smoothstep(fx);
         let uy = smoothstep(fy);
         let uz = smoothstep(fz);
-        let c000 = hash1(ix,   iy,   iz,   seed);
-        let c100 = hash1(ix+1, iy,   iz,   seed);
-        let c010 = hash1(ix,   iy+1, iz,   seed);
-        let c110 = hash1(ix+1, iy+1, iz,   seed);
-        let c001 = hash1(ix,   iy,   iz+1, seed);
-        let c101 = hash1(ix+1, iy,   iz+1, seed);
-        let c011 = hash1(ix,   iy+1, iz+1, seed);
-        let c111 = hash1(ix+1, iy+1, iz+1, seed);
+        let c000 = hash1(ix, iy, iz, seed);
+        let c100 = hash1(ix + 1, iy, iz, seed);
+        let c010 = hash1(ix, iy + 1, iz, seed);
+        let c110 = hash1(ix + 1, iy + 1, iz, seed);
+        let c001 = hash1(ix, iy, iz + 1, seed);
+        let c101 = hash1(ix + 1, iy, iz + 1, seed);
+        let c011 = hash1(ix, iy + 1, iz + 1, seed);
+        let c111 = hash1(ix + 1, iy + 1, iz + 1, seed);
         let x00 = c000 + (c100 - c000) * ux;
         let x10 = c010 + (c110 - c010) * ux;
         let x01 = c001 + (c101 - c001) * ux;
         let x11 = c011 + (c111 - c011) * ux;
-        let y0  = x00  + (x10  - x00)  * uy;
-        let y1  = x01  + (x11  - x01)  * uy;
+        let y0 = x00 + (x10 - x00) * uy;
+        let y1 = x01 + (x11 - x01) * uy;
         y0 + (y1 - y0) * uz
     }
 
     let sample = |p: glam::Vec3| -> f32 {
         let world_center = glam::Vec3::from(params.world_center);
         let dist = (p - world_center).length();
-        if dist > params.world_radius { return 1.0; }
+        if dist > params.world_radius {
+            return 1.0;
+        }
 
         // Domain warp
-        let warp_scale    = params.scale * 0.5;
+        let warp_scale = params.scale * 0.5;
         let warp_strength = params.smoothness * params.scale;
-        let warp_seed     = params.seed + 9999;
+        let warp_seed = params.seed + 9999;
         let wx = value_noise_3d(p / warp_scale, warp_seed) - 0.5;
-        let wy = value_noise_3d(p / warp_scale + glam::Vec3::new(31.7, 47.3, 13.1), warp_seed) - 0.5;
-        let wz = value_noise_3d(p / warp_scale + glam::Vec3::new(73.9, 19.4, 67.2), warp_seed) - 0.5;
+        let wy = value_noise_3d(
+            p / warp_scale + glam::Vec3::new(31.7, 47.3, 13.1),
+            warp_seed,
+        ) - 0.5;
+        let wz = value_noise_3d(
+            p / warp_scale + glam::Vec3::new(73.9, 19.4, 67.2),
+            warp_seed,
+        ) - 0.5;
         let warped = p + glam::Vec3::new(wx, wy, wz) * warp_strength;
 
         // FBM
-        let mut value     = 0.0f32;
+        let mut value = 0.0f32;
         let mut amplitude = 1.0f32;
         let mut frequency = 1.0f32;
-        let mut max_val   = 0.0f32;
+        let mut max_val = 0.0f32;
         for i in 0..params.octaves {
             let sp = warped * frequency / params.scale;
             let octave_seed = params.seed + i * 1337;
-            value     += amplitude * value_noise_3d(sp, octave_seed);
-            max_val   += amplitude;
+            value += amplitude * value_noise_3d(sp, octave_seed);
+            max_val += amplitude;
             amplitude *= params.persistence;
             frequency *= 2.0;
         }
@@ -830,14 +857,14 @@ impl CaveSystemRenderer {
         let resolution = params.grid_resolution as usize;
         let world_center = Vec3::from(params.world_center);
         let world_radius = params.world_radius;
-        
+
         // Extend cave generation 3 units beyond world sphere
         let cave_generation_radius = world_radius + 3.0;
-        
+
         // Create 3D grid of density values
         let grid_size = resolution + 1;
         let mut density_grid = vec![vec![vec![0.0f32; grid_size]; grid_size]; grid_size];
-        
+
         // Sample density at each grid point
         let cell_size = (cave_generation_radius * 2.0) / resolution as f32;
         for x in 0..grid_size {
@@ -848,21 +875,23 @@ impl CaveSystemRenderer {
                         world_center.y - cave_generation_radius + y as f32 * cell_size,
                         world_center.z - cave_generation_radius + z as f32 * cell_size,
                     );
-                    
+
                     density_grid[x][y][z] = Self::sample_density(pos, params);
                 }
             }
         }
-        
+
         // Run marching cubes
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        
+
         for x in 0..resolution {
             for y in 0..resolution {
                 for z in 0..resolution {
                     Self::process_cube(
-                        x, y, z,
+                        x,
+                        y,
+                        z,
                         &density_grid,
                         cell_size,
                         world_center - Vec3::splat(cave_generation_radius),
@@ -873,7 +902,7 @@ impl CaveSystemRenderer {
                 }
             }
         }
-        
+
         (vertices, indices)
     }
 
@@ -965,8 +994,10 @@ impl CaveSystemRenderer {
         // Sample noise at offset positions to get warp vectors
         let warp_seed = params.seed.wrapping_add(9999);
         let wx = Self::value_noise_3d(pos / warp_scale, warp_seed) - 0.5;
-        let wy = Self::value_noise_3d(pos / warp_scale + Vec3::new(31.7, 47.3, 13.1), warp_seed) - 0.5;
-        let wz = Self::value_noise_3d(pos / warp_scale + Vec3::new(73.9, 19.4, 67.2), warp_seed) - 0.5;
+        let wy =
+            Self::value_noise_3d(pos / warp_scale + Vec3::new(31.7, 47.3, 13.1), warp_seed) - 0.5;
+        let wz =
+            Self::value_noise_3d(pos / warp_scale + Vec3::new(73.9, 19.4, 67.2), warp_seed) - 0.5;
 
         Vec3::new(
             pos.x + wx * warp_strength,
@@ -980,7 +1011,7 @@ impl CaveSystemRenderer {
         // Distance from world center (spherical constraint)
         let world_center = Vec3::from(params.world_center);
         let dist_from_center = (pos - world_center).length();
-        
+
         // Extend cave generation 3 units beyond world sphere
         let cave_generation_radius = params.world_radius + 3.0;
         let sphere_sdf = dist_from_center - cave_generation_radius;
@@ -1019,25 +1050,25 @@ impl CaveSystemRenderer {
 // ============================================================================
 
 /// Compute triplanar UV coordinates for texture mapping
-    /// Encodes which plane to sample from and the UV coordinates
-    fn compute_triplanar_uv(position: Vec3, normal: Vec3) -> [f32; 2] {
-        // Determine which plane has the strongest influence based on normal
-        let abs_normal = normal.abs();
-        
-        // UV coordinate scale (adjust for texture density)
-        let uv_scale = 0.05;
-        
-        if abs_normal.x >= abs_normal.y && abs_normal.x >= abs_normal.z {
-            // X-plane dominant - use YZ coordinates
-            [position.y * uv_scale, position.z * uv_scale]
-        } else if abs_normal.y >= abs_normal.x && abs_normal.y >= abs_normal.z {
-            // Y-plane dominant - use XZ coordinates  
-            [position.x * uv_scale, position.z * uv_scale]
-        } else {
-            // Z-plane dominant - use XY coordinates
-            [position.x * uv_scale, position.y * uv_scale]
-        }
+/// Encodes which plane to sample from and the UV coordinates
+fn compute_triplanar_uv(position: Vec3, normal: Vec3) -> [f32; 2] {
+    // Determine which plane has the strongest influence based on normal
+    let abs_normal = normal.abs();
+
+    // UV coordinate scale (adjust for texture density)
+    let uv_scale = 0.05;
+
+    if abs_normal.x >= abs_normal.y && abs_normal.x >= abs_normal.z {
+        // X-plane dominant - use YZ coordinates
+        [position.y * uv_scale, position.z * uv_scale]
+    } else if abs_normal.y >= abs_normal.x && abs_normal.y >= abs_normal.z {
+        // Y-plane dominant - use XZ coordinates
+        [position.x * uv_scale, position.z * uv_scale]
+    } else {
+        // Z-plane dominant - use XY coordinates
+        [position.x * uv_scale, position.y * uv_scale]
     }
+}
 
 impl CaveSystemRenderer {
     /// Process a single cube in the marching cubes algorithm
@@ -1063,7 +1094,7 @@ impl CaveSystemRenderer {
             density_grid[x + 1][y + 1][z + 1],
             density_grid[x][y + 1][z + 1],
         ];
-        
+
         // Calculate cube index
         let mut cube_index = 0u8;
         for i in 0..8 {
@@ -1071,60 +1102,60 @@ impl CaveSystemRenderer {
                 cube_index |= 1 << i;
             }
         }
-        
+
         // Skip if cube is entirely inside or outside
         if cube_index == 0 || cube_index == 255 {
             return;
         }
-        
+
         // Get edge table entry
         let edges = EDGE_TABLE[cube_index as usize];
         if edges == 0 {
             return;
         }
-        
+
         // Calculate vertex positions on edges
         let mut edge_vertices = [Vec3::ZERO; 12];
         let cube_pos = Vec3::new(x as f32, y as f32, z as f32);
-        
+
         for i in 0..12 {
             if edges & (1 << i) != 0 {
                 let (v0, v1) = EDGE_CONNECTIONS[i];
                 let p0 = Self::corner_position(v0, cube_pos, cell_size, grid_origin);
                 let p1 = Self::corner_position(v1, cube_pos, cell_size, grid_origin);
-                
+
                 // Linear interpolation based on density
                 let t = (threshold - d[v0]) / (d[v1] - d[v0]);
                 edge_vertices[i] = p0 + (p1 - p0) * t;
             }
         }
-        
+
         // Generate triangles
         let tri_table = &TRI_TABLE[cube_index as usize];
-        
+
         for tri in tri_table.chunks(3) {
             if tri[0] == 255 {
                 break;
             }
-            
+
             let v0 = edge_vertices[tri[0] as usize];
             let v1 = edge_vertices[tri[1] as usize];
             let v2 = edge_vertices[tri[2] as usize];
-            
+
             // Calculate normal (ensure it points outward from solid)
             let edge1 = v1 - v0;
             let edge2 = v2 - v0;
             let normal = edge1.cross(edge2).normalize();
-            
+
             // Get base index for this triangle
             let base_index = vertices.len() as u32;
-            
+
             // Add vertices with triplanar UV coordinates
             // UVs encode which plane to sample from and the coordinates
             let uv0 = compute_triplanar_uv(v0, normal);
             let uv1 = compute_triplanar_uv(v1, normal);
             let uv2 = compute_triplanar_uv(v2, normal);
-            
+
             vertices.push(CaveVertex {
                 position: v0.to_array(),
                 normal: normal.to_array(),
@@ -1140,14 +1171,14 @@ impl CaveSystemRenderer {
                 normal: normal.to_array(),
                 uv: uv2,
             });
-            
+
             // Add indices
             indices.push(base_index);
             indices.push(base_index + 1);
             indices.push(base_index + 2);
         }
     }
-    
+
     /// Get corner position in world space
     fn corner_position(corner: usize, cube_pos: Vec3, cell_size: f32, grid_origin: Vec3) -> Vec3 {
         let offset = CORNER_OFFSETS[corner];
@@ -1173,304 +1204,557 @@ const CORNER_OFFSETS: [Vec3; 8] = [
 
 /// Edge connections (which corners each edge connects)
 const EDGE_CONNECTIONS: [(usize, usize); 12] = [
-    (0, 1), (1, 2), (2, 3), (3, 0), // Bottom edges
-    (4, 5), (5, 6), (6, 7), (7, 4), // Top edges
-    (0, 4), (1, 5), (2, 6), (3, 7), // Vertical edges
+    (0, 1),
+    (1, 2),
+    (2, 3),
+    (3, 0), // Bottom edges
+    (4, 5),
+    (5, 6),
+    (6, 7),
+    (7, 4), // Top edges
+    (0, 4),
+    (1, 5),
+    (2, 6),
+    (3, 7), // Vertical edges
 ];
 
 /// Edge table - which edges are intersected for each cube configuration
 const EDGE_TABLE: [u16; 256] = [
-    0x0, 0x109, 0x203, 0x30a, 0x406, 0x50f, 0x605, 0x70c,
-    0x80c, 0x905, 0xa0f, 0xb06, 0xc0a, 0xd03, 0xe09, 0xf00,
-    0x190, 0x99, 0x393, 0x29a, 0x596, 0x49f, 0x795, 0x69c,
-    0x99c, 0x895, 0xb9f, 0xa96, 0xd9a, 0xc93, 0xf99, 0xe90,
-    0x230, 0x339, 0x33, 0x13a, 0x636, 0x73f, 0x435, 0x53c,
-    0xa3c, 0xb35, 0x83f, 0x936, 0xe3a, 0xf33, 0xc39, 0xd30,
-    0x3a0, 0x2a9, 0x1a3, 0xaa, 0x7a6, 0x6af, 0x5a5, 0x4ac,
-    0xbac, 0xaa5, 0x9af, 0x8a6, 0xfaa, 0xea3, 0xda9, 0xca0,
-    0x460, 0x569, 0x663, 0x76a, 0x66, 0x16f, 0x265, 0x36c,
-    0xc6c, 0xd65, 0xe6f, 0xf66, 0x86a, 0x963, 0xa69, 0xb60,
-    0x5f0, 0x4f9, 0x7f3, 0x6fa, 0x1f6, 0xff, 0x3f5, 0x2fc,
-    0xdfc, 0xcf5, 0xfff, 0xef6, 0x9fa, 0x8f3, 0xbf9, 0xaf0,
-    0x650, 0x759, 0x453, 0x55a, 0x256, 0x35f, 0x55, 0x15c,
-    0xe5c, 0xf55, 0xc5f, 0xd56, 0xa5a, 0xb53, 0x859, 0x950,
-    0x7c0, 0x6c9, 0x5c3, 0x4ca, 0x3c6, 0x2cf, 0x1c5, 0xcc,
-    0xfcc, 0xec5, 0xdcf, 0xcc6, 0xbca, 0xac3, 0x9c9, 0x8c0,
-    0x8c0, 0x9c9, 0xac3, 0xbca, 0xcc6, 0xdcf, 0xec5, 0xfcc,
-    0xcc, 0x1c5, 0x2cf, 0x3c6, 0x4ca, 0x5c3, 0x6c9, 0x7c0,
-    0x950, 0x859, 0xb53, 0xa5a, 0xd56, 0xc5f, 0xf55, 0xe5c,
-    0x15c, 0x55, 0x35f, 0x256, 0x55a, 0x453, 0x759, 0x650,
-    0xaf0, 0xbf9, 0x8f3, 0x9fa, 0xef6, 0xfff, 0xcf5, 0xdfc,
-    0x2fc, 0x3f5, 0xff, 0x1f6, 0x6fa, 0x7f3, 0x4f9, 0x5f0,
-    0xb60, 0xa69, 0x963, 0x86a, 0xf66, 0xe6f, 0xd65, 0xc6c,
-    0x36c, 0x265, 0x16f, 0x66, 0x76a, 0x663, 0x569, 0x460,
-    0xca0, 0xda9, 0xea3, 0xfaa, 0x8a6, 0x9af, 0xaa5, 0xbac,
-    0x4ac, 0x5a5, 0x6af, 0x7a6, 0xaa, 0x1a3, 0x2a9, 0x3a0,
-    0xd30, 0xc39, 0xf33, 0xe3a, 0x936, 0x83f, 0xb35, 0xa3c,
-    0x53c, 0x435, 0x73f, 0x636, 0x13a, 0x33, 0x339, 0x230,
-    0xe90, 0xf99, 0xc93, 0xd9a, 0xa96, 0xb9f, 0x895, 0x99c,
-    0x69c, 0x795, 0x49f, 0x596, 0x29a, 0x393, 0x99, 0x190,
-    0xf00, 0xe09, 0xd03, 0xc0a, 0xb06, 0xa0f, 0x905, 0x80c,
+    0x0, 0x109, 0x203, 0x30a, 0x406, 0x50f, 0x605, 0x70c, 0x80c, 0x905, 0xa0f, 0xb06, 0xc0a, 0xd03,
+    0xe09, 0xf00, 0x190, 0x99, 0x393, 0x29a, 0x596, 0x49f, 0x795, 0x69c, 0x99c, 0x895, 0xb9f,
+    0xa96, 0xd9a, 0xc93, 0xf99, 0xe90, 0x230, 0x339, 0x33, 0x13a, 0x636, 0x73f, 0x435, 0x53c,
+    0xa3c, 0xb35, 0x83f, 0x936, 0xe3a, 0xf33, 0xc39, 0xd30, 0x3a0, 0x2a9, 0x1a3, 0xaa, 0x7a6,
+    0x6af, 0x5a5, 0x4ac, 0xbac, 0xaa5, 0x9af, 0x8a6, 0xfaa, 0xea3, 0xda9, 0xca0, 0x460, 0x569,
+    0x663, 0x76a, 0x66, 0x16f, 0x265, 0x36c, 0xc6c, 0xd65, 0xe6f, 0xf66, 0x86a, 0x963, 0xa69,
+    0xb60, 0x5f0, 0x4f9, 0x7f3, 0x6fa, 0x1f6, 0xff, 0x3f5, 0x2fc, 0xdfc, 0xcf5, 0xfff, 0xef6,
+    0x9fa, 0x8f3, 0xbf9, 0xaf0, 0x650, 0x759, 0x453, 0x55a, 0x256, 0x35f, 0x55, 0x15c, 0xe5c,
+    0xf55, 0xc5f, 0xd56, 0xa5a, 0xb53, 0x859, 0x950, 0x7c0, 0x6c9, 0x5c3, 0x4ca, 0x3c6, 0x2cf,
+    0x1c5, 0xcc, 0xfcc, 0xec5, 0xdcf, 0xcc6, 0xbca, 0xac3, 0x9c9, 0x8c0, 0x8c0, 0x9c9, 0xac3,
+    0xbca, 0xcc6, 0xdcf, 0xec5, 0xfcc, 0xcc, 0x1c5, 0x2cf, 0x3c6, 0x4ca, 0x5c3, 0x6c9, 0x7c0,
+    0x950, 0x859, 0xb53, 0xa5a, 0xd56, 0xc5f, 0xf55, 0xe5c, 0x15c, 0x55, 0x35f, 0x256, 0x55a,
+    0x453, 0x759, 0x650, 0xaf0, 0xbf9, 0x8f3, 0x9fa, 0xef6, 0xfff, 0xcf5, 0xdfc, 0x2fc, 0x3f5,
+    0xff, 0x1f6, 0x6fa, 0x7f3, 0x4f9, 0x5f0, 0xb60, 0xa69, 0x963, 0x86a, 0xf66, 0xe6f, 0xd65,
+    0xc6c, 0x36c, 0x265, 0x16f, 0x66, 0x76a, 0x663, 0x569, 0x460, 0xca0, 0xda9, 0xea3, 0xfaa,
+    0x8a6, 0x9af, 0xaa5, 0xbac, 0x4ac, 0x5a5, 0x6af, 0x7a6, 0xaa, 0x1a3, 0x2a9, 0x3a0, 0xd30,
+    0xc39, 0xf33, 0xe3a, 0x936, 0x83f, 0xb35, 0xa3c, 0x53c, 0x435, 0x73f, 0x636, 0x13a, 0x33,
+    0x339, 0x230, 0xe90, 0xf99, 0xc93, 0xd9a, 0xa96, 0xb9f, 0x895, 0x99c, 0x69c, 0x795, 0x49f,
+    0x596, 0x29a, 0x393, 0x99, 0x190, 0xf00, 0xe09, 0xd03, 0xc0a, 0xb06, 0xa0f, 0x905, 0x80c,
     0x70c, 0x605, 0x50f, 0x406, 0x30a, 0x203, 0x109, 0x0,
 ];
 
 /// Triangle table - which edges form triangles for each cube configuration.
 /// Each entry contains up to 5 triangles (15 indices), terminated by 255.
 const TRI_TABLE: [[u8; 16]; 256] = [
-  [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [0, 8, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [0, 1, 9, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [1, 8, 3, 9, 8, 1, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [1, 2, 10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [0, 8, 3, 1, 2, 10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [9, 2, 10, 0, 2, 9, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [2, 8, 3, 2, 10, 8, 10, 9, 8, 255, 255, 255, 255, 255, 255, 255],
-  [3, 11, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [0, 11, 2, 8, 11, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [1, 9, 0, 2, 3, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [1, 11, 2, 1, 9, 11, 9, 8, 11, 255, 255, 255, 255, 255, 255, 255],
-  [3, 10, 1, 11, 10, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [0, 10, 1, 0, 8, 10, 8, 11, 10, 255, 255, 255, 255, 255, 255, 255],
-  [3, 9, 0, 3, 11, 9, 11, 10, 9, 255, 255, 255, 255, 255, 255, 255],
-  [9, 8, 10, 10, 8, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [4, 7, 8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [4, 3, 0, 7, 3, 4, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [0, 1, 9, 8, 4, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [4, 1, 9, 4, 7, 1, 7, 3, 1, 255, 255, 255, 255, 255, 255, 255],
-  [1, 2, 10, 8, 4, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [3, 4, 7, 3, 0, 4, 1, 2, 10, 255, 255, 255, 255, 255, 255, 255],
-  [9, 2, 10, 9, 0, 2, 8, 4, 7, 255, 255, 255, 255, 255, 255, 255],
-  [2, 10, 9, 2, 9, 7, 2, 7, 3, 7, 9, 4, 255, 255, 255, 255],
-  [8, 4, 7, 3, 11, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [11, 4, 7, 11, 2, 4, 2, 0, 4, 255, 255, 255, 255, 255, 255, 255],
-  [9, 0, 1, 8, 4, 7, 2, 3, 11, 255, 255, 255, 255, 255, 255, 255],
-  [4, 7, 11, 9, 4, 11, 9, 11, 2, 9, 2, 1, 255, 255, 255, 255],
-  [3, 10, 1, 3, 11, 10, 7, 8, 4, 255, 255, 255, 255, 255, 255, 255],
-  [1, 11, 10, 1, 4, 11, 1, 0, 4, 7, 11, 4, 255, 255, 255, 255],
-  [4, 7, 8, 9, 0, 11, 9, 11, 10, 11, 0, 3, 255, 255, 255, 255],
-  [4, 7, 11, 4, 11, 9, 9, 11, 10, 255, 255, 255, 255, 255, 255, 255],
-  [9, 5, 4, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [9, 5, 4, 0, 8, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [0, 5, 4, 1, 5, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [8, 5, 4, 8, 3, 5, 3, 1, 5, 255, 255, 255, 255, 255, 255, 255],
-  [1, 2, 10, 9, 5, 4, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [3, 0, 8, 1, 2, 10, 4, 9, 5, 255, 255, 255, 255, 255, 255, 255],
-  [5, 2, 10, 5, 4, 2, 4, 0, 2, 255, 255, 255, 255, 255, 255, 255],
-  [2, 10, 5, 3, 2, 5, 3, 5, 4, 3, 4, 8, 255, 255, 255, 255],
-  [9, 5, 4, 2, 3, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [0, 11, 2, 0, 8, 11, 4, 9, 5, 255, 255, 255, 255, 255, 255, 255],
-  [0, 5, 4, 0, 1, 5, 2, 3, 11, 255, 255, 255, 255, 255, 255, 255],
-  [2, 1, 5, 2, 5, 8, 2, 8, 11, 4, 8, 5, 255, 255, 255, 255],
-  [10, 3, 11, 10, 1, 3, 9, 5, 4, 255, 255, 255, 255, 255, 255, 255],
-  [4, 9, 5, 0, 8, 1, 8, 10, 1, 8, 11, 10, 255, 255, 255, 255],
-  [5, 4, 0, 5, 0, 11, 5, 11, 10, 11, 0, 3, 255, 255, 255, 255],
-  [5, 4, 8, 5, 8, 10, 10, 8, 11, 255, 255, 255, 255, 255, 255, 255],
-  [9, 7, 8, 5, 7, 9, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [9, 3, 0, 9, 5, 3, 5, 7, 3, 255, 255, 255, 255, 255, 255, 255],
-  [0, 7, 8, 0, 1, 7, 1, 5, 7, 255, 255, 255, 255, 255, 255, 255],
-  [1, 5, 3, 3, 5, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [9, 7, 8, 9, 5, 7, 10, 1, 2, 255, 255, 255, 255, 255, 255, 255],
-  [10, 1, 2, 9, 5, 0, 5, 3, 0, 5, 7, 3, 255, 255, 255, 255],
-  [8, 0, 2, 8, 2, 5, 8, 5, 7, 10, 5, 2, 255, 255, 255, 255],
-  [2, 10, 5, 2, 5, 3, 3, 5, 7, 255, 255, 255, 255, 255, 255, 255],
-  [7, 9, 5, 7, 8, 9, 3, 11, 2, 255, 255, 255, 255, 255, 255, 255],
-  [9, 5, 7, 9, 7, 2, 9, 2, 0, 2, 7, 11, 255, 255, 255, 255],
-  [2, 3, 11, 0, 1, 8, 1, 7, 8, 1, 5, 7, 255, 255, 255, 255],
-  [11, 2, 1, 11, 1, 7, 7, 1, 5, 255, 255, 255, 255, 255, 255, 255],
-  [9, 5, 8, 8, 5, 7, 10, 1, 3, 10, 3, 11, 255, 255, 255, 255],
-  [5, 7, 0, 5, 0, 9, 7, 11, 0, 1, 0, 10, 11, 10, 0, 255],
-  [11, 10, 0, 11, 0, 3, 10, 5, 0, 8, 0, 7, 5, 7, 0, 255],
-  [11, 10, 5, 7, 11, 5, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [10, 6, 5, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [0, 8, 3, 5, 10, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [9, 0, 1, 5, 10, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [1, 8, 3, 1, 9, 8, 5, 10, 6, 255, 255, 255, 255, 255, 255, 255],
-  [1, 6, 5, 2, 6, 1, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [1, 6, 5, 1, 2, 6, 3, 0, 8, 255, 255, 255, 255, 255, 255, 255],
-  [9, 6, 5, 9, 0, 6, 0, 2, 6, 255, 255, 255, 255, 255, 255, 255],
-  [5, 9, 8, 5, 8, 2, 5, 2, 6, 3, 2, 8, 255, 255, 255, 255],
-  [2, 3, 11, 10, 6, 5, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [11, 0, 8, 11, 2, 0, 10, 6, 5, 255, 255, 255, 255, 255, 255, 255],
-  [0, 1, 9, 2, 3, 11, 5, 10, 6, 255, 255, 255, 255, 255, 255, 255],
-  [5, 10, 6, 1, 9, 2, 9, 11, 2, 9, 8, 11, 255, 255, 255, 255],
-  [6, 3, 11, 6, 5, 3, 5, 1, 3, 255, 255, 255, 255, 255, 255, 255],
-  [0, 8, 11, 0, 11, 5, 0, 5, 1, 5, 11, 6, 255, 255, 255, 255],
-  [3, 11, 6, 0, 3, 6, 0, 6, 5, 0, 5, 9, 255, 255, 255, 255],
-  [6, 5, 9, 6, 9, 11, 11, 9, 8, 255, 255, 255, 255, 255, 255, 255],
-  [5, 10, 6, 4, 7, 8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [4, 3, 0, 4, 7, 3, 6, 5, 10, 255, 255, 255, 255, 255, 255, 255],
-  [1, 9, 0, 5, 10, 6, 8, 4, 7, 255, 255, 255, 255, 255, 255, 255],
-  [10, 6, 5, 1, 9, 7, 1, 7, 3, 7, 9, 4, 255, 255, 255, 255],
-  [6, 1, 2, 6, 5, 1, 4, 7, 8, 255, 255, 255, 255, 255, 255, 255],
-  [1, 2, 5, 5, 2, 6, 3, 0, 4, 3, 4, 7, 255, 255, 255, 255],
-  [8, 4, 7, 9, 0, 5, 0, 6, 5, 0, 2, 6, 255, 255, 255, 255],
-  [7, 3, 9, 7, 9, 4, 3, 2, 9, 5, 9, 6, 2, 6, 9, 255],
-  [3, 11, 2, 7, 8, 4, 10, 6, 5, 255, 255, 255, 255, 255, 255, 255],
-  [5, 10, 6, 4, 7, 2, 4, 2, 0, 2, 7, 11, 255, 255, 255, 255],
-  [0, 1, 9, 4, 7, 8, 2, 3, 11, 5, 10, 6, 255, 255, 255, 255],
-  [9, 2, 1, 9, 11, 2, 9, 4, 11, 7, 11, 4, 5, 10, 6, 255],
-  [8, 4, 7, 3, 11, 5, 3, 5, 1, 5, 11, 6, 255, 255, 255, 255],
-  [5, 1, 11, 5, 11, 6, 1, 0, 11, 7, 11, 4, 0, 4, 11, 255],
-  [0, 5, 9, 0, 6, 5, 0, 3, 6, 11, 6, 3, 8, 4, 7, 255],
-  [6, 5, 9, 6, 9, 11, 4, 7, 9, 7, 11, 9, 255, 255, 255, 255],
-  [10, 4, 9, 6, 4, 10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [4, 10, 6, 4, 9, 10, 0, 8, 3, 255, 255, 255, 255, 255, 255, 255],
-  [10, 0, 1, 10, 6, 0, 6, 4, 0, 255, 255, 255, 255, 255, 255, 255],
-  [8, 3, 1, 8, 1, 6, 8, 6, 4, 6, 1, 10, 255, 255, 255, 255],
-  [1, 4, 9, 1, 2, 4, 2, 6, 4, 255, 255, 255, 255, 255, 255, 255],
-  [3, 0, 8, 1, 2, 9, 2, 4, 9, 2, 6, 4, 255, 255, 255, 255],
-  [0, 2, 4, 4, 2, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [8, 3, 2, 8, 2, 4, 4, 2, 6, 255, 255, 255, 255, 255, 255, 255],
-  [10, 4, 9, 10, 6, 4, 11, 2, 3, 255, 255, 255, 255, 255, 255, 255],
-  [0, 8, 2, 2, 8, 11, 4, 9, 10, 4, 10, 6, 255, 255, 255, 255],
-  [3, 11, 2, 0, 1, 6, 0, 6, 4, 6, 1, 10, 255, 255, 255, 255],
-  [6, 4, 1, 6, 1, 10, 4, 8, 1, 2, 1, 11, 8, 11, 1, 255],
-  [9, 6, 4, 9, 3, 6, 9, 1, 3, 11, 6, 3, 255, 255, 255, 255],
-  [8, 11, 1, 8, 1, 0, 11, 6, 1, 9, 1, 4, 6, 4, 1, 255],
-  [3, 11, 6, 3, 6, 0, 0, 6, 4, 255, 255, 255, 255, 255, 255, 255],
-  [6, 4, 8, 11, 6, 8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [7, 10, 6, 7, 8, 10, 8, 9, 10, 255, 255, 255, 255, 255, 255, 255],
-  [0, 7, 3, 0, 10, 7, 0, 9, 10, 6, 7, 10, 255, 255, 255, 255],
-  [10, 6, 7, 1, 10, 7, 1, 7, 8, 1, 8, 0, 255, 255, 255, 255],
-  [10, 6, 7, 10, 7, 1, 1, 7, 3, 255, 255, 255, 255, 255, 255, 255],
-  [1, 2, 6, 1, 6, 8, 1, 8, 9, 8, 6, 7, 255, 255, 255, 255],
-  [2, 6, 9, 2, 9, 1, 6, 7, 9, 0, 9, 3, 7, 3, 9, 255],
-  [7, 8, 0, 7, 0, 6, 6, 0, 2, 255, 255, 255, 255, 255, 255, 255],
-  [7, 3, 2, 6, 7, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [2, 3, 11, 10, 6, 8, 10, 8, 9, 8, 6, 7, 255, 255, 255, 255],
-  [2, 0, 7, 2, 7, 11, 0, 9, 7, 6, 7, 10, 9, 10, 7, 255],
-  [1, 8, 0, 1, 7, 8, 1, 10, 7, 6, 7, 10, 2, 3, 11, 255],
-  [11, 2, 1, 11, 1, 7, 10, 6, 1, 6, 7, 1, 255, 255, 255, 255],
-  [8, 9, 6, 8, 6, 7, 9, 1, 6, 11, 6, 3, 1, 3, 6, 255],
-  [0, 9, 1, 11, 6, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [7, 8, 0, 7, 0, 6, 3, 11, 0, 11, 6, 0, 255, 255, 255, 255],
-  [7, 11, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [7, 6, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [3, 0, 8, 11, 7, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [0, 1, 9, 11, 7, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [8, 1, 9, 8, 3, 1, 11, 7, 6, 255, 255, 255, 255, 255, 255, 255],
-  [10, 1, 2, 6, 11, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [1, 2, 10, 3, 0, 8, 6, 11, 7, 255, 255, 255, 255, 255, 255, 255],
-  [2, 9, 0, 2, 10, 9, 6, 11, 7, 255, 255, 255, 255, 255, 255, 255],
-  [6, 11, 7, 2, 10, 3, 10, 8, 3, 10, 9, 8, 255, 255, 255, 255],
-  [7, 2, 3, 6, 2, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [7, 0, 8, 7, 6, 0, 6, 2, 0, 255, 255, 255, 255, 255, 255, 255],
-  [2, 7, 6, 2, 3, 7, 0, 1, 9, 255, 255, 255, 255, 255, 255, 255],
-  [1, 6, 2, 1, 8, 6, 1, 9, 8, 8, 7, 6, 255, 255, 255, 255],
-  [10, 7, 6, 10, 1, 7, 1, 3, 7, 255, 255, 255, 255, 255, 255, 255],
-  [10, 7, 6, 1, 7, 10, 1, 8, 7, 1, 0, 8, 255, 255, 255, 255],
-  [0, 3, 7, 0, 7, 10, 0, 10, 9, 6, 10, 7, 255, 255, 255, 255],
-  [7, 6, 10, 7, 10, 8, 8, 10, 9, 255, 255, 255, 255, 255, 255, 255],
-  [6, 8, 4, 11, 8, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [3, 6, 11, 3, 0, 6, 0, 4, 6, 255, 255, 255, 255, 255, 255, 255],
-  [8, 6, 11, 8, 4, 6, 9, 0, 1, 255, 255, 255, 255, 255, 255, 255],
-  [9, 4, 6, 9, 6, 3, 9, 3, 1, 11, 3, 6, 255, 255, 255, 255],
-  [6, 8, 4, 6, 11, 8, 2, 10, 1, 255, 255, 255, 255, 255, 255, 255],
-  [1, 2, 10, 3, 0, 11, 0, 6, 11, 0, 4, 6, 255, 255, 255, 255],
-  [4, 11, 8, 4, 6, 11, 0, 2, 9, 2, 10, 9, 255, 255, 255, 255],
-  [10, 9, 3, 10, 3, 2, 9, 4, 3, 11, 3, 6, 4, 6, 3, 255],
-  [8, 2, 3, 8, 4, 2, 4, 6, 2, 255, 255, 255, 255, 255, 255, 255],
-  [0, 4, 2, 4, 6, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [1, 9, 0, 2, 3, 4, 2, 4, 6, 4, 3, 8, 255, 255, 255, 255],
-  [1, 9, 4, 1, 4, 2, 2, 4, 6, 255, 255, 255, 255, 255, 255, 255],
-  [8, 1, 3, 8, 6, 1, 8, 4, 6, 6, 10, 1, 255, 255, 255, 255],
-  [10, 1, 0, 10, 0, 6, 6, 0, 4, 255, 255, 255, 255, 255, 255, 255],
-  [4, 6, 3, 4, 3, 8, 6, 10, 3, 0, 3, 9, 10, 9, 3, 255],
-  [10, 9, 4, 6, 10, 4, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [4, 9, 5, 7, 6, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [0, 8, 3, 4, 9, 5, 11, 7, 6, 255, 255, 255, 255, 255, 255, 255],
-  [5, 0, 1, 5, 4, 0, 7, 6, 11, 255, 255, 255, 255, 255, 255, 255],
-  [11, 7, 6, 8, 3, 4, 3, 5, 4, 3, 1, 5, 255, 255, 255, 255],
-  [9, 5, 4, 10, 1, 2, 7, 6, 11, 255, 255, 255, 255, 255, 255, 255],
-  [6, 11, 7, 1, 2, 10, 0, 8, 3, 4, 9, 5, 255, 255, 255, 255],
-  [7, 6, 11, 5, 4, 10, 4, 2, 10, 4, 0, 2, 255, 255, 255, 255],
-  [3, 4, 8, 3, 5, 4, 3, 2, 5, 10, 5, 2, 11, 7, 6, 255],
-  [7, 2, 3, 7, 6, 2, 5, 4, 9, 255, 255, 255, 255, 255, 255, 255],
-  [9, 5, 4, 0, 8, 6, 0, 6, 2, 6, 8, 7, 255, 255, 255, 255],
-  [3, 6, 2, 3, 7, 6, 1, 5, 0, 5, 4, 0, 255, 255, 255, 255],
-  [6, 2, 8, 6, 8, 7, 2, 1, 8, 4, 8, 5, 1, 5, 8, 255],
-  [9, 5, 4, 10, 1, 6, 1, 7, 6, 1, 3, 7, 255, 255, 255, 255],
-  [1, 6, 10, 1, 7, 6, 1, 0, 7, 8, 7, 0, 9, 5, 4, 255],
-  [4, 0, 10, 4, 10, 5, 0, 3, 10, 6, 10, 7, 3, 7, 10, 255],
-  [7, 6, 10, 7, 10, 8, 5, 4, 10, 4, 8, 10, 255, 255, 255, 255],
-  [6, 9, 5, 6, 11, 9, 11, 8, 9, 255, 255, 255, 255, 255, 255, 255],
-  [3, 6, 11, 0, 6, 3, 0, 5, 6, 0, 9, 5, 255, 255, 255, 255],
-  [0, 11, 8, 0, 5, 11, 0, 1, 5, 5, 6, 11, 255, 255, 255, 255],
-  [6, 11, 3, 6, 3, 5, 5, 3, 1, 255, 255, 255, 255, 255, 255, 255],
-  [1, 2, 10, 9, 5, 11, 9, 11, 8, 11, 5, 6, 255, 255, 255, 255],
-  [0, 11, 3, 0, 6, 11, 0, 9, 6, 5, 6, 9, 1, 2, 10, 255],
-  [11, 8, 5, 11, 5, 6, 8, 0, 5, 10, 5, 2, 0, 2, 5, 255],
-  [6, 11, 3, 6, 3, 5, 2, 10, 3, 10, 5, 3, 255, 255, 255, 255],
-  [5, 8, 9, 5, 2, 8, 5, 6, 2, 3, 8, 2, 255, 255, 255, 255],
-  [9, 5, 6, 9, 6, 0, 0, 6, 2, 255, 255, 255, 255, 255, 255, 255],
-  [1, 5, 8, 1, 8, 0, 5, 6, 8, 3, 8, 2, 6, 2, 8, 255],
-  [1, 5, 6, 2, 1, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [1, 3, 6, 1, 6, 10, 3, 8, 6, 5, 6, 9, 8, 9, 6, 255],
-  [10, 1, 0, 10, 0, 6, 9, 5, 0, 5, 6, 0, 255, 255, 255, 255],
-  [0, 3, 8, 5, 6, 10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [10, 5, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [11, 5, 10, 7, 5, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [11, 5, 10, 11, 7, 5, 8, 3, 0, 255, 255, 255, 255, 255, 255, 255],
-  [5, 11, 7, 5, 10, 11, 1, 9, 0, 255, 255, 255, 255, 255, 255, 255],
-  [10, 7, 5, 10, 11, 7, 9, 8, 1, 8, 3, 1, 255, 255, 255, 255],
-  [11, 1, 2, 11, 7, 1, 7, 5, 1, 255, 255, 255, 255, 255, 255, 255],
-  [0, 8, 3, 1, 2, 7, 1, 7, 5, 7, 2, 11, 255, 255, 255, 255],
-  [9, 7, 5, 9, 2, 7, 9, 0, 2, 2, 11, 7, 255, 255, 255, 255],
-  [7, 5, 2, 7, 2, 11, 5, 9, 2, 3, 2, 8, 9, 8, 2, 255],
-  [2, 5, 10, 2, 3, 5, 3, 7, 5, 255, 255, 255, 255, 255, 255, 255],
-  [8, 2, 0, 8, 5, 2, 8, 7, 5, 10, 2, 5, 255, 255, 255, 255],
-  [9, 0, 1, 5, 10, 3, 5, 3, 7, 3, 10, 2, 255, 255, 255, 255],
-  [9, 8, 2, 9, 2, 1, 8, 7, 2, 10, 2, 5, 7, 5, 2, 255],
-  [1, 3, 5, 3, 7, 5, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [0, 8, 7, 0, 7, 1, 1, 7, 5, 255, 255, 255, 255, 255, 255, 255],
-  [9, 0, 3, 9, 3, 5, 5, 3, 7, 255, 255, 255, 255, 255, 255, 255],
-  [9, 8, 7, 5, 9, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [5, 8, 4, 5, 10, 8, 10, 11, 8, 255, 255, 255, 255, 255, 255, 255],
-  [5, 0, 4, 5, 11, 0, 5, 10, 11, 11, 3, 0, 255, 255, 255, 255],
-  [0, 1, 9, 8, 4, 10, 8, 10, 11, 10, 4, 5, 255, 255, 255, 255],
-  [10, 11, 4, 10, 4, 5, 11, 3, 4, 9, 4, 1, 3, 1, 4, 255],
-  [2, 5, 1, 2, 8, 5, 2, 11, 8, 4, 5, 8, 255, 255, 255, 255],
-  [0, 4, 11, 0, 11, 3, 4, 5, 11, 2, 11, 1, 5, 1, 11, 255],
-  [0, 2, 5, 0, 5, 9, 2, 11, 5, 4, 5, 8, 11, 8, 5, 255],
-  [9, 4, 5, 2, 11, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [2, 5, 10, 3, 5, 2, 3, 4, 5, 3, 8, 4, 255, 255, 255, 255],
-  [5, 10, 2, 5, 2, 4, 4, 2, 0, 255, 255, 255, 255, 255, 255, 255],
-  [3, 10, 2, 3, 5, 10, 3, 8, 5, 4, 5, 8, 0, 1, 9, 255],
-  [5, 10, 2, 5, 2, 4, 1, 9, 2, 9, 4, 2, 255, 255, 255, 255],
-  [8, 4, 5, 8, 5, 3, 3, 5, 1, 255, 255, 255, 255, 255, 255, 255],
-  [0, 4, 5, 1, 0, 5, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [8, 4, 5, 8, 5, 3, 9, 0, 5, 0, 3, 5, 255, 255, 255, 255],
-  [9, 4, 5, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [4, 11, 7, 4, 9, 11, 9, 10, 11, 255, 255, 255, 255, 255, 255, 255],
-  [0, 8, 3, 4, 9, 7, 9, 11, 7, 9, 10, 11, 255, 255, 255, 255],
-  [1, 10, 11, 1, 11, 4, 1, 4, 0, 7, 4, 11, 255, 255, 255, 255],
-  [3, 1, 4, 3, 4, 8, 1, 10, 4, 7, 4, 11, 10, 11, 4, 255],
-  [4, 11, 7, 9, 11, 4, 9, 2, 11, 9, 1, 2, 255, 255, 255, 255],
-  [9, 7, 4, 9, 11, 7, 9, 1, 11, 2, 11, 1, 0, 8, 3, 255],
-  [11, 7, 4, 11, 4, 2, 2, 4, 0, 255, 255, 255, 255, 255, 255, 255],
-  [11, 7, 4, 11, 4, 2, 8, 3, 4, 3, 2, 4, 255, 255, 255, 255],
-  [2, 9, 10, 2, 7, 9, 2, 3, 7, 7, 4, 9, 255, 255, 255, 255],
-  [9, 10, 7, 9, 7, 4, 10, 2, 7, 8, 7, 0, 2, 0, 7, 255],
-  [3, 7, 10, 3, 10, 2, 7, 4, 10, 1, 10, 0, 4, 0, 10, 255],
-  [1, 10, 2, 8, 7, 4, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [4, 9, 1, 4, 1, 7, 7, 1, 3, 255, 255, 255, 255, 255, 255, 255],
-  [4, 9, 1, 4, 1, 7, 0, 8, 1, 8, 7, 1, 255, 255, 255, 255],
-  [4, 0, 3, 7, 4, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [4, 8, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [9, 10, 8, 10, 11, 8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [3, 0, 9, 3, 9, 11, 11, 9, 10, 255, 255, 255, 255, 255, 255, 255],
-  [0, 1, 10, 0, 10, 8, 8, 10, 11, 255, 255, 255, 255, 255, 255, 255],
-  [3, 1, 10, 11, 3, 10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [1, 2, 11, 1, 11, 9, 9, 11, 8, 255, 255, 255, 255, 255, 255, 255],
-  [3, 0, 9, 3, 9, 11, 1, 2, 9, 2, 11, 9, 255, 255, 255, 255],
-  [0, 2, 11, 8, 0, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [3, 2, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [2, 3, 8, 2, 8, 10, 10, 8, 9, 255, 255, 255, 255, 255, 255, 255],
-  [9, 10, 2, 0, 9, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [2, 3, 8, 2, 8, 10, 0, 1, 8, 1, 10, 8, 255, 255, 255, 255],
-  [1, 10, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [1, 3, 8, 9, 1, 8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [0, 9, 1, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [0, 3, 8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-  [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 8, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 1, 9, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        1, 8, 3, 9, 8, 1, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        1, 2, 10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 8, 3, 1, 2, 10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        9, 2, 10, 0, 2, 9, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        2, 8, 3, 2, 10, 8, 10, 9, 8, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        3, 11, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 11, 2, 8, 11, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        1, 9, 0, 2, 3, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        1, 11, 2, 1, 9, 11, 9, 8, 11, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        3, 10, 1, 11, 10, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 10, 1, 0, 8, 10, 8, 11, 10, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        3, 9, 0, 3, 11, 9, 11, 10, 9, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        9, 8, 10, 10, 8, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        4, 7, 8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        4, 3, 0, 7, 3, 4, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 1, 9, 8, 4, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [4, 1, 9, 4, 7, 1, 7, 3, 1, 255, 255, 255, 255, 255, 255, 255],
+    [
+        1, 2, 10, 8, 4, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        3, 4, 7, 3, 0, 4, 1, 2, 10, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        9, 2, 10, 9, 0, 2, 8, 4, 7, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [2, 10, 9, 2, 9, 7, 2, 7, 3, 7, 9, 4, 255, 255, 255, 255],
+    [
+        8, 4, 7, 3, 11, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        11, 4, 7, 11, 2, 4, 2, 0, 4, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        9, 0, 1, 8, 4, 7, 2, 3, 11, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [4, 7, 11, 9, 4, 11, 9, 11, 2, 9, 2, 1, 255, 255, 255, 255],
+    [
+        3, 10, 1, 3, 11, 10, 7, 8, 4, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [1, 11, 10, 1, 4, 11, 1, 0, 4, 7, 11, 4, 255, 255, 255, 255],
+    [4, 7, 8, 9, 0, 11, 9, 11, 10, 11, 0, 3, 255, 255, 255, 255],
+    [
+        4, 7, 11, 4, 11, 9, 9, 11, 10, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        9, 5, 4, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        9, 5, 4, 0, 8, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 5, 4, 1, 5, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [8, 5, 4, 8, 3, 5, 3, 1, 5, 255, 255, 255, 255, 255, 255, 255],
+    [
+        1, 2, 10, 9, 5, 4, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        3, 0, 8, 1, 2, 10, 4, 9, 5, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        5, 2, 10, 5, 4, 2, 4, 0, 2, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [2, 10, 5, 3, 2, 5, 3, 5, 4, 3, 4, 8, 255, 255, 255, 255],
+    [
+        9, 5, 4, 2, 3, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 11, 2, 0, 8, 11, 4, 9, 5, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 5, 4, 0, 1, 5, 2, 3, 11, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [2, 1, 5, 2, 5, 8, 2, 8, 11, 4, 8, 5, 255, 255, 255, 255],
+    [
+        10, 3, 11, 10, 1, 3, 9, 5, 4, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [4, 9, 5, 0, 8, 1, 8, 10, 1, 8, 11, 10, 255, 255, 255, 255],
+    [5, 4, 0, 5, 0, 11, 5, 11, 10, 11, 0, 3, 255, 255, 255, 255],
+    [
+        5, 4, 8, 5, 8, 10, 10, 8, 11, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        9, 7, 8, 5, 7, 9, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [9, 3, 0, 9, 5, 3, 5, 7, 3, 255, 255, 255, 255, 255, 255, 255],
+    [0, 7, 8, 0, 1, 7, 1, 5, 7, 255, 255, 255, 255, 255, 255, 255],
+    [
+        1, 5, 3, 3, 5, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        9, 7, 8, 9, 5, 7, 10, 1, 2, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [10, 1, 2, 9, 5, 0, 5, 3, 0, 5, 7, 3, 255, 255, 255, 255],
+    [8, 0, 2, 8, 2, 5, 8, 5, 7, 10, 5, 2, 255, 255, 255, 255],
+    [
+        2, 10, 5, 2, 5, 3, 3, 5, 7, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        7, 9, 5, 7, 8, 9, 3, 11, 2, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [9, 5, 7, 9, 7, 2, 9, 2, 0, 2, 7, 11, 255, 255, 255, 255],
+    [2, 3, 11, 0, 1, 8, 1, 7, 8, 1, 5, 7, 255, 255, 255, 255],
+    [
+        11, 2, 1, 11, 1, 7, 7, 1, 5, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [9, 5, 8, 8, 5, 7, 10, 1, 3, 10, 3, 11, 255, 255, 255, 255],
+    [5, 7, 0, 5, 0, 9, 7, 11, 0, 1, 0, 10, 11, 10, 0, 255],
+    [11, 10, 0, 11, 0, 3, 10, 5, 0, 8, 0, 7, 5, 7, 0, 255],
+    [
+        11, 10, 5, 7, 11, 5, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        10, 6, 5, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 8, 3, 5, 10, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        9, 0, 1, 5, 10, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        1, 8, 3, 1, 9, 8, 5, 10, 6, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        1, 6, 5, 2, 6, 1, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [1, 6, 5, 1, 2, 6, 3, 0, 8, 255, 255, 255, 255, 255, 255, 255],
+    [9, 6, 5, 9, 0, 6, 0, 2, 6, 255, 255, 255, 255, 255, 255, 255],
+    [5, 9, 8, 5, 8, 2, 5, 2, 6, 3, 2, 8, 255, 255, 255, 255],
+    [
+        2, 3, 11, 10, 6, 5, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        11, 0, 8, 11, 2, 0, 10, 6, 5, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 1, 9, 2, 3, 11, 5, 10, 6, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [5, 10, 6, 1, 9, 2, 9, 11, 2, 9, 8, 11, 255, 255, 255, 255],
+    [
+        6, 3, 11, 6, 5, 3, 5, 1, 3, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [0, 8, 11, 0, 11, 5, 0, 5, 1, 5, 11, 6, 255, 255, 255, 255],
+    [3, 11, 6, 0, 3, 6, 0, 6, 5, 0, 5, 9, 255, 255, 255, 255],
+    [
+        6, 5, 9, 6, 9, 11, 11, 9, 8, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        5, 10, 6, 4, 7, 8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        4, 3, 0, 4, 7, 3, 6, 5, 10, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        1, 9, 0, 5, 10, 6, 8, 4, 7, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [10, 6, 5, 1, 9, 7, 1, 7, 3, 7, 9, 4, 255, 255, 255, 255],
+    [6, 1, 2, 6, 5, 1, 4, 7, 8, 255, 255, 255, 255, 255, 255, 255],
+    [1, 2, 5, 5, 2, 6, 3, 0, 4, 3, 4, 7, 255, 255, 255, 255],
+    [8, 4, 7, 9, 0, 5, 0, 6, 5, 0, 2, 6, 255, 255, 255, 255],
+    [7, 3, 9, 7, 9, 4, 3, 2, 9, 5, 9, 6, 2, 6, 9, 255],
+    [
+        3, 11, 2, 7, 8, 4, 10, 6, 5, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [5, 10, 6, 4, 7, 2, 4, 2, 0, 2, 7, 11, 255, 255, 255, 255],
+    [0, 1, 9, 4, 7, 8, 2, 3, 11, 5, 10, 6, 255, 255, 255, 255],
+    [9, 2, 1, 9, 11, 2, 9, 4, 11, 7, 11, 4, 5, 10, 6, 255],
+    [8, 4, 7, 3, 11, 5, 3, 5, 1, 5, 11, 6, 255, 255, 255, 255],
+    [5, 1, 11, 5, 11, 6, 1, 0, 11, 7, 11, 4, 0, 4, 11, 255],
+    [0, 5, 9, 0, 6, 5, 0, 3, 6, 11, 6, 3, 8, 4, 7, 255],
+    [6, 5, 9, 6, 9, 11, 4, 7, 9, 7, 11, 9, 255, 255, 255, 255],
+    [
+        10, 4, 9, 6, 4, 10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        4, 10, 6, 4, 9, 10, 0, 8, 3, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        10, 0, 1, 10, 6, 0, 6, 4, 0, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [8, 3, 1, 8, 1, 6, 8, 6, 4, 6, 1, 10, 255, 255, 255, 255],
+    [1, 4, 9, 1, 2, 4, 2, 6, 4, 255, 255, 255, 255, 255, 255, 255],
+    [3, 0, 8, 1, 2, 9, 2, 4, 9, 2, 6, 4, 255, 255, 255, 255],
+    [
+        0, 2, 4, 4, 2, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [8, 3, 2, 8, 2, 4, 4, 2, 6, 255, 255, 255, 255, 255, 255, 255],
+    [
+        10, 4, 9, 10, 6, 4, 11, 2, 3, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [0, 8, 2, 2, 8, 11, 4, 9, 10, 4, 10, 6, 255, 255, 255, 255],
+    [3, 11, 2, 0, 1, 6, 0, 6, 4, 6, 1, 10, 255, 255, 255, 255],
+    [6, 4, 1, 6, 1, 10, 4, 8, 1, 2, 1, 11, 8, 11, 1, 255],
+    [9, 6, 4, 9, 3, 6, 9, 1, 3, 11, 6, 3, 255, 255, 255, 255],
+    [8, 11, 1, 8, 1, 0, 11, 6, 1, 9, 1, 4, 6, 4, 1, 255],
+    [
+        3, 11, 6, 3, 6, 0, 0, 6, 4, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        6, 4, 8, 11, 6, 8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        7, 10, 6, 7, 8, 10, 8, 9, 10, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [0, 7, 3, 0, 10, 7, 0, 9, 10, 6, 7, 10, 255, 255, 255, 255],
+    [10, 6, 7, 1, 10, 7, 1, 7, 8, 1, 8, 0, 255, 255, 255, 255],
+    [
+        10, 6, 7, 10, 7, 1, 1, 7, 3, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [1, 2, 6, 1, 6, 8, 1, 8, 9, 8, 6, 7, 255, 255, 255, 255],
+    [2, 6, 9, 2, 9, 1, 6, 7, 9, 0, 9, 3, 7, 3, 9, 255],
+    [7, 8, 0, 7, 0, 6, 6, 0, 2, 255, 255, 255, 255, 255, 255, 255],
+    [
+        7, 3, 2, 6, 7, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [2, 3, 11, 10, 6, 8, 10, 8, 9, 8, 6, 7, 255, 255, 255, 255],
+    [2, 0, 7, 2, 7, 11, 0, 9, 7, 6, 7, 10, 9, 10, 7, 255],
+    [1, 8, 0, 1, 7, 8, 1, 10, 7, 6, 7, 10, 2, 3, 11, 255],
+    [11, 2, 1, 11, 1, 7, 10, 6, 1, 6, 7, 1, 255, 255, 255, 255],
+    [8, 9, 6, 8, 6, 7, 9, 1, 6, 11, 6, 3, 1, 3, 6, 255],
+    [
+        0, 9, 1, 11, 6, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [7, 8, 0, 7, 0, 6, 3, 11, 0, 11, 6, 0, 255, 255, 255, 255],
+    [
+        7, 11, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        7, 6, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        3, 0, 8, 11, 7, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 1, 9, 11, 7, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        8, 1, 9, 8, 3, 1, 11, 7, 6, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        10, 1, 2, 6, 11, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        1, 2, 10, 3, 0, 8, 6, 11, 7, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        2, 9, 0, 2, 10, 9, 6, 11, 7, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [6, 11, 7, 2, 10, 3, 10, 8, 3, 10, 9, 8, 255, 255, 255, 255],
+    [
+        7, 2, 3, 6, 2, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [7, 0, 8, 7, 6, 0, 6, 2, 0, 255, 255, 255, 255, 255, 255, 255],
+    [2, 7, 6, 2, 3, 7, 0, 1, 9, 255, 255, 255, 255, 255, 255, 255],
+    [1, 6, 2, 1, 8, 6, 1, 9, 8, 8, 7, 6, 255, 255, 255, 255],
+    [
+        10, 7, 6, 10, 1, 7, 1, 3, 7, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [10, 7, 6, 1, 7, 10, 1, 8, 7, 1, 0, 8, 255, 255, 255, 255],
+    [0, 3, 7, 0, 7, 10, 0, 10, 9, 6, 10, 7, 255, 255, 255, 255],
+    [
+        7, 6, 10, 7, 10, 8, 8, 10, 9, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        6, 8, 4, 11, 8, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        3, 6, 11, 3, 0, 6, 0, 4, 6, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        8, 6, 11, 8, 4, 6, 9, 0, 1, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [9, 4, 6, 9, 6, 3, 9, 3, 1, 11, 3, 6, 255, 255, 255, 255],
+    [
+        6, 8, 4, 6, 11, 8, 2, 10, 1, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [1, 2, 10, 3, 0, 11, 0, 6, 11, 0, 4, 6, 255, 255, 255, 255],
+    [4, 11, 8, 4, 6, 11, 0, 2, 9, 2, 10, 9, 255, 255, 255, 255],
+    [10, 9, 3, 10, 3, 2, 9, 4, 3, 11, 3, 6, 4, 6, 3, 255],
+    [8, 2, 3, 8, 4, 2, 4, 6, 2, 255, 255, 255, 255, 255, 255, 255],
+    [
+        0, 4, 2, 4, 6, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [1, 9, 0, 2, 3, 4, 2, 4, 6, 4, 3, 8, 255, 255, 255, 255],
+    [1, 9, 4, 1, 4, 2, 2, 4, 6, 255, 255, 255, 255, 255, 255, 255],
+    [8, 1, 3, 8, 6, 1, 8, 4, 6, 6, 10, 1, 255, 255, 255, 255],
+    [
+        10, 1, 0, 10, 0, 6, 6, 0, 4, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [4, 6, 3, 4, 3, 8, 6, 10, 3, 0, 3, 9, 10, 9, 3, 255],
+    [
+        10, 9, 4, 6, 10, 4, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        4, 9, 5, 7, 6, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 8, 3, 4, 9, 5, 11, 7, 6, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        5, 0, 1, 5, 4, 0, 7, 6, 11, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [11, 7, 6, 8, 3, 4, 3, 5, 4, 3, 1, 5, 255, 255, 255, 255],
+    [
+        9, 5, 4, 10, 1, 2, 7, 6, 11, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [6, 11, 7, 1, 2, 10, 0, 8, 3, 4, 9, 5, 255, 255, 255, 255],
+    [7, 6, 11, 5, 4, 10, 4, 2, 10, 4, 0, 2, 255, 255, 255, 255],
+    [3, 4, 8, 3, 5, 4, 3, 2, 5, 10, 5, 2, 11, 7, 6, 255],
+    [7, 2, 3, 7, 6, 2, 5, 4, 9, 255, 255, 255, 255, 255, 255, 255],
+    [9, 5, 4, 0, 8, 6, 0, 6, 2, 6, 8, 7, 255, 255, 255, 255],
+    [3, 6, 2, 3, 7, 6, 1, 5, 0, 5, 4, 0, 255, 255, 255, 255],
+    [6, 2, 8, 6, 8, 7, 2, 1, 8, 4, 8, 5, 1, 5, 8, 255],
+    [9, 5, 4, 10, 1, 6, 1, 7, 6, 1, 3, 7, 255, 255, 255, 255],
+    [1, 6, 10, 1, 7, 6, 1, 0, 7, 8, 7, 0, 9, 5, 4, 255],
+    [4, 0, 10, 4, 10, 5, 0, 3, 10, 6, 10, 7, 3, 7, 10, 255],
+    [7, 6, 10, 7, 10, 8, 5, 4, 10, 4, 8, 10, 255, 255, 255, 255],
+    [
+        6, 9, 5, 6, 11, 9, 11, 8, 9, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [3, 6, 11, 0, 6, 3, 0, 5, 6, 0, 9, 5, 255, 255, 255, 255],
+    [0, 11, 8, 0, 5, 11, 0, 1, 5, 5, 6, 11, 255, 255, 255, 255],
+    [
+        6, 11, 3, 6, 3, 5, 5, 3, 1, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [1, 2, 10, 9, 5, 11, 9, 11, 8, 11, 5, 6, 255, 255, 255, 255],
+    [0, 11, 3, 0, 6, 11, 0, 9, 6, 5, 6, 9, 1, 2, 10, 255],
+    [11, 8, 5, 11, 5, 6, 8, 0, 5, 10, 5, 2, 0, 2, 5, 255],
+    [6, 11, 3, 6, 3, 5, 2, 10, 3, 10, 5, 3, 255, 255, 255, 255],
+    [5, 8, 9, 5, 2, 8, 5, 6, 2, 3, 8, 2, 255, 255, 255, 255],
+    [9, 5, 6, 9, 6, 0, 0, 6, 2, 255, 255, 255, 255, 255, 255, 255],
+    [1, 5, 8, 1, 8, 0, 5, 6, 8, 3, 8, 2, 6, 2, 8, 255],
+    [
+        1, 5, 6, 2, 1, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [1, 3, 6, 1, 6, 10, 3, 8, 6, 5, 6, 9, 8, 9, 6, 255],
+    [10, 1, 0, 10, 0, 6, 9, 5, 0, 5, 6, 0, 255, 255, 255, 255],
+    [
+        0, 3, 8, 5, 6, 10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        10, 5, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        11, 5, 10, 7, 5, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        11, 5, 10, 11, 7, 5, 8, 3, 0, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        5, 11, 7, 5, 10, 11, 1, 9, 0, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [10, 7, 5, 10, 11, 7, 9, 8, 1, 8, 3, 1, 255, 255, 255, 255],
+    [
+        11, 1, 2, 11, 7, 1, 7, 5, 1, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [0, 8, 3, 1, 2, 7, 1, 7, 5, 7, 2, 11, 255, 255, 255, 255],
+    [9, 7, 5, 9, 2, 7, 9, 0, 2, 2, 11, 7, 255, 255, 255, 255],
+    [7, 5, 2, 7, 2, 11, 5, 9, 2, 3, 2, 8, 9, 8, 2, 255],
+    [
+        2, 5, 10, 2, 3, 5, 3, 7, 5, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [8, 2, 0, 8, 5, 2, 8, 7, 5, 10, 2, 5, 255, 255, 255, 255],
+    [9, 0, 1, 5, 10, 3, 5, 3, 7, 3, 10, 2, 255, 255, 255, 255],
+    [9, 8, 2, 9, 2, 1, 8, 7, 2, 10, 2, 5, 7, 5, 2, 255],
+    [
+        1, 3, 5, 3, 7, 5, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [0, 8, 7, 0, 7, 1, 1, 7, 5, 255, 255, 255, 255, 255, 255, 255],
+    [9, 0, 3, 9, 3, 5, 5, 3, 7, 255, 255, 255, 255, 255, 255, 255],
+    [
+        9, 8, 7, 5, 9, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        5, 8, 4, 5, 10, 8, 10, 11, 8, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [5, 0, 4, 5, 11, 0, 5, 10, 11, 11, 3, 0, 255, 255, 255, 255],
+    [0, 1, 9, 8, 4, 10, 8, 10, 11, 10, 4, 5, 255, 255, 255, 255],
+    [10, 11, 4, 10, 4, 5, 11, 3, 4, 9, 4, 1, 3, 1, 4, 255],
+    [2, 5, 1, 2, 8, 5, 2, 11, 8, 4, 5, 8, 255, 255, 255, 255],
+    [0, 4, 11, 0, 11, 3, 4, 5, 11, 2, 11, 1, 5, 1, 11, 255],
+    [0, 2, 5, 0, 5, 9, 2, 11, 5, 4, 5, 8, 11, 8, 5, 255],
+    [
+        9, 4, 5, 2, 11, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [2, 5, 10, 3, 5, 2, 3, 4, 5, 3, 8, 4, 255, 255, 255, 255],
+    [
+        5, 10, 2, 5, 2, 4, 4, 2, 0, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [3, 10, 2, 3, 5, 10, 3, 8, 5, 4, 5, 8, 0, 1, 9, 255],
+    [5, 10, 2, 5, 2, 4, 1, 9, 2, 9, 4, 2, 255, 255, 255, 255],
+    [8, 4, 5, 8, 5, 3, 3, 5, 1, 255, 255, 255, 255, 255, 255, 255],
+    [
+        0, 4, 5, 1, 0, 5, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [8, 4, 5, 8, 5, 3, 9, 0, 5, 0, 3, 5, 255, 255, 255, 255],
+    [
+        9, 4, 5, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        4, 11, 7, 4, 9, 11, 9, 10, 11, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [0, 8, 3, 4, 9, 7, 9, 11, 7, 9, 10, 11, 255, 255, 255, 255],
+    [1, 10, 11, 1, 11, 4, 1, 4, 0, 7, 4, 11, 255, 255, 255, 255],
+    [3, 1, 4, 3, 4, 8, 1, 10, 4, 7, 4, 11, 10, 11, 4, 255],
+    [4, 11, 7, 9, 11, 4, 9, 2, 11, 9, 1, 2, 255, 255, 255, 255],
+    [9, 7, 4, 9, 11, 7, 9, 1, 11, 2, 11, 1, 0, 8, 3, 255],
+    [
+        11, 7, 4, 11, 4, 2, 2, 4, 0, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [11, 7, 4, 11, 4, 2, 8, 3, 4, 3, 2, 4, 255, 255, 255, 255],
+    [2, 9, 10, 2, 7, 9, 2, 3, 7, 7, 4, 9, 255, 255, 255, 255],
+    [9, 10, 7, 9, 7, 4, 10, 2, 7, 8, 7, 0, 2, 0, 7, 255],
+    [3, 7, 10, 3, 10, 2, 7, 4, 10, 1, 10, 0, 4, 0, 10, 255],
+    [
+        1, 10, 2, 8, 7, 4, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [4, 9, 1, 4, 1, 7, 7, 1, 3, 255, 255, 255, 255, 255, 255, 255],
+    [4, 9, 1, 4, 1, 7, 0, 8, 1, 8, 7, 1, 255, 255, 255, 255],
+    [
+        4, 0, 3, 7, 4, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        4, 8, 7, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        9, 10, 8, 10, 11, 8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        3, 0, 9, 3, 9, 11, 11, 9, 10, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 1, 10, 0, 10, 8, 8, 10, 11, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        3, 1, 10, 11, 3, 10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        1, 2, 11, 1, 11, 9, 9, 11, 8, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [3, 0, 9, 3, 9, 11, 1, 2, 9, 2, 11, 9, 255, 255, 255, 255],
+    [
+        0, 2, 11, 8, 0, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        3, 2, 11, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        2, 3, 8, 2, 8, 10, 10, 8, 9, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        9, 10, 2, 0, 9, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [2, 3, 8, 2, 8, 10, 0, 1, 8, 1, 10, 8, 255, 255, 255, 255],
+    [
+        1, 10, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        1, 3, 8, 9, 1, 8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 9, 1, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        0, 3, 8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
 ];

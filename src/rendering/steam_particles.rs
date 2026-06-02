@@ -71,7 +71,7 @@ impl SteamParticleRenderer {
         width: u32,
         height: u32,
     ) -> Self {
-        let max_particles = 500_000u32;  // Support up to 500k steam voxels
+        let max_particles = 500_000u32; // Support up to 500k steam voxels
 
         // Create render shader
         let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -101,7 +101,9 @@ impl SteamParticleRenderer {
         let counter_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Steam Particle Counter"),
             size: std::mem::size_of::<ParticleCounter>() as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -122,62 +124,64 @@ impl SteamParticleRenderer {
         });
 
         // Create extract compute bind group layout
-        let extract_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Steam Extract Bind Group Layout"),
-            entries: &[
-                // Fluid state buffer (read)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let extract_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Steam Extract Bind Group Layout"),
+                entries: &[
+                    // Fluid state buffer (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Particle buffer (write)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Particle buffer (write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Counter buffer (atomic)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Counter buffer (atomic)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // Params uniform
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // Params uniform
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
+                ],
+            });
 
         // Create compute pipeline
-        let extract_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Steam Extract Pipeline Layout"),
-            bind_group_layouts: &[&extract_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let extract_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Steam Extract Pipeline Layout"),
+                bind_group_layouts: &[&extract_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
         let extract_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Steam Extract Pipeline"),
@@ -189,17 +193,19 @@ impl SteamParticleRenderer {
         });
 
         // Create render bind group layout (for params uniform in fragment shader)
-        let render_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Steam Render Bind Group Layout"),
-            entries: &[],  // No bindings needed - we removed params from render shader
-        });
+        let render_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Steam Render Bind Group Layout"),
+                entries: &[], // No bindings needed - we removed params from render shader
+            });
 
         // Create render pipeline layout
-        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Steam Particle Pipeline Layout"),
-            bind_group_layouts: &[camera_layout, &render_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Steam Particle Pipeline Layout"),
+                bind_group_layouts: &[camera_layout, &render_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
         // Vertex buffer layout for instanced particles
         let vertex_buffer_layout = wgpu::VertexBufferLayout {
@@ -264,7 +270,7 @@ impl SteamParticleRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,  // Billboards need no culling
+                cull_mode: None, // Billboards need no culling
                 unclipped_depth: false,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
@@ -286,10 +292,10 @@ impl SteamParticleRenderer {
         });
 
         // Clone the camera layout for later use
-        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Steam Camera Bind Group Layout (stored)"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Steam Camera Bind Group Layout (stored)"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
@@ -298,9 +304,8 @@ impl SteamParticleRenderer {
                         min_binding_size: None,
                     },
                     count: None,
-                },
-            ],
-        });
+                }],
+            });
 
         Self {
             render_pipeline,
@@ -385,7 +390,6 @@ impl SteamParticleRenderer {
             _padding: 0.0,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
-
 
         // Run compute shader
         {

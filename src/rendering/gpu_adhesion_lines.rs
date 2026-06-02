@@ -280,7 +280,11 @@ impl GpuAdhesionLineRenderer {
             _padding: 0.0,
         };
 
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
+        queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[camera_uniform]),
+        );
 
         // Set up render pass
         render_pass.set_pipeline(&self.render_pipeline);

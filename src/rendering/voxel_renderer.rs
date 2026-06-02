@@ -50,43 +50,46 @@ impl VoxelRenderer {
     ) -> Self {
         // Create cube geometry
         let (vertices, indices) = Self::create_cube_geometry();
-        
+
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Voxel Vertex Buffer"),
             contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
-        
+
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Voxel Index Buffer"),
             contents: bytemuck::cast_slice(&indices),
             usage: wgpu::BufferUsages::INDEX,
         });
-        
+
         let index_count = indices.len() as u32;
-        
+
         // Create instance buffer
-        let instance_buffer_size = (max_instances as u64) * std::mem::size_of::<VoxelInstance>() as u64;
+        let instance_buffer_size =
+            (max_instances as u64) * std::mem::size_of::<VoxelInstance>() as u64;
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Voxel Instance Buffer"),
             size: instance_buffer_size,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // Create shader module
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Voxel Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/fluid/voxel_instance.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/fluid/voxel_instance.wgsl").into(),
+            ),
         });
-        
+
         // Create pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Voxel Pipeline Layout"),
             bind_group_layouts: &[camera_bind_group_layout],
             push_constant_ranges: &[],
         });
-        
+
         // Create render pipeline
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Voxel Render Pipeline"),
@@ -149,7 +152,7 @@ impl VoxelRenderer {
             multiview: None,
             cache: None,
         });
-        
+
         Self {
             pipeline,
             vertex_buffer,
@@ -159,42 +162,37 @@ impl VoxelRenderer {
             max_instances,
         }
     }
-    
+
     /// Create cube geometry (vertices and indices)
     fn create_cube_geometry() -> (Vec<[f32; 3]>, Vec<u16>) {
         // Cube vertices (unit cube centered at origin)
         let vertices = vec![
             // Front face
-            [-0.5, -0.5,  0.5],
-            [ 0.5, -0.5,  0.5],
-            [ 0.5,  0.5,  0.5],
-            [-0.5,  0.5,  0.5],
+            [-0.5, -0.5, 0.5],
+            [0.5, -0.5, 0.5],
+            [0.5, 0.5, 0.5],
+            [-0.5, 0.5, 0.5],
             // Back face
             [-0.5, -0.5, -0.5],
-            [ 0.5, -0.5, -0.5],
-            [ 0.5,  0.5, -0.5],
-            [-0.5,  0.5, -0.5],
+            [0.5, -0.5, -0.5],
+            [0.5, 0.5, -0.5],
+            [-0.5, 0.5, -0.5],
         ];
-        
+
         // Cube indices (12 triangles, 36 indices)
         let indices = vec![
             // Front
-            0, 1, 2,  2, 3, 0,
-            // Back
-            5, 4, 7,  7, 6, 5,
-            // Left
-            4, 0, 3,  3, 7, 4,
-            // Right
-            1, 5, 6,  6, 2, 1,
-            // Top
-            3, 2, 6,  6, 7, 3,
-            // Bottom
-            4, 5, 1,  1, 0, 4,
+            0, 1, 2, 2, 3, 0, // Back
+            5, 4, 7, 7, 6, 5, // Left
+            4, 0, 3, 3, 7, 4, // Right
+            1, 5, 6, 6, 2, 1, // Top
+            3, 2, 6, 6, 7, 3, // Bottom
+            4, 5, 1, 1, 0, 4,
         ];
-        
+
         (vertices, indices)
     }
-    
+
     /// Update instance buffer with new voxel data
     pub fn update_instances(&self, queue: &wgpu::Queue, instances: &[VoxelInstance]) {
         if instances.len() as u32 > self.max_instances {
@@ -204,7 +202,7 @@ impl VoxelRenderer {
                 self.max_instances
             );
         }
-        
+
         let count = instances.len().min(self.max_instances as usize);
         if count > 0 {
             queue.write_buffer(
@@ -214,7 +212,7 @@ impl VoxelRenderer {
             );
         }
     }
-    
+
     /// Render voxels
     pub fn render<'a>(
         &'a self,
@@ -225,9 +223,9 @@ impl VoxelRenderer {
         if instance_count == 0 {
             return;
         }
-        
+
         let count = instance_count.min(self.max_instances);
-        
+
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, camera_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));

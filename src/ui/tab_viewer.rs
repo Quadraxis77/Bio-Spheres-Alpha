@@ -4,15 +4,15 @@
 //! TabViewer trait to render panel content and handle panel interactions.
 
 use egui::{Id, Ui, WidgetText};
-use egui_dock::{NodeIndex, SurfaceIndex, TabViewer};
 use egui_dock::tab_viewer::OnCloseResponse;
+use egui_dock::{NodeIndex, SurfaceIndex, TabViewer};
 
 use crate::ui::panel::Panel;
-use crate::ui::types::SimulationMode;
 use crate::ui::panel_context::PanelContext;
 use crate::ui::types::GlobalUiState;
-use crate::ui::widgets::{quaternion_ball, modes_buttons, modes_list_items};
+use crate::ui::types::SimulationMode;
 use crate::ui::ui_system::palette;
+use crate::ui::widgets::{modes_buttons, modes_list_items, quaternion_ball};
 
 /// TabViewer implementation for Bio-Spheres panels.
 ///
@@ -50,10 +50,15 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
         // biotech-console aesthetic. The viewport tab keeps its name hidden by
         // the dock anyway, so casing there is irrelevant.
         let raw = tab.display_name();
-        let upper: String = raw.chars().flat_map(|c| {
-            // Insert a hair-space between characters for readability
-            [Some(c.to_ascii_uppercase()), Some('\u{2009}')].into_iter().flatten()
-        }).collect();
+        let upper: String = raw
+            .chars()
+            .flat_map(|c| {
+                // Insert a hair-space between characters for readability
+                [Some(c.to_ascii_uppercase()), Some('\u{2009}')]
+                    .into_iter()
+                    .flatten()
+            })
+            .collect();
         // Trim the trailing hair-space
         let upper = upper.trim_end().to_string();
         egui::RichText::new(upper).size(11.0).into()
@@ -64,20 +69,28 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
         // are skipped entirely so their content doesn't appear on screen.
         if self.context.hide_ui {
             if matches!(tab, Panel::Viewport) {
-                let is_gpu_mode = self.context.current_mode == crate::ui::types::SimulationMode::Gpu;
+                let is_gpu_mode =
+                    self.context.current_mode == crate::ui::types::SimulationMode::Gpu;
                 render_viewport(ui, self.viewport_rect, is_gpu_mode);
                 if let Some(r) = *self.viewport_rect {
-                    self.context.editor_state.panel_rects.insert("Viewport".to_string(), r);
+                    self.context
+                        .editor_state
+                        .panel_rects
+                        .insert("Viewport".to_string(), r);
                 }
             }
             return;
         }
         match tab {
             Panel::Viewport => {
-                let is_gpu_mode = self.context.current_mode == crate::ui::types::SimulationMode::Gpu;
+                let is_gpu_mode =
+                    self.context.current_mode == crate::ui::types::SimulationMode::Gpu;
                 render_viewport(ui, self.viewport_rect, is_gpu_mode);
                 if let Some(r) = *self.viewport_rect {
-                    self.context.editor_state.panel_rects.insert("Viewport".to_string(), r);
+                    self.context
+                        .editor_state
+                        .panel_rects
+                        .insert("Viewport".to_string(), r);
                 }
             }
             Panel::LeftPanel => render_placeholder_panel(ui, "Left Panel"),
@@ -91,7 +104,11 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::CaveSystem => render_cave_system(ui, self.context, self.state),
             Panel::FluidSettings => {
                 render_fluid_settings(ui, self.context, self.state);
-                render_organism_skin_settings(ui, self.context, &mut self.state.fluid_settings.organism_skin);
+                render_organism_skin_settings(
+                    ui,
+                    self.context,
+                    &mut self.state.fluid_settings.organism_skin,
+                );
             }
             Panel::WorldSettings => render_world_settings(ui, self.context, self.state),
             Panel::LightSettings => render_light_settings(ui, self.context, self.state),
@@ -198,13 +215,13 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
         if self.state.lock_tabs {
             return true;
         }
-        
+
         // Hide tab button if this specific panel is locked
         let panel_name = format!("{:?}", tab);
         if self.state.is_panel_locked(&panel_name) {
             return true;
         }
-        
+
         // Use the panel's own settings (viewport tabs are typically hidden)
         tab.is_viewport()
     }
@@ -247,7 +264,10 @@ fn render_viewport(ui: &mut Ui, viewport_rect: &mut Option<egui::Rect>, _draw_br
 /// Render the SceneManager panel.
 fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
     // Record panel rect for the tutorial pointer.
-    context.editor_state.panel_rects.insert("SceneManager".to_string(), ui.max_rect());
+    context
+        .editor_state
+        .panel_rects
+        .insert("SceneManager".to_string(), ui.max_rect());
 
     // The mode-switch button lives in the top bar - this panel only hosts
     // playback controls. In Preview mode there's nothing to do here.
@@ -272,23 +292,35 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
             ("⏸", "Pause", palette().accent_primary)
         };
 
-        if ui.add_sized(
-            [32.0, 32.0],
-            egui::Button::new(egui::RichText::new(play_icon).size(15.0).color(play_color))
-                .fill(palette().bg_widget)
-                .stroke(egui::Stroke::new(1.0, palette().border_normal))
-                .corner_radius(egui::CornerRadius::same(3)),
-        ).on_hover_text(play_tip).clicked() {
+        if ui
+            .add_sized(
+                [32.0, 32.0],
+                egui::Button::new(egui::RichText::new(play_icon).size(15.0).color(play_color))
+                    .fill(palette().bg_widget)
+                    .stroke(egui::Stroke::new(1.0, palette().border_normal))
+                    .corner_radius(egui::CornerRadius::same(3)),
+            )
+            .on_hover_text(play_tip)
+            .clicked()
+        {
             context.request_toggle_pause();
         }
 
-        if ui.add_sized(
-            [32.0, 32.0],
-            egui::Button::new(egui::RichText::new("⟲").size(15.0).color(palette().text_secondary))
+        if ui
+            .add_sized(
+                [32.0, 32.0],
+                egui::Button::new(
+                    egui::RichText::new("⟲")
+                        .size(15.0)
+                        .color(palette().text_secondary),
+                )
                 .fill(palette().bg_widget)
                 .stroke(egui::Stroke::new(1.0, palette().border_normal))
                 .corner_radius(egui::CornerRadius::same(3)),
-        ).on_hover_text("Reset").clicked() {
+            )
+            .on_hover_text("Reset")
+            .clicked()
+        {
             state.show_reset_dialog = true;
         }
 
@@ -319,12 +351,15 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
         let speed = context.simulation_speed();
         let display_speed = (speed * 2.0).round() / 2.0;
         let mut slider_speed = display_speed;
-        if ui.add(
-            egui::Slider::new(&mut slider_speed, 0.5..=10.0)
-                .step_by(0.5)
-                .suffix("x")
-                .text_color(palette().text_primary),
-        ).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut slider_speed, 0.5..=10.0)
+                    .step_by(0.5)
+                    .suffix("x")
+                    .text_color(palette().text_primary),
+            )
+            .changed()
+        {
             context.set_simulation_speed(slider_speed);
         }
     });
@@ -334,7 +369,6 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
 
 /// Render the CellInspector panel.
 fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
-
     // -- Header row ----------------------------------------------------------
     ui.horizontal(|ui| {
         ui.label(
@@ -349,7 +383,11 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             } else {
                 format!("{} cells", context.cell_count())
             };
-            ui.label(egui::RichText::new(count_str).size(10.0).color(palette().text_dim));
+            ui.label(
+                egui::RichText::new(count_str)
+                    .size(10.0)
+                    .color(palette().text_dim),
+            );
         });
     });
     ui.add_space(2.0);
@@ -357,7 +395,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
 
     // Get the inspected cell index from radial menu state
     let inspected_cell = context.editor_state.radial_menu.inspected_cell;
-    
+
     if let Some(cell_idx) = inspected_cell {
         // Extract data from GPU scene
         let gpu_extraction_data = if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
@@ -377,13 +415,14 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
         } else {
             None
         };
-        
+
         // Now use the extracted data without borrowing context
         if let Some((_is_extracting, extraction_result, data_valid)) = gpu_extraction_data {
             // While a new extraction is in flight we still show the last known data -
             // no spinner needed since updates are continuous and near-instant.
 
-            if let (Some(extraction_result), Some(data_valid)) = (extraction_result, data_valid) {                let data = &extraction_result.data;
+            if let (Some(extraction_result), Some(data_valid)) = (extraction_result, data_valid) {
+                let data = &extraction_result.data;
 
                 // -- Invalid / dead cell --------------------------------------
                 if !data_valid {
@@ -396,13 +435,18 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                         );
                     });
                     ui.add_space(6.0);
-                    if ui.add(
-                        egui::Button::new(
-                            egui::RichText::new("Clear Selection").size(11.0).color(palette().text_primary),
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("Clear Selection")
+                                    .size(11.0)
+                                    .color(palette().text_primary),
+                            )
+                            .fill(palette().bg_widget)
+                            .stroke(egui::Stroke::new(1.0, palette().border_normal)),
                         )
-                        .fill(palette().bg_widget)
-                        .stroke(egui::Stroke::new(1.0, palette().border_normal)),
-                    ).clicked() {
+                        .clicked()
+                    {
                         context.editor_state.radial_menu.inspected_cell = None;
                     }
                     return;
@@ -419,7 +463,11 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
 
                 // Title row: type name + cell index
                 ui.horizontal(|ui| {
-                    let title_color = if data.is_dead != 0 { palette().status_err } else { palette().text_primary };
+                    let title_color = if data.is_dead != 0 {
+                        palette().status_err
+                    } else {
+                        palette().text_primary
+                    };
                     let dead_suffix = if data.is_dead != 0 { " — DEAD" } else { "" };
                     ui.label(
                         egui::RichText::new(format!("{}{}", type_name, dead_suffix))
@@ -442,10 +490,30 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                 } else {
                     format!("org {}", data.organism_id)
                 };
+                let genome_str = context
+                    .scene_manager
+                    .gpu_scene()
+                    .map(|gpu_scene| {
+                        if gpu_scene
+                            .reported_genome_matches_absolute_mode(data.genome_id, data.mode_index)
+                        {
+                            format!("genome {}", data.genome_id)
+                        } else {
+                            format!("mutated GPU genome (reported {})", data.genome_id)
+                        }
+                    })
+                    .unwrap_or_else(|| format!("genome {}", data.genome_id));
+                let mode_str = context
+                    .scene_manager
+                    .gpu_scene()
+                    .map(|gpu_scene| {
+                        gpu_scene.inspected_mode_label(data.genome_id, data.mode_index)
+                    })
+                    .unwrap_or_else(|| format!("M{}", data.mode_index));
                 ui.label(
                     egui::RichText::new(format!(
-                        "M{}  ·  genome {}  ·  slot {}  ·  {}",
-                        data.mode_index, data.genome_id, data.cell_slot_index, org_str
+                        "{}  ·  {}  ·  slot {}  ·  {}",
+                        mode_str, genome_str, data.cell_slot_index, org_str
                     ))
                     .size(10.0)
                     .color(palette().text_dim),
@@ -463,8 +531,15 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                         .stroke(egui::Stroke::new(1.0, palette().border_normal)),
                     ).clicked() {
                         *context.scene_request =
-                            crate::ui::panel_context::SceneModeRequest::LoadGenomeFromGpu(data.genome_id);
-                        log::info!("Requested genome readback for genome_id={}", data.genome_id);
+                            crate::ui::panel_context::SceneModeRequest::LoadGenomeFromGpuCell {
+                                genome_id: data.genome_id,
+                                mode_index: data.mode_index,
+                            };
+                        log::info!(
+                            "Requested genome readback for inspected cell: genome_id={} mode_index={}",
+                            data.genome_id,
+                            data.mode_index
+                        );
                     }
                     if ui.add(
                         egui::Button::new(
@@ -492,11 +567,10 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                 let nutrient_frac = (data.nutrients / nutrient_max).clamp(0.0, 1.0);
                 let bar_width = ui.available_width() - 4.0;
                 let bar_height = 8.0;
-                let (bar_rect, _) = ui.allocate_exact_size(
-                    egui::vec2(bar_width, bar_height),
-                    egui::Sense::hover(),
-                );
-                ui.painter().rect_filled(bar_rect, 3.0, palette().bg_darkest);
+                let (bar_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(bar_width, bar_height), egui::Sense::hover());
+                ui.painter()
+                    .rect_filled(bar_rect, 3.0, palette().bg_darkest);
                 let fill_color = if nutrient_frac > 0.5 {
                     palette().status_ok
                 } else if nutrient_frac > 0.2 {
@@ -514,7 +588,10 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     let split_frac = (data.nutrient_threshold / nutrient_max).clamp(0.0, 1.0);
                     let marker_x = bar_rect.min.x + bar_rect.width() * split_frac;
                     ui.painter().line_segment(
-                        [egui::pos2(marker_x, bar_rect.min.y), egui::pos2(marker_x, bar_rect.max.y)],
+                        [
+                            egui::pos2(marker_x, bar_rect.min.y),
+                            egui::pos2(marker_x, bar_rect.max.y),
+                        ],
                         egui::Stroke::new(1.5, palette().text_primary),
                     );
                 }
@@ -530,36 +607,99 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     .num_columns(2)
                     .spacing([8.0, 2.0])
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new("Gain rate").size(11.0).color(palette().text_secondary));
-                        let gain_color = if data.nutrient_gain_rate > 0.0 { palette().status_ok } else { palette().text_dim };
-                        ui.label(egui::RichText::new(format!("{:.2}/s", data.nutrient_gain_rate)).size(11.0).color(gain_color));
+                        ui.label(
+                            egui::RichText::new("Gain rate")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        let gain_color = if data.nutrient_gain_rate > 0.0 {
+                            palette().status_ok
+                        } else {
+                            palette().text_dim
+                        };
+                        ui.label(
+                            egui::RichText::new(format!("{:.2}/s", data.nutrient_gain_rate))
+                                .size(11.0)
+                                .color(gain_color),
+                        );
                         ui.end_row();
 
                         if data.reserve > 0 {
-                            ui.label(egui::RichText::new("Reserve").size(11.0).color(palette().text_secondary));
-                            ui.label(egui::RichText::new(format!("{}", data.reserve / 1000)).size(11.0).color(palette().accent_secondary));
+                            ui.label(
+                                egui::RichText::new("Reserve")
+                                    .size(11.0)
+                                    .color(palette().text_secondary),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{}", data.reserve / 1000))
+                                    .size(11.0)
+                                    .color(palette().accent_secondary),
+                            );
                             ui.end_row();
                         }
 
-                        ui.label(egui::RichText::new("Split at").size(11.0).color(palette().text_secondary));
+                        ui.label(
+                            egui::RichText::new("Split at")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
                         if split_never || data.nutrient_threshold <= 0.0 {
-                            ui.label(egui::RichText::new("Never").size(11.0).color(palette().text_dim));
+                            ui.label(
+                                egui::RichText::new("Never")
+                                    .size(11.0)
+                                    .color(palette().text_dim),
+                            );
                         } else {
-                            ui.label(egui::RichText::new(format!("{:.0}", data.nutrient_threshold)).size(11.0).color(palette().text_primary));
+                            ui.label(
+                                egui::RichText::new(format!("{:.0}", data.nutrient_threshold))
+                                    .size(11.0)
+                                    .color(palette().text_primary),
+                            );
                         }
                         ui.end_row();
 
-                        let max_splits_str = if data.max_splits == 0 { "∞".to_string() } else { format!("{}", data.max_splits) };
-                        ui.label(egui::RichText::new("Splits").size(11.0).color(palette().text_secondary));
-                        ui.label(egui::RichText::new(format!("{} / {}", data.split_count, max_splits_str)).size(11.0).color(palette().text_primary));
+                        let max_splits_str = if data.max_splits == 0 {
+                            "∞".to_string()
+                        } else {
+                            format!("{}", data.max_splits)
+                        };
+                        ui.label(
+                            egui::RichText::new("Splits")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} / {}",
+                                data.split_count, max_splits_str
+                            ))
+                            .size(11.0)
+                            .color(palette().text_primary),
+                        );
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Interval").size(11.0).color(palette().text_secondary));
-                        ui.label(egui::RichText::new(format!("{:.1}s", data.split_interval)).size(11.0).color(palette().text_primary));
+                        ui.label(
+                            egui::RichText::new("Interval")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{:.1}s", data.split_interval))
+                                .size(11.0)
+                                .color(palette().text_primary),
+                        );
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Age").size(11.0).color(palette().text_secondary));
-                        ui.label(egui::RichText::new(format!("{:.1}s", data.age)).size(11.0).color(palette().text_primary));
+                        ui.label(
+                            egui::RichText::new("Age")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{:.1}s", data.age))
+                                .size(11.0)
+                                .color(palette().text_primary),
+                        );
                         ui.end_row();
                     });
 
@@ -576,33 +716,101 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     .num_columns(2)
                     .spacing([8.0, 2.0])
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new("Position").size(11.0).color(palette().text_secondary));
-                        ui.label(egui::RichText::new(format!("{:.1}, {:.1}, {:.1}", pos.x, pos.y, pos.z)).size(11.0).color(palette().text_primary).monospace());
+                        ui.label(
+                            egui::RichText::new("Position")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{:.1}, {:.1}, {:.1}",
+                                pos.x, pos.y, pos.z
+                            ))
+                            .size(11.0)
+                            .color(palette().text_primary)
+                            .monospace(),
+                        );
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Velocity").size(11.0).color(palette().text_secondary));
-                        ui.label(egui::RichText::new(format!("{:.2}, {:.2}, {:.2}", vel.x, vel.y, vel.z)).size(11.0).color(palette().text_primary).monospace());
+                        ui.label(
+                            egui::RichText::new("Velocity")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{:.2}, {:.2}, {:.2}",
+                                vel.x, vel.y, vel.z
+                            ))
+                            .size(11.0)
+                            .color(palette().text_primary)
+                            .monospace(),
+                        );
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Speed").size(11.0).color(palette().text_secondary));
-                        let speed_color = if speed > 5.0 { palette().status_warn } else { palette().text_primary };
-                        ui.label(egui::RichText::new(format!("{:.3}", speed)).size(11.0).color(speed_color));
+                        ui.label(
+                            egui::RichText::new("Speed")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        let speed_color = if speed > 5.0 {
+                            palette().status_warn
+                        } else {
+                            palette().text_primary
+                        };
+                        ui.label(
+                            egui::RichText::new(format!("{:.3}", speed))
+                                .size(11.0)
+                                .color(speed_color),
+                        );
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Mass").size(11.0).color(palette().text_secondary));
-                        ui.label(egui::RichText::new(format!("{:.2}", data.mass)).size(11.0).color(palette().text_primary));
+                        ui.label(
+                            egui::RichText::new("Mass")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{:.2}", data.mass))
+                                .size(11.0)
+                                .color(palette().text_primary),
+                        );
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Radius").size(11.0).color(palette().text_secondary));
-                        ui.label(egui::RichText::new(format!("{:.2}", data.radius)).size(11.0).color(palette().text_primary));
+                        ui.label(
+                            egui::RichText::new("Radius")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{:.2}", data.radius))
+                                .size(11.0)
+                                .color(palette().text_primary),
+                        );
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Max size").size(11.0).color(palette().text_secondary));
-                        ui.label(egui::RichText::new(format!("{:.2}", data.max_cell_size)).size(11.0).color(palette().text_primary));
+                        ui.label(
+                            egui::RichText::new("Max size")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{:.2}", data.max_cell_size))
+                                .size(11.0)
+                                .color(palette().text_primary),
+                        );
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("Stiffness").size(11.0).color(palette().text_secondary));
-                        ui.label(egui::RichText::new(format!("{:.2}", data.stiffness)).size(11.0).color(palette().text_primary));
+                        ui.label(
+                            egui::RichText::new("Stiffness")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{:.2}", data.stiffness))
+                                .size(11.0)
+                                .color(palette().text_primary),
+                        );
                         ui.end_row();
                     });
 
@@ -617,9 +825,13 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     palette().accent_secondary
                 };
                 ui.label(
-                    egui::RichText::new(format!("{} active bond{}", data.adhesion_count, if data.adhesion_count == 1 { "" } else { "s" }))
-                        .size(12.0)
-                        .color(adhesion_color),
+                    egui::RichText::new(format!(
+                        "{} active bond{}",
+                        data.adhesion_count,
+                        if data.adhesion_count == 1 { "" } else { "s" }
+                    ))
+                    .size(12.0)
+                    .color(adhesion_color),
                 );
 
                 return;
@@ -664,30 +876,34 @@ fn render_genome_editor(ui: &mut Ui, context: &mut PanelContext) {
     ui.separator();
     ui.label(format!("Genome: {}", context.genome.name));
     ui.label(format!("Initial Mode: {}", context.genome.initial_mode));
-    
+
     ui.separator();
-    ui.label("Use the individual panels (Rotation, Parent Settings, etc.) to edit genome properties.");
+    ui.label(
+        "Use the individual panels (Rotation, Parent Settings, etc.) to edit genome properties.",
+    );
 }
 
 /// Render the PerformanceMonitor panel.
 fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
     let perf = context.performance;
-    
+
     // GPU Readbacks toggle at the top
     ui.horizontal(|ui| {
         ui.checkbox(&mut state.gpu_readbacks_enabled, "Enable GPU Readbacks")
             .on_hover_text("Allow the CPU to read back cell data from the GPU for the Cell Inspector. Disable to reduce GPU-CPU synchronization overhead if the inspector is not needed");
     });
     ui.add_space(4.0);
-    
+
     // Culling section (GPU mode only)
     if context.current_mode == crate::ui::types::SimulationMode::Gpu {
         section_header(ui, "GPU RENDERING");
-        
+
         // Culling toggles
         ui.horizontal(|ui| {
-            ui.checkbox(&mut state.frustum_enabled, "Frustum").on_hover_text("Discard cells outside the camera frustum");
-            ui.checkbox(&mut state.occlusion_enabled, "Occlusion").on_hover_text("Discard cells hidden behind other geometry (requires Hi-Z)");
+            ui.checkbox(&mut state.frustum_enabled, "Frustum")
+                .on_hover_text("Discard cells outside the camera frustum");
+            ui.checkbox(&mut state.occlusion_enabled, "Occlusion")
+                .on_hover_text("Discard cells hidden behind other geometry (requires Hi-Z)");
         });
         ui.add_space(4.0);
 
@@ -697,22 +913,62 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             .num_columns(2)
             .spacing([8.0, 2.0])
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Total Cells").size(11.0).color(palette().text_secondary));
-                ui.label(egui::RichText::new(format!("{}", total)).size(11.0).color(palette().text_primary));
+                ui.label(
+                    egui::RichText::new("Total Cells")
+                        .size(11.0)
+                        .color(palette().text_secondary),
+                );
+                ui.label(
+                    egui::RichText::new(format!("{}", total))
+                        .size(11.0)
+                        .color(palette().text_primary),
+                );
                 ui.end_row();
-                ui.label(egui::RichText::new("Visible").size(11.0).color(palette().text_secondary));
-                ui.label(egui::RichText::new(format!("{}", visible)).size(11.0).color(palette().status_ok));
+                ui.label(
+                    egui::RichText::new("Visible")
+                        .size(11.0)
+                        .color(palette().text_secondary),
+                );
+                ui.label(
+                    egui::RichText::new(format!("{}", visible))
+                        .size(11.0)
+                        .color(palette().status_ok),
+                );
                 ui.end_row();
-                ui.label(egui::RichText::new("Frustum Culled").size(11.0).color(palette().text_secondary));
-                ui.label(egui::RichText::new(format!("{}", frustum_culled)).size(11.0).color(palette().text_dim));
+                ui.label(
+                    egui::RichText::new("Frustum Culled")
+                        .size(11.0)
+                        .color(palette().text_secondary),
+                );
+                ui.label(
+                    egui::RichText::new(format!("{}", frustum_culled))
+                        .size(11.0)
+                        .color(palette().text_dim),
+                );
                 ui.end_row();
-                ui.label(egui::RichText::new("Occluded").size(11.0).color(palette().text_secondary));
-                ui.label(egui::RichText::new(format!("{}", occluded)).size(11.0).color(palette().text_dim));
+                ui.label(
+                    egui::RichText::new("Occluded")
+                        .size(11.0)
+                        .color(palette().text_secondary),
+                );
+                ui.label(
+                    egui::RichText::new(format!("{}", occluded))
+                        .size(11.0)
+                        .color(palette().text_dim),
+                );
                 ui.end_row();
                 if total > 0 {
                     let cull_percent = ((total - visible) as f32 / total as f32) * 100.0;
-                    ui.label(egui::RichText::new("Cull Rate").size(11.0).color(palette().text_secondary));
-                    ui.label(egui::RichText::new(format!("{:.1}%", cull_percent)).size(11.0).color(palette().accent_secondary));
+                    ui.label(
+                        egui::RichText::new("Cull Rate")
+                            .size(11.0)
+                            .color(palette().text_secondary),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!("{:.1}%", cull_percent))
+                            .size(11.0)
+                            .color(palette().accent_secondary),
+                    );
                     ui.end_row();
                 }
             });
@@ -723,68 +979,142 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             .num_columns(2)
             .spacing([8.0, 4.0])
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Scale").size(11.0).color(palette().text_secondary))
-                    .on_hover_text("Higher = more aggressive LOD (switches to lower resolution sooner)");
-                ui.add(egui::Slider::new(&mut state.lod_scale_factor, 50.0..=2000.0).fixed_decimals(0));
+                ui.label(
+                    egui::RichText::new("Scale")
+                        .size(11.0)
+                        .color(palette().text_secondary),
+                )
+                .on_hover_text(
+                    "Higher = more aggressive LOD (switches to lower resolution sooner)",
+                );
+                ui.add(
+                    egui::Slider::new(&mut state.lod_scale_factor, 50.0..=2000.0).fixed_decimals(0),
+                );
                 ui.end_row();
-                ui.label(egui::RichText::new("Low→Med").size(11.0).color(palette().text_secondary))
-                    .on_hover_text("Distance threshold for 32→64 texture transition");
-                ui.add(egui::Slider::new(&mut state.lod_threshold_low, 1.0..=1000.0).fixed_decimals(0));
+                ui.label(
+                    egui::RichText::new("Low→Med")
+                        .size(11.0)
+                        .color(palette().text_secondary),
+                )
+                .on_hover_text("Distance threshold for 32→64 texture transition");
+                ui.add(
+                    egui::Slider::new(&mut state.lod_threshold_low, 1.0..=1000.0).fixed_decimals(0),
+                );
                 ui.end_row();
-                ui.label(egui::RichText::new("Med→High").size(11.0).color(palette().text_secondary))
-                    .on_hover_text("Distance threshold for 64→128 texture transition");
-                ui.add(egui::Slider::new(&mut state.lod_threshold_medium, 1.0..=1000.0).fixed_decimals(0));
+                ui.label(
+                    egui::RichText::new("Med→High")
+                        .size(11.0)
+                        .color(palette().text_secondary),
+                )
+                .on_hover_text("Distance threshold for 64→128 texture transition");
+                ui.add(
+                    egui::Slider::new(&mut state.lod_threshold_medium, 1.0..=1000.0)
+                        .fixed_decimals(0),
+                );
                 ui.end_row();
-                ui.label(egui::RichText::new("High→Ultra").size(11.0).color(palette().text_secondary))
-                    .on_hover_text("Distance threshold for 128→256 texture transition");
-                ui.add(egui::Slider::new(&mut state.lod_threshold_high, 1.0..=1000.0).fixed_decimals(0));
+                ui.label(
+                    egui::RichText::new("High→Ultra")
+                        .size(11.0)
+                        .color(palette().text_secondary),
+                )
+                .on_hover_text("Distance threshold for 128→256 texture transition");
+                ui.add(
+                    egui::Slider::new(&mut state.lod_threshold_high, 1.0..=1000.0)
+                        .fixed_decimals(0),
+                );
                 ui.end_row();
-                ui.label(egui::RichText::new("Debug Colors").size(11.0).color(palette().text_secondary))
-                    .on_hover_text("Tint cells by LOD level: green=ultra, yellow=high, orange=med, red=low");
+                ui.label(
+                    egui::RichText::new("Debug Colors")
+                        .size(11.0)
+                        .color(palette().text_secondary),
+                )
+                .on_hover_text(
+                    "Tint cells by LOD level: green=ultra, yellow=high, orange=med, red=low",
+                );
                 ui.checkbox(&mut state.lod_debug_colors, "");
                 ui.end_row();
             });
 
         ui.add_space(6.0);
     }
-    
+
     // FPS and Frame Time section
     section_header(ui, "FRAME RATE");
-    
+
     let fps = perf.fps();
-    let fps_color = if fps >= 50.0 { palette().status_ok } else if fps >= 30.0 { palette().status_warn } else { palette().status_err };
-    
+    let fps_color = if fps >= 50.0 {
+        palette().status_ok
+    } else if fps >= 30.0 {
+        palette().status_warn
+    } else {
+        palette().status_err
+    };
+
     egui::Grid::new("fps_grid")
         .num_columns(2)
         .spacing([8.0, 2.0])
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("FPS").size(11.0).color(palette().text_secondary));
-            ui.label(egui::RichText::new(format!("{:.1}", fps)).size(13.0).strong().color(fps_color));
+            ui.label(
+                egui::RichText::new("FPS")
+                    .size(11.0)
+                    .color(palette().text_secondary),
+            );
+            ui.label(
+                egui::RichText::new(format!("{:.1}", fps))
+                    .size(13.0)
+                    .strong()
+                    .color(fps_color),
+            );
             ui.end_row();
-            ui.label(egui::RichText::new("Frame Time").size(11.0).color(palette().text_secondary));
-            ui.label(egui::RichText::new(format!("{:.2} ms", perf.average_frame_time_ms())).size(11.0).color(palette().text_primary));
+            ui.label(
+                egui::RichText::new("Frame Time")
+                    .size(11.0)
+                    .color(palette().text_secondary),
+            );
+            ui.label(
+                egui::RichText::new(format!("{:.2} ms", perf.average_frame_time_ms()))
+                    .size(11.0)
+                    .color(palette().text_primary),
+            );
             ui.end_row();
-            ui.label(egui::RichText::new("Min / Max").size(11.0).color(palette().text_secondary));
-            ui.label(egui::RichText::new(format!("{:.2} / {:.2} ms", perf.min_frame_time_ms(), perf.max_frame_time_ms())).size(11.0).color(palette().text_dim));
+            ui.label(
+                egui::RichText::new("Min / Max")
+                    .size(11.0)
+                    .color(palette().text_secondary),
+            );
+            ui.label(
+                egui::RichText::new(format!(
+                    "{:.2} / {:.2} ms",
+                    perf.min_frame_time_ms(),
+                    perf.max_frame_time_ms()
+                ))
+                .size(11.0)
+                .color(palette().text_dim),
+            );
             ui.end_row();
         });
-    
+
     // FPS graph
     let frame_times: Vec<f32> = perf.frame_time_history().collect();
     if !frame_times.is_empty() {
         let max_fps = 60.0_f32;
         ui.add_space(4.0);
-        
+
         let plot_height = 36.0;
         let (response, painter) = ui.allocate_painter(
             egui::vec2(ui.available_width(), plot_height),
             egui::Sense::hover(),
         );
         let rect = response.rect;
-        
+
         painter.rect_filled(rect, 2.0, palette().bg_darkest);
-        painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, palette().border_subtle), egui::StrokeKind::Outside);
-        
+        painter.rect_stroke(
+            rect,
+            2.0,
+            egui::Stroke::new(1.0, palette().border_subtle),
+            egui::StrokeKind::Outside,
+        );
+
         let bar_width = rect.width() / frame_times.len() as f32;
         for (i, &time) in frame_times.iter().enumerate() {
             let fps_val = if time > 0.0 { 1000.0 / time } else { 0.0 };
@@ -792,31 +1122,54 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             let x = rect.left() + i as f32 * bar_width;
             let height = (fps_clamped / max_fps) * rect.height();
             let y = rect.bottom() - height;
-            let color = if fps_val < 20.0 { palette().status_err } else if fps_val < 40.0 { palette().status_warn } else { palette().status_ok };
+            let color = if fps_val < 20.0 {
+                palette().status_err
+            } else if fps_val < 40.0 {
+                palette().status_warn
+            } else {
+                palette().status_ok
+            };
             painter.rect_filled(
                 egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(bar_width.max(1.0), height)),
-                0.0, color,
+                0.0,
+                color,
             );
         }
     }
-    
+
     ui.add_space(6.0);
-    
+
     // CPU section
     section_header(ui, "CPU");
-    
+
     egui::Grid::new("cpu_grid")
         .num_columns(2)
         .spacing([8.0, 2.0])
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("Cores").size(11.0).color(palette().text_secondary));
-            ui.label(egui::RichText::new(format!("{}", perf.cpu_core_count())).size(11.0).color(palette().text_primary));
+            ui.label(
+                egui::RichText::new("Cores")
+                    .size(11.0)
+                    .color(palette().text_secondary),
+            );
+            ui.label(
+                egui::RichText::new(format!("{}", perf.cpu_core_count()))
+                    .size(11.0)
+                    .color(palette().text_primary),
+            );
             ui.end_row();
-            ui.label(egui::RichText::new("Usage").size(11.0).color(palette().text_secondary));
-            ui.label(egui::RichText::new(format!("{:.1}%", perf.cpu_usage_total())).size(11.0).color(palette().text_primary));
+            ui.label(
+                egui::RichText::new("Usage")
+                    .size(11.0)
+                    .color(palette().text_secondary),
+            );
+            ui.label(
+                egui::RichText::new(format!("{:.1}%", perf.cpu_usage_total()))
+                    .size(11.0)
+                    .color(palette().text_primary),
+            );
             ui.end_row();
         });
-    
+
     // Per-core usage bars
     let core_usage = perf.cpu_usage_per_core();
     if !core_usage.is_empty() {
@@ -824,56 +1177,100 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
         let bar_height = 6.0;
         let spacing = 2.0;
         let total_height = core_usage.len() as f32 * (bar_height + spacing);
-        
+
         let (response, painter) = ui.allocate_painter(
             egui::vec2(ui.available_width(), total_height),
             egui::Sense::hover(),
         );
         let rect = response.rect;
-        
+
         for (i, &usage) in core_usage.iter().enumerate() {
             let y = rect.top() + i as f32 * (bar_height + spacing);
-            let bar_rect = egui::Rect::from_min_size(egui::pos2(rect.left(), y), egui::vec2(rect.width(), bar_height));
+            let bar_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.left(), y),
+                egui::vec2(rect.width(), bar_height),
+            );
             painter.rect_filled(bar_rect, 1.0, palette().bg_darkest);
             let usage_width = (usage / 100.0) * rect.width();
-            let usage_rect = egui::Rect::from_min_size(egui::pos2(rect.left(), y), egui::vec2(usage_width, bar_height));
-            let color = if usage > 80.0 { palette().status_err } else if usage > 50.0 { palette().status_warn } else { palette().accent_primary };
+            let usage_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.left(), y),
+                egui::vec2(usage_width, bar_height),
+            );
+            let color = if usage > 80.0 {
+                palette().status_err
+            } else if usage > 50.0 {
+                palette().status_warn
+            } else {
+                palette().accent_primary
+            };
             painter.rect_filled(usage_rect, 1.0, color);
         }
     }
-    
+
     ui.add_space(6.0);
-    
+
     // Memory section
     section_header(ui, "MEMORY");
-    
+
     let mem_used_mb = perf.memory_used() as f64 / (1024.0 * 1024.0);
     let mem_used_gb = mem_used_mb / 1024.0;
-    
+
     egui::Grid::new("mem_grid")
         .num_columns(2)
         .spacing([8.0, 2.0])
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("Process RSS").size(11.0).color(palette().text_secondary));
-            let used_str = if mem_used_gb >= 1.0 { format!("{:.2} GB", mem_used_gb) } else { format!("{:.0} MB", mem_used_mb) };
-            ui.label(egui::RichText::new(used_str).size(11.0).color(palette().text_primary));
+            ui.label(
+                egui::RichText::new("Process RSS")
+                    .size(11.0)
+                    .color(palette().text_secondary),
+            );
+            let used_str = if mem_used_gb >= 1.0 {
+                format!("{:.2} GB", mem_used_gb)
+            } else {
+                format!("{:.0} MB", mem_used_mb)
+            };
+            ui.label(
+                egui::RichText::new(used_str)
+                    .size(11.0)
+                    .color(palette().text_primary),
+            );
             ui.end_row();
         });
-    
+
     // Memory bar - scaled to a fixed reference (4 GB) so the bar is meaningful
     ui.add_space(3.0);
     let reference_gb = 4.0_f64;
     let usage_percent = ((mem_used_gb / reference_gb) * 100.0).min(100.0) as f32;
     let bar_height = 10.0;
-    let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), bar_height), egui::Sense::hover());
+    let (response, painter) = ui.allocate_painter(
+        egui::vec2(ui.available_width(), bar_height),
+        egui::Sense::hover(),
+    );
     let rect = response.rect;
     painter.rect_filled(rect, 2.0, palette().bg_darkest);
-    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, palette().border_subtle), egui::StrokeKind::Outside);
+    painter.rect_stroke(
+        rect,
+        2.0,
+        egui::Stroke::new(1.0, palette().border_subtle),
+        egui::StrokeKind::Outside,
+    );
     let usage_width = (usage_percent / 100.0) * rect.width();
     let usage_rect = egui::Rect::from_min_size(rect.min, egui::vec2(usage_width, bar_height));
-    let mem_color = if usage_percent > 90.0 { palette().status_err } else if usage_percent > 70.0 { palette().status_warn } else { palette().status_info };
+    let mem_color = if usage_percent > 90.0 {
+        palette().status_err
+    } else if usage_percent > 70.0 {
+        palette().status_warn
+    } else {
+        palette().status_info
+    };
     painter.rect_filled(usage_rect, 2.0, mem_color);
-    painter.text(rect.center(), egui::Align2::CENTER_CENTER, format!("{:.0} MB", mem_used_mb), egui::FontId::proportional(9.0), egui::Color32::WHITE);
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        format!("{:.0} MB", mem_used_mb),
+        egui::FontId::proportional(9.0),
+        egui::Color32::WHITE,
+    );
 }
 
 /// Render the RenderingControls panel (placeholder).
@@ -889,41 +1286,46 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
     let sw = (ui.available_width() - 60.0).max(60.0);
     ui.style_mut().spacing.slider_width = sw;
     ui.separator();
-    
+
     // Check if we're in GPU mode
     if !context.is_gpu_mode() {
         ui.label("Cave system is only available in GPU mode.");
         return;
     }
-    
+
     // Store cave generation request in editor state
     let _editor_state = &mut context.editor_state;
-    
+
     // Check if cave system exists
-    let has_cave_system = context.scene_manager.gpu_scene()
+    let has_cave_system = context
+        .scene_manager
+        .gpu_scene()
         .map(|s| s.cave_renderer.is_some())
         .unwrap_or(false);
-    
+
     if !has_cave_system {
         ui.label("Cave system not initialized.");
         ui.add_space(10.0);
-        
+
         if ui.button("🏔️ Generate Cave System").clicked() {
             // Request cave system initialization
             // This will be handled by the app's render loop
-            *context.scene_request = crate::ui::panel_context::SceneModeRequest::Reset; // Temporary - will add proper request
+            *context.scene_request = crate::ui::panel_context::SceneModeRequest::Reset;
+            // Temporary - will add proper request
         }
-        
+
         ui.add_space(10.0);
-        ui.label("Click the button above to generate a procedural cave system with XPBD collision.");
+        ui.label(
+            "Click the button above to generate a procedural cave system with XPBD collision.",
+        );
         return;
     }
-    
+
     // Cave system exists - show editable parameters
     if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
         if let Some(cave_renderer) = &gpu_scene.cave_renderer {
             let params = cave_renderer.params();
-            
+
             // Create local copies for editing
             // Invert density for UI display so that 1.0 = higher density (lower actual value)
             let mut density = 1.0 - params.density;
@@ -932,45 +1334,57 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
             let mut smoothness = params.smoothness;
             let mut seed = params.seed as i32;
             let mut resolution = params.grid_resolution as i32;
-            
+
             let mut params_changed = false;
-            
+
             ui.heading("Generation Parameters");
             ui.add_space(5.0);
-            
+
             // Editable parameters
             ui.add_space(4.0);
             ui.label("Density:")
                 .on_hover_text("How much of the world is filled with cave rock. Higher values create denser, more enclosed caves with less open space");
-            params_changed |= ui.add(egui::Slider::new(&mut density, 0.01..=1.0)).changed();
-            
+            params_changed |= ui
+                .add(egui::Slider::new(&mut density, 0.01..=1.0))
+                .changed();
+
             ui.add_space(4.0);
             ui.label("Scale:")
                 .on_hover_text("Size of the cave features. Higher values create larger, more open chambers; lower values create tighter, more intricate passages");
-            params_changed |= ui.add(egui::Slider::new(&mut scale, 50.0..=100.0)).changed();
+            params_changed |= ui
+                .add(egui::Slider::new(&mut scale, 50.0..=100.0))
+                .changed();
 
             if state.show_advanced_options {
                 ui.add_space(4.0);
                 ui.label("Octaves:")
                     .on_hover_text("Number of noise layers combined to generate the cave shape. More octaves add finer detail and rougher surfaces");
                 params_changed |= ui.add(egui::Slider::new(&mut octaves, 1..=8)).changed();
-                
+
                 ui.add_space(4.0);
-                ui.label("Smoothness:")
-                    .on_hover_text("How smooth the cave walls are. 0 = rough and jagged; 1 = smooth and rounded");
-                params_changed |= ui.add(egui::Slider::new(&mut smoothness, 0.0..=1.0)).changed();
-                
+                ui.label("Smoothness:").on_hover_text(
+                    "How smooth the cave walls are. 0 = rough and jagged; 1 = smooth and rounded",
+                );
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut smoothness, 0.0..=1.0))
+                    .changed();
+
                 ui.add_space(4.0);
                 ui.label("Resolution:")
                     .on_hover_text("Voxel grid resolution for the cave mesh. Higher values produce more detailed geometry but take longer to generate and use more memory");
-                params_changed |= ui.add(egui::Slider::new(&mut resolution, 32..=128)).changed();
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut resolution, 32..=128))
+                    .changed();
             }
-            
+
             ui.add_space(4.0);
             ui.label("Seed:");
             ui.horizontal(|ui| {
                 let mut seed_text = seed.to_string();
-                if ui.add_sized([80.0, 20.0], egui::TextEdit::singleline(&mut seed_text)).changed() {
+                if ui
+                    .add_sized([80.0, 20.0], egui::TextEdit::singleline(&mut seed_text))
+                    .changed()
+                {
                     if let Ok(parsed_seed) = seed_text.parse::<i32>() {
                         if parsed_seed >= 0 && parsed_seed <= 9999 {
                             seed = parsed_seed;
@@ -978,11 +1392,15 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                         }
                     }
                 }
-                if ui.button("🎲 Randomize").on_hover_text("Generate random seed").clicked() {
+                if ui
+                    .button("🎲 Randomize")
+                    .on_hover_text("Generate random seed")
+                    .clicked()
+                {
                     use std::collections::hash_map::DefaultHasher;
                     use std::hash::{Hash, Hasher};
                     use std::time::SystemTime;
-                    
+
                     // Generate a simple random seed using system time
                     let mut hasher = DefaultHasher::new();
                     SystemTime::now().hash(&mut hasher);
@@ -990,15 +1408,15 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     params_changed = true;
                 }
             });
-            
+
             if state.show_advanced_options {
                 ui.add_space(10.0);
                 ui.separator();
                 ui.label(format!("Triangle Count: {}", params.triangle_count));
             }
-            
+
             ui.add_space(10.0);
-            
+
             // Apply changes whenever any parameter changed
             if params_changed {
                 // Store changes in editor state for the app to apply
@@ -1010,7 +1428,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 context.editor_state.cave_seed = seed as u32;
                 context.editor_state.cave_resolution = resolution as u32;
                 context.editor_state.cave_params_dirty = true;
-                
+
                 // Save settings to disk
                 context.editor_state.save_cave_settings();
             }
@@ -1047,8 +1465,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
                 ui.label("Growth Rate:")
                     .on_hover_text("How quickly moss spreads to adjacent voxels per second. Logarithmic scale — small values create slow, patchy growth; large values fill surfaces rapidly");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_growth_rate, 0.001..=1.0)
-                    .logarithmic(true)).changed() {
+                if ui
+                    .add(
+                        egui::Slider::new(&mut context.editor_state.moss_growth_rate, 0.001..=1.0)
+                            .logarithmic(true),
+                    )
+                    .changed()
+                {
                     moss.growth_rate = context.editor_state.moss_growth_rate;
                     moss_changed = true;
                 }
@@ -1056,7 +1479,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(2.0);
                 ui.label("Min Light Level:")
                     .on_hover_text("Minimum light intensity required for moss to grow in a voxel. Moss won't grow in completely dark areas below this threshold");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_min_light, 0.0..=0.5)).changed() {
+                if ui
+                    .add(egui::Slider::new(
+                        &mut context.editor_state.moss_min_light,
+                        0.0..=0.5,
+                    ))
+                    .changed()
+                {
                     moss.min_light = context.editor_state.moss_min_light;
                     moss_changed = true;
                 }
@@ -1064,7 +1493,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(2.0);
                 ui.label("Water Radius (voxels):")
                     .on_hover_text("Radius around water voxels where moss can grow. Moss requires proximity to water — larger values allow moss to grow further from water sources");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_water_radius, 2.0..=50.0)).changed() {
+                if ui
+                    .add(egui::Slider::new(
+                        &mut context.editor_state.moss_water_radius,
+                        2.0..=50.0,
+                    ))
+                    .changed()
+                {
                     moss.water_radius = context.editor_state.moss_water_radius;
                     moss_changed = true;
                 }
@@ -1072,8 +1507,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(2.0);
                 ui.label("Decay Rate:")
                     .on_hover_text("How quickly moss dies when conditions are unfavorable (too dark or too dry). Logarithmic scale");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_decay_rate, 0.001..=0.5)
-                    .logarithmic(true)).changed() {
+                if ui
+                    .add(
+                        egui::Slider::new(&mut context.editor_state.moss_decay_rate, 0.001..=0.5)
+                            .logarithmic(true),
+                    )
+                    .changed()
+                {
                     moss.decay_rate = context.editor_state.moss_decay_rate;
                     moss_changed = true;
                 }
@@ -1084,7 +1524,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
                 ui.label("Water Erosion Rate:")
                     .on_hover_text("How much flowing water erodes moss. Higher values cause moss to be washed away more quickly by water currents");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_erosion_rate, 0.0..=2.0)).changed() {
+                if ui
+                    .add(egui::Slider::new(
+                        &mut context.editor_state.moss_erosion_rate,
+                        0.0..=2.0,
+                    ))
+                    .changed()
+                {
                     moss.erosion_rate = context.editor_state.moss_erosion_rate;
                     moss_changed = true;
                 }
@@ -1092,8 +1538,16 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(2.0);
                 ui.label("Wetness Evaporation:")
                     .on_hover_text("How quickly surface wetness dries out. Higher values mean moss dries faster and needs more frequent water contact to survive");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_wetness_evaporation, 0.001..=0.2)
-                    .logarithmic(true)).changed() {
+                if ui
+                    .add(
+                        egui::Slider::new(
+                            &mut context.editor_state.moss_wetness_evaporation,
+                            0.001..=0.2,
+                        )
+                        .logarithmic(true),
+                    )
+                    .changed()
+                {
                     moss.wetness_evaporation = context.editor_state.moss_wetness_evaporation;
                     moss_changed = true;
                 }
@@ -1104,7 +1558,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
                 ui.label("Graze Cooldown:")
                     .on_hover_text("Seconds a phagocyte must wait before it can graze the same moss voxel again. Prevents a single cell from instantly consuming all nearby moss");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_consume_rate, 1.0..=30.0)).changed() {
+                if ui
+                    .add(egui::Slider::new(
+                        &mut context.editor_state.moss_consume_rate,
+                        1.0..=30.0,
+                    ))
+                    .changed()
+                {
                     moss.graze_cooldown = context.editor_state.moss_consume_rate;
                     moss_changed = true;
                 }
@@ -1112,7 +1572,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(2.0);
                 ui.label("Nutrients per Moss:")
                     .on_hover_text("How many nutrients a phagocyte gains from grazing one moss voxel. Higher values make moss a richer food source");
-                if ui.add(egui::Slider::new(&mut context.editor_state.moss_nutrient_per_moss, 1.0..=200.0)).changed() {
+                if ui
+                    .add(egui::Slider::new(
+                        &mut context.editor_state.moss_nutrient_per_moss,
+                        1.0..=200.0,
+                    ))
+                    .changed()
+                {
                     moss.nutrient_per_moss = context.editor_state.moss_nutrient_per_moss;
                     moss_changed = true;
                 }
@@ -1124,7 +1590,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
                     ui.label("Texture Scale:")
                         .on_hover_text("UV scale of the moss texture on cave surfaces. Smaller values = larger texture tiles; larger values = finer, more detailed texture");
-                    if ui.add(egui::Slider::new(&mut context.editor_state.moss_scale, 0.02..=0.5)).changed() {
+                    if ui
+                        .add(egui::Slider::new(
+                            &mut context.editor_state.moss_scale,
+                            0.02..=0.5,
+                        ))
+                        .changed()
+                    {
                         context.editor_state.light_params_dirty = true;
                         moss_changed = true;
                     }
@@ -1132,7 +1604,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     ui.add_space(2.0);
                     ui.label("Parallax Depth:")
                         .on_hover_text("Strength of the parallax occlusion mapping effect on moss. Higher values make the moss appear to have more 3D depth and volume");
-                    if ui.add(egui::Slider::new(&mut context.editor_state.moss_parallax_depth, 0.0..=0.3)).changed() {
+                    if ui
+                        .add(egui::Slider::new(
+                            &mut context.editor_state.moss_parallax_depth,
+                            0.0..=0.3,
+                        ))
+                        .changed()
+                    {
                         context.editor_state.light_params_dirty = true;
                         moss_changed = true;
                     }
@@ -1159,36 +1637,68 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
                     ui.add_space(2.0);
                     ui.label("Noise Frequency:");
-                    if ui.add(egui::Slider::new(&mut context.editor_state.moss_noise_frequency, 4.0..=80.0)
-                        .logarithmic(true)).changed() {
+                    if ui
+                        .add(
+                            egui::Slider::new(
+                                &mut context.editor_state.moss_noise_frequency,
+                                4.0..=80.0,
+                            )
+                            .logarithmic(true),
+                        )
+                        .changed()
+                    {
                         context.editor_state.light_params_dirty = true;
                         moss_changed = true;
                     }
 
                     ui.add_space(2.0);
                     ui.label("Noise Lacunarity:");
-                    if ui.add(egui::Slider::new(&mut context.editor_state.moss_noise_lacunarity, 1.5..=5.0)).changed() {
+                    if ui
+                        .add(egui::Slider::new(
+                            &mut context.editor_state.moss_noise_lacunarity,
+                            1.5..=5.0,
+                        ))
+                        .changed()
+                    {
                         context.editor_state.light_params_dirty = true;
                         moss_changed = true;
                     }
 
                     ui.add_space(2.0);
                     ui.label("Height Sharpness (low):");
-                    if ui.add(egui::Slider::new(&mut context.editor_state.moss_height_sharpness_low, 0.0..=0.5)).changed() {
+                    if ui
+                        .add(egui::Slider::new(
+                            &mut context.editor_state.moss_height_sharpness_low,
+                            0.0..=0.5,
+                        ))
+                        .changed()
+                    {
                         context.editor_state.light_params_dirty = true;
                         moss_changed = true;
                     }
 
                     ui.add_space(2.0);
                     ui.label("Height Sharpness (high):");
-                    if ui.add(egui::Slider::new(&mut context.editor_state.moss_height_sharpness_high, 0.3..=1.0)).changed() {
+                    if ui
+                        .add(egui::Slider::new(
+                            &mut context.editor_state.moss_height_sharpness_high,
+                            0.3..=1.0,
+                        ))
+                        .changed()
+                    {
                         context.editor_state.light_params_dirty = true;
                         moss_changed = true;
                     }
 
                     ui.add_space(2.0);
                     ui.label("Bump Strength:");
-                    if ui.add(egui::Slider::new(&mut context.editor_state.moss_bump_strength, 0.0..=15.0)).changed() {
+                    if ui
+                        .add(egui::Slider::new(
+                            &mut context.editor_state.moss_bump_strength,
+                            0.0..=15.0,
+                        ))
+                        .changed()
+                    {
                         context.editor_state.light_params_dirty = true;
                         moss_changed = true;
                     }
@@ -1237,7 +1747,10 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
     if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
         let mut show_boulders = gpu_scene.show_boulders;
-        if ui.checkbox(&mut show_boulders, "Enable Mossrocks").changed() {
+        if ui
+            .checkbox(&mut show_boulders, "Enable Mossrocks")
+            .changed()
+        {
             gpu_scene.show_boulders = show_boulders;
             context.editor_state.show_boulders = show_boulders;
             context.editor_state.save_cave_settings();
@@ -1265,8 +1778,10 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
             let mut interval = gpu_scene.boulder_spawn_interval;
             ui.label("Approx. Spawn Interval (seconds):")
                 .on_hover_text("Average time between new mossrock spawns. Logarithmic scale — small values spawn rocks rapidly; large values create rare spawns");
-            if ui.add(egui::Slider::new(&mut interval, 0.5..=60.0)
-                .logarithmic(true)).changed() {
+            if ui
+                .add(egui::Slider::new(&mut interval, 0.5..=60.0).logarithmic(true))
+                .changed()
+            {
                 gpu_scene.boulder_spawn_interval = interval;
                 if let Some(ref mut bs) = gpu_scene.boulder_system {
                     bs.spawn_interval = interval;
@@ -1280,23 +1795,37 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.label("Min");
                 let mut rmin = gpu_scene.boulder_radius_min;
                 let rmax_cur = gpu_scene.boulder_radius_max;
-                if ui.add(egui::DragValue::new(&mut rmin)
-                    .range(0.5..=rmax_cur - 0.5)
-                    .speed(0.1)
-                    .suffix(" u")).changed() {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut rmin)
+                            .range(0.5..=rmax_cur - 0.5)
+                            .speed(0.1)
+                            .suffix(" u"),
+                    )
+                    .changed()
+                {
                     gpu_scene.boulder_radius_min = rmin;
-                    if let Some(ref mut bs) = gpu_scene.boulder_system { bs.radius_min = rmin; }
+                    if let Some(ref mut bs) = gpu_scene.boulder_system {
+                        bs.radius_min = rmin;
+                    }
                     boulder_changed = true;
                 }
                 ui.label("–  Max");
                 let mut rmax = gpu_scene.boulder_radius_max;
                 let rmin_cur = gpu_scene.boulder_radius_min;
-                if ui.add(egui::DragValue::new(&mut rmax)
-                    .range(rmin_cur + 0.5..=30.0)
-                    .speed(0.1)
-                    .suffix(" u")).changed() {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut rmax)
+                            .range(rmin_cur + 0.5..=30.0)
+                            .speed(0.1)
+                            .suffix(" u"),
+                    )
+                    .changed()
+                {
                     gpu_scene.boulder_radius_max = rmax;
-                    if let Some(ref mut bs) = gpu_scene.boulder_system { bs.radius_max = rmax; }
+                    if let Some(ref mut bs) = gpu_scene.boulder_system {
+                        bs.radius_max = rmax;
+                    }
                     boulder_changed = true;
                 }
             });
@@ -1308,21 +1837,35 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     ui.label("Min");
                     let mut mmin = gpu_scene.boulder_moss_min;
                     let mmax_cur = gpu_scene.boulder_moss_max;
-                    if ui.add(egui::DragValue::new(&mut mmin)
-                        .range(100.0..=mmax_cur - 100.0)
-                        .speed(100.0)).changed() {
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut mmin)
+                                .range(100.0..=mmax_cur - 100.0)
+                                .speed(100.0),
+                        )
+                        .changed()
+                    {
                         gpu_scene.boulder_moss_min = mmin;
-                        if let Some(ref mut bs) = gpu_scene.boulder_system { bs.moss_min = mmin; }
+                        if let Some(ref mut bs) = gpu_scene.boulder_system {
+                            bs.moss_min = mmin;
+                        }
                         boulder_changed = true;
                     }
                     ui.label("–  Max");
                     let mut mmax = gpu_scene.boulder_moss_max;
                     let mmin_cur = gpu_scene.boulder_moss_min;
-                    if ui.add(egui::DragValue::new(&mut mmax)
-                        .range(mmin_cur + 100.0..=500_000.0)
-                        .speed(500.0)).changed() {
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut mmax)
+                                .range(mmin_cur + 100.0..=500_000.0)
+                                .speed(500.0),
+                        )
+                        .changed()
+                    {
                         gpu_scene.boulder_moss_max = mmax;
-                        if let Some(ref mut bs) = gpu_scene.boulder_system { bs.moss_max = mmax; }
+                        if let Some(ref mut bs) = gpu_scene.boulder_system {
+                            bs.moss_max = mmax;
+                        }
                         boulder_changed = true;
                     }
                 });
@@ -1333,11 +1876,15 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 let mut buoyancy = gpu_scene.boulder_buoyancy;
                 ui.label("Buoyancy in Water:");
                 ui.add_space(2.0);
-                ui.label(egui::RichText::new(
-                    "0 = floats, 1 = sinks at full gravity"
-                ).small().weak());
-                if ui.add(egui::Slider::new(&mut buoyancy, 0.0..=1.0)
-                    .step_by(0.01)).changed() {
+                ui.label(
+                    egui::RichText::new("0 = floats, 1 = sinks at full gravity")
+                        .small()
+                        .weak(),
+                );
+                if ui
+                    .add(egui::Slider::new(&mut buoyancy, 0.0..=1.0).step_by(0.01))
+                    .changed()
+                {
                     gpu_scene.boulder_buoyancy = buoyancy;
                     if let Some(ref mut bs) = gpu_scene.boulder_system {
                         bs.buoyancy = buoyancy;
@@ -1352,9 +1899,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 let mut gate = gpu_scene.boulder_size_gate;
                 ui.label("Size Gate (half-saturation):");
                 ui.add_space(2.0);
-                ui.label(egui::RichText::new(
-                    "Organism size at which consumption reaches 50% of max rate."
-                ).small().weak());
+                ui.label(
+                    egui::RichText::new(
+                        "Organism size at which consumption reaches 50% of max rate.",
+                    )
+                    .small()
+                    .weak(),
+                );
                 if ui.add(egui::Slider::new(&mut gate, 1.0..=200.0)).changed() {
                     gpu_scene.boulder_size_gate = gate;
                     boulder_changed = true;
@@ -1381,12 +1932,18 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
             // Live stats
             if let Some(ref bs) = gpu_scene.boulder_system {
-                let live = bs.buffers.cpu_boulders.iter()
+                let live = bs
+                    .buffers
+                    .cpu_boulders
+                    .iter()
                     .filter(|b| b.dead == 0 && b.radius > 0.0)
                     .count();
                 ui.label(format!("Live mossrocks: {}", live));
             } else {
-                ui.label(egui::RichText::new("Mossrock system not initialized. Requires cave system.").weak());
+                ui.label(
+                    egui::RichText::new("Mossrock system not initialized. Requires cave system.")
+                        .weak(),
+                );
             }
         }
     }
@@ -1400,16 +1957,18 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     if !context.is_gpu_mode() {
         return;
     }
-    
+
     // Check if fluid system exists
-    let has_fluid_system = context.scene_manager.gpu_scene()
+    let has_fluid_system = context
+        .scene_manager
+        .gpu_scene()
         .map(|scene| scene.fluid_buffers.is_some())
         .unwrap_or(false);
-    
+
     if !has_fluid_system {
         return;
     }
-    
+
     // Continuous spawning controls
     ui.separator();
     ui.heading("Fluid Spawning");
@@ -1417,24 +1976,50 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     // Toggle button - same as the  rail button in the side bar.
     let water_active = context.editor_state.fluid_continuous_spawn;
-    let label = if water_active { "🌊  Water Fill: ON" } else { "🌊  Water Fill: OFF" };
+    let label = if water_active {
+        "🌊  Water Fill: ON"
+    } else {
+        "🌊  Water Fill: OFF"
+    };
     let p = crate::ui::ui_system::palette();
     let btn_fill = if water_active {
-        egui::Color32::from_rgba_unmultiplied(p.accent_primary.r(), p.accent_primary.g(), p.accent_primary.b(), 40)
+        egui::Color32::from_rgba_unmultiplied(
+            p.accent_primary.r(),
+            p.accent_primary.g(),
+            p.accent_primary.b(),
+            40,
+        )
     } else {
         egui::Color32::TRANSPARENT
     };
-    let btn_stroke = if water_active { p.accent_primary } else { p.border_normal };
-    if ui.add(
-        egui::Button::new(egui::RichText::new(label).color(if water_active { p.accent_primary } else { p.text_secondary }))
+    let btn_stroke = if water_active {
+        p.accent_primary
+    } else {
+        p.border_normal
+    };
+    if ui
+        .add(
+            egui::Button::new(egui::RichText::new(label).color(if water_active {
+                p.accent_primary
+            } else {
+                p.text_secondary
+            }))
             .fill(btn_fill)
-            .stroke(egui::Stroke::new(1.0, btn_stroke))
-    ).clicked() {
+            .stroke(egui::Stroke::new(1.0, btn_stroke)),
+        )
+        .clicked()
+    {
         context.editor_state.request_toggle_water = true;
     }
-    ui.label(egui::RichText::new("Continuously fills the world with water. Same as the 🌊 button in the side bar.").small().color(p.text_dim));
+    ui.label(
+        egui::RichText::new(
+            "Continuously fills the world with water. Same as the 🌊 button in the side bar.",
+        )
+        .small()
+        .color(p.text_dim),
+    );
     ui.add_space(4.0);
-    
+
     // === Nutrients ===
     ui.separator();
     ui.heading("Nutrients");
@@ -1442,10 +2027,14 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     ui.label("Density:")
         .on_hover_text("Fraction of the world volume that contains nutrient voxels at any given time. Higher values create a richer food environment");
-    if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_density, 0.0..=0.5)
-        .step_by(0.01)
-        .fixed_decimals(2)
-    ).changed() {
+    if ui
+        .add(
+            egui::Slider::new(&mut context.editor_state.nutrient_density, 0.0..=0.5)
+                .step_by(0.01)
+                .fixed_decimals(2),
+        )
+        .changed()
+    {
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
             gpu_scene.nutrient_density = context.editor_state.nutrient_density;
         }
@@ -1454,11 +2043,18 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     ui.label("Epoch Duration:")
         .on_hover_text("Total length of one nutrient spawn cycle in seconds. Nutrients spawn during the first part of the epoch and despawn during the last part");
-    if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_epoch_duration, 2.0..=30.0)
-        .step_by(0.5)
-        .fixed_decimals(1)
-        .suffix("s")
-    ).changed() {
+    if ui
+        .add(
+            egui::Slider::new(
+                &mut context.editor_state.nutrient_epoch_duration,
+                2.0..=30.0,
+            )
+            .step_by(0.5)
+            .fixed_decimals(1)
+            .suffix("s"),
+        )
+        .changed()
+    {
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
             gpu_scene.nutrient_epoch_duration = context.editor_state.nutrient_epoch_duration;
         }
@@ -1466,13 +2062,19 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     ui.label("Epoch Spacing:")
         .on_hover_text("Gap between consecutive nutrient epochs in seconds. Longer spacing creates feast-and-famine cycles that drive organism behavior");
-    if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_epoch_spacing, 1.0..=30.0)
-        .step_by(0.5)
-        .fixed_decimals(1)
-        .suffix("s")
-    ).changed() {
+    if ui
+        .add(
+            egui::Slider::new(&mut context.editor_state.nutrient_epoch_spacing, 1.0..=30.0)
+                .step_by(0.5)
+                .fixed_decimals(1)
+                .suffix("s"),
+        )
+        .changed()
+    {
         // Clamp spacing to not exceed duration
-        context.editor_state.nutrient_epoch_spacing = context.editor_state.nutrient_epoch_spacing
+        context.editor_state.nutrient_epoch_spacing = context
+            .editor_state
+            .nutrient_epoch_spacing
             .min(context.editor_state.nutrient_epoch_duration);
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
             gpu_scene.nutrient_epoch_spacing = context.editor_state.nutrient_epoch_spacing;
@@ -1482,13 +2084,20 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     if state.show_advanced_options {
         ui.label("Spawn Ramp:")
             .on_hover_text("Fraction of the epoch duration over which nutrients gradually appear. 0.1 = nutrients appear quickly at the start; 0.9 = nutrients trickle in slowly over most of the epoch");
-        if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_spawn_end, 0.05..=0.9)
-            .step_by(0.05)
-            .fixed_decimals(2)
-        ).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.nutrient_spawn_end, 0.05..=0.9)
+                    .step_by(0.05)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
             // Ensure spawn_end < despawn_start
-            if context.editor_state.nutrient_spawn_end >= context.editor_state.nutrient_despawn_start {
-                context.editor_state.nutrient_despawn_start = (context.editor_state.nutrient_spawn_end + 0.05).min(0.95);
+            if context.editor_state.nutrient_spawn_end
+                >= context.editor_state.nutrient_despawn_start
+            {
+                context.editor_state.nutrient_despawn_start =
+                    (context.editor_state.nutrient_spawn_end + 0.05).min(0.95);
             }
             if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                 gpu_scene.nutrient_spawn_end = context.editor_state.nutrient_spawn_end;
@@ -1498,13 +2107,20 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
         ui.label("Despawn Ramp:")
             .on_hover_text("Fraction of the epoch at which nutrients start disappearing. Must be greater than Spawn Ramp. Lower values give organisms less time to consume nutrients before they vanish");
-        if ui.add(egui::Slider::new(&mut context.editor_state.nutrient_despawn_start, 0.1..=0.95)
-            .step_by(0.05)
-            .fixed_decimals(2)
-        ).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.nutrient_despawn_start, 0.1..=0.95)
+                    .step_by(0.05)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
             // Ensure despawn_start > spawn_end
-            if context.editor_state.nutrient_despawn_start <= context.editor_state.nutrient_spawn_end {
-                context.editor_state.nutrient_spawn_end = (context.editor_state.nutrient_despawn_start - 0.05).max(0.05);
+            if context.editor_state.nutrient_despawn_start
+                <= context.editor_state.nutrient_spawn_end
+            {
+                context.editor_state.nutrient_spawn_end =
+                    (context.editor_state.nutrient_despawn_start - 0.05).max(0.05);
             }
             if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                 gpu_scene.nutrient_spawn_end = context.editor_state.nutrient_spawn_end;
@@ -1516,84 +2132,109 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     // Surface pressure control for radial fluid mode
     ui.separator();
     ui.heading("Fluid Physics");
-    
+
     // Only show surface pressure when gravity mode is radial (advanced only)
     if state.show_advanced_options && state.world_settings.gravity_mode == 3 {
         ui.label("Surface Pressure:")
             .on_hover_text("Tangential smoothing strength for radial fluid mode. Higher values push fluid toward the world surface more aggressively, creating a more uniform water layer");
-        if ui.add(egui::Slider::new(&mut state.fluid_settings.surface_pressure, 0.0..=1.0)
-        ).changed() {
+        if ui
+            .add(egui::Slider::new(
+                &mut state.fluid_settings.surface_pressure,
+                0.0..=1.0,
+            ))
+            .changed()
+        {
             // Apply to GPU scene
             if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                 gpu_scene.set_surface_pressure(state.fluid_settings.surface_pressure);
             }
         }
-        ui.label(egui::RichText::new("Tangential smoothing strength for radial fluid mode").small());
+        ui.label(
+            egui::RichText::new("Tangential smoothing strength for radial fluid mode").small(),
+        );
     }
 
     // Lateral flow probability - advanced only
     if state.show_advanced_options {
         let selected_fluid_type = context.editor_state.selected_fluid_type;
-        
+
         if selected_fluid_type > 0 && selected_fluid_type <= 3 {
             let mut probabilities = context.editor_state.fluid_lateral_flow_probabilities;
             let mut changed = false;
-            
+
             ui.add_space(4.0);
             ui.label("Lateral Flow Probability:")
                 .on_hover_text("Probability that a fluid voxel moves sideways each step. Higher values create more horizontal spreading and mixing");
-            if ui.add(egui::Slider::new(&mut probabilities[selected_fluid_type as usize], 0.0..=1.0)
-                .step_by(0.01)
-                .fixed_decimals(2)
-            ).changed() {
+            if ui
+                .add(
+                    egui::Slider::new(&mut probabilities[selected_fluid_type as usize], 0.0..=1.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
                 changed = true;
             }
-            
+
             if changed {
                 context.editor_state.fluid_lateral_flow_probabilities = probabilities;
                 context.editor_state.save_fluid_settings();
             }
         }
     } // end advanced fluid physics
-    
+
     // Condensation probability (steam to water)
     ui.add_space(4.0);
     ui.label("Condensation Probability:")
         .on_hover_text("Probability per step that a steam voxel converts to water. Higher values cause steam to condense into water more quickly");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_condensation_probability, 0.0..=0.05)
-        .step_by(0.001)
-        .fixed_decimals(3)
-        ).changed() {
-            // Update GPU scene phase change probabilities
-            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                gpu_scene.set_phase_change_probabilities(
-                    context.editor_state.fluid_condensation_probability,
-                    context.editor_state.fluid_vaporization_probability
-                );
-            }
-            // Save fluid settings
-            context.editor_state.save_fluid_settings();
+    if ui
+        .add(
+            egui::Slider::new(
+                &mut context.editor_state.fluid_condensation_probability,
+                0.0..=0.05,
+            )
+            .step_by(0.001)
+            .fixed_decimals(3),
+        )
+        .changed()
+    {
+        // Update GPU scene phase change probabilities
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            gpu_scene.set_phase_change_probabilities(
+                context.editor_state.fluid_condensation_probability,
+                context.editor_state.fluid_vaporization_probability,
+            );
         }
-    
+        // Save fluid settings
+        context.editor_state.save_fluid_settings();
+    }
+
     // Vaporization probability (water to steam)
     ui.add_space(4.0);
     ui.label("Vaporization Probability:")
         .on_hover_text("Probability per step that a water voxel converts to steam. Higher values cause water to evaporate into steam more quickly");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_vaporization_probability, 0.0..=0.05)
-        .step_by(0.001)
-        .fixed_decimals(3)
-        ).changed() {
-            // Update GPU scene phase change probabilities
-            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                gpu_scene.set_phase_change_probabilities(
-                    context.editor_state.fluid_condensation_probability,
-                    context.editor_state.fluid_vaporization_probability
-                );
-            }
-            // Save fluid settings
-            context.editor_state.save_fluid_settings();
+    if ui
+        .add(
+            egui::Slider::new(
+                &mut context.editor_state.fluid_vaporization_probability,
+                0.0..=0.05,
+            )
+            .step_by(0.001)
+            .fixed_decimals(3),
+        )
+        .changed()
+    {
+        // Update GPU scene phase change probabilities
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            gpu_scene.set_phase_change_probabilities(
+                context.editor_state.fluid_condensation_probability,
+                context.editor_state.fluid_vaporization_probability,
+            );
         }
-    
+        // Save fluid settings
+        context.editor_state.save_fluid_settings();
+    }
+
     // === Water Surface Lighting & Reflection ===
     ui.add_space(8.0);
     ui.separator();
@@ -1603,40 +2244,71 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     if state.show_advanced_options {
         ui.label("Ambient:")
             .on_hover_text("Minimum light level on the water surface regardless of light direction. Higher values brighten the water in shadowed areas");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_ambient, 0.0..=1.0)
-            .step_by(0.01).fixed_decimals(2)).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_ambient, 0.0..=1.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
             context.editor_state.save_fluid_render_settings();
         }
 
         ui.add_space(4.0);
         ui.label("Diffuse:")
             .on_hover_text("Strength of the diffuse (Lambertian) lighting on the water surface. Higher values make the water respond more strongly to the light direction");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_diffuse, 0.0..=1.0)
-            .step_by(0.01).fixed_decimals(2)).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_diffuse, 0.0..=1.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
             context.editor_state.save_fluid_render_settings();
         }
 
         ui.add_space(4.0);
         ui.label("Specular:")
             .on_hover_text("Strength of the specular highlight (glint) on the water surface. Higher values create a brighter, more mirror-like reflection of the light source");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_specular, 0.0..=2.0)
-            .step_by(0.01).fixed_decimals(2)).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_specular, 0.0..=2.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
             context.editor_state.save_fluid_render_settings();
         }
 
         ui.add_space(4.0);
         ui.label("Shininess:")
             .on_hover_text("Sharpness of the specular highlight. Low values = broad, soft glint. High values = tight, sharp glint like polished glass");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_shininess, 1.0..=256.0)
-            .step_by(1.0).fixed_decimals(0).logarithmic(true)).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_shininess, 1.0..=256.0)
+                    .step_by(1.0)
+                    .fixed_decimals(0)
+                    .logarithmic(true),
+            )
+            .changed()
+        {
             context.editor_state.save_fluid_render_settings();
         }
 
         ui.add_space(4.0);
         ui.label("Rim Light:")
             .on_hover_text("Backlit glow around the edges of the water surface. Creates a halo effect when the light is behind the water");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_rim, 0.0..=2.0)
-            .step_by(0.01).fixed_decimals(2)).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_rim, 0.0..=2.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
             context.editor_state.save_fluid_render_settings();
         }
 
@@ -1645,8 +2317,14 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     ui.label("Alpha (Transparency):")
         .on_hover_text("Overall transparency of the water surface. 0 = fully transparent (invisible); 1 = fully opaque");
-    if ui.add(egui::Slider::new(&mut context.editor_state.fluid_alpha, 0.0..=1.0)
-        .step_by(0.01).fixed_decimals(2)).changed() {
+    if ui
+        .add(
+            egui::Slider::new(&mut context.editor_state.fluid_alpha, 0.0..=1.0)
+                .step_by(0.01)
+                .fixed_decimals(2),
+        )
+        .changed()
+    {
         context.editor_state.save_fluid_render_settings();
     }
 
@@ -1658,32 +2336,60 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
         ui.label("Fresnel Strength:")
             .on_hover_text("How strongly the Fresnel effect controls reflection intensity. Higher values make the water more reflective at grazing angles");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_fresnel, 0.0..=2.0)
-            .step_by(0.01).fixed_decimals(2)).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_fresnel, 0.0..=2.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
             context.editor_state.save_fluid_render_settings();
         }
 
         ui.add_space(4.0);
         ui.label("Fresnel Power:")
             .on_hover_text("Sharpness of the Fresnel transition. Higher values make the reflection appear only at very shallow angles; lower values spread it across more of the surface");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_fresnel_power, 0.5..=10.0)
-            .step_by(0.1).fixed_decimals(1)).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_fresnel_power, 0.5..=10.0)
+                    .step_by(0.1)
+                    .fixed_decimals(1),
+            )
+            .changed()
+        {
             context.editor_state.save_fluid_render_settings();
         }
 
         ui.add_space(4.0);
-        ui.label("Reflection Intensity:")
-            .on_hover_text("Overall strength of the cubemap/environment reflection on the water surface");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_reflection, 0.0..=2.0)
-            .step_by(0.01).fixed_decimals(2)).changed() {
+        ui.label("Reflection Intensity:").on_hover_text(
+            "Overall strength of the cubemap/environment reflection on the water surface",
+        );
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_reflection, 0.0..=2.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
             context.editor_state.save_fluid_render_settings();
         }
 
         ui.add_space(4.0);
         ui.label("Reflection Brightness:")
             .on_hover_text("Brightness multiplier applied to the reflected environment. Higher values make the reflection appear brighter and more vivid");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_reflection_brightness, 1.0..=50.0)
-            .step_by(0.5).fixed_decimals(1)).changed() {
+        if ui
+            .add(
+                egui::Slider::new(
+                    &mut context.editor_state.fluid_reflection_brightness,
+                    1.0..=50.0,
+                )
+                .step_by(0.5)
+                .fixed_decimals(1),
+            )
+            .changed()
+        {
             context.editor_state.save_fluid_render_settings();
         }
 
@@ -1692,84 +2398,137 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.separator();
         ui.heading("Water Surface Waves");
         ui.add_space(4.0);
-        
+
         ui.label("Wave Height:")
             .on_hover_text("Amplitude of the animated wave displacement on the water surface. 0 = flat water; higher values create more dramatic waves");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_wave_height, 0.0..=5.0)
-            .step_by(0.05).fixed_decimals(2)).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_wave_height, 0.0..=5.0)
+                    .step_by(0.05)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
             context.editor_state.fluid_mesh_params_dirty = true;
             context.editor_state.save_fluid_render_settings();
         }
-        
+
         ui.add_space(4.0);
         ui.label("Wave Speed:")
             .on_hover_text("How fast the wave pattern animates across the water surface");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_wave_speed, 0.0..=5.0)
-            .step_by(0.05).fixed_decimals(2)).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_wave_speed, 0.0..=5.0)
+                    .step_by(0.05)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
             context.editor_state.fluid_mesh_params_dirty = true;
             context.editor_state.save_fluid_render_settings();
         }
-        
+
         ui.add_space(4.0);
         ui.label("Noise Scale (lower = larger waves):")
             .on_hover_text("Spatial frequency of the wave noise pattern. Lower values create large, rolling waves; higher values create small, choppy ripples");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_scale, 0.01..=20.0)
-            .step_by(0.01).fixed_decimals(2).logarithmic(true)).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_noise_scale, 0.01..=20.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2)
+                    .logarithmic(true),
+            )
+            .changed()
+        {
             context.editor_state.fluid_mesh_params_dirty = true;
             context.editor_state.save_fluid_render_settings();
         }
-        
+
         ui.add_space(4.0);
         ui.label("Octaves:")
             .on_hover_text("Number of noise layers combined for the wave pattern. More octaves add finer detail to the waves");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_octaves, 1.0..=6.0)
-            .step_by(1.0).fixed_decimals(0)).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_noise_octaves, 1.0..=6.0)
+                    .step_by(1.0)
+                    .fixed_decimals(0),
+            )
+            .changed()
+        {
             context.editor_state.fluid_mesh_params_dirty = true;
             context.editor_state.save_fluid_render_settings();
         }
-        
+
         ui.add_space(4.0);
         ui.label("Lacunarity (freq per octave):")
             .on_hover_text("How much the frequency increases with each successive noise octave. Higher values create more varied, complex wave patterns");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_lacunarity, 1.0..=4.0)
-            .step_by(0.1).fixed_decimals(1)).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_noise_lacunarity, 1.0..=4.0)
+                    .step_by(0.1)
+                    .fixed_decimals(1),
+            )
+            .changed()
+        {
             context.editor_state.fluid_mesh_params_dirty = true;
             context.editor_state.save_fluid_render_settings();
         }
-        
+
         ui.add_space(4.0);
         ui.label("Persistence (amp per octave):")
             .on_hover_text("How much the amplitude decreases with each successive noise octave. Lower values make higher octaves contribute less, creating smoother waves");
-        if ui.add(egui::Slider::new(&mut context.editor_state.fluid_noise_persistence, 0.1..=1.0)
-            .step_by(0.05).fixed_decimals(2)).changed() {
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_noise_persistence, 0.1..=1.0)
+                    .step_by(0.05)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
             context.editor_state.fluid_mesh_params_dirty = true;
             context.editor_state.save_fluid_render_settings();
         }
-        
+
         // === Caustics ===
         ui.add_space(8.0);
         ui.separator();
         ui.heading("Caustics");
         ui.add_space(4.0);
         let mut caustic_changed = false;
-        
-        ui.label("Intensity:")
-            .on_hover_text("Brightness of the caustic light patterns projected onto surfaces beneath the water");
-        caustic_changed |= ui.add(egui::Slider::new(&mut context.editor_state.caustic_intensity, 0.0..=2.0)
-            .step_by(0.01).fixed_decimals(2)).changed();
-        
+
+        ui.label("Intensity:").on_hover_text(
+            "Brightness of the caustic light patterns projected onto surfaces beneath the water",
+        );
+        caustic_changed |= ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.caustic_intensity, 0.0..=2.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed();
+
         ui.add_space(4.0);
         ui.label("Scale:")
             .on_hover_text("Size of the caustic pattern. Smaller values create tighter, more detailed caustic ripples; larger values create broader patterns");
-        caustic_changed |= ui.add(egui::Slider::new(&mut context.editor_state.caustic_scale, 0.1..=30.0)
-            .step_by(0.1).fixed_decimals(1)).changed();
-        
+        caustic_changed |= ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.caustic_scale, 0.1..=30.0)
+                    .step_by(0.1)
+                    .fixed_decimals(1),
+            )
+            .changed();
+
         ui.add_space(4.0);
         ui.label("Speed:")
             .on_hover_text("How fast the caustic pattern animates. Higher values create more dynamic, rapidly shifting light patterns");
-        caustic_changed |= ui.add(egui::Slider::new(&mut context.editor_state.caustic_speed, 0.0..=5.0)
-            .step_by(0.1).fixed_decimals(1)).changed();
-        
+        caustic_changed |= ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.caustic_speed, 0.0..=5.0)
+                    .step_by(0.1)
+                    .fixed_decimals(1),
+            )
+            .changed();
+
         if caustic_changed {
             if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                 if let Some(ref mut light_field) = gpu_scene.light_field_system {
@@ -1781,12 +2540,16 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             context.editor_state.save_light_settings();
         }
     } // end advanced water visuals (cubemap, waves, caustics)
-    
+
     ui.add_space(10.0);
 }
 
 /// Organism skin controls, embedded at the bottom of the fluid/environment panel.
-fn render_organism_skin_settings(ui: &mut Ui, context: &mut PanelContext, organism_skin: &mut crate::ui::OrganismSkinSettings) {
+fn render_organism_skin_settings(
+    ui: &mut Ui,
+    context: &mut PanelContext,
+    organism_skin: &mut crate::ui::OrganismSkinSettings,
+) {
     if !context.is_gpu_mode() {
         return;
     }
@@ -1815,20 +2578,29 @@ fn render_organism_skin_settings(ui: &mut Ui, context: &mut PanelContext, organi
     // -- Geometry --------------------------------------------------------------
     ui.label("Skin Offset (gap from cell surface, world units):")
         .on_hover_text("How far the skin mesh extends beyond the cell surfaces. Larger values create a more inflated, blobby appearance");
-    ui.add(egui::Slider::new(&mut organism_skin.radius_scale, 0.0..=5.0)
-        .step_by(0.05).fixed_decimals(2));
+    ui.add(
+        egui::Slider::new(&mut organism_skin.radius_scale, 0.0..=5.0)
+            .step_by(0.05)
+            .fixed_decimals(2),
+    );
 
     ui.add_space(4.0);
     ui.label("Shrink Speed (fraction of gap closed per iteration):")
         .on_hover_text("How aggressively the skin mesh wraps around the cells each iteration. Higher values create a tighter fit but may cause artifacts");
-    ui.add(egui::Slider::new(&mut organism_skin.shrink_speed, 0.01..=1.0)
-        .step_by(0.01).fixed_decimals(2));
+    ui.add(
+        egui::Slider::new(&mut organism_skin.shrink_speed, 0.01..=1.0)
+            .step_by(0.01)
+            .fixed_decimals(2),
+    );
 
     ui.add_space(4.0);
     ui.label("Smooth Factor (Laplacian blend per iteration):")
         .on_hover_text("How much the skin mesh is smoothed each iteration. Higher values create a smoother, more organic surface");
-    ui.add(egui::Slider::new(&mut organism_skin.smooth_factor, 0.0..=0.8)
-        .step_by(0.01).fixed_decimals(2));
+    ui.add(
+        egui::Slider::new(&mut organism_skin.smooth_factor, 0.0..=0.8)
+            .step_by(0.01)
+            .fixed_decimals(2),
+    );
 
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -1839,9 +2611,13 @@ fn render_organism_skin_settings(ui: &mut Ui, context: &mut PanelContext, organi
 
     ui.add_space(2.0);
     ui.horizontal(|ui| {
-        ui.label("Smooth Iterations:")
-            .on_hover_text("Number of Laplacian smoothing passes. More iterations create a smoother surface");
-        ui.add(egui::Slider::new(&mut organism_skin.smooth_iters, 0u32..=8u32));
+        ui.label("Smooth Iterations:").on_hover_text(
+            "Number of Laplacian smoothing passes. More iterations create a smoother surface",
+        );
+        ui.add(egui::Slider::new(
+            &mut organism_skin.smooth_iters,
+            0u32..=8u32,
+        ));
     });
 
     ui.add_space(2.0);
@@ -1870,22 +2646,32 @@ fn render_organism_skin_settings(ui: &mut Ui, context: &mut PanelContext, organi
     });
 
     ui.add_space(4.0);
-    ui.label("Opacity:")
-        .on_hover_text("Transparency of the organism skin. 0 = fully transparent; 1 = fully opaque");
-    ui.add(egui::Slider::new(&mut organism_skin.alpha, 0.0..=1.0)
-        .step_by(0.01).fixed_decimals(2));
+    ui.label("Opacity:").on_hover_text(
+        "Transparency of the organism skin. 0 = fully transparent; 1 = fully opaque",
+    );
+    ui.add(
+        egui::Slider::new(&mut organism_skin.alpha, 0.0..=1.0)
+            .step_by(0.01)
+            .fixed_decimals(2),
+    );
 
     ui.add_space(4.0);
     ui.label("Subsurface Scattering:")
         .on_hover_text("Simulates light penetrating and scattering beneath the skin surface, creating a soft, translucent biological look");
-    ui.add(egui::Slider::new(&mut organism_skin.sss_strength, 0.0..=3.0)
-        .step_by(0.05).fixed_decimals(2));
+    ui.add(
+        egui::Slider::new(&mut organism_skin.sss_strength, 0.0..=3.0)
+            .step_by(0.05)
+            .fixed_decimals(2),
+    );
 
     ui.add_space(4.0);
     ui.label("Rim Light:")
         .on_hover_text("Backlit glow around the edges of the organism skin. Creates a halo effect that makes organisms stand out against the background");
-    ui.add(egui::Slider::new(&mut organism_skin.rim_strength, 0.0..=3.0)
-        .step_by(0.05).fixed_decimals(2));
+    ui.add(
+        egui::Slider::new(&mut organism_skin.rim_strength, 0.0..=3.0)
+            .step_by(0.05)
+            .fixed_decimals(2),
+    );
 
     ui.add_space(8.0);
 
@@ -1922,18 +2708,20 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         ui.label("Lighting settings are only available in GPU mode.");
         return;
     }
-    
-    let has_light_field = context.scene_manager.gpu_scene()
+
+    let has_light_field = context
+        .scene_manager
+        .gpu_scene()
         .map(|s| s.light_field_system.is_some())
         .unwrap_or(false);
-    
+
     if !has_light_field {
         ui.label("Light field system not initialized.");
         ui.add_space(5.0);
         ui.label("Initialize the fluid system first to enable lighting.");
         return;
     }
-    
+
     let mut changed = false;
     let mut sun_changed = false;
 
@@ -1941,20 +2729,37 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
     ui.add_space(4.0);
     ui.heading("Light Direction");
     ui.add_space(4.0);
-    
-    ui.label("X:")
-        .on_hover_text("X component of the light direction vector. Negative = light comes from the right");
-    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[0], -1.0..=1.0)
-        .step_by(0.01).fixed_decimals(2)).changed();
-    ui.label("Y:")
-        .on_hover_text("Y component of the light direction vector. Positive = light comes from above (top-down)");
-    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[1], -1.0..=1.0)
-        .step_by(0.01).fixed_decimals(2)).changed();
+
+    ui.label("X:").on_hover_text(
+        "X component of the light direction vector. Negative = light comes from the right",
+    );
+    changed |= ui
+        .add(
+            egui::Slider::new(&mut context.editor_state.light_dir[0], -1.0..=1.0)
+                .step_by(0.01)
+                .fixed_decimals(2),
+        )
+        .changed();
+    ui.label("Y:").on_hover_text(
+        "Y component of the light direction vector. Positive = light comes from above (top-down)",
+    );
+    changed |= ui
+        .add(
+            egui::Slider::new(&mut context.editor_state.light_dir[1], -1.0..=1.0)
+                .step_by(0.01)
+                .fixed_decimals(2),
+        )
+        .changed();
     ui.label("Z:")
         .on_hover_text("Z component of the light direction vector");
-    changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_dir[2], -1.0..=1.0)
-        .step_by(0.01).fixed_decimals(2)).changed();
-    
+    changed |= ui
+        .add(
+            egui::Slider::new(&mut context.editor_state.light_dir[2], -1.0..=1.0)
+                .step_by(0.01)
+                .fixed_decimals(2),
+        )
+        .changed();
+
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         if ui.button("☀ Top-Down").clicked() {
@@ -1979,8 +2784,13 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
 
     ui.label("Brightness:")
         .on_hover_text("Overall intensity of the directional sun light. Also affects how much energy photocyte cells generate from light");
-    let brightness_changed = ui.add(egui::Slider::new(&mut context.editor_state.sun_intensity, 0.0..=20.0)
-        .step_by(0.1).fixed_decimals(1)).changed();
+    let brightness_changed = ui
+        .add(
+            egui::Slider::new(&mut context.editor_state.sun_intensity, 0.0..=20.0)
+                .step_by(0.1)
+                .fixed_decimals(1),
+        )
+        .changed();
     if brightness_changed {
         changed = true;
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
@@ -1988,7 +2798,8 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         }
     }
 
-    sun_changed |= ui.checkbox(&mut context.editor_state.show_sun, "Show Sun Disc")
+    sun_changed |= ui
+        .checkbox(&mut context.editor_state.show_sun, "Show Sun Disc")
         .on_hover_text("Render a visible sun disc in the skybox at the light direction position")
         .changed();
 
@@ -1998,15 +2809,33 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         ui.label("Sun Color:");
         ui.horizontal(|ui| {
             ui.label("R:");
-            sun_changed |= ui.add(egui::Slider::new(&mut sc[0], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+            sun_changed |= ui
+                .add(
+                    egui::Slider::new(&mut sc[0], 0.0..=1.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed();
         });
         ui.horizontal(|ui| {
             ui.label("G:");
-            sun_changed |= ui.add(egui::Slider::new(&mut sc[1], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+            sun_changed |= ui
+                .add(
+                    egui::Slider::new(&mut sc[1], 0.0..=1.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed();
         });
         ui.horizontal(|ui| {
             ui.label("B:");
-            sun_changed |= ui.add(egui::Slider::new(&mut sc[2], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+            sun_changed |= ui
+                .add(
+                    egui::Slider::new(&mut sc[2], 0.0..=1.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed();
         });
         context.editor_state.sun_color = sc;
 
@@ -2014,8 +2843,13 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
             ui.add_space(4.0);
             ui.label("Sun Size:")
                 .on_hover_text("Angular radius of the sun disc in the skybox. Larger values create a bigger, more diffuse sun");
-            sun_changed |= ui.add(egui::Slider::new(&mut context.editor_state.sun_angular_radius, 0.005..=0.2)
-                .step_by(0.005).fixed_decimals(3)).changed();
+            sun_changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.sun_angular_radius, 0.005..=0.2)
+                        .step_by(0.005)
+                        .fixed_decimals(3),
+                )
+                .changed();
         }
     } // end show_sun
 
@@ -2028,21 +2862,38 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         ui.add_space(4.0);
 
         let mut shadow_changed = false;
-        shadow_changed |= ui.checkbox(&mut context.editor_state.shadow_enabled, "Enable Surface Shadows")
-            .on_hover_text("Cast shadows from cave geometry and cells onto surfaces using the light field")
+        shadow_changed |= ui
+            .checkbox(
+                &mut context.editor_state.shadow_enabled,
+                "Enable Surface Shadows",
+            )
+            .on_hover_text(
+                "Cast shadows from cave geometry and cells onto surfaces using the light field",
+            )
             .changed();
 
         ui.add_space(4.0);
-        ui.label("Shadow Strength:")
-            .on_hover_text("How dark the shadows are. 0 = no shadows visible; 1 = fully opaque black shadows");
-        shadow_changed |= ui.add(egui::Slider::new(&mut context.editor_state.shadow_strength, 0.0..=1.0)
-            .step_by(0.01).fixed_decimals(2)).changed();
+        ui.label("Shadow Strength:").on_hover_text(
+            "How dark the shadows are. 0 = no shadows visible; 1 = fully opaque black shadows",
+        );
+        shadow_changed |= ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.shadow_strength, 0.0..=1.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed();
 
         ui.add_space(4.0);
         ui.label("Shadow Quality:")
             .on_hover_text("Sampling quality for shadow rays. Higher values reduce noise and banding but increase GPU cost");
-        shadow_changed |= ui.add(egui::Slider::new(&mut context.editor_state.shadow_quality, 0.0..=1.0)
-            .step_by(0.01).fixed_decimals(2)).changed();
+        shadow_changed |= ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.shadow_quality, 0.0..=1.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed();
 
         if shadow_changed {
             changed = true;
@@ -2074,23 +2925,52 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
 
         ui.label("Step Size:")
             .on_hover_text("Distance between ray samples in world units. Smaller steps = more accurate but slower. Larger steps = faster but may miss thin geometry");
-        changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_step_size, 0.5..=4.0)
-            .step_by(0.1).fixed_decimals(1)).changed();
+        changed |= ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.light_field_step_size, 0.5..=4.0)
+                    .step_by(0.1)
+                    .fixed_decimals(1),
+            )
+            .changed();
 
         ui.label("Solid Absorption:")
             .on_hover_text("How much light is blocked per unit of solid (cave) material. Higher values create darker shadows behind cave walls");
-        changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_absorption_solid, 0.1..=20.0)
-            .step_by(0.1).fixed_decimals(1)).changed();
+        changed |= ui
+            .add(
+                egui::Slider::new(
+                    &mut context.editor_state.light_field_absorption_solid,
+                    0.1..=20.0,
+                )
+                .step_by(0.1)
+                .fixed_decimals(1),
+            )
+            .changed();
 
         ui.label("Cell Absorption:")
             .on_hover_text("How much light is blocked per unit of cell material. Higher values make cells cast darker shadows on each other");
-        changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_absorption_cell, 0.0..=5.0)
-            .step_by(0.05).fixed_decimals(2)).changed();
+        changed |= ui
+            .add(
+                egui::Slider::new(
+                    &mut context.editor_state.light_field_absorption_cell,
+                    0.0..=5.0,
+                )
+                .step_by(0.05)
+                .fixed_decimals(2),
+            )
+            .changed();
 
         ui.label("Ambient Floor:")
             .on_hover_text("Minimum light level in fully shadowed areas. Prevents completely black shadows — simulates indirect/ambient light bouncing");
-        changed |= ui.add(egui::Slider::new(&mut context.editor_state.light_field_ambient_floor, 0.0..=0.2)
-            .step_by(0.005).fixed_decimals(3)).changed();
+        changed |= ui
+            .add(
+                egui::Slider::new(
+                    &mut context.editor_state.light_field_ambient_floor,
+                    0.0..=0.2,
+                )
+                .step_by(0.005)
+                .fixed_decimals(3),
+            )
+            .changed();
 
         // Volumetric Fog
         ui.add_space(8.0);
@@ -2102,8 +2982,13 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
             ui.add_space(4.0);
             ui.label("Fog Density:")
                 .on_hover_text("Overall thickness of the fog. Higher values create denser, more opaque fog that obscures distant objects");
-            changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_density, 0.0..=2.0)
-                .step_by(0.01).fixed_decimals(2)).changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.fog_density, 0.0..=2.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed();
 
             ui.label("Fog Steps:")
                 .on_hover_text("Number of ray march steps for volumetric fog. More steps = smoother, more accurate fog but higher GPU cost");
@@ -2115,34 +3000,75 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
 
             ui.label("Scattering Anisotropy:")
                 .on_hover_text("Direction of light scattering. 0 = uniform scatter in all directions. Higher values create a forward-scattering glow around the light source (Mie scattering)");
-            changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_scattering_anisotropy, 0.0..=0.95)
-                .step_by(0.01).fixed_decimals(2)).changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(
+                        &mut context.editor_state.fog_scattering_anisotropy,
+                        0.0..=0.95,
+                    )
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+                )
+                .changed();
 
             ui.label("Absorption:")
                 .on_hover_text("How much light the fog absorbs (as opposed to scattering). Higher values make the fog darker and more opaque");
-            changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_absorption, 0.0..=2.0)
-                .step_by(0.01).fixed_decimals(2)).changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.fog_absorption, 0.0..=2.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed();
 
             ui.add_space(4.0);
             let mut fog_col = context.editor_state.fog_color;
             ui.label("Fog Color R:");
-            changed |= ui.add(egui::Slider::new(&mut fog_col[0], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut fog_col[0], 0.0..=1.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed();
             ui.label("Fog Color G:");
-            changed |= ui.add(egui::Slider::new(&mut fog_col[1], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut fog_col[1], 0.0..=1.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed();
             ui.label("Fog Color B:");
-            changed |= ui.add(egui::Slider::new(&mut fog_col[2], 0.0..=1.0).step_by(0.01).fixed_decimals(2)).changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut fog_col[2], 0.0..=1.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed();
             context.editor_state.fog_color = fog_col;
 
             ui.add_space(4.0);
             ui.label("Height Fog Density:")
                 .on_hover_text("Density of fog that accumulates at the bottom of the world (or toward the center in radial gravity mode). Creates a ground-hugging mist effect");
-            changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_height_density, 0.0..=2.0)
-                .step_by(0.01).fixed_decimals(2)).changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.fog_height_density, 0.0..=2.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed();
 
             ui.label("Height Fog Falloff:")
                 .on_hover_text("How quickly the height fog thins out with altitude. Smaller values = fog extends higher; larger values = fog stays close to the ground");
-            changed |= ui.add(egui::Slider::new(&mut context.editor_state.fog_height_falloff, 0.001..=0.1)
-                .step_by(0.001).fixed_decimals(3)).changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.fog_height_falloff, 0.001..=0.1)
+                        .step_by(0.001)
+                        .fixed_decimals(3),
+                )
+                .changed();
         }
 
         // Depth of Field
@@ -2159,23 +3085,43 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
             ui.add_space(4.0);
             ui.label("Focal Distance:")
                 .on_hover_text("Distance from the camera at which objects are in perfect focus");
-            changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_focal_distance, 5.0..=500.0)
-                .step_by(1.0).fixed_decimals(0)).changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.dof_focal_distance, 5.0..=500.0)
+                        .step_by(1.0)
+                        .fixed_decimals(0),
+                )
+                .changed();
 
             ui.label("Focal Range:")
                 .on_hover_text("Depth of the in-focus zone. Objects within this distance from the focal point remain sharp");
-            changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_focal_range, 1.0..=200.0)
-                .step_by(1.0).fixed_decimals(0)).changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.dof_focal_range, 1.0..=200.0)
+                        .step_by(1.0)
+                        .fixed_decimals(0),
+                )
+                .changed();
 
             ui.label("Max Blur Radius:")
                 .on_hover_text("Maximum blur radius in pixels for objects far outside the focal range. Higher values create a more dramatic bokeh effect");
-            changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_max_blur_radius, 1.0..=24.0)
-                .step_by(0.5).fixed_decimals(1)).changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.dof_max_blur_radius, 1.0..=24.0)
+                        .step_by(0.5)
+                        .fixed_decimals(1),
+                )
+                .changed();
 
             ui.label("Blur Strength:")
                 .on_hover_text("Overall intensity of the depth-of-field blur effect. 0 = no blur; higher values create stronger out-of-focus blurring");
-            changed |= ui.add(egui::Slider::new(&mut context.editor_state.dof_blur_strength, 0.0..=3.0)
-                .step_by(0.05).fixed_decimals(2)).changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.dof_blur_strength, 0.0..=3.0)
+                        .step_by(0.05)
+                        .fixed_decimals(2),
+                )
+                .changed();
         }
     } // end advanced lighting sections
 
@@ -2222,7 +3168,7 @@ fn render_time_scrubber(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the ThemeEditor panel - full custom theme color editor.
 fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
-    use crate::ui::types::{UiTheme, ThemeColor};
+    use crate::ui::types::{ThemeColor, UiTheme};
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -2236,11 +3182,7 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
                 .selected_text(state.selected_theme.display_name())
                 .show_ui(ui, |ui| {
                     for &theme in UiTheme::all() {
-                        ui.selectable_value(
-                            &mut state.selected_theme,
-                            theme,
-                            theme.display_name(),
-                        );
+                        ui.selectable_value(&mut state.selected_theme, theme, theme.display_name());
                     }
                 });
 
@@ -2259,27 +3201,27 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
                     // Seed the custom palette from the currently active palette
                     let p = palette();
                     state.custom_theme = crate::ui::types::CustomThemePalette {
-                        bg_darkest:       ThemeColor::from_egui(p.bg_darkest),
-                        bg_panel:         ThemeColor::from_egui(p.bg_panel),
-                        bg_widget:        ThemeColor::from_egui(p.bg_widget),
-                        bg_hover:         ThemeColor::from_egui(p.bg_hover),
-                        bg_active:        ThemeColor::from_egui(p.bg_active),
-                        bg_selected:      ThemeColor::from_egui(p.bg_selected),
-                        accent_primary:   ThemeColor::from_egui(p.accent_primary),
+                        bg_darkest: ThemeColor::from_egui(p.bg_darkest),
+                        bg_panel: ThemeColor::from_egui(p.bg_panel),
+                        bg_widget: ThemeColor::from_egui(p.bg_widget),
+                        bg_hover: ThemeColor::from_egui(p.bg_hover),
+                        bg_active: ThemeColor::from_egui(p.bg_active),
+                        bg_selected: ThemeColor::from_egui(p.bg_selected),
+                        accent_primary: ThemeColor::from_egui(p.accent_primary),
                         accent_secondary: ThemeColor::from_egui(p.accent_secondary),
-                        text_primary:     ThemeColor::from_egui(p.text_primary),
-                        text_secondary:   ThemeColor::from_egui(p.text_secondary),
-                        text_dim:         ThemeColor::from_egui(p.text_dim),
-                        border_subtle:    ThemeColor::from_egui(p.border_subtle),
-                        border_normal:    ThemeColor::from_egui(p.border_normal),
-                        border_bright:    ThemeColor::from_egui(p.border_bright),
-                        topbar_bg:        ThemeColor::from_egui(p.topbar_bg),
-                        topbar_border:    ThemeColor::from_egui(p.topbar_border),
-                        status_ok:        ThemeColor::from_egui(p.status_ok),
-                        status_warn:      ThemeColor::from_egui(p.status_warn),
-                        status_err:       ThemeColor::from_egui(p.status_err),
-                        status_info:      ThemeColor::from_egui(p.status_info),
-                        dark_mode:        p.bg_darkest.r() < 128,
+                        text_primary: ThemeColor::from_egui(p.text_primary),
+                        text_secondary: ThemeColor::from_egui(p.text_secondary),
+                        text_dim: ThemeColor::from_egui(p.text_dim),
+                        border_subtle: ThemeColor::from_egui(p.border_subtle),
+                        border_normal: ThemeColor::from_egui(p.border_normal),
+                        border_bright: ThemeColor::from_egui(p.border_bright),
+                        topbar_bg: ThemeColor::from_egui(p.topbar_bg),
+                        topbar_border: ThemeColor::from_egui(p.topbar_border),
+                        status_ok: ThemeColor::from_egui(p.status_ok),
+                        status_warn: ThemeColor::from_egui(p.status_warn),
+                        status_err: ThemeColor::from_egui(p.status_err),
+                        status_info: ThemeColor::from_egui(p.status_info),
+                        dark_mode: p.bg_darkest.r() < 128,
                     };
                     state.selected_theme = UiTheme::Custom;
                 }
@@ -2290,7 +3232,7 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
             ui.label(egui::RichText::new("Mode").strong());
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.radio_value(&mut state.custom_theme.dark_mode, true,  "Dark");
+                ui.radio_value(&mut state.custom_theme.dark_mode, true, "Dark");
                 ui.radio_value(&mut state.custom_theme.dark_mode, false, "Light");
             });
             ui.add_space(8.0);
@@ -2310,12 +3252,36 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
             // -- Backgrounds ---------------------------------------------------
             ui.label(egui::RichText::new("Backgrounds").strong());
             ui.add_space(4.0);
-            color_row!("Darkest Background",  "Deepest background — window chrome, gutters",          state.custom_theme.bg_darkest);
-            color_row!("Panel Background",    "Panel and window fill color",                           state.custom_theme.bg_panel);
-            color_row!("Widget Background",   "Input fields, buttons, inactive widgets",               state.custom_theme.bg_widget);
-            color_row!("Hover Background",    "Widget background when hovered",                        state.custom_theme.bg_hover);
-            color_row!("Active Background",   "Widget background when pressed or active",              state.custom_theme.bg_active);
-            color_row!("Selected Background", "Selection highlight background",                        state.custom_theme.bg_selected);
+            color_row!(
+                "Darkest Background",
+                "Deepest background — window chrome, gutters",
+                state.custom_theme.bg_darkest
+            );
+            color_row!(
+                "Panel Background",
+                "Panel and window fill color",
+                state.custom_theme.bg_panel
+            );
+            color_row!(
+                "Widget Background",
+                "Input fields, buttons, inactive widgets",
+                state.custom_theme.bg_widget
+            );
+            color_row!(
+                "Hover Background",
+                "Widget background when hovered",
+                state.custom_theme.bg_hover
+            );
+            color_row!(
+                "Active Background",
+                "Widget background when pressed or active",
+                state.custom_theme.bg_active
+            );
+            color_row!(
+                "Selected Background",
+                "Selection highlight background",
+                state.custom_theme.bg_selected
+            );
 
             ui.add_space(8.0);
             ui.separator();
@@ -2324,8 +3290,16 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
             // -- Accents -------------------------------------------------------
             ui.label(egui::RichText::new("Accents").strong());
             ui.add_space(4.0);
-            color_row!("Primary Accent",   "Main accent — active tabs, highlights, rail buttons",     state.custom_theme.accent_primary);
-            color_row!("Secondary Accent", "Secondary accent — hyperlinks, secondary highlights",     state.custom_theme.accent_secondary);
+            color_row!(
+                "Primary Accent",
+                "Main accent — active tabs, highlights, rail buttons",
+                state.custom_theme.accent_primary
+            );
+            color_row!(
+                "Secondary Accent",
+                "Secondary accent — hyperlinks, secondary highlights",
+                state.custom_theme.accent_secondary
+            );
 
             ui.add_space(8.0);
             ui.separator();
@@ -2334,9 +3308,21 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
             // -- Text ----------------------------------------------------------
             ui.label(egui::RichText::new("Text").strong());
             ui.add_space(4.0);
-            color_row!("Primary Text",   "Main body text color",                                      state.custom_theme.text_primary);
-            color_row!("Secondary Text", "Labels, captions, less important text",                     state.custom_theme.text_secondary);
-            color_row!("Dim Text",       "Placeholder text, disabled labels",                         state.custom_theme.text_dim);
+            color_row!(
+                "Primary Text",
+                "Main body text color",
+                state.custom_theme.text_primary
+            );
+            color_row!(
+                "Secondary Text",
+                "Labels, captions, less important text",
+                state.custom_theme.text_secondary
+            );
+            color_row!(
+                "Dim Text",
+                "Placeholder text, disabled labels",
+                state.custom_theme.text_dim
+            );
 
             ui.add_space(8.0);
             ui.separator();
@@ -2345,9 +3331,21 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
             // -- Borders -------------------------------------------------------
             ui.label(egui::RichText::new("Borders").strong());
             ui.add_space(4.0);
-            color_row!("Subtle Border",  "Faint dividers, panel edges",                               state.custom_theme.border_subtle);
-            color_row!("Normal Border",  "Standard widget borders",                                   state.custom_theme.border_normal);
-            color_row!("Bright Border",  "Focused/active widget borders, accent outlines",            state.custom_theme.border_bright);
+            color_row!(
+                "Subtle Border",
+                "Faint dividers, panel edges",
+                state.custom_theme.border_subtle
+            );
+            color_row!(
+                "Normal Border",
+                "Standard widget borders",
+                state.custom_theme.border_normal
+            );
+            color_row!(
+                "Bright Border",
+                "Focused/active widget borders, accent outlines",
+                state.custom_theme.border_bright
+            );
 
             ui.add_space(8.0);
             ui.separator();
@@ -2356,8 +3354,16 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
             // -- Top bar -------------------------------------------------------
             ui.label(egui::RichText::new("Top Bar").strong());
             ui.add_space(4.0);
-            color_row!("Top Bar Background", "Background of the top menu bar",                        state.custom_theme.topbar_bg);
-            color_row!("Top Bar Border",     "Bottom border line of the top bar",                     state.custom_theme.topbar_border);
+            color_row!(
+                "Top Bar Background",
+                "Background of the top menu bar",
+                state.custom_theme.topbar_bg
+            );
+            color_row!(
+                "Top Bar Border",
+                "Bottom border line of the top bar",
+                state.custom_theme.topbar_border
+            );
 
             ui.add_space(8.0);
             ui.separator();
@@ -2366,17 +3372,37 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
             // -- Status colors -------------------------------------------------
             ui.label(egui::RichText::new("Status Colors").strong());
             ui.add_space(4.0);
-            color_row!("Status OK",   "Success indicators, healthy state",                            state.custom_theme.status_ok);
-            color_row!("Status Warn", "Warning indicators",                                           state.custom_theme.status_warn);
-            color_row!("Status Error","Error indicators",                                              state.custom_theme.status_err);
-            color_row!("Status Info", "Informational indicators",                                     state.custom_theme.status_info);
+            color_row!(
+                "Status OK",
+                "Success indicators, healthy state",
+                state.custom_theme.status_ok
+            );
+            color_row!(
+                "Status Warn",
+                "Warning indicators",
+                state.custom_theme.status_warn
+            );
+            color_row!(
+                "Status Error",
+                "Error indicators",
+                state.custom_theme.status_err
+            );
+            color_row!(
+                "Status Info",
+                "Informational indicators",
+                state.custom_theme.status_info
+            );
 
             ui.add_space(16.0);
             ui.separator();
             ui.add_space(4.0);
 
             // -- Reset ---------------------------------------------------------
-            if ui.button("Reset to Defaults").on_hover_text("Reset custom theme to Biotech Dark defaults").clicked() {
+            if ui
+                .button("Reset to Defaults")
+                .on_hover_text("Reset custom theme to Biotech Dark defaults")
+                .clicked()
+            {
                 state.custom_theme = crate::ui::types::CustomThemePalette::default();
             }
         });
@@ -2393,18 +3419,13 @@ fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext) {
     ui.label(format!("Mode: {:?}", camera.mode));
     ui.label(format!("Distance: {:.1}", camera.distance));
 
-    ui.label("Move Speed:")
-        .on_hover_text("Camera movement speed in FreeFly mode. Higher values let you traverse the world faster");
-    ui.add(
-        egui::Slider::new(&mut camera.move_speed, 1.0..=50.0)
-            .logarithmic(true),
+    ui.label("Move Speed:").on_hover_text(
+        "Camera movement speed in FreeFly mode. Higher values let you traverse the world faster",
     );
+    ui.add(egui::Slider::new(&mut camera.move_speed, 1.0..=50.0).logarithmic(true));
     ui.label("Mouse Sensitivity:")
         .on_hover_text("How much the camera rotates per pixel of mouse movement. Lower values give finer control; higher values feel more responsive");
-    ui.add(
-        egui::Slider::new(&mut camera.mouse_sensitivity, 0.001..=0.01)
-            .logarithmic(true),
-    );
+    ui.add(egui::Slider::new(&mut camera.mouse_sensitivity, 0.001..=0.01).logarithmic(true));
     ui.checkbox(&mut camera.enable_spring, "Enable Spring")
         .on_hover_text("Adds a spring/lag to camera movement for a smoother cinematic feel. Disable for instant, precise camera control");
 }
@@ -2419,16 +3440,20 @@ fn render_lighting_settings(ui: &mut Ui) {
 
 /// Render the Modes panel with full functionality.
 fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
-
     // Record panel rect for the tutorial pointer.
-    context.editor_state.panel_rects.insert("Modes".to_string(), ui.max_rect());
+    context
+        .editor_state
+        .panel_rects
+        .insert("Modes".to_string(), ui.max_rect());
 
     if context.genome.modes.is_empty() {
         log::warn!("Genome has no modes, this should not happen with default genome");
         return;
     }
 
-    let selected_index = context.editor_state.selected_mode_index
+    let selected_index = context
+        .editor_state
+        .selected_mode_index
         .min(context.genome.modes.len().saturating_sub(1));
     context.editor_state.selected_mode_index = selected_index;
 
@@ -2440,9 +3465,11 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         let type_before = context.genome.modes[selected_index].cell_type;
         let combo_resp = egui::ComboBox::from_id_salt("modes_panel_cell_type")
             .selected_text(
-                egui::RichText::new(cell_types[context.genome.modes[selected_index].cell_type as usize].name())
-                    .size(11.5)
-                    .color(palette().text_primary),
+                egui::RichText::new(
+                    cell_types[context.genome.modes[selected_index].cell_type as usize].name(),
+                )
+                .size(11.5)
+                .color(palette().text_primary),
             )
             .width(ui.available_width())
             .show_ui(ui, |ui| {
@@ -2451,7 +3478,8 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                         &mut context.genome.modes[selected_index].cell_type,
                         ct.to_index() as i32,
                         ct.name(),
-                    ).on_hover_text(ct.tooltip());
+                    )
+                    .on_hover_text(ct.tooltip());
                 }
             });
         // Propagate cell type change to all selected modes.
@@ -2465,19 +3493,32 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                 }
             }
         }
-        context.editor_state.panel_rects.insert(
-            "cell_type_dropdown".to_string(), combo_resp.response.rect,
-        );
+        context
+            .editor_state
+            .panel_rects
+            .insert("cell_type_dropdown".to_string(), combo_resp.response.rect);
 
         // Make Adhesion toggle - full width, teal when active
         let on = context.genome.modes[selected_index].parent_make_adhesion;
         let (fill, text_col, stroke_col) = if on {
             let accent = palette().accent_primary;
-            (accent, crate::ui::widgets::color_utils::text_color_for_background(accent), accent)
+            (
+                accent,
+                crate::ui::widgets::color_utils::text_color_for_background(accent),
+                accent,
+            )
         } else {
-            (palette().bg_widget, palette().text_secondary, palette().border_normal)
+            (
+                palette().bg_widget,
+                palette().text_secondary,
+                palette().border_normal,
+            )
         };
-        let label = if on { "Make Adhesion  ON" } else { "Make Adhesion  OFF" };
+        let label = if on {
+            "Make Adhesion  ON"
+        } else {
+            "Make Adhesion  OFF"
+        };
         let adh_resp = ui.add_sized(
             egui::vec2(ui.available_width(), 22.0),
             egui::Button::new(egui::RichText::new(label).size(11.0).color(text_col))
@@ -2493,9 +3534,10 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                 }
             }
         }
-        context.editor_state.panel_rects.insert(
-            "make_adhesion_checkbox".to_string(), adh_resp.rect,
-        );
+        context
+            .editor_state
+            .panel_rects
+            .insert("make_adhesion_checkbox".to_string(), adh_resp.rect);
 
         ui.add_space(4.0);
     }
@@ -2515,16 +3557,12 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         initial_mode = 0;
         context.genome.initial_mode = 0;
     }
-    
+
     // Control buttons row: Copy Into, Reset, Add (+), Remove (-)
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        let (copy_into_clicked, reset_clicked) = modes_buttons(
-            ui,
-            context.genome.modes.len(),
-            selected_index,
-            initial_mode,
-        );
+        let (copy_into_clicked, reset_clicked) =
+            modes_buttons(ui, context.genome.modes.len(), selected_index, initial_mode);
 
         // Add mode button
         let at_cap = context.genome.modes.len() >= crate::genome::MAX_MODES;
@@ -2532,11 +3570,18 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             !at_cap,
             egui::Button::new("+").min_size(egui::Vec2::new(20.0, 0.0)),
         );
-        if add_btn.on_hover_text(if at_cap {
-            format!("At maximum ({} modes)", crate::genome::MAX_MODES)
-        } else {
-            format!("Add mode ({}/{})", context.genome.modes.len(), crate::genome::MAX_MODES)
-        }).clicked() {
+        if add_btn
+            .on_hover_text(if at_cap {
+                format!("At maximum ({} modes)", crate::genome::MAX_MODES)
+            } else {
+                format!(
+                    "Add mode ({}/{})",
+                    context.genome.modes.len(),
+                    crate::genome::MAX_MODES
+                )
+            })
+            .clicked()
+        {
             if let Some(new_idx) = context.genome.add_mode() {
                 context.editor_state.selected_mode_index = new_idx;
                 context.editor_state.selected_mode_indices = vec![new_idx];
@@ -2550,23 +3595,34 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             can_remove,
             egui::Button::new("−").min_size(egui::Vec2::new(20.0, 0.0)),
         );
-        if remove_btn.on_hover_text(if can_remove {
-            format!("Remove last mode ({})", context.genome.modes.len())
-        } else {
-            "Need at least 1 mode".to_string()
-        }).clicked() {
+        if remove_btn
+            .on_hover_text(if can_remove {
+                format!("Remove last mode ({})", context.genome.modes.len())
+            } else {
+                "Need at least 1 mode".to_string()
+            })
+            .clicked()
+        {
             context.genome.remove_last_mode();
             // Clamp selection after removal
             if context.editor_state.selected_mode_index >= context.genome.modes.len() {
-                context.editor_state.selected_mode_index = context.genome.modes.len().saturating_sub(1);
+                context.editor_state.selected_mode_index =
+                    context.genome.modes.len().saturating_sub(1);
             }
-            context.editor_state.selected_mode_indices.retain(|&i| i < context.genome.modes.len());
+            context
+                .editor_state
+                .selected_mode_indices
+                .retain(|&i| i < context.genome.modes.len());
             if context.editor_state.selected_mode_indices.is_empty() {
-                context.editor_state.selected_mode_indices = vec![context.editor_state.selected_mode_index];
+                context.editor_state.selected_mode_indices =
+                    vec![context.editor_state.selected_mode_index];
             }
-            log::info!("Removed last mode, now {} modes", context.genome.modes.len());
+            log::info!(
+                "Removed last mode, now {} modes",
+                context.genome.modes.len()
+            );
         }
-        
+
         if copy_into_clicked {
             let selected_idx = selected_index;
             if selected_idx < context.genome.modes.len() {
@@ -2576,18 +3632,25 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                 log::info!("Entered copy into mode for mode {}", selected_idx);
             }
         }
-        
+
         if reset_clicked {
             // Collect all indices to reset (all selected modes, or just the primary if only one)
-            let indices_to_reset: Vec<usize> = if context.editor_state.selected_mode_indices.len() > 1 {
-                context.editor_state.selected_mode_indices
-                    .iter()
-                    .copied()
-                    .filter(|&i| i < context.genome.modes.len())
-                    .collect()
-            } else {
-                if selected_index < context.genome.modes.len() { vec![selected_index] } else { vec![] }
-            };
+            let indices_to_reset: Vec<usize> =
+                if context.editor_state.selected_mode_indices.len() > 1 {
+                    context
+                        .editor_state
+                        .selected_mode_indices
+                        .iter()
+                        .copied()
+                        .filter(|&i| i < context.genome.modes.len())
+                        .collect()
+                } else {
+                    if selected_index < context.genome.modes.len() {
+                        vec![selected_index]
+                    } else {
+                        vec![]
+                    }
+                };
 
             // Seed the LCG once; each mode advances it to get a distinct color
             let seed = std::time::SystemTime::now()
@@ -2597,11 +3660,17 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             let mut rng = seed as u64;
 
             for idx in indices_to_reset {
-                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                rng = rng
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 let r = ((rng >> 33) & 0xFF) as f32 / 255.0;
-                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                rng = rng
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 let g = ((rng >> 33) & 0xFF) as f32 / 255.0;
-                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                rng = rng
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 let b = ((rng >> 33) & 0xFF) as f32 / 255.0;
 
                 context.genome.modes[idx] = crate::genome::ModeSettings {
@@ -2735,7 +3804,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             }
         }
     });
-    
+
     ui.add_space(4.0);
 
     // Show copy into mode indicator - pinned above the scrollable list
@@ -2749,7 +3818,9 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
     }
 
     // Prepare modes data for the widget (name, color tuples)
-    let modes_data: Vec<(String, (u8, u8, u8))> = context.genome.modes
+    let modes_data: Vec<(String, (u8, u8, u8))> = context
+        .genome
+        .modes
         .iter()
         .map(|mode| {
             let color_vec3 = mode.color;
@@ -2804,10 +3875,16 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                         format!("✦ {} modes selected — edits apply to all", multi_count),
                     );
                 } else if selected_index < context.genome.modes.len() {
-                    ui.small(format!("Selected: {}", context.genome.modes[selected_index].name));
+                    ui.small(format!(
+                        "Selected: {}",
+                        context.genome.modes[selected_index].name
+                    ));
                 }
                 if initial_mode < context.genome.modes.len() {
-                    ui.small(format!("Initial: {}", context.genome.modes[initial_mode].name));
+                    ui.small(format!(
+                        "Initial: {}",
+                        context.genome.modes[initial_mode].name
+                    ));
                 }
                 ui.small(format!("Total: {}", modes_data.len()));
             }
@@ -2815,7 +3892,10 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
 
     // Store each mode row's rect so the tutorial arrow can point at specific rows.
     for (i, rect) in row_rects.iter().enumerate() {
-        context.editor_state.panel_rects.insert(format!("mode_row_{}", i), *rect);
+        context
+            .editor_state
+            .panel_rects
+            .insert(format!("mode_row_{}", i), *rect);
     }
 
     // Handle mode selection change
@@ -2825,8 +3905,10 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             let source_idx = context.editor_state.copy_into_source;
             let target_idx = selected_index;
 
-            if source_idx != target_idx && source_idx < context.genome.modes.len()
-                && target_idx < context.genome.modes.len() {
+            if source_idx != target_idx
+                && source_idx < context.genome.modes.len()
+                && target_idx < context.genome.modes.len()
+            {
                 // Copy all settings from source to target (including color, except name)
                 let source_mode = context.genome.modes[source_idx].clone();
                 let target_name = context.genome.modes[target_idx].name.clone();
@@ -2843,26 +3925,32 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             // Plain click (no modifier) resets multi-selection to just this mode.
             // Ctrl/Shift clicks are handled inside modes_list_items and don't set
             // selection_changed, so this branch only fires for plain clicks.
-            if !context.editor_state.selected_mode_indices.contains(&selected_index) {
+            if !context
+                .editor_state
+                .selected_mode_indices
+                .contains(&selected_index)
+            {
                 context.editor_state.selected_mode_indices = vec![selected_index];
             }
-            
+
             // Initialize editor state orientations from the selected mode's genome data
             // This ensures the quaternion balls show the correct orientation when switching modes
             if selected_index < context.genome.modes.len() {
-                context.editor_state.child_a_orientation = context.genome.modes[selected_index].child_a.orientation;
-                context.editor_state.child_b_orientation = context.genome.modes[selected_index].child_b.orientation;
+                context.editor_state.child_a_orientation =
+                    context.genome.modes[selected_index].child_a.orientation;
+                context.editor_state.child_b_orientation =
+                    context.genome.modes[selected_index].child_b.orientation;
             }
-            
+
             log::info!("Mode selection changed to: {}", selected_index + 1);
         }
     }
-    
+
     // Handle initial mode change
     if initial_changed {
         context.genome.initial_mode = initial_mode as i32;
     }
-    
+
     // Handle rename completion (when user finishes inline editing)
     if let Some((mode_index, new_name)) = rename_completed {
         if mode_index < context.genome.modes.len() {
@@ -2875,16 +3963,13 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             context.genome.modes[mode_index].name = final_name;
         }
     }
-    
+
     // Handle color change
     if let Some((mode_index, new_color)) = color_change {
         if mode_index < context.genome.modes.len() {
             let (r, g, b) = new_color;
-            context.genome.modes[mode_index].color = glam::Vec3::new(
-                r as f32 / 255.0,
-                g as f32 / 255.0,
-                b as f32 / 255.0
-            );
+            context.genome.modes[mode_index].color =
+                glam::Vec3::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
         }
     }
 
@@ -2896,15 +3981,16 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         if from < n && to <= n && from != to {
             // Determine which indices to move: the whole multi-selection if the dragged
             // item is part of it, otherwise just the single dragged item.
-            let mut moving: Vec<usize> = if context.editor_state.selected_mode_indices.contains(&from)
-                && context.editor_state.selected_mode_indices.len() > 1
-            {
-                let mut v = context.editor_state.selected_mode_indices.clone();
-                v.sort_unstable();
-                v
-            } else {
-                vec![from]
-            };
+            let mut moving: Vec<usize> =
+                if context.editor_state.selected_mode_indices.contains(&from)
+                    && context.editor_state.selected_mode_indices.len() > 1
+                {
+                    let mut v = context.editor_state.selected_mode_indices.clone();
+                    v.sort_unstable();
+                    v
+                } else {
+                    vec![from]
+                };
             moving.sort_unstable();
 
             // Only proceed if the drop target actually changes position
@@ -2914,7 +4000,8 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             let drop_inside = to >= min_sel && to <= max_sel + 1;
             if !drop_inside || moving.len() == 1 {
                 // Extract the modes to move (back-to-front to keep indices valid)
-                let mut extracted: Vec<crate::genome::ModeSettings> = Vec::with_capacity(moving.len());
+                let mut extracted: Vec<crate::genome::ModeSettings> =
+                    Vec::with_capacity(moving.len());
                 for &idx in moving.iter().rev() {
                     extracted.insert(0, context.genome.modes.remove(idx));
                 }
@@ -2950,7 +4037,9 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                 }
 
                 let remap = |idx: i32| -> i32 {
-                    if idx < 0 || idx as usize >= n { return idx; }
+                    if idx < 0 || idx as usize >= n {
+                        return idx;
+                    }
                     remap_table[idx as usize] as i32
                 };
 
@@ -2999,13 +4088,16 @@ fn draw_marquee_text(
     let font_id = egui::FontId::default();
     let text_max_width = rect.width() - 6.0;
 
-    let full_galley = ui.painter().layout_no_wrap(name.to_owned(), font_id.clone(), text_color);
+    let full_galley = ui
+        .painter()
+        .layout_no_wrap(name.to_owned(), font_id.clone(), text_color);
     let text_overflows = full_galley.rect.width() > text_max_width;
 
     if text_overflows {
         let dt = ui.input(|i| i.stable_dt).min(0.1);
-        let (mut offset, mut timer): (f32, f32) =
-            ui.ctx().data(|d| d.get_temp(marquee_id).unwrap_or((0.0f32, 0.0f32)));
+        let (mut offset, mut timer): (f32, f32) = ui
+            .ctx()
+            .data(|d| d.get_temp(marquee_id).unwrap_or((0.0f32, 0.0f32)));
 
         if is_hovered {
             timer += dt;
@@ -3028,7 +4120,8 @@ fn draw_marquee_text(
             timer = 0.0;
         }
 
-        ui.ctx().data_mut(|d| d.insert_temp(marquee_id, (offset, timer)));
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(marquee_id, (offset, timer)));
 
         let clip_rect = rect.shrink2(egui::vec2(3.0, 0.0));
         let painter = ui.painter().with_clip_rect(clip_rect);
@@ -3071,16 +4164,37 @@ fn group_container(ui: &mut Ui, title: &str, color: egui::Color32, content: impl
     };
 
     let frame = egui::Frame::default()
-        .fill(egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 18u8))
-        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 80u8)))
+        .fill(egui::Color32::from_rgba_unmultiplied(
+            color.r(),
+            color.g(),
+            color.b(),
+            18u8,
+        ))
+        .stroke(egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 80u8),
+        ))
         .corner_radius(egui::CornerRadius::same(3u8))
-        .inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 6 });
+        .inner_margin(egui::Margin {
+            left: 8,
+            right: 8,
+            top: 6,
+            bottom: 6,
+        });
 
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
-        let header_rect = ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(title).strong().size(11.5).color(text_color));
-        }).response.rect;
+        let header_rect = ui
+            .horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(title)
+                        .strong()
+                        .size(11.5)
+                        .color(text_color),
+                );
+            })
+            .response
+            .rect;
         let painter = ui.painter();
         let left_x = header_rect.left() - 6.0;
         painter.line_segment(
@@ -3099,14 +4213,16 @@ fn group_container(ui: &mut Ui, title: &str, color: egui::Color32, content: impl
 /// Render a section header with a teal left-border accent (for top-level sections).
 fn section_header(ui: &mut Ui, title: &str) {
     ui.add_space(4.0);
-    let resp = ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(title)
-                .strong()
-                .size(11.5)
-                .color(palette().accent_primary),
-        );
-    }).response;
+    let resp = ui
+        .horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(title)
+                    .strong()
+                    .size(11.5)
+                    .color(palette().accent_primary),
+            );
+        })
+        .response;
     // Draw left-border accent
     let painter = ui.painter();
     let left_x = resp.rect.left() - 4.0;
@@ -3129,7 +4245,10 @@ fn section_header(ui: &mut Ui, title: &str) {
 /// Render the AdhesionSettings panel (placeholder).
 fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
     // Record panel rect for the tutorial pointer.
-    context.editor_state.panel_rects.insert("AdhesionSettings".to_string(), ui.max_rect());
+    context
+        .editor_state
+        .panel_rects
+        .insert("AdhesionSettings".to_string(), ui.max_rect());
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -3294,7 +4413,10 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
 /// Render the ParentSettings panel (placeholder).
 fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
     // Record panel rect for the tutorial pointer.
-    context.editor_state.panel_rects.insert("ParentSettings".to_string(), ui.max_rect());
+    context
+        .editor_state
+        .panel_rects
+        .insert("ParentSettings".to_string(), ui.max_rect());
 
     // Multi-select: snapshot the primary mode before rendering so we can diff afterwards
     let selected_idx = context.editor_state.selected_mode_index;
@@ -3302,11 +4424,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
     if context.editor_state.selected_mode_indices.is_empty() {
         context.editor_state.selected_mode_indices = vec![selected_idx];
     }
-    let pre_snapshot: Option<crate::genome::ModeSettings> = if selected_idx < context.genome.modes.len() {
-        Some(context.genome.modes[selected_idx].clone())
-    } else {
-        None
-    };
+    let pre_snapshot: Option<crate::genome::ModeSettings> =
+        if selected_idx < context.genome.modes.len() {
+            Some(context.genome.modes[selected_idx].clone())
+        } else {
+            None
+        };
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -4936,13 +6059,20 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
         let selected_idx = context.editor_state.selected_mode_index;
         if selected_idx < context.genome.modes.len() {
             let updated = context.genome.modes[selected_idx].clone();
-            let secondary_indices: Vec<usize> = context.editor_state.selected_mode_indices
+            let secondary_indices: Vec<usize> = context
+                .editor_state
+                .selected_mode_indices
                 .iter()
                 .copied()
                 .filter(|&i| i != selected_idx && i < context.genome.modes.len())
                 .collect();
             if !secondary_indices.is_empty() {
-                sync_mode_changes_to_others(&snapshot, &updated, &secondary_indices, &mut context.genome.modes);
+                sync_mode_changes_to_others(
+                    &snapshot,
+                    &updated,
+                    &secondary_indices,
+                    &mut context.genome.modes,
+                );
             }
         }
     }
@@ -4960,134 +6090,340 @@ fn sync_mode_changes_to_others(
         let other = &mut modes[idx];
 
         // Cell type
-        if updated.cell_type != snapshot.cell_type { other.cell_type = updated.cell_type; }
+        if updated.cell_type != snapshot.cell_type {
+            other.cell_type = updated.cell_type;
+        }
 
         // Visual
-        if (updated.opacity - snapshot.opacity).abs() > f32::EPSILON { other.opacity = updated.opacity; }
-        if (updated.emissive - snapshot.emissive).abs() > f32::EPSILON { other.emissive = updated.emissive; }
+        if (updated.opacity - snapshot.opacity).abs() > f32::EPSILON {
+            other.opacity = updated.opacity;
+        }
+        if (updated.emissive - snapshot.emissive).abs() > f32::EPSILON {
+            other.emissive = updated.emissive;
+        }
 
         // Parent / division
-        if updated.parent_make_adhesion != snapshot.parent_make_adhesion { other.parent_make_adhesion = updated.parent_make_adhesion; }
-        if (updated.split_mass - snapshot.split_mass).abs() > f32::EPSILON { other.split_mass = updated.split_mass; }
-        if (updated.split_interval - snapshot.split_interval).abs() > f32::EPSILON { other.split_interval = updated.split_interval; }
-        if (updated.nutrient_gain_rate - snapshot.nutrient_gain_rate).abs() > f32::EPSILON { other.nutrient_gain_rate = updated.nutrient_gain_rate; }
-        if (updated.max_cell_size - snapshot.max_cell_size).abs() > f32::EPSILON { other.max_cell_size = updated.max_cell_size; }
-        if (updated.split_ratio - snapshot.split_ratio).abs() > f32::EPSILON { other.split_ratio = updated.split_ratio; }
-        if (updated.nutrient_priority - snapshot.nutrient_priority).abs() > f32::EPSILON { other.nutrient_priority = updated.nutrient_priority; }
-        if updated.prioritize_when_low != snapshot.prioritize_when_low { other.prioritize_when_low = updated.prioritize_when_low; }
-        if (updated.parent_split_direction.x - snapshot.parent_split_direction.x).abs() > f32::EPSILON
-            || (updated.parent_split_direction.y - snapshot.parent_split_direction.y).abs() > f32::EPSILON
+        if updated.parent_make_adhesion != snapshot.parent_make_adhesion {
+            other.parent_make_adhesion = updated.parent_make_adhesion;
+        }
+        if (updated.split_mass - snapshot.split_mass).abs() > f32::EPSILON {
+            other.split_mass = updated.split_mass;
+        }
+        if (updated.split_interval - snapshot.split_interval).abs() > f32::EPSILON {
+            other.split_interval = updated.split_interval;
+        }
+        if (updated.nutrient_gain_rate - snapshot.nutrient_gain_rate).abs() > f32::EPSILON {
+            other.nutrient_gain_rate = updated.nutrient_gain_rate;
+        }
+        if (updated.max_cell_size - snapshot.max_cell_size).abs() > f32::EPSILON {
+            other.max_cell_size = updated.max_cell_size;
+        }
+        if (updated.split_ratio - snapshot.split_ratio).abs() > f32::EPSILON {
+            other.split_ratio = updated.split_ratio;
+        }
+        if (updated.nutrient_priority - snapshot.nutrient_priority).abs() > f32::EPSILON {
+            other.nutrient_priority = updated.nutrient_priority;
+        }
+        if updated.prioritize_when_low != snapshot.prioritize_when_low {
+            other.prioritize_when_low = updated.prioritize_when_low;
+        }
+        if (updated.parent_split_direction.x - snapshot.parent_split_direction.x).abs()
+            > f32::EPSILON
+            || (updated.parent_split_direction.y - snapshot.parent_split_direction.y).abs()
+                > f32::EPSILON
         {
             other.parent_split_direction = updated.parent_split_direction;
         }
-        if updated.max_adhesions != snapshot.max_adhesions { other.max_adhesions = updated.max_adhesions; }
-        if updated.min_adhesions != snapshot.min_adhesions { other.min_adhesions = updated.min_adhesions; }
-        if updated.enable_parent_angle_snapping != snapshot.enable_parent_angle_snapping { other.enable_parent_angle_snapping = updated.enable_parent_angle_snapping; }
-        if updated.max_splits != snapshot.max_splits { other.max_splits = updated.max_splits; }
-        if updated.mode_a_after_splits != snapshot.mode_a_after_splits { other.mode_a_after_splits = updated.mode_a_after_splits; }
-        if updated.mode_b_after_splits != snapshot.mode_b_after_splits { other.mode_b_after_splits = updated.mode_b_after_splits; }
-        if updated.child_a_after_split_keep_adhesion != snapshot.child_a_after_split_keep_adhesion { other.child_a_after_split_keep_adhesion = updated.child_a_after_split_keep_adhesion; }
-        if updated.child_b_after_split_keep_adhesion != snapshot.child_b_after_split_keep_adhesion { other.child_b_after_split_keep_adhesion = updated.child_b_after_split_keep_adhesion; }
+        if updated.max_adhesions != snapshot.max_adhesions {
+            other.max_adhesions = updated.max_adhesions;
+        }
+        if updated.min_adhesions != snapshot.min_adhesions {
+            other.min_adhesions = updated.min_adhesions;
+        }
+        if updated.enable_parent_angle_snapping != snapshot.enable_parent_angle_snapping {
+            other.enable_parent_angle_snapping = updated.enable_parent_angle_snapping;
+        }
+        if updated.max_splits != snapshot.max_splits {
+            other.max_splits = updated.max_splits;
+        }
+        if updated.mode_a_after_splits != snapshot.mode_a_after_splits {
+            other.mode_a_after_splits = updated.mode_a_after_splits;
+        }
+        if updated.mode_b_after_splits != snapshot.mode_b_after_splits {
+            other.mode_b_after_splits = updated.mode_b_after_splits;
+        }
+        if updated.child_a_after_split_keep_adhesion != snapshot.child_a_after_split_keep_adhesion {
+            other.child_a_after_split_keep_adhesion = updated.child_a_after_split_keep_adhesion;
+        }
+        if updated.child_b_after_split_keep_adhesion != snapshot.child_b_after_split_keep_adhesion {
+            other.child_b_after_split_keep_adhesion = updated.child_b_after_split_keep_adhesion;
+        }
 
         // Membrane
-        if (updated.membrane_stiffness - snapshot.membrane_stiffness).abs() > f32::EPSILON { other.membrane_stiffness = updated.membrane_stiffness; }
+        if (updated.membrane_stiffness - snapshot.membrane_stiffness).abs() > f32::EPSILON {
+            other.membrane_stiffness = updated.membrane_stiffness;
+        }
 
         // Glueocyte
-        if updated.glueocyte_cell_adhesion != snapshot.glueocyte_cell_adhesion { other.glueocyte_cell_adhesion = updated.glueocyte_cell_adhesion; }
-        if updated.glueocyte_self_adhesion != snapshot.glueocyte_self_adhesion { other.glueocyte_self_adhesion = updated.glueocyte_self_adhesion; }
-        if updated.glueocyte_env_adhesion != snapshot.glueocyte_env_adhesion { other.glueocyte_env_adhesion = updated.glueocyte_env_adhesion; }
-        if updated.glueocyte_boulder_adhesion != snapshot.glueocyte_boulder_adhesion { other.glueocyte_boulder_adhesion = updated.glueocyte_boulder_adhesion; }
-        if updated.glueocyte_cell_adhesion_signal_channel != snapshot.glueocyte_cell_adhesion_signal_channel { other.glueocyte_cell_adhesion_signal_channel = updated.glueocyte_cell_adhesion_signal_channel; }
-        if (updated.glueocyte_cell_adhesion_signal_threshold - snapshot.glueocyte_cell_adhesion_signal_threshold).abs() > f32::EPSILON { other.glueocyte_cell_adhesion_signal_threshold = updated.glueocyte_cell_adhesion_signal_threshold; }
-        if updated.glueocyte_signal_gate_invert != snapshot.glueocyte_signal_gate_invert { other.glueocyte_signal_gate_invert = updated.glueocyte_signal_gate_invert; }
+        if updated.glueocyte_cell_adhesion != snapshot.glueocyte_cell_adhesion {
+            other.glueocyte_cell_adhesion = updated.glueocyte_cell_adhesion;
+        }
+        if updated.glueocyte_self_adhesion != snapshot.glueocyte_self_adhesion {
+            other.glueocyte_self_adhesion = updated.glueocyte_self_adhesion;
+        }
+        if updated.glueocyte_env_adhesion != snapshot.glueocyte_env_adhesion {
+            other.glueocyte_env_adhesion = updated.glueocyte_env_adhesion;
+        }
+        if updated.glueocyte_boulder_adhesion != snapshot.glueocyte_boulder_adhesion {
+            other.glueocyte_boulder_adhesion = updated.glueocyte_boulder_adhesion;
+        }
+        if updated.glueocyte_cell_adhesion_signal_channel
+            != snapshot.glueocyte_cell_adhesion_signal_channel
+        {
+            other.glueocyte_cell_adhesion_signal_channel =
+                updated.glueocyte_cell_adhesion_signal_channel;
+        }
+        if (updated.glueocyte_cell_adhesion_signal_threshold
+            - snapshot.glueocyte_cell_adhesion_signal_threshold)
+            .abs()
+            > f32::EPSILON
+        {
+            other.glueocyte_cell_adhesion_signal_threshold =
+                updated.glueocyte_cell_adhesion_signal_threshold;
+        }
+        if updated.glueocyte_signal_gate_invert != snapshot.glueocyte_signal_gate_invert {
+            other.glueocyte_signal_gate_invert = updated.glueocyte_signal_gate_invert;
+        }
 
         // Flagellocyte
-        if (updated.swim_force - snapshot.swim_force).abs() > f32::EPSILON { other.swim_force = updated.swim_force; }
-        if updated.flagellocyte_use_signal != snapshot.flagellocyte_use_signal { other.flagellocyte_use_signal = updated.flagellocyte_use_signal; }
-        if updated.flagellocyte_signal_channel != snapshot.flagellocyte_signal_channel { other.flagellocyte_signal_channel = updated.flagellocyte_signal_channel; }
-        if (updated.flagellocyte_speed_a - snapshot.flagellocyte_speed_a).abs() > f32::EPSILON { other.flagellocyte_speed_a = updated.flagellocyte_speed_a; }
-        if (updated.flagellocyte_speed_b - snapshot.flagellocyte_speed_b).abs() > f32::EPSILON { other.flagellocyte_speed_b = updated.flagellocyte_speed_b; }
-        if (updated.flagellocyte_threshold_c - snapshot.flagellocyte_threshold_c).abs() > f32::EPSILON { other.flagellocyte_threshold_c = updated.flagellocyte_threshold_c; }
+        if (updated.swim_force - snapshot.swim_force).abs() > f32::EPSILON {
+            other.swim_force = updated.swim_force;
+        }
+        if updated.flagellocyte_use_signal != snapshot.flagellocyte_use_signal {
+            other.flagellocyte_use_signal = updated.flagellocyte_use_signal;
+        }
+        if updated.flagellocyte_signal_channel != snapshot.flagellocyte_signal_channel {
+            other.flagellocyte_signal_channel = updated.flagellocyte_signal_channel;
+        }
+        if (updated.flagellocyte_speed_a - snapshot.flagellocyte_speed_a).abs() > f32::EPSILON {
+            other.flagellocyte_speed_a = updated.flagellocyte_speed_a;
+        }
+        if (updated.flagellocyte_speed_b - snapshot.flagellocyte_speed_b).abs() > f32::EPSILON {
+            other.flagellocyte_speed_b = updated.flagellocyte_speed_b;
+        }
+        if (updated.flagellocyte_threshold_c - snapshot.flagellocyte_threshold_c).abs()
+            > f32::EPSILON
+        {
+            other.flagellocyte_threshold_c = updated.flagellocyte_threshold_c;
+        }
 
         // Buoyocyte
-        if (updated.buoyancy_force - snapshot.buoyancy_force).abs() > f32::EPSILON { other.buoyancy_force = updated.buoyancy_force; }
+        if (updated.buoyancy_force - snapshot.buoyancy_force).abs() > f32::EPSILON {
+            other.buoyancy_force = updated.buoyancy_force;
+        }
 
         // Oculocyte
-        if updated.oculocyte_sense_type != snapshot.oculocyte_sense_type { other.oculocyte_sense_type = updated.oculocyte_sense_type; }
-        if updated.oculocyte_signal_channel != snapshot.oculocyte_signal_channel { other.oculocyte_signal_channel = updated.oculocyte_signal_channel; }
-        if (updated.oculocyte_signal_value - snapshot.oculocyte_signal_value).abs() > f32::EPSILON { other.oculocyte_signal_value = updated.oculocyte_signal_value; }
-        if updated.oculocyte_signal_hops != snapshot.oculocyte_signal_hops { other.oculocyte_signal_hops = updated.oculocyte_signal_hops; }
-        if (updated.oculocyte_ray_length - snapshot.oculocyte_ray_length).abs() > f32::EPSILON { other.oculocyte_ray_length = updated.oculocyte_ray_length; }
+        if updated.oculocyte_sense_type != snapshot.oculocyte_sense_type {
+            other.oculocyte_sense_type = updated.oculocyte_sense_type;
+        }
+        if updated.oculocyte_signal_channel != snapshot.oculocyte_signal_channel {
+            other.oculocyte_signal_channel = updated.oculocyte_signal_channel;
+        }
+        if (updated.oculocyte_signal_value - snapshot.oculocyte_signal_value).abs() > f32::EPSILON {
+            other.oculocyte_signal_value = updated.oculocyte_signal_value;
+        }
+        if updated.oculocyte_signal_hops != snapshot.oculocyte_signal_hops {
+            other.oculocyte_signal_hops = updated.oculocyte_signal_hops;
+        }
+        if (updated.oculocyte_ray_length - snapshot.oculocyte_ray_length).abs() > f32::EPSILON {
+            other.oculocyte_ray_length = updated.oculocyte_ray_length;
+        }
 
         // Ciliocyte
-        if (updated.cilia_speed - snapshot.cilia_speed).abs() > f32::EPSILON { other.cilia_speed = updated.cilia_speed; }
-        if updated.cilia_push_bonded != snapshot.cilia_push_bonded { other.cilia_push_bonded = updated.cilia_push_bonded; }
-        if updated.cilia_use_signal != snapshot.cilia_use_signal { other.cilia_use_signal = updated.cilia_use_signal; }
-        if updated.cilia_signal_channel != snapshot.cilia_signal_channel { other.cilia_signal_channel = updated.cilia_signal_channel; }
-        if (updated.cilia_speed_below - snapshot.cilia_speed_below).abs() > f32::EPSILON { other.cilia_speed_below = updated.cilia_speed_below; }
-        if (updated.cilia_speed_above - snapshot.cilia_speed_above).abs() > f32::EPSILON { other.cilia_speed_above = updated.cilia_speed_above; }
-        if (updated.cilia_threshold - snapshot.cilia_threshold).abs() > f32::EPSILON { other.cilia_threshold = updated.cilia_threshold; }
-        if (updated.cilia_attract_force - snapshot.cilia_attract_force).abs() > f32::EPSILON { other.cilia_attract_force = updated.cilia_attract_force; }
+        if (updated.cilia_speed - snapshot.cilia_speed).abs() > f32::EPSILON {
+            other.cilia_speed = updated.cilia_speed;
+        }
+        if updated.cilia_push_bonded != snapshot.cilia_push_bonded {
+            other.cilia_push_bonded = updated.cilia_push_bonded;
+        }
+        if updated.cilia_use_signal != snapshot.cilia_use_signal {
+            other.cilia_use_signal = updated.cilia_use_signal;
+        }
+        if updated.cilia_signal_channel != snapshot.cilia_signal_channel {
+            other.cilia_signal_channel = updated.cilia_signal_channel;
+        }
+        if (updated.cilia_speed_below - snapshot.cilia_speed_below).abs() > f32::EPSILON {
+            other.cilia_speed_below = updated.cilia_speed_below;
+        }
+        if (updated.cilia_speed_above - snapshot.cilia_speed_above).abs() > f32::EPSILON {
+            other.cilia_speed_above = updated.cilia_speed_above;
+        }
+        if (updated.cilia_threshold - snapshot.cilia_threshold).abs() > f32::EPSILON {
+            other.cilia_threshold = updated.cilia_threshold;
+        }
+        if (updated.cilia_attract_force - snapshot.cilia_attract_force).abs() > f32::EPSILON {
+            other.cilia_attract_force = updated.cilia_attract_force;
+        }
 
         // Myocyte
-        if (updated.myocyte_contraction - snapshot.myocyte_contraction).abs() > f32::EPSILON { other.myocyte_contraction = updated.myocyte_contraction; }
-        if updated.myocyte_use_signal != snapshot.myocyte_use_signal { other.myocyte_use_signal = updated.myocyte_use_signal; }
-        if updated.myocyte_signal_channel != snapshot.myocyte_signal_channel { other.myocyte_signal_channel = updated.myocyte_signal_channel; }
-        if (updated.myocyte_contraction_above - snapshot.myocyte_contraction_above).abs() > f32::EPSILON { other.myocyte_contraction_above = updated.myocyte_contraction_above; }
-        if (updated.myocyte_contraction_below - snapshot.myocyte_contraction_below).abs() > f32::EPSILON { other.myocyte_contraction_below = updated.myocyte_contraction_below; }
-        if (updated.myocyte_threshold - snapshot.myocyte_threshold).abs() > f32::EPSILON { other.myocyte_threshold = updated.myocyte_threshold; }
-        if (updated.myocyte_pulse_rate - snapshot.myocyte_pulse_rate).abs() > f32::EPSILON { other.myocyte_pulse_rate = updated.myocyte_pulse_rate; }
-        if updated.myocyte_pulse_phase != snapshot.myocyte_pulse_phase { other.myocyte_pulse_phase = updated.myocyte_pulse_phase; }
+        if (updated.myocyte_contraction - snapshot.myocyte_contraction).abs() > f32::EPSILON {
+            other.myocyte_contraction = updated.myocyte_contraction;
+        }
+        if updated.myocyte_use_signal != snapshot.myocyte_use_signal {
+            other.myocyte_use_signal = updated.myocyte_use_signal;
+        }
+        if updated.myocyte_signal_channel != snapshot.myocyte_signal_channel {
+            other.myocyte_signal_channel = updated.myocyte_signal_channel;
+        }
+        if (updated.myocyte_contraction_above - snapshot.myocyte_contraction_above).abs()
+            > f32::EPSILON
+        {
+            other.myocyte_contraction_above = updated.myocyte_contraction_above;
+        }
+        if (updated.myocyte_contraction_below - snapshot.myocyte_contraction_below).abs()
+            > f32::EPSILON
+        {
+            other.myocyte_contraction_below = updated.myocyte_contraction_below;
+        }
+        if (updated.myocyte_threshold - snapshot.myocyte_threshold).abs() > f32::EPSILON {
+            other.myocyte_threshold = updated.myocyte_threshold;
+        }
+        if (updated.myocyte_pulse_rate - snapshot.myocyte_pulse_rate).abs() > f32::EPSILON {
+            other.myocyte_pulse_rate = updated.myocyte_pulse_rate;
+        }
+        if updated.myocyte_pulse_phase != snapshot.myocyte_pulse_phase {
+            other.myocyte_pulse_phase = updated.myocyte_pulse_phase;
+        }
 
         // Embryocyte
-        if updated.embryocyte_use_timer != snapshot.embryocyte_use_timer { other.embryocyte_use_timer = updated.embryocyte_use_timer; }
-        if (updated.embryocyte_release_timer - snapshot.embryocyte_release_timer).abs() > f32::EPSILON { other.embryocyte_release_timer = updated.embryocyte_release_timer; }
-        if updated.embryocyte_use_threshold != snapshot.embryocyte_use_threshold { other.embryocyte_use_threshold = updated.embryocyte_use_threshold; }
-        if updated.embryocyte_threshold_value != snapshot.embryocyte_threshold_value { other.embryocyte_threshold_value = updated.embryocyte_threshold_value; }
-        if updated.embryocyte_use_signal != snapshot.embryocyte_use_signal { other.embryocyte_use_signal = updated.embryocyte_use_signal; }
-        if updated.embryocyte_signal_channel != snapshot.embryocyte_signal_channel { other.embryocyte_signal_channel = updated.embryocyte_signal_channel; }
-        if (updated.embryocyte_signal_value - snapshot.embryocyte_signal_value).abs() > f32::EPSILON { other.embryocyte_signal_value = updated.embryocyte_signal_value; }
+        if updated.embryocyte_use_timer != snapshot.embryocyte_use_timer {
+            other.embryocyte_use_timer = updated.embryocyte_use_timer;
+        }
+        if (updated.embryocyte_release_timer - snapshot.embryocyte_release_timer).abs()
+            > f32::EPSILON
+        {
+            other.embryocyte_release_timer = updated.embryocyte_release_timer;
+        }
+        if updated.embryocyte_use_threshold != snapshot.embryocyte_use_threshold {
+            other.embryocyte_use_threshold = updated.embryocyte_use_threshold;
+        }
+        if updated.embryocyte_threshold_value != snapshot.embryocyte_threshold_value {
+            other.embryocyte_threshold_value = updated.embryocyte_threshold_value;
+        }
+        if updated.embryocyte_use_signal != snapshot.embryocyte_use_signal {
+            other.embryocyte_use_signal = updated.embryocyte_use_signal;
+        }
+        if updated.embryocyte_signal_channel != snapshot.embryocyte_signal_channel {
+            other.embryocyte_signal_channel = updated.embryocyte_signal_channel;
+        }
+        if (updated.embryocyte_signal_value - snapshot.embryocyte_signal_value).abs() > f32::EPSILON
+        {
+            other.embryocyte_signal_value = updated.embryocyte_signal_value;
+        }
 
         // Regulation emit
-        if updated.regulation_emit_channel != snapshot.regulation_emit_channel { other.regulation_emit_channel = updated.regulation_emit_channel; }
-        if (updated.regulation_emit_value - snapshot.regulation_emit_value).abs() > f32::EPSILON { other.regulation_emit_value = updated.regulation_emit_value; }
-        if updated.regulation_emit_hops != snapshot.regulation_emit_hops { other.regulation_emit_hops = updated.regulation_emit_hops; }
+        if updated.regulation_emit_channel != snapshot.regulation_emit_channel {
+            other.regulation_emit_channel = updated.regulation_emit_channel;
+        }
+        if (updated.regulation_emit_value - snapshot.regulation_emit_value).abs() > f32::EPSILON {
+            other.regulation_emit_value = updated.regulation_emit_value;
+        }
+        if updated.regulation_emit_hops != snapshot.regulation_emit_hops {
+            other.regulation_emit_hops = updated.regulation_emit_hops;
+        }
 
         // Signal conditions - division
-        if updated.division_signal_channel != snapshot.division_signal_channel { other.division_signal_channel = updated.division_signal_channel; }
-        if (updated.division_signal_threshold - snapshot.division_signal_threshold).abs() > f32::EPSILON { other.division_signal_threshold = updated.division_signal_threshold; }
-        if updated.division_signal_invert != snapshot.division_signal_invert { other.division_signal_invert = updated.division_signal_invert; }
+        if updated.division_signal_channel != snapshot.division_signal_channel {
+            other.division_signal_channel = updated.division_signal_channel;
+        }
+        if (updated.division_signal_threshold - snapshot.division_signal_threshold).abs()
+            > f32::EPSILON
+        {
+            other.division_signal_threshold = updated.division_signal_threshold;
+        }
+        if updated.division_signal_invert != snapshot.division_signal_invert {
+            other.division_signal_invert = updated.division_signal_invert;
+        }
 
         // Signal conditions - apoptosis
-        if updated.apoptosis_signal_channel != snapshot.apoptosis_signal_channel { other.apoptosis_signal_channel = updated.apoptosis_signal_channel; }
-        if (updated.apoptosis_signal_threshold - snapshot.apoptosis_signal_threshold).abs() > f32::EPSILON { other.apoptosis_signal_threshold = updated.apoptosis_signal_threshold; }
-        if updated.apoptosis_signal_invert != snapshot.apoptosis_signal_invert { other.apoptosis_signal_invert = updated.apoptosis_signal_invert; }
+        if updated.apoptosis_signal_channel != snapshot.apoptosis_signal_channel {
+            other.apoptosis_signal_channel = updated.apoptosis_signal_channel;
+        }
+        if (updated.apoptosis_signal_threshold - snapshot.apoptosis_signal_threshold).abs()
+            > f32::EPSILON
+        {
+            other.apoptosis_signal_threshold = updated.apoptosis_signal_threshold;
+        }
+        if updated.apoptosis_signal_invert != snapshot.apoptosis_signal_invert {
+            other.apoptosis_signal_invert = updated.apoptosis_signal_invert;
+        }
 
         // Signal conditions - child routing
-        if updated.signal_child_a_channel != snapshot.signal_child_a_channel { other.signal_child_a_channel = updated.signal_child_a_channel; }
-        if (updated.signal_child_a_threshold - snapshot.signal_child_a_threshold).abs() > f32::EPSILON { other.signal_child_a_threshold = updated.signal_child_a_threshold; }
-        if updated.signal_child_a_mode_above != snapshot.signal_child_a_mode_above { other.signal_child_a_mode_above = updated.signal_child_a_mode_above; }
-        if updated.signal_child_a_mode_below != snapshot.signal_child_a_mode_below { other.signal_child_a_mode_below = updated.signal_child_a_mode_below; }
-        if updated.signal_child_b_channel != snapshot.signal_child_b_channel { other.signal_child_b_channel = updated.signal_child_b_channel; }
-        if (updated.signal_child_b_threshold - snapshot.signal_child_b_threshold).abs() > f32::EPSILON { other.signal_child_b_threshold = updated.signal_child_b_threshold; }
-        if updated.signal_child_b_mode_above != snapshot.signal_child_b_mode_above { other.signal_child_b_mode_above = updated.signal_child_b_mode_above; }
-        if updated.signal_child_b_mode_below != snapshot.signal_child_b_mode_below { other.signal_child_b_mode_below = updated.signal_child_b_mode_below; }
+        if updated.signal_child_a_channel != snapshot.signal_child_a_channel {
+            other.signal_child_a_channel = updated.signal_child_a_channel;
+        }
+        if (updated.signal_child_a_threshold - snapshot.signal_child_a_threshold).abs()
+            > f32::EPSILON
+        {
+            other.signal_child_a_threshold = updated.signal_child_a_threshold;
+        }
+        if updated.signal_child_a_mode_above != snapshot.signal_child_a_mode_above {
+            other.signal_child_a_mode_above = updated.signal_child_a_mode_above;
+        }
+        if updated.signal_child_a_mode_below != snapshot.signal_child_a_mode_below {
+            other.signal_child_a_mode_below = updated.signal_child_a_mode_below;
+        }
+        if updated.signal_child_b_channel != snapshot.signal_child_b_channel {
+            other.signal_child_b_channel = updated.signal_child_b_channel;
+        }
+        if (updated.signal_child_b_threshold - snapshot.signal_child_b_threshold).abs()
+            > f32::EPSILON
+        {
+            other.signal_child_b_threshold = updated.signal_child_b_threshold;
+        }
+        if updated.signal_child_b_mode_above != snapshot.signal_child_b_mode_above {
+            other.signal_child_b_mode_above = updated.signal_child_b_mode_above;
+        }
+        if updated.signal_child_b_mode_below != snapshot.signal_child_b_mode_below {
+            other.signal_child_b_mode_below = updated.signal_child_b_mode_below;
+        }
 
         // Signal conditions - mode switch
-        if updated.mode_switch_signal_channel != snapshot.mode_switch_signal_channel { other.mode_switch_signal_channel = updated.mode_switch_signal_channel; }
-        if (updated.mode_switch_signal_threshold - snapshot.mode_switch_signal_threshold).abs() > f32::EPSILON { other.mode_switch_signal_threshold = updated.mode_switch_signal_threshold; }
-        if updated.mode_switch_target != snapshot.mode_switch_target { other.mode_switch_target = updated.mode_switch_target; }
-        if updated.mode_switch_invert != snapshot.mode_switch_invert { other.mode_switch_invert = updated.mode_switch_invert; }
+        if updated.mode_switch_signal_channel != snapshot.mode_switch_signal_channel {
+            other.mode_switch_signal_channel = updated.mode_switch_signal_channel;
+        }
+        if (updated.mode_switch_signal_threshold - snapshot.mode_switch_signal_threshold).abs()
+            > f32::EPSILON
+        {
+            other.mode_switch_signal_threshold = updated.mode_switch_signal_threshold;
+        }
+        if updated.mode_switch_target != snapshot.mode_switch_target {
+            other.mode_switch_target = updated.mode_switch_target;
+        }
+        if updated.mode_switch_invert != snapshot.mode_switch_invert {
+            other.mode_switch_invert = updated.mode_switch_invert;
+        }
 
         // Devorocyte
-        if (updated.devorocyte_consume_range - snapshot.devorocyte_consume_range).abs() > f32::EPSILON { other.devorocyte_consume_range = updated.devorocyte_consume_range; }
-        if (updated.devorocyte_consume_rate - snapshot.devorocyte_consume_rate).abs() > f32::EPSILON { other.devorocyte_consume_rate = updated.devorocyte_consume_rate; }
+        if (updated.devorocyte_consume_range - snapshot.devorocyte_consume_range).abs()
+            > f32::EPSILON
+        {
+            other.devorocyte_consume_range = updated.devorocyte_consume_range;
+        }
+        if (updated.devorocyte_consume_rate - snapshot.devorocyte_consume_rate).abs() > f32::EPSILON
+        {
+            other.devorocyte_consume_rate = updated.devorocyte_consume_rate;
+        }
 
         // Vasculocyte
-        if updated.vascular_outlet != snapshot.vascular_outlet { other.vascular_outlet = updated.vascular_outlet; }
+        if updated.vascular_outlet != snapshot.vascular_outlet {
+            other.vascular_outlet = updated.vascular_outlet;
+        }
 
         // Gametocyte
-        if (updated.gametocyte_merge_range - snapshot.gametocyte_merge_range).abs() > f32::EPSILON { other.gametocyte_merge_range = updated.gametocyte_merge_range; }
+        if (updated.gametocyte_merge_range - snapshot.gametocyte_merge_range).abs() > f32::EPSILON {
+            other.gametocyte_merge_range = updated.gametocyte_merge_range;
+        }
     }
 }
 
@@ -5096,15 +6432,21 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
     use crate::ui::widgets::circular_slider_float;
 
     // Record panel rect for the tutorial pointer.
-    context.editor_state.panel_rects.insert("CircleSliders".to_string(), ui.max_rect());
+    context
+        .editor_state
+        .panel_rects
+        .insert("CircleSliders".to_string(), ui.max_rect());
 
     ui.add_space(4.0); // Reduced spacing
-    
+
     // Ensure we have at least one mode
     if context.genome.modes.is_empty() {
-        context.genome.modes.push(crate::genome::ModeSettings::default());
+        context
+            .genome
+            .modes
+            .push(crate::genome::ModeSettings::default());
     }
-    
+
     // Get the currently selected mode
     let selected_index = context.editor_state.selected_mode_index;
     if let Some(mode) = context.genome.modes.get_mut(selected_index) {
@@ -5115,11 +6457,11 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
         let available_width = ui.available_width();
         let max_radius = ((available_width - 20.0) / 2.0 - 10.0) / 2.0; // Reduced margins
         let radius = max_radius.clamp(20.0, 80.0); // Allow larger radius
-        
+
         // Side by side layout with minimal spacing
         ui.horizontal(|ui| {
             ui.add_space(4.0); // Reduced left margin
-            
+
             ui.vertical(|ui| {
                 ui.label("Pitch:");
                 circular_slider_float(
@@ -5131,9 +6473,9 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
                     context.editor_state.enable_snapping,
                 );
             });
-            
+
             ui.add_space(4.0); // Minimal spacing between sliders
-            
+
             ui.vertical(|ui| {
                 ui.label("Yaw:");
                 circular_slider_float(
@@ -5150,16 +6492,22 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
         // Multi-select: propagate changed split direction to all other selected modes
         let new_dir = mode.parent_split_direction;
         let pitch_changed = (new_dir.x - prev_dir.x).abs() > f32::EPSILON;
-        let yaw_changed   = (new_dir.y - prev_dir.y).abs() > f32::EPSILON;
+        let yaw_changed = (new_dir.y - prev_dir.y).abs() > f32::EPSILON;
         if pitch_changed || yaw_changed {
-            let secondary_indices: Vec<usize> = context.editor_state.selected_mode_indices
+            let secondary_indices: Vec<usize> = context
+                .editor_state
+                .selected_mode_indices
                 .iter()
                 .copied()
                 .filter(|&i| i != selected_index && i < context.genome.modes.len())
                 .collect();
             for other_idx in secondary_indices {
-                if pitch_changed { context.genome.modes[other_idx].parent_split_direction.x = new_dir.x; }
-                if yaw_changed   { context.genome.modes[other_idx].parent_split_direction.y = new_dir.y; }
+                if pitch_changed {
+                    context.genome.modes[other_idx].parent_split_direction.x = new_dir.x;
+                }
+                if yaw_changed {
+                    context.genome.modes[other_idx].parent_split_direction.y = new_dir.y;
+                }
             }
         }
     }
@@ -5167,12 +6515,23 @@ fn render_circle_sliders(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the QuaternionBall panel with two quaternion balls for Child A and Child B.
 fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
-    context.editor_state.panel_rects.insert("QuaternionBall".to_string(), ui.max_rect());
+    context
+        .editor_state
+        .panel_rects
+        .insert("QuaternionBall".to_string(), ui.max_rect());
 
     // Snapshot child settings before rendering for multi-select diff
     let selected_idx = context.editor_state.selected_mode_index;
-    let pre_child_a = context.genome.modes.get(selected_idx).map(|m| m.child_a.clone());
-    let pre_child_b = context.genome.modes.get(selected_idx).map(|m| m.child_b.clone());
+    let pre_child_a = context
+        .genome
+        .modes
+        .get(selected_idx)
+        .map(|m| m.child_a.clone());
+    let pre_child_b = context
+        .genome
+        .modes
+        .get(selected_idx)
+        .map(|m| m.child_b.clone());
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -5576,7 +6935,9 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
             let new_a = context.genome.modes[selected_idx].child_a.clone();
             let new_b = context.genome.modes[selected_idx].child_b.clone();
 
-            let secondary_indices: Vec<usize> = context.editor_state.selected_mode_indices
+            let secondary_indices: Vec<usize> = context
+                .editor_state
+                .selected_mode_indices
                 .iter()
                 .copied()
                 .filter(|&i| i != selected_idx && i < context.genome.modes.len())
@@ -5621,7 +6982,10 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
 /// simulation has actually reached (resim_display_time).
 fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
     // Record panel rect for the tutorial pointer.
-    context.editor_state.panel_rects.insert("TimeSlider".to_string(), ui.max_rect());
+    context
+        .editor_state
+        .panel_rects
+        .insert("TimeSlider".to_string(), ui.max_rect());
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -5632,7 +6996,7 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
             if !is_preview_mode {
                 ui.colored_label(
                     egui::Color32::GRAY,
-                    "Time scrubbing only available in Preview mode"
+                    "Time scrubbing only available in Preview mode",
                 );
             } else {
                 ui.label("");
@@ -5642,15 +7006,22 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Time:");
 
                 let available = ui.available_width();
-                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                let slider_width = if available > 80.0 {
+                    available - 70.0
+                } else {
+                    50.0
+                };
                 ui.style_mut().spacing.slider_width = slider_width;
 
                 // Slider range is 0 to max_preview_duration (in seconds)
                 // The slider is purely user-driven - simulation never writes to time_value
                 let slider_response = ui.add_enabled(
                     is_preview_mode,
-                    egui::Slider::new(&mut context.editor_state.time_value, 0.0..=context.editor_state.max_preview_duration)
-                        .show_value(false)
+                    egui::Slider::new(
+                        &mut context.editor_state.time_value,
+                        0.0..=context.editor_state.max_preview_duration,
+                    )
+                    .show_value(false),
                 );
                 context.editor_state.time_slider_dragging = slider_response.dragged();
 
@@ -5686,10 +7057,10 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
                     egui::DragValue::new(&mut context.editor_state.time_value)
                         .speed(0.1)
                         .range(0.0..=context.editor_state.max_preview_duration)
-                        .suffix("s")
+                        .suffix("s"),
                 );
             });
-            
+
             // Show cell count and resimulation status
             if is_preview_mode {
                 ui.horizontal(|ui| {
@@ -5704,14 +7075,17 @@ fn render_gizmo_settings(ui: &mut Ui, context: &mut PanelContext) {
     section_header(ui, "GIZMO RENDERING");
     ui.checkbox(&mut context.editor_state.gizmo_visible, "Show Orientation Lines")
         .on_hover_text("Display colored axis lines on each cell showing its current orientation. Red = X, Green = Y, Blue = Z");
-    ui.checkbox(&mut context.editor_state.split_rings_visible, "Show Split Rings")
-        .on_hover_text("Display animated ring effects around cells that are about to divide");
+    ui.checkbox(
+        &mut context.editor_state.split_rings_visible,
+        "Show Split Rings",
+    )
+    .on_hover_text("Display animated ring effects around cells that are about to divide");
 }
 
 /// Render the Cell Type Visuals panel for appearance settings.
 fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
     use crate::cell::types::CellType;
-    
+
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -6524,12 +7898,27 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
     use egui_snarl::Snarl;
 
     // Collect mode data for the viewer
-    let mode_names: Vec<String> = context.genome.modes.iter().map(|m| m.name.clone()).collect();
+    let mode_names: Vec<String> = context
+        .genome
+        .modes
+        .iter()
+        .map(|m| m.name.clone())
+        .collect();
     let mode_colors: Vec<glam::Vec3> = context.genome.modes.iter().map(|m| m.color).collect();
-    
+
     // Collect child mode numbers (we need mutable access)
-    let mut child_a_modes: Vec<i32> = context.genome.modes.iter().map(|m| m.child_a.mode_number).collect();
-    let mut child_b_modes: Vec<i32> = context.genome.modes.iter().map(|m| m.child_b.mode_number).collect();
+    let mut child_a_modes: Vec<i32> = context
+        .genome
+        .modes
+        .iter()
+        .map(|m| m.child_a.mode_number)
+        .collect();
+    let mut child_b_modes: Vec<i32> = context
+        .genome
+        .modes
+        .iter()
+        .map(|m| m.child_b.mode_number)
+        .collect();
 
     // Helper for contrasting text
     fn contrasting_text(bg: glam::Vec3) -> egui::Color32 {
@@ -6545,18 +7934,25 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
     ui.horizontal(|ui| {
         ui.label("Add:");
         let selected = &mut context.editor_state.mode_graph_state.selected_add_mode;
-        
+
         // Get selected mode color for the combo box display
-        let selected_color = mode_colors.get(*selected).copied().unwrap_or(glam::Vec3::ONE);
+        let selected_color = mode_colors
+            .get(*selected)
+            .copied()
+            .unwrap_or(glam::Vec3::ONE);
         let bg_color = egui::Color32::from_rgb(
             (selected_color.x * 255.0) as u8,
             (selected_color.y * 255.0) as u8,
             (selected_color.z * 255.0) as u8,
         );
         let text_color = contrasting_text(selected_color);
-        
+
         egui::ComboBox::from_id_salt("add_mode_combo")
-            .selected_text(egui::RichText::new(format!("M{}", *selected + 1)).color(text_color).background_color(bg_color))
+            .selected_text(
+                egui::RichText::new(format!("M{}", *selected + 1))
+                    .color(text_color)
+                    .background_color(bg_color),
+            )
             .width(60.0)
             .show_ui(ui, |ui| {
                 for i in 0..mode_names.len() {
@@ -6567,26 +7963,35 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
                         (color.z * 255.0) as u8,
                     );
                     let item_text = contrasting_text(color);
-                    
+
                     ui.selectable_value(
-                        selected, 
-                        i, 
-                        egui::RichText::new(format!("M{}", i + 1)).color(item_text).background_color(item_bg)
+                        selected,
+                        i,
+                        egui::RichText::new(format!("M{}", i + 1))
+                            .color(item_text)
+                            .background_color(item_bg),
                     );
                 }
             });
-        
+
         if ui.button("Add Node").clicked() {
             let idx = *selected;
             let name = mode_names.get(idx).cloned().unwrap_or_default();
             let color = mode_colors.get(idx).copied().unwrap_or(glam::Vec3::ONE);
             // Add node at next available position in column
             let pos = context.editor_state.mode_graph_state.next_node_position();
-            let node_id = context.editor_state.mode_graph_state.snarl.insert_node(pos, ModeNode::new(idx, name, color));
+            let node_id = context
+                .editor_state
+                .mode_graph_state
+                .snarl
+                .insert_node(pos, ModeNode::new(idx, name, color));
             // Record which slot this node occupies
-            context.editor_state.mode_graph_state.record_node_in_slot(node_id, pos);
+            context
+                .editor_state
+                .mode_graph_state
+                .record_node_in_slot(node_id, pos);
         }
-        
+
         ui.separator();
         ui.label("Scroll to zoom, drag to pan");
     });
@@ -6619,14 +8024,14 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
     // Render the snarl graph
     // We need to temporarily take ownership of the snarl to pass to the widget
     let mut snarl = std::mem::replace(&mut viewer.graph_state.snarl, Snarl::new());
-    
+
     SnarlWidget::new()
         .style(style)
         .show(&mut snarl, &mut viewer, ui);
-    
+
     // Put the snarl back
     viewer.graph_state.snarl = snarl;
-    
+
     // Update node positions after rendering to detect moved nodes
     viewer.graph_state.update_node_positions(ui);
 
@@ -6642,7 +8047,7 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
             changes_made = true;
         }
     }
-    
+
     if changes_made {
         log::info!("Node graph changes written back to genome");
     }
@@ -6656,14 +8061,16 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.style_mut().spacing.slider_width = sw;
 
     // Only show world settings in GPU mode
-    if context.current_mode != crate::ui::types::SimulationMode::Gpu {        ui.label("World settings are only available in GPU mode.");
+    if context.current_mode != crate::ui::types::SimulationMode::Gpu {
+        ui.label("World settings are only available in GPU mode.");
         return;
     }
-    
+
     let world = &mut state.world_settings;
 
     // World Radius slider (top, reset-gated)
-    let current_world_radius = context.scene_manager
+    let current_world_radius = context
+        .scene_manager
         .gpu_scene()
         .map(|s| s.config.sphere_radius)
         .unwrap_or(world.world_radius);
@@ -6681,32 +8088,35 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.add_space(8.0);
     let current_capacity = context.gpu_capacity().unwrap_or(world.cell_capacity);
     let capacity_k = world.cell_capacity / 1000;
-    
+
     ui.label("Cell Capacity:")
         .on_hover_text("Maximum number of cells the simulation can hold simultaneously. Higher values use more GPU memory. ⚠ Changing this requires a scene reset to take effect");
     let mut capacity_k_mut = capacity_k;
-    if ui.add(egui::Slider::new(&mut capacity_k_mut, 10..=200).suffix("k")).changed() {
+    if ui
+        .add(egui::Slider::new(&mut capacity_k_mut, 10..=200).suffix("k"))
+        .changed()
+    {
         world.cell_capacity = capacity_k_mut * 1000;
     }
-    
+
     // Show reset required message if capacity changed
     if world.cell_capacity != current_capacity {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("⚠ Scene reset required").color(palette().status_warn));
         });
     }
-    
+
     ui.add_space(8.0);
-    
+
     // Physics section
     ui.heading("Physics");
     ui.separator();
-    
+
     // Gravity slider
     ui.label("Gravity:")
         .on_hover_text("Gravitational acceleration applied to all cells each frame. Positive = downward (or toward the chosen axis). Negative = upward/repulsive. 0 = weightless");
     ui.add(egui::Slider::new(&mut world.gravity, -50.0..=50.0).suffix(" m/s²"));
-    
+
     // Gravity axis / mode
     ui.label("Gravity Axis:")
         .on_hover_text("Direction gravity pulls. X/Y/Z = along a world axis. Radial = pulls all cells toward the world center — the boundary sphere becomes the 'floor'");
@@ -6720,38 +8130,61 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         if ui.selectable_label(world.gravity_mode == 2, "Z").clicked() {
             world.gravity_mode = 2;
         }
-        if ui.selectable_label(world.gravity_mode == 3, "Radial").clicked() {
+        if ui
+            .selectable_label(world.gravity_mode == 3, "Radial")
+            .clicked()
+        {
             world.gravity_mode = 3;
         }
     });
     if world.gravity_mode == 3 {
-        ui.label(egui::RichText::new("Pulls fluid toward origin; world boundary is the shell").small());
+        ui.label(
+            egui::RichText::new("Pulls fluid toward origin; world boundary is the shell").small(),
+        );
     }
-    
+
     ui.add_space(8.0);
-    
+
     // Global velocity damping
     ui.label("Velocity Damping:")
         .on_hover_text("Multiplier applied to cell velocity each frame. 1.0 = no drag (cells coast forever). 0.8 = heavy drag (cells slow down quickly). Lower values create a more viscous environment");
-    ui.add(egui::Slider::new(&mut world.acceleration_damping, 0.8..=1.0));
-    ui.label(egui::RichText::new("Global drag on cell movement (lower = more drag, higher = less damping)").small());
-    
+    ui.add(egui::Slider::new(
+        &mut world.acceleration_damping,
+        0.8..=1.0,
+    ));
+    ui.label(
+        egui::RichText::new(
+            "Global drag on cell movement (lower = more drag, higher = less damping)",
+        )
+        .small(),
+    );
+
     if state.show_advanced_options {
         ui.add_space(8.0);
-        
+
         // Adhesion constraint solver iterations
         ui.label("Constraint Iterations:")
             .on_hover_text("Number of extra adhesion solver passes per physics step. More iterations = stiffer, more accurate joints but higher GPU cost. 0 = single pass (fast, slightly springy). 8–16 = rigid joints");
         ui.add(egui::Slider::new(&mut world.constraint_iterations, 0..=16));
-        ui.label(egui::RichText::new("Extra adhesion solver passes (higher = stiffer joints, more GPU cost)").small());
-        
+        ui.label(
+            egui::RichText::new(
+                "Extra adhesion solver passes (higher = stiffer joints, more GPU cost)",
+            )
+            .small(),
+        );
+
         ui.add_space(8.0);
-        
+
         // Water viscosity
         ui.label("Water Viscosity:")
             .on_hover_text("Additional drag applied to cells that are inside water voxels. 0 = water has no effect on movement. 1 = maximum resistance — cells move very slowly through water");
         ui.add(egui::Slider::new(&mut world.water_viscosity, 0.0..=1.0));
-        ui.label(egui::RichText::new("Drag applied to cells moving through water (0 = off, higher = thicker fluid)").small());
+        ui.label(
+            egui::RichText::new(
+                "Drag applied to cells moving through water (0 = off, higher = thicker fluid)",
+            )
+            .small(),
+        );
     } // end advanced physics
 
     ui.add_space(12.0);
@@ -6768,7 +8201,10 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Metabolism Multiplier:")
             .on_hover_text("How much faster solo cells (0 connections) burn nutrients compared to connected cells. Gradient: 1 connection = partial penalty, 3+ connections = normal rate");
-        ui.add(egui::Slider::new(&mut world.solo_metabolism_multiplier, 1.5..=10.0));
+        ui.add(egui::Slider::new(
+            &mut world.solo_metabolism_multiplier,
+            1.5..=10.0,
+        ));
         ui.label(egui::RichText::new("Solo cells (0 connections) drain at this rate. Gradient: 1 conn = partial, 3+ = normal").small());
     }
 
@@ -6781,7 +8217,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
         ui.label("Radiation Level:")
             .on_hover_text("Probability that each child cell mutates during division. 0 = no mutations. Uses a logarithmic scale for fine control at low values. Higher radiation drives faster evolution but may destabilize organisms");
-        
+
         // Logarithmic slider: position 0.0 = exactly 0.0 (off)
         // position > 0.0 maps to [0.00001, 1.0] over 5 decades for fine low-end control
         const EPSILON: f32 = 0.0001;
@@ -6821,14 +8257,16 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                             None
                         }
                     })
-                })
+                }),
         );
 
         if response.changed() {
             world.radiation_level = if log_slider < EPSILON {
                 0.0
             } else {
-                10_f32.powf(log_slider * DECADES as f32 - DECADES as f32).clamp(0.0, 1.0)
+                10_f32
+                    .powf(log_slider * DECADES as f32 - DECADES as f32)
+                    .clamp(0.0, 1.0)
             };
         }
 
@@ -6836,7 +8274,9 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
         ui.add_space(4.0);
         ui.checkbox(&mut world.subtle_mutations, "Subtle mutations")
-            .on_hover_text("When checked, mutations make small color nudges instead of full re-rolls");
+            .on_hover_text(
+                "When checked, mutations make small color nudges instead of full re-rolls",
+            );
     } // end advanced biology/mutation
 
     ui.add_space(12.0);

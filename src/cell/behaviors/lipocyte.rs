@@ -7,8 +7,8 @@
 //! Lipocytes have high nutrient_priority and serve as nutrient reservoirs
 //! for the colony.
 
-use crate::genome::ModeSettings;
 use super::{CellBehavior, TypeSpecificInstanceData};
+use crate::genome::ModeSettings;
 
 /// Behavior implementation for Lipocyte cells.
 ///

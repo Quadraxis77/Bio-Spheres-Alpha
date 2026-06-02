@@ -159,9 +159,7 @@ impl DepthOfFieldRenderer {
         // Create DoF blur shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("DoF Blur Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/dof_blur.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/dof_blur.wgsl").into()),
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -402,8 +400,7 @@ impl DepthOfFieldRenderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());

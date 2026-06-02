@@ -33,8 +33,8 @@
 //! - `data[6]`: tail_segments (4 - 64)
 //! - `data[7]`: reserved
 
-use crate::genome::ModeSettings;
 use super::{CellBehavior, TypeSpecificInstanceData};
+use crate::genome::ModeSettings;
 
 /// Behavior implementation for Flagellocyte cells.
 ///
@@ -84,9 +84,9 @@ mod tests {
     fn flagellocyte_behavior_returns_empty_data() {
         let behavior = FlagellocyteBehavior;
         let mode_settings = ModeSettings::default();
-        
+
         let instance_data = behavior.build_instance_data(&mode_settings);
-        
+
         // Behavior returns empty data - actual values come from CellTypeVisuals
         for i in 0..8 {
             assert_eq!(

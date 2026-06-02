@@ -23,10 +23,10 @@ pub struct SkyboxCameraUniforms {
     /// Inverse of (proj * rotation-only view) - no translation component.
     /// Multiply by NDC to get a world-space direction directly.
     pub inv_view_rot_proj: [[f32; 4]; 4],
-    pub time:              f32,
-    pub _pad0:             f32,
-    pub _pad1:             f32,
-    pub _pad2:             f32,
+    pub time: f32,
+    pub _pad0: f32,
+    pub _pad1: f32,
+    pub _pad2: f32,
 }
 
 /// Skybox appearance parameters (must match shader struct).
@@ -34,15 +34,15 @@ pub struct SkyboxCameraUniforms {
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct SkyboxParams {
     /// Controls how many stars appear (0.0-1.0; default 0.8)
-    pub star_density:        f32,
+    pub star_density: f32,
     /// Overall star brightness multiplier (default 1.0)
-    pub star_brightness:     f32,
+    pub star_brightness: f32,
     /// How fast stars twinkle in Hz (default 1.5)
-    pub twinkle_speed:       f32,
+    pub twinkle_speed: f32,
     /// Twinkle amplitude - 0 = no twinkle, 1 = full twinkle (default 0.25)
-    pub twinkle_amount:      f32,
+    pub twinkle_amount: f32,
     /// Nebula color cloud intensity (default 1.0)
-    pub nebula_intensity:    f32,
+    pub nebula_intensity: f32,
     /// Milky Way band brightness (default 1.0)
     pub milky_way_intensity: f32,
     _pad0: f32,
@@ -52,11 +52,11 @@ pub struct SkyboxParams {
 impl Default for SkyboxParams {
     fn default() -> Self {
         Self {
-            star_density:        0.8,
-            star_brightness:     1.0,
-            twinkle_speed:       1.5,
-            twinkle_amount:      0.25,
-            nebula_intensity:    1.0,
+            star_density: 0.8,
+            star_brightness: 1.0,
+            twinkle_speed: 1.5,
+            twinkle_amount: 0.25,
+            nebula_intensity: 1.0,
             milky_way_intensity: 1.0,
             _pad0: 0.0,
             _pad1: 0.0,
@@ -70,11 +70,11 @@ impl Default for SkyboxParams {
 /// Call [`SkyboxRenderer::render`] immediately after the clear pass and
 /// before any opaque geometry.
 pub struct SkyboxRenderer {
-    pipeline:       wgpu::RenderPipeline,
-    camera_layout:  wgpu::BindGroupLayout,
-    params_layout:  wgpu::BindGroupLayout,
-    camera_buffer:  wgpu::Buffer,
-    params_buffer:  wgpu::Buffer,
+    pipeline: wgpu::RenderPipeline,
+    camera_layout: wgpu::BindGroupLayout,
+    params_layout: wgpu::BindGroupLayout,
+    camera_buffer: wgpu::Buffer,
+    params_buffer: wgpu::Buffer,
 
     /// Publicly configurable appearance parameters.
     pub params: SkyboxParams,
@@ -199,13 +199,13 @@ impl SkyboxRenderer {
     /// camera moves.
     pub fn render(
         &self,
-        encoder:    &mut wgpu::CommandEncoder,
-        queue:      &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
         color_view: &wgpu::TextureView,
-        device:     &wgpu::Device,
-        view_proj:  glam::Mat4,
+        device: &wgpu::Device,
+        view_proj: glam::Mat4,
         camera_pos: glam::Vec3,
-        time:       f32,
+        time: f32,
     ) {
         // Build a rotation-only view-projection by cancelling the camera
         // translation. Multiplying view_proj by T(+camera_pos) on the right

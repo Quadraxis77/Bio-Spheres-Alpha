@@ -14,8 +14,8 @@
 //! evenly over that window so the thumbnail always shows the full life-cycle
 //! regardless of how fast or slow the genome grows.
 
-use std::path::PathBuf;
 use glam::{Quat, Vec3};
+use std::path::PathBuf;
 
 // -- Constants -----------------------------------------------------------------
 
@@ -148,7 +148,9 @@ impl GifCaptureState {
 
                 let count = scan_scene.state.work_state.cell_count;
 
-                if count > 0 { ever_alive = true; }
+                if count > 0 {
+                    ever_alive = true;
+                }
 
                 // Track stagnation: count consecutive steps with no change.
                 if count == last_count {
@@ -187,7 +189,11 @@ impl GifCaptureState {
             }
 
             // If nothing interesting happened, use the fallback window.
-            if elapsed < 1.0 { FALLBACK_WINDOW } else { elapsed }
+            if elapsed < 1.0 {
+                FALLBACK_WINDOW
+            } else {
+                elapsed
+            }
         };
 
         let frame_interval = capture_window / GIF_FRAMES as f32;
@@ -199,12 +205,18 @@ impl GifCaptureState {
         scene.camera.distance = cam_distance;
         scene.camera.target_distance = cam_distance;
         scene.camera.center = cam_center;
-        scene.gizmo_renderer.update_config(&crate::rendering::orientation_gizmo::GizmoConfig {
-            visible: false, ..Default::default()
-        });
-        scene.split_ring_renderer.update_config(&crate::rendering::split_rings::SplitRingConfig {
-            visible: false, ..Default::default()
-        });
+        scene
+            .gizmo_renderer
+            .update_config(&crate::rendering::orientation_gizmo::GizmoConfig {
+                visible: false,
+                ..Default::default()
+            });
+        scene
+            .split_ring_renderer
+            .update_config(&crate::rendering::split_rings::SplitRingConfig {
+                visible: false,
+                ..Default::default()
+            });
         scene.update_genome(genome);
         // Reset to t=0 with the correct genome's initial state so step_forward
         // starts from the right initial cell configuration, not the random genome
@@ -223,12 +235,17 @@ impl GifCaptureState {
             ((sim_time / capture_window) * GIF_FRAMES as f32).round() as u32
         } else {
             0
-        }.min(GIF_FRAMES.saturating_sub(1));
+        }
+        .min(GIF_FRAMES.saturating_sub(1));
 
         // -- Off-screen render target ------------------------------------------
         let color_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("GIF Capture Color Texture"),
-            size: wgpu::Extent3d { width: GIF_SIZE, height: GIF_SIZE, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: GIF_SIZE,
+                height: GIF_SIZE,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -257,8 +274,10 @@ impl GifCaptureState {
             wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
         );
 
-        let output_path = crate::app_dirs::genomes_dir()
-            .join(format!("{}.gif", crate::app_dirs::sanitize_filename(&genome.name)));
+        let output_path = crate::app_dirs::genomes_dir().join(format!(
+            "{}.gif",
+            crate::app_dirs::sanitize_filename(&genome.name)
+        ));
 
         let _ = cell_type_visuals;
 
@@ -281,16 +300,24 @@ impl GifCaptureState {
     }
 
     /// How many frames have been captured so far.
-    pub fn frames_done(&self) -> u32 { self.frames.len() as u32 }
+    pub fn frames_done(&self) -> u32 {
+        self.frames.len() as u32
+    }
 
     /// Total frames to capture.
-    pub fn frames_total(&self) -> u32 { GIF_FRAMES }
+    pub fn frames_total(&self) -> u32 {
+        GIF_FRAMES
+    }
 
     /// Progress 0.0-1.0.
-    pub fn progress(&self) -> f32 { self.frames_done() as f32 / GIF_FRAMES as f32 }
+    pub fn progress(&self) -> f32 {
+        self.frames_done() as f32 / GIF_FRAMES as f32
+    }
 
     /// Whether capture + encoding is complete.
-    pub fn is_done(&self) -> bool { self.result.is_some() }
+    pub fn is_done(&self) -> bool {
+        self.result.is_some()
+    }
 
     /// Capture one frame. Call once per app frame until `is_done()`.
     pub fn step(
@@ -299,7 +326,9 @@ impl GifCaptureState {
         queue: &wgpu::Queue,
         cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
     ) {
-        if self.is_done() { return; }
+        if self.is_done() {
+            return;
+        }
 
         // Advance simulation by the dynamic per-frame interval.
         {
@@ -313,8 +342,8 @@ impl GifCaptureState {
         let saved_forward = self.initial_rotation * Vec3::NEG_Z;
         let pitch_angle = saved_forward.y.asin();
         let pitch = Quat::from_axis_angle(Vec3::X, pitch_angle);
-        let yaw   = Quat::from_axis_angle(Vec3::Y, self.orbit_angle);
-        let rot   = yaw * pitch;
+        let yaw = Quat::from_axis_angle(Vec3::Y, self.orbit_angle);
+        let rot = yaw * pitch;
         self.orbit_angle += ORBIT_SPEED * self.frame_interval;
         self.scene.camera.distance = self.orbit_distance;
         self.scene.camera.target_distance = self.orbit_distance;
@@ -322,9 +351,23 @@ impl GifCaptureState {
         self.scene.camera.target_rotation = rot;
 
         // Render.
-        let view = self.color_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = self
+            .color_tex
+            .create_view(&wgpu::TextureViewDescriptor::default());
         use crate::scene::traits::Scene as _;
-        self.scene.render(device, queue, &view, cell_type_visuals, 0.0, 500.0, 10.0, 25.0, 50.0, false, 0.08);
+        self.scene.render(
+            device,
+            queue,
+            &view,
+            cell_type_visuals,
+            0.0,
+            500.0,
+            10.0,
+            25.0,
+            50.0,
+            false,
+            0.08,
+        );
 
         // Copy to staging.
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -340,19 +383,36 @@ impl GifCaptureState {
                     rows_per_image: Some(GIF_SIZE),
                 },
             },
-            wgpu::Extent3d { width: GIF_SIZE, height: GIF_SIZE, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: GIF_SIZE,
+                height: GIF_SIZE,
+                depth_or_array_layers: 1,
+            },
         );
         queue.submit(std::iter::once(encoder.finish()));
 
         // Readback (blocking for this one frame - ~1ms).
         let slice = self.staging.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-        if device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).is_err() {
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        if device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .is_err()
+        {
             self.result = Some(Err("GIF capture: device.poll failed".into()));
             return;
         }
-        if rx.recv().map_err(|_| ()).and_then(|r| r.map_err(|_| ())).is_err() {
+        if rx
+            .recv()
+            .map_err(|_| ())
+            .and_then(|r| r.map_err(|_| ()))
+            .is_err()
+        {
             self.result = Some(Err("GIF capture: staging map failed".into()));
             return;
         }
@@ -364,7 +424,10 @@ impl GifCaptureState {
             let row_bytes = &mapped[row_start..row_start + self.unpadded_bpr as usize];
             if self.is_bgra {
                 for chunk in row_bytes.chunks_exact(4) {
-                    rgba.push(chunk[2]); rgba.push(chunk[1]); rgba.push(chunk[0]); rgba.push(chunk[3]);
+                    rgba.push(chunk[2]);
+                    rgba.push(chunk[1]);
+                    rgba.push(chunk[0]);
+                    rgba.push(chunk[3]);
                 }
             } else {
                 rgba.extend_from_slice(row_bytes);
@@ -389,20 +452,28 @@ impl GifCaptureState {
             GIF_SIZE as u16,
             GIF_SIZE as u16,
             &[],
-        ).map_err(|e| format!("GIF: encoder init: {}", e))?;
+        )
+        .map_err(|e| format!("GIF: encoder init: {}", e))?;
 
-        encoder.set_repeat(gif::Repeat::Infinite)
+        encoder
+            .set_repeat(gif::Repeat::Infinite)
             .map_err(|e| format!("GIF: set_repeat: {}", e))?;
 
         for (i, rgba) in self.frames.iter().enumerate() {
             let mut frame = gif::Frame::from_rgba_speed(
-                GIF_SIZE as u16, GIF_SIZE as u16,
+                GIF_SIZE as u16,
+                GIF_SIZE as u16,
                 &mut rgba.clone(),
                 10,
             );
             // Hold the last frame for 1 second (100cs) before looping.
-            frame.delay = if i + 1 == self.frames.len() { 100 } else { FRAME_DELAY_CS };
-            encoder.write_frame(&frame)
+            frame.delay = if i + 1 == self.frames.len() {
+                100
+            } else {
+                FRAME_DELAY_CS
+            };
+            encoder
+                .write_frame(&frame)
                 .map_err(|e| format!("GIF: write_frame: {}", e))?;
         }
 

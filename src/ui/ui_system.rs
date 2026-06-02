@@ -18,43 +18,43 @@ pub mod theme {
     use egui::Color32;
 
     // Background layers
-    pub const BG_DARKEST:   Color32 = Color32::from_rgb(8,  12, 22);   // window bg
-    pub const BG_PANEL:     Color32 = Color32::from_rgb(12, 17, 30);   // panel bg
-    pub const BG_WIDGET:    Color32 = Color32::from_rgb(18, 25, 42);   // widget bg
-    pub const BG_HOVER:     Color32 = Color32::from_rgb(24, 34, 58);   // hovered widget
-    pub const BG_ACTIVE:    Color32 = Color32::from_rgb(30, 44, 74);   // active/pressed
-    pub const BG_SELECTED:  Color32 = Color32::from_rgb(20, 50, 80);   // selected item
+    pub const BG_DARKEST: Color32 = Color32::from_rgb(8, 12, 22); // window bg
+    pub const BG_PANEL: Color32 = Color32::from_rgb(12, 17, 30); // panel bg
+    pub const BG_WIDGET: Color32 = Color32::from_rgb(18, 25, 42); // widget bg
+    pub const BG_HOVER: Color32 = Color32::from_rgb(24, 34, 58); // hovered widget
+    pub const BG_ACTIVE: Color32 = Color32::from_rgb(30, 44, 74); // active/pressed
+    pub const BG_SELECTED: Color32 = Color32::from_rgb(20, 50, 80); // selected item
 
     // Accent colors
-    pub const ACCENT_TEAL:  Color32 = Color32::from_rgb(0,  200, 160); // primary accent
-    pub const ACCENT_CYAN:  Color32 = Color32::from_rgb(40, 180, 220); // secondary accent
-    pub const ACCENT_DIM:   Color32 = Color32::from_rgb(0,  80,  64);  // dimmed accent
+    pub const ACCENT_TEAL: Color32 = Color32::from_rgb(0, 200, 160); // primary accent
+    pub const ACCENT_CYAN: Color32 = Color32::from_rgb(40, 180, 220); // secondary accent
+    pub const ACCENT_DIM: Color32 = Color32::from_rgb(0, 80, 64); // dimmed accent
 
     // Text
-    pub const TEXT_PRIMARY:   Color32 = Color32::from_rgb(210, 220, 235);
+    pub const TEXT_PRIMARY: Color32 = Color32::from_rgb(210, 220, 235);
     pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(130, 150, 175);
-    pub const TEXT_DIM:       Color32 = Color32::from_rgb(70,  90,  120);
-    pub const TEXT_ACCENT:    Color32 = Color32::from_rgb(0,   200, 160);
+    pub const TEXT_DIM: Color32 = Color32::from_rgb(70, 90, 120);
+    pub const TEXT_ACCENT: Color32 = Color32::from_rgb(0, 200, 160);
 
     // Borders / strokes
-    pub const BORDER_SUBTLE:  Color32 = Color32::from_rgb(30,  45,  70);
-    pub const BORDER_NORMAL:  Color32 = Color32::from_rgb(45,  65,  100);
-    pub const BORDER_BRIGHT:  Color32 = Color32::from_rgb(0,   140, 110);
+    pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(30, 45, 70);
+    pub const BORDER_NORMAL: Color32 = Color32::from_rgb(45, 65, 100);
+    pub const BORDER_BRIGHT: Color32 = Color32::from_rgb(0, 140, 110);
 
     // Status colors
-    pub const STATUS_GREEN:   Color32 = Color32::from_rgb(60,  200, 100);
-    pub const STATUS_YELLOW:  Color32 = Color32::from_rgb(220, 180, 50);
-    pub const STATUS_RED:     Color32 = Color32::from_rgb(220, 70,  70);
-    pub const STATUS_BLUE:    Color32 = Color32::from_rgb(60,  140, 220);
+    pub const STATUS_GREEN: Color32 = Color32::from_rgb(60, 200, 100);
+    pub const STATUS_YELLOW: Color32 = Color32::from_rgb(220, 180, 50);
+    pub const STATUS_RED: Color32 = Color32::from_rgb(220, 70, 70);
+    pub const STATUS_BLUE: Color32 = Color32::from_rgb(60, 140, 220);
 
     // Top bar
-    pub const TOPBAR_BG:      Color32 = Color32::from_rgb(6,   9,   18);
-    pub const TOPBAR_BORDER:  Color32 = Color32::from_rgb(0,   120, 95);
+    pub const TOPBAR_BG: Color32 = Color32::from_rgb(6, 9, 18);
+    pub const TOPBAR_BORDER: Color32 = Color32::from_rgb(0, 120, 95);
 
     // Live Simulation button
-    pub const BTN_LIVE_BG:    Color32 = Color32::from_rgb(180, 40,  40);
-    pub const BTN_LIVE_HOVER: Color32 = Color32::from_rgb(210, 55,  55);
-    pub const BTN_EDITOR_BG:  Color32 = Color32::from_rgb(30,  120, 80);
+    pub const BTN_LIVE_BG: Color32 = Color32::from_rgb(180, 40, 40);
+    pub const BTN_LIVE_HOVER: Color32 = Color32::from_rgb(210, 55, 55);
+    pub const BTN_EDITOR_BG: Color32 = Color32::from_rgb(30, 120, 80);
     pub const BTN_EDITOR_HOVER: Color32 = Color32::from_rgb(40, 150, 100);
 }
 
@@ -66,28 +66,28 @@ pub mod theme {
 // switches without needing to re-derive colors from the enum each frame.
 #[derive(Clone, Copy)]
 pub struct ActivePalette {
-    pub bg_darkest:      egui::Color32,
-    pub bg_panel:        egui::Color32,
-    pub bg_widget:       egui::Color32,
-    pub bg_hover:        egui::Color32,
-    pub bg_active:       egui::Color32,
-    pub bg_selected:     egui::Color32,
-    pub accent_primary:  egui::Color32,
-    pub accent_secondary:egui::Color32,
-    pub text_primary:    egui::Color32,
-    pub text_secondary:  egui::Color32,
-    pub text_dim:        egui::Color32,
-    pub border_subtle:   egui::Color32,
-    pub border_normal:   egui::Color32,
-    pub border_bright:   egui::Color32,
-    pub topbar_bg:       egui::Color32,
-    pub topbar_border:   egui::Color32,
-    pub status_ok:       egui::Color32,
-    pub status_warn:     egui::Color32,
-    pub status_err:      egui::Color32,
-    pub status_info:     egui::Color32,
+    pub bg_darkest: egui::Color32,
+    pub bg_panel: egui::Color32,
+    pub bg_widget: egui::Color32,
+    pub bg_hover: egui::Color32,
+    pub bg_active: egui::Color32,
+    pub bg_selected: egui::Color32,
+    pub accent_primary: egui::Color32,
+    pub accent_secondary: egui::Color32,
+    pub text_primary: egui::Color32,
+    pub text_secondary: egui::Color32,
+    pub text_dim: egui::Color32,
+    pub border_subtle: egui::Color32,
+    pub border_normal: egui::Color32,
+    pub border_bright: egui::Color32,
+    pub topbar_bg: egui::Color32,
+    pub topbar_border: egui::Color32,
+    pub status_ok: egui::Color32,
+    pub status_warn: egui::Color32,
+    pub status_err: egui::Color32,
+    pub status_info: egui::Color32,
     /// Icon color for inactive rail buttons - always readable against the dark rail bg.
-    pub rail_icon:       egui::Color32,
+    pub rail_icon: egui::Color32,
     /// Icon color for active/toggled rail buttons (drawn on accent_primary bg).
     pub rail_icon_active: egui::Color32,
     /// The active theme variant - available to any rendering code that needs per-theme logic.
@@ -98,29 +98,29 @@ impl Default for ActivePalette {
     fn default() -> Self {
         // Biotech Dark defaults
         Self {
-            bg_darkest:       egui::Color32::from_rgb(8,   12,  22),
-            bg_panel:         egui::Color32::from_rgb(12,  17,  30),
-            bg_widget:        egui::Color32::from_rgb(18,  25,  42),
-            bg_hover:         egui::Color32::from_rgb(24,  34,  58),
-            bg_active:        egui::Color32::from_rgb(30,  44,  74),
-            bg_selected:      egui::Color32::from_rgb(20,  50,  80),
-            accent_primary:   egui::Color32::from_rgb(0,   200, 160),
-            accent_secondary: egui::Color32::from_rgb(40,  180, 220),
-            text_primary:     egui::Color32::from_rgb(210, 220, 235),
-            text_secondary:   egui::Color32::from_rgb(130, 150, 175),
-            text_dim:         egui::Color32::from_rgb(70,  90,  120),
-            border_subtle:    egui::Color32::from_rgb(30,  45,  70),
-            border_normal:    egui::Color32::from_rgb(45,  65,  100),
-            border_bright:    egui::Color32::from_rgb(0,   140, 110),
-            topbar_bg:        egui::Color32::from_rgb(6,   9,   18),
-            topbar_border:    egui::Color32::from_rgb(0,   120, 95),
-            status_ok:        egui::Color32::from_rgb(60,  200, 100),
-            status_warn:      egui::Color32::from_rgb(220, 180,  50),
-            status_err:       egui::Color32::from_rgb(220,  70,  70),
-            status_info:      egui::Color32::from_rgb(60,  140, 220),
-            rail_icon:        egui::Color32::from_rgb(160, 185, 220),
+            bg_darkest: egui::Color32::from_rgb(8, 12, 22),
+            bg_panel: egui::Color32::from_rgb(12, 17, 30),
+            bg_widget: egui::Color32::from_rgb(18, 25, 42),
+            bg_hover: egui::Color32::from_rgb(24, 34, 58),
+            bg_active: egui::Color32::from_rgb(30, 44, 74),
+            bg_selected: egui::Color32::from_rgb(20, 50, 80),
+            accent_primary: egui::Color32::from_rgb(0, 200, 160),
+            accent_secondary: egui::Color32::from_rgb(40, 180, 220),
+            text_primary: egui::Color32::from_rgb(210, 220, 235),
+            text_secondary: egui::Color32::from_rgb(130, 150, 175),
+            text_dim: egui::Color32::from_rgb(70, 90, 120),
+            border_subtle: egui::Color32::from_rgb(30, 45, 70),
+            border_normal: egui::Color32::from_rgb(45, 65, 100),
+            border_bright: egui::Color32::from_rgb(0, 140, 110),
+            topbar_bg: egui::Color32::from_rgb(6, 9, 18),
+            topbar_border: egui::Color32::from_rgb(0, 120, 95),
+            status_ok: egui::Color32::from_rgb(60, 200, 100),
+            status_warn: egui::Color32::from_rgb(220, 180, 50),
+            status_err: egui::Color32::from_rgb(220, 70, 70),
+            status_info: egui::Color32::from_rgb(60, 140, 220),
+            rail_icon: egui::Color32::from_rgb(160, 185, 220),
             rail_icon_active: egui::Color32::WHITE,
-            theme:            crate::ui::types::UiTheme::BiotechDark,
+            theme: crate::ui::types::UiTheme::BiotechDark,
         }
     }
 }
@@ -205,15 +205,20 @@ impl UiSystem {
 
             fonts.font_data.insert(
                 "NotoSans".to_owned(),
-                egui::FontData::from_static(include_bytes!("../../assets/fonts/NotoSans-Regular.ttf")).into(),
+                egui::FontData::from_static(include_bytes!(
+                    "../../assets/fonts/NotoSans-Regular.ttf"
+                ))
+                .into(),
             );
             fonts.font_data.insert(
                 "SegoeSymbol".to_owned(),
-                egui::FontData::from_static(include_bytes!("../../assets/fonts/seguisym.ttf")).into(),
+                egui::FontData::from_static(include_bytes!("../../assets/fonts/seguisym.ttf"))
+                    .into(),
             );
             fonts.font_data.insert(
                 "SegoeEmoji".to_owned(),
-                egui::FontData::from_static(include_bytes!("../../assets/fonts/seguiemj.ttf")).into(),
+                egui::FontData::from_static(include_bytes!("../../assets/fonts/seguiemj.ttf"))
+                    .into(),
             );
 
             // Append fallbacks to both Proportional and Monospace families so
@@ -279,12 +284,15 @@ impl UiSystem {
         }
     }
 
-
     /// Handle a winit window event.
     ///
     /// Returns `true` if egui consumed the event (i.e., the event should not
     /// be passed to other systems like the camera controller).
-    pub fn handle_event(&mut self, window: &Window, event: &WindowEvent) -> egui_winit::EventResponse {
+    pub fn handle_event(
+        &mut self,
+        window: &Window,
+        event: &WindowEvent,
+    ) -> egui_winit::EventResponse {
         self.winit_state.on_window_event(window, event)
     }
 
@@ -310,7 +318,7 @@ impl UiSystem {
             // Don't block camera input - the whole window is the viewport.
             return false;
         }
-        
+
         // Otherwise, check if egui wants the pointer
         self.ctx.egui_wants_pointer_input() || self.ctx.is_pointer_over_egui()
     }
@@ -354,14 +362,14 @@ impl UiSystem {
     /// the current ui_scale factor.
     fn apply_ui_scale(&mut self) {
         let scale = self.state.ui_scale;
-        
+
         self.ctx.global_style_mut(|style| {
             // Store original values on first run
             if self.original_spacing.is_none() {
                 self.original_spacing = Some(style.spacing.clone());
                 self.original_text_styles = Some(style.text_styles.clone());
             }
-            
+
             // Apply scale from original values (not multiplicatively)
             if let Some(ref original_spacing) = self.original_spacing {
                 style.spacing.item_spacing = original_spacing.item_spacing * scale;
@@ -379,7 +387,7 @@ impl UiSystem {
                 style.spacing.menu_width = original_spacing.menu_width * scale;
                 style.spacing.combo_height = original_spacing.combo_height * scale;
             }
-            
+
             // Scale text sizes from original values
             if let Some(ref original_text_styles) = self.original_text_styles {
                 for (text_style, font_id) in style.text_styles.iter_mut() {
@@ -389,7 +397,7 @@ impl UiSystem {
                 }
             }
         });
-        
+
         log::debug!("Applied UI scale: {:.2}x", scale);
     }
 
@@ -409,43 +417,71 @@ impl UiSystem {
         //              status_ok, status_warn, status_err, status_info)
         #[allow(clippy::type_complexity)]
         let (
-            bg_darkest, bg_panel, bg_widget, bg_hover, bg_active, bg_selected,
-            accent_primary, accent_secondary,
-            text_primary, text_secondary, text_dim,
-            border_subtle, border_normal, border_bright,
-            topbar_bg, topbar_border,
-            status_ok, status_warn, status_err, status_info,
+            bg_darkest,
+            bg_panel,
+            bg_widget,
+            bg_hover,
+            bg_active,
+            bg_selected,
+            accent_primary,
+            accent_secondary,
+            text_primary,
+            text_secondary,
+            text_dim,
+            border_subtle,
+            border_normal,
+            border_bright,
+            topbar_bg,
+            topbar_border,
+            status_ok,
+            status_warn,
+            status_err,
+            status_info,
         ): (
-            egui::Color32, egui::Color32, egui::Color32, egui::Color32, egui::Color32, egui::Color32,
-            egui::Color32, egui::Color32,
-            egui::Color32, egui::Color32, egui::Color32,
-            egui::Color32, egui::Color32, egui::Color32,
-            egui::Color32, egui::Color32,
-            egui::Color32, egui::Color32, egui::Color32, egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
+            egui::Color32,
         ) = match theme_choice {
             // -- BIOTECH DARK -------------------------------------------------
             // Original. Navy backgrounds, bright teal accent, high-contrast white text.
             UiTheme::BiotechDark => (
-                egui::Color32::from_rgb(  6,   9,  18), // bg_darkest
-                egui::Color32::from_rgb( 12,  17,  32), // bg_panel
-                egui::Color32::from_rgb( 22,  30,  52), // bg_widget
-                egui::Color32::from_rgb( 32,  44,  72), // bg_hover
-                egui::Color32::from_rgb( 42,  58,  95), // bg_active
-                egui::Color32::from_rgb( 18,  55,  85), // bg_selected
-                egui::Color32::from_rgb(  0, 220, 175), // accent_primary  - bright teal
-                egui::Color32::from_rgb( 60, 195, 240), // accent_secondary - cyan
+                egui::Color32::from_rgb(6, 9, 18),      // bg_darkest
+                egui::Color32::from_rgb(12, 17, 32),    // bg_panel
+                egui::Color32::from_rgb(22, 30, 52),    // bg_widget
+                egui::Color32::from_rgb(32, 44, 72),    // bg_hover
+                egui::Color32::from_rgb(42, 58, 95),    // bg_active
+                egui::Color32::from_rgb(18, 55, 85),    // bg_selected
+                egui::Color32::from_rgb(0, 220, 175),   // accent_primary  - bright teal
+                egui::Color32::from_rgb(60, 195, 240),  // accent_secondary - cyan
                 egui::Color32::from_rgb(225, 235, 255), // text_primary    - bright white-blue
                 egui::Color32::from_rgb(155, 175, 210), // text_secondary
-                egui::Color32::from_rgb( 80, 100, 145), // text_dim
-                egui::Color32::from_rgb( 28,  42,  72), // border_subtle
-                egui::Color32::from_rgb( 50,  72, 115), // border_normal
-                egui::Color32::from_rgb(  0, 180, 140), // border_bright
-                egui::Color32::from_rgb(  4,   6,  14), // topbar_bg
-                egui::Color32::from_rgb(  0, 160, 125), // topbar_border
-                egui::Color32::from_rgb( 60, 210, 100), // status_ok
-                egui::Color32::from_rgb(220, 185,  50), // status_warn
-                egui::Color32::from_rgb(225,  70,  70), // status_err
-                egui::Color32::from_rgb( 60, 150, 230), // status_info
+                egui::Color32::from_rgb(80, 100, 145),  // text_dim
+                egui::Color32::from_rgb(28, 42, 72),    // border_subtle
+                egui::Color32::from_rgb(50, 72, 115),   // border_normal
+                egui::Color32::from_rgb(0, 180, 140),   // border_bright
+                egui::Color32::from_rgb(4, 6, 14),      // topbar_bg
+                egui::Color32::from_rgb(0, 160, 125),   // topbar_border
+                egui::Color32::from_rgb(60, 210, 100),  // status_ok
+                egui::Color32::from_rgb(220, 185, 50),  // status_warn
+                egui::Color32::from_rgb(225, 70, 70),   // status_err
+                egui::Color32::from_rgb(60, 150, 230),  // status_info
             ),
             // -- ARCTIC - light, dark status colors for readability on white --
             UiTheme::Arctic => (
@@ -455,20 +491,20 @@ impl UiSystem {
                 egui::Color32::from_rgb(195, 210, 238),
                 egui::Color32::from_rgb(170, 192, 230),
                 egui::Color32::from_rgb(185, 215, 255),
-                egui::Color32::from_rgb( 10,  90, 200),
-                egui::Color32::from_rgb(  0, 155, 185),
-                egui::Color32::from_rgb(  8,  15,  35),
-                egui::Color32::from_rgb( 45,  70, 120),
+                egui::Color32::from_rgb(10, 90, 200),
+                egui::Color32::from_rgb(0, 155, 185),
+                egui::Color32::from_rgb(8, 15, 35),
+                egui::Color32::from_rgb(45, 70, 120),
                 egui::Color32::from_rgb(110, 135, 175),
                 egui::Color32::from_rgb(185, 200, 225),
                 egui::Color32::from_rgb(140, 165, 205),
-                egui::Color32::from_rgb( 10,  90, 200),
+                egui::Color32::from_rgb(10, 90, 200),
                 egui::Color32::from_rgb(220, 230, 248),
-                egui::Color32::from_rgb( 10,  90, 200),
-                egui::Color32::from_rgb( 20, 140,  55), // status_ok   - dark green
-                egui::Color32::from_rgb(155,  95,   0), // status_warn - dark amber (no yellow)
-                egui::Color32::from_rgb(185,  30,  30), // status_err  - dark red
-                egui::Color32::from_rgb( 15,  90, 175), // status_info - dark blue
+                egui::Color32::from_rgb(10, 90, 200),
+                egui::Color32::from_rgb(20, 140, 55), // status_ok   - dark green
+                egui::Color32::from_rgb(155, 95, 0),  // status_warn - dark amber (no yellow)
+                egui::Color32::from_rgb(185, 30, 30), // status_err  - dark red
+                egui::Color32::from_rgb(15, 90, 175), // status_info - dark blue
             ),
             // -- PARCHMENT - light, earthy dark status colors -----------------
             UiTheme::Parchment => (
@@ -478,20 +514,20 @@ impl UiSystem {
                 egui::Color32::from_rgb(208, 188, 148),
                 egui::Color32::from_rgb(188, 165, 118),
                 egui::Color32::from_rgb(215, 185, 130),
-                egui::Color32::from_rgb(165,  55,  15),
-                egui::Color32::from_rgb(120,  75,  20),
-                egui::Color32::from_rgb( 28,  14,   4),
-                egui::Color32::from_rgb( 85,  50,  18),
-                egui::Color32::from_rgb(148, 112,  65),
+                egui::Color32::from_rgb(165, 55, 15),
+                egui::Color32::from_rgb(120, 75, 20),
+                egui::Color32::from_rgb(28, 14, 4),
+                egui::Color32::from_rgb(85, 50, 18),
+                egui::Color32::from_rgb(148, 112, 65),
                 egui::Color32::from_rgb(205, 185, 148),
                 egui::Color32::from_rgb(172, 145, 100),
-                egui::Color32::from_rgb(165,  55,  15),
+                egui::Color32::from_rgb(165, 55, 15),
                 egui::Color32::from_rgb(235, 222, 192),
-                egui::Color32::from_rgb(145,  48,  12),
-                egui::Color32::from_rgb( 25, 120,  45), // status_ok   - forest green
-                egui::Color32::from_rgb(145,  80,   0), // status_warn - dark amber
-                egui::Color32::from_rgb(170,  30,  20), // status_err  - dark red
-                egui::Color32::from_rgb( 20,  80, 160), // status_info - dark blue
+                egui::Color32::from_rgb(145, 48, 12),
+                egui::Color32::from_rgb(25, 120, 45), // status_ok   - forest green
+                egui::Color32::from_rgb(145, 80, 0),  // status_warn - dark amber
+                egui::Color32::from_rgb(170, 30, 20), // status_err  - dark red
+                egui::Color32::from_rgb(20, 80, 160), // status_info - dark blue
             ),
             // -- BLOSSOM - light, deep jewel-tone status colors ---------------
             UiTheme::Blossom => (
@@ -501,135 +537,135 @@ impl UiSystem {
                 egui::Color32::from_rgb(228, 155, 205), // bg_hover    - deeper pink
                 egui::Color32::from_rgb(212, 120, 185), // bg_active   - strong pink
                 egui::Color32::from_rgb(245, 160, 215), // bg_selected - bright pink highlight
-                egui::Color32::from_rgb(185,  10, 105), // accent_primary  - deep magenta-rose
-                egui::Color32::from_rgb(110,  15, 165), // accent_secondary - deep violet
-                egui::Color32::from_rgb( 55,   5,  35), // text_primary    - near-black plum
-                egui::Color32::from_rgb(120,  20,  80), // text_secondary  - dark rose
-                egui::Color32::from_rgb(175,  80, 140), // text_dim        - medium rose
+                egui::Color32::from_rgb(185, 10, 105),  // accent_primary  - deep magenta-rose
+                egui::Color32::from_rgb(110, 15, 165),  // accent_secondary - deep violet
+                egui::Color32::from_rgb(55, 5, 35),     // text_primary    - near-black plum
+                egui::Color32::from_rgb(120, 20, 80),   // text_secondary  - dark rose
+                egui::Color32::from_rgb(175, 80, 140),  // text_dim        - medium rose
                 egui::Color32::from_rgb(225, 160, 205), // border_subtle
                 egui::Color32::from_rgb(195, 110, 168), // border_normal
-                egui::Color32::from_rgb(185,  10, 105), // border_bright   - deep rose
+                egui::Color32::from_rgb(185, 10, 105),  // border_bright   - deep rose
                 egui::Color32::from_rgb(248, 200, 232), // topbar_bg
-                egui::Color32::from_rgb(165,   8,  92), // topbar_border
-                egui::Color32::from_rgb( 15, 115,  45), // status_ok   - deep green
-                egui::Color32::from_rgb(130,  65,   0), // status_warn - dark amber
-                egui::Color32::from_rgb(160,  15,  40), // status_err  - deep crimson
-                egui::Color32::from_rgb( 45,  20, 155), // status_info - deep indigo
+                egui::Color32::from_rgb(165, 8, 92),    // topbar_border
+                egui::Color32::from_rgb(15, 115, 45),   // status_ok   - deep green
+                egui::Color32::from_rgb(130, 65, 0),    // status_warn - dark amber
+                egui::Color32::from_rgb(160, 15, 40),   // status_err  - deep crimson
+                egui::Color32::from_rgb(45, 20, 155),   // status_info - deep indigo
             ),
             // -- CRIMSON - dark, bright status colors -------------------------
             UiTheme::Crimson => (
-                egui::Color32::from_rgb( 10,   2,   5),
-                egui::Color32::from_rgb( 28,   8,  15),
-                egui::Color32::from_rgb( 50,  15,  25),
-                egui::Color32::from_rgb( 72,  22,  35),
-                egui::Color32::from_rgb( 98,  30,  48),
-                egui::Color32::from_rgb( 88,  18,  12),
-                egui::Color32::from_rgb(225, 178,  35),
-                egui::Color32::from_rgb(255, 215,  80),
+                egui::Color32::from_rgb(10, 2, 5),
+                egui::Color32::from_rgb(28, 8, 15),
+                egui::Color32::from_rgb(50, 15, 25),
+                egui::Color32::from_rgb(72, 22, 35),
+                egui::Color32::from_rgb(98, 30, 48),
+                egui::Color32::from_rgb(88, 18, 12),
+                egui::Color32::from_rgb(225, 178, 35),
+                egui::Color32::from_rgb(255, 215, 80),
                 egui::Color32::from_rgb(252, 238, 215),
                 egui::Color32::from_rgb(205, 165, 130),
-                egui::Color32::from_rgb(130,  85,  72),
-                egui::Color32::from_rgb( 55,  18,  28),
-                egui::Color32::from_rgb( 95,  32,  48),
-                egui::Color32::from_rgb(225, 178,  35),
-                egui::Color32::from_rgb(  8,   2,   4),
-                egui::Color32::from_rgb(195, 152,  28),
-                egui::Color32::from_rgb( 80, 210, 110), // status_ok
-                egui::Color32::from_rgb(225, 185,  45), // status_warn
-                egui::Color32::from_rgb(230,  75,  75), // status_err
-                egui::Color32::from_rgb( 80, 160, 235), // status_info
+                egui::Color32::from_rgb(130, 85, 72),
+                egui::Color32::from_rgb(55, 18, 28),
+                egui::Color32::from_rgb(95, 32, 48),
+                egui::Color32::from_rgb(225, 178, 35),
+                egui::Color32::from_rgb(8, 2, 4),
+                egui::Color32::from_rgb(195, 152, 28),
+                egui::Color32::from_rgb(80, 210, 110), // status_ok
+                egui::Color32::from_rgb(225, 185, 45), // status_warn
+                egui::Color32::from_rgb(230, 75, 75),  // status_err
+                egui::Color32::from_rgb(80, 160, 235), // status_info
             ),
             // -- NEON SYNTHWAVE -----------------------------------------------
             UiTheme::NeonSynthwave => (
-                egui::Color32::from_rgb(  5,   2,  12),
-                egui::Color32::from_rgb( 12,   6,  24),
-                egui::Color32::from_rgb( 22,  10,  42),
-                egui::Color32::from_rgb( 35,  15,  62),
-                egui::Color32::from_rgb( 50,  20,  85),
-                egui::Color32::from_rgb( 55,   8,  55),
-                egui::Color32::from_rgb(255,  20, 175),
-                egui::Color32::from_rgb(  0, 245, 255),
+                egui::Color32::from_rgb(5, 2, 12),
+                egui::Color32::from_rgb(12, 6, 24),
+                egui::Color32::from_rgb(22, 10, 42),
+                egui::Color32::from_rgb(35, 15, 62),
+                egui::Color32::from_rgb(50, 20, 85),
+                egui::Color32::from_rgb(55, 8, 55),
+                egui::Color32::from_rgb(255, 20, 175),
+                egui::Color32::from_rgb(0, 245, 255),
                 egui::Color32::from_rgb(248, 228, 255),
                 egui::Color32::from_rgb(188, 148, 228),
-                egui::Color32::from_rgb(105,  68, 148),
-                egui::Color32::from_rgb( 28,  12,  55),
-                egui::Color32::from_rgb( 75,  18,  98),
-                egui::Color32::from_rgb(255,  20, 175),
-                egui::Color32::from_rgb(  3,   1,   8),
-                egui::Color32::from_rgb(210,  15, 148),
-                egui::Color32::from_rgb( 50, 255, 120), // status_ok
-                egui::Color32::from_rgb(255, 210,  30), // status_warn - amber not yellow
-                egui::Color32::from_rgb(255,  50,  80), // status_err
-                egui::Color32::from_rgb(  0, 245, 255), // status_info
+                egui::Color32::from_rgb(105, 68, 148),
+                egui::Color32::from_rgb(28, 12, 55),
+                egui::Color32::from_rgb(75, 18, 98),
+                egui::Color32::from_rgb(255, 20, 175),
+                egui::Color32::from_rgb(3, 1, 8),
+                egui::Color32::from_rgb(210, 15, 148),
+                egui::Color32::from_rgb(50, 255, 120), // status_ok
+                egui::Color32::from_rgb(255, 210, 30), // status_warn - amber not yellow
+                egui::Color32::from_rgb(255, 50, 80),  // status_err
+                egui::Color32::from_rgb(0, 245, 255),  // status_info
             ),
             // -- NEON TOXIC ---------------------------------------------------
             UiTheme::NeonToxic => (
-                egui::Color32::from_rgb(  1,   5,   1),
-                egui::Color32::from_rgb(  3,  12,   3),
-                egui::Color32::from_rgb(  5,  22,   5),
-                egui::Color32::from_rgb(  8,  35,   8),
-                egui::Color32::from_rgb( 12,  50,  12),
-                egui::Color32::from_rgb(  8,  48,   4),
-                egui::Color32::from_rgb( 40, 255,  40),
-                egui::Color32::from_rgb(215, 255,   0),
+                egui::Color32::from_rgb(1, 5, 1),
+                egui::Color32::from_rgb(3, 12, 3),
+                egui::Color32::from_rgb(5, 22, 5),
+                egui::Color32::from_rgb(8, 35, 8),
+                egui::Color32::from_rgb(12, 50, 12),
+                egui::Color32::from_rgb(8, 48, 4),
+                egui::Color32::from_rgb(40, 255, 40),
+                egui::Color32::from_rgb(215, 255, 0),
                 egui::Color32::from_rgb(210, 255, 210),
                 egui::Color32::from_rgb(105, 195, 105),
-                egui::Color32::from_rgb( 42, 105,  42),
-                egui::Color32::from_rgb(  6,  28,   6),
-                egui::Color32::from_rgb( 18,  75,  18),
-                egui::Color32::from_rgb( 40, 255,  40),
-                egui::Color32::from_rgb(  1,   4,   1),
-                egui::Color32::from_rgb( 28, 210,  28),
-                egui::Color32::from_rgb( 40, 255,  40), // status_ok
-                egui::Color32::from_rgb(215, 255,   0), // status_warn - electric yellow (fine on black)
-                egui::Color32::from_rgb(255,  60,  60), // status_err
-                egui::Color32::from_rgb( 60, 200, 255), // status_info
+                egui::Color32::from_rgb(42, 105, 42),
+                egui::Color32::from_rgb(6, 28, 6),
+                egui::Color32::from_rgb(18, 75, 18),
+                egui::Color32::from_rgb(40, 255, 40),
+                egui::Color32::from_rgb(1, 4, 1),
+                egui::Color32::from_rgb(28, 210, 28),
+                egui::Color32::from_rgb(40, 255, 40), // status_ok
+                egui::Color32::from_rgb(215, 255, 0), // status_warn - electric yellow (fine on black)
+                egui::Color32::from_rgb(255, 60, 60), // status_err
+                egui::Color32::from_rgb(60, 200, 255), // status_info
             ),
             // -- NEON ULTRAVIOLET ---------------------------------------------
             UiTheme::NeonUltraviolet => (
-                egui::Color32::from_rgb(  4,   1,  10),
-                egui::Color32::from_rgb(  8,   3,  20),
-                egui::Color32::from_rgb( 16,   5,  38),
-                egui::Color32::from_rgb( 26,   8,  58),
-                egui::Color32::from_rgb( 38,  10,  80),
-                egui::Color32::from_rgb( 42,   4,  62),
-                egui::Color32::from_rgb(175,  25, 255),
-                egui::Color32::from_rgb(255,  25, 195),
+                egui::Color32::from_rgb(4, 1, 10),
+                egui::Color32::from_rgb(8, 3, 20),
+                egui::Color32::from_rgb(16, 5, 38),
+                egui::Color32::from_rgb(26, 8, 58),
+                egui::Color32::from_rgb(38, 10, 80),
+                egui::Color32::from_rgb(42, 4, 62),
+                egui::Color32::from_rgb(175, 25, 255),
+                egui::Color32::from_rgb(255, 25, 195),
                 egui::Color32::from_rgb(242, 222, 255),
                 egui::Color32::from_rgb(172, 128, 222),
-                egui::Color32::from_rgb( 88,  48, 135),
-                egui::Color32::from_rgb( 20,   6,  48),
-                egui::Color32::from_rgb( 62,  12, 108),
-                egui::Color32::from_rgb(175,  25, 255),
-                egui::Color32::from_rgb(  2,   0,   7),
-                egui::Color32::from_rgb(145,  18, 215),
-                egui::Color32::from_rgb( 60, 255, 140), // status_ok
-                egui::Color32::from_rgb(255, 200,  30), // status_warn - amber not yellow
-                egui::Color32::from_rgb(255,  40, 100), // status_err
-                egui::Color32::from_rgb(255,  25, 195), // status_info
+                egui::Color32::from_rgb(88, 48, 135),
+                egui::Color32::from_rgb(20, 6, 48),
+                egui::Color32::from_rgb(62, 12, 108),
+                egui::Color32::from_rgb(175, 25, 255),
+                egui::Color32::from_rgb(2, 0, 7),
+                egui::Color32::from_rgb(145, 18, 215),
+                egui::Color32::from_rgb(60, 255, 140), // status_ok
+                egui::Color32::from_rgb(255, 200, 30), // status_warn - amber not yellow
+                egui::Color32::from_rgb(255, 40, 100), // status_err
+                egui::Color32::from_rgb(255, 25, 195), // status_info
             ),
             // -- HIGH CONTRAST ------------------------------------------------
             UiTheme::HighContrast => (
-                egui::Color32::from_rgb(  0,   0,   0),
-                egui::Color32::from_rgb( 10,  10,  10),
-                egui::Color32::from_rgb( 25,  25,  25),
-                egui::Color32::from_rgb( 45,  45,  45),
-                egui::Color32::from_rgb( 65,  65,  65),
-                egui::Color32::from_rgb( 50,  45,   0),
-                egui::Color32::from_rgb(255, 230,   0),
-                egui::Color32::from_rgb(  0, 200, 255),
+                egui::Color32::from_rgb(0, 0, 0),
+                egui::Color32::from_rgb(10, 10, 10),
+                egui::Color32::from_rgb(25, 25, 25),
+                egui::Color32::from_rgb(45, 45, 45),
+                egui::Color32::from_rgb(65, 65, 65),
+                egui::Color32::from_rgb(50, 45, 0),
+                egui::Color32::from_rgb(255, 230, 0),
+                egui::Color32::from_rgb(0, 200, 255),
                 egui::Color32::from_rgb(255, 255, 255),
                 egui::Color32::from_rgb(195, 195, 195),
                 egui::Color32::from_rgb(115, 115, 115),
-                egui::Color32::from_rgb( 45,  45,  45),
-                egui::Color32::from_rgb( 95,  95,  95),
-                egui::Color32::from_rgb(255, 230,   0),
-                egui::Color32::from_rgb(  0,   0,   0),
-                egui::Color32::from_rgb(200, 180,   0),
-                egui::Color32::from_rgb( 50, 255,  50), // status_ok
-                egui::Color32::from_rgb(255, 230,   0), // status_warn - yellow fine on black
-                egui::Color32::from_rgb(255,  60,  60), // status_err
-                egui::Color32::from_rgb(  0, 200, 255), // status_info
+                egui::Color32::from_rgb(45, 45, 45),
+                egui::Color32::from_rgb(95, 95, 95),
+                egui::Color32::from_rgb(255, 230, 0),
+                egui::Color32::from_rgb(0, 0, 0),
+                egui::Color32::from_rgb(200, 180, 0),
+                egui::Color32::from_rgb(50, 255, 50), // status_ok
+                egui::Color32::from_rgb(255, 230, 0), // status_warn - yellow fine on black
+                egui::Color32::from_rgb(255, 60, 60), // status_err
+                egui::Color32::from_rgb(0, 200, 255), // status_info
             ),
             // -- CUSTOM -------------------------------------------------------
             UiTheme::Custom => {
@@ -656,7 +692,7 @@ impl UiSystem {
                     c.status_err.to_egui(),
                     c.status_info.to_egui(),
                 )
-            },
+            }
         };
 
         self.ctx.global_style_mut(|style| {
@@ -666,60 +702,61 @@ impl UiSystem {
             v.dark_mode = matches!(
                 theme_choice,
                 UiTheme::BiotechDark
-                | UiTheme::Crimson
-                | UiTheme::NeonSynthwave
-                | UiTheme::NeonToxic
-                | UiTheme::NeonUltraviolet
-                | UiTheme::HighContrast
-            ) || (theme_choice == UiTheme::Custom && self.state.custom_theme.dark_mode);
+                    | UiTheme::Crimson
+                    | UiTheme::NeonSynthwave
+                    | UiTheme::NeonToxic
+                    | UiTheme::NeonUltraviolet
+                    | UiTheme::HighContrast
+            ) || (theme_choice == UiTheme::Custom
+                && self.state.custom_theme.dark_mode);
 
-            v.window_fill        = bg_panel;
-            v.panel_fill         = bg_panel;
-            v.faint_bg_color     = bg_widget;
-            v.extreme_bg_color   = bg_darkest;
-            v.code_bg_color      = bg_widget;
+            v.window_fill = bg_panel;
+            v.panel_fill = bg_panel;
+            v.faint_bg_color = bg_widget;
+            v.extreme_bg_color = bg_darkest;
+            v.code_bg_color = bg_widget;
 
-            v.window_stroke      = egui::Stroke::new(1.0, border_normal);
+            v.window_stroke = egui::Stroke::new(1.0, border_normal);
 
-            v.selection.bg_fill  = bg_selected;
-            v.selection.stroke   = egui::Stroke::new(1.0, accent_primary);
+            v.selection.bg_fill = bg_selected;
+            v.selection.stroke = egui::Stroke::new(1.0, accent_primary);
 
-            v.hyperlink_color    = accent_secondary;
+            v.hyperlink_color = accent_secondary;
 
-            v.widgets.noninteractive.bg_fill      = bg_panel;
+            v.widgets.noninteractive.bg_fill = bg_panel;
             v.widgets.noninteractive.weak_bg_fill = bg_widget;
-            v.widgets.noninteractive.bg_stroke    = egui::Stroke::new(1.0, border_subtle);
-            v.widgets.noninteractive.fg_stroke    = egui::Stroke::new(1.0, text_secondary);
+            v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, border_subtle);
+            v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, text_secondary);
             v.widgets.noninteractive.corner_radius = egui::CornerRadius::same(3);
-            v.widgets.noninteractive.expansion    = 0.0;
+            v.widgets.noninteractive.expansion = 0.0;
 
-            v.widgets.inactive.bg_fill          = bg_widget;
-            v.widgets.inactive.weak_bg_fill     = bg_widget;
-            v.widgets.inactive.bg_stroke        = egui::Stroke::new(1.0, border_normal);
-            v.widgets.inactive.fg_stroke        = egui::Stroke::new(1.5, text_secondary);
-            v.widgets.inactive.corner_radius    = egui::CornerRadius::same(3);
-            v.widgets.inactive.expansion        = 0.0;
+            v.widgets.inactive.bg_fill = bg_widget;
+            v.widgets.inactive.weak_bg_fill = bg_widget;
+            v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, border_normal);
+            v.widgets.inactive.fg_stroke = egui::Stroke::new(1.5, text_secondary);
+            v.widgets.inactive.corner_radius = egui::CornerRadius::same(3);
+            v.widgets.inactive.expansion = 0.0;
 
-            v.widgets.hovered.bg_fill           = bg_hover;
-            v.widgets.hovered.weak_bg_fill      = bg_hover;
-            v.widgets.hovered.bg_stroke         = egui::Stroke::new(1.0, border_bright);
-            v.widgets.hovered.fg_stroke         = egui::Stroke::new(1.5, text_primary);
-            v.widgets.hovered.corner_radius     = egui::CornerRadius::same(3);
-            v.widgets.hovered.expansion         = 1.0;
+            v.widgets.hovered.bg_fill = bg_hover;
+            v.widgets.hovered.weak_bg_fill = bg_hover;
+            v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, border_bright);
+            v.widgets.hovered.fg_stroke = egui::Stroke::new(1.5, text_primary);
+            v.widgets.hovered.corner_radius = egui::CornerRadius::same(3);
+            v.widgets.hovered.expansion = 1.0;
 
-            v.widgets.active.bg_fill            = bg_active;
-            v.widgets.active.weak_bg_fill       = bg_active;
-            v.widgets.active.bg_stroke          = egui::Stroke::new(1.5, accent_primary);
-            v.widgets.active.fg_stroke          = egui::Stroke::new(2.0, accent_primary);
-            v.widgets.active.corner_radius      = egui::CornerRadius::same(3);
-            v.widgets.active.expansion          = 1.0;
+            v.widgets.active.bg_fill = bg_active;
+            v.widgets.active.weak_bg_fill = bg_active;
+            v.widgets.active.bg_stroke = egui::Stroke::new(1.5, accent_primary);
+            v.widgets.active.fg_stroke = egui::Stroke::new(2.0, accent_primary);
+            v.widgets.active.corner_radius = egui::CornerRadius::same(3);
+            v.widgets.active.expansion = 1.0;
 
-            v.widgets.open.bg_fill              = bg_active;
-            v.widgets.open.weak_bg_fill         = bg_active;
-            v.widgets.open.bg_stroke            = egui::Stroke::new(1.0, accent_primary);
-            v.widgets.open.fg_stroke            = egui::Stroke::new(1.5, accent_primary);
-            v.widgets.open.corner_radius        = egui::CornerRadius::same(3);
-            v.widgets.open.expansion            = 0.0;
+            v.widgets.open.bg_fill = bg_active;
+            v.widgets.open.weak_bg_fill = bg_active;
+            v.widgets.open.bg_stroke = egui::Stroke::new(1.0, accent_primary);
+            v.widgets.open.fg_stroke = egui::Stroke::new(1.5, accent_primary);
+            v.widgets.open.corner_radius = egui::CornerRadius::same(3);
+            v.widgets.open.expansion = 0.0;
 
             v.override_text_color = Some(text_primary);
             v.slider_trailing_fill = true;
@@ -737,44 +774,58 @@ impl UiSystem {
                 color: egui::Color32::from_black_alpha(100),
             };
 
-            style.spacing.item_spacing      = egui::vec2(6.0, 4.0);
-            style.spacing.button_padding    = egui::vec2(8.0, 4.0);
-            style.spacing.indent            = 14.0;
-            style.spacing.menu_margin       = egui::Margin::same(6);
-            style.spacing.slider_width      = 200.0;
+            style.spacing.item_spacing = egui::vec2(6.0, 4.0);
+            style.spacing.button_padding = egui::vec2(8.0, 4.0);
+            style.spacing.indent = 14.0;
+            style.spacing.menu_margin = egui::Margin::same(6);
+            style.spacing.slider_width = 200.0;
 
-            use egui::{FontId, FontFamily, TextStyle};
-            style.text_styles.insert(TextStyle::Small,    FontId::new(10.0, FontFamily::Proportional));
-            style.text_styles.insert(TextStyle::Body,     FontId::new(12.0, FontFamily::Proportional));
-            style.text_styles.insert(TextStyle::Button,   FontId::new(12.0, FontFamily::Proportional));
-            style.text_styles.insert(TextStyle::Heading,  FontId::new(13.0, FontFamily::Proportional));
-            style.text_styles.insert(TextStyle::Monospace, FontId::new(11.0, FontFamily::Monospace));
+            use egui::{FontFamily, FontId, TextStyle};
+            style.text_styles.insert(
+                TextStyle::Small,
+                FontId::new(10.0, FontFamily::Proportional),
+            );
+            style
+                .text_styles
+                .insert(TextStyle::Body, FontId::new(12.0, FontFamily::Proportional));
+            style.text_styles.insert(
+                TextStyle::Button,
+                FontId::new(12.0, FontFamily::Proportional),
+            );
+            style.text_styles.insert(
+                TextStyle::Heading,
+                FontId::new(13.0, FontFamily::Proportional),
+            );
+            style.text_styles.insert(
+                TextStyle::Monospace,
+                FontId::new(11.0, FontFamily::Monospace),
+            );
         });
 
         // Store the full palette in the thread-local so all rendering code
         // can read it without re-deriving colors from the theme enum.
         ACTIVE_PALETTE.with(|cell| {
             *cell.borrow_mut() = ActivePalette {
-                bg_darkest:       bg_darkest,
-                bg_panel:         bg_panel,
-                bg_widget:        bg_widget,
-                bg_hover:         bg_hover,
-                bg_active:        bg_active,
-                bg_selected:      bg_selected,
-                accent_primary:   accent_primary,
+                bg_darkest: bg_darkest,
+                bg_panel: bg_panel,
+                bg_widget: bg_widget,
+                bg_hover: bg_hover,
+                bg_active: bg_active,
+                bg_selected: bg_selected,
+                accent_primary: accent_primary,
                 accent_secondary: accent_secondary,
-                text_primary:     text_primary,
-                text_secondary:   text_secondary,
-                text_dim:         text_dim,
-                border_subtle:    border_subtle,
-                border_normal:    border_normal,
-                border_bright:    border_bright,
-                topbar_bg:        topbar_bg,
-                topbar_border:    topbar_border,
-                status_ok:        status_ok,
-                status_warn:      status_warn,
-                status_err:       status_err,
-                status_info:      status_info,
+                text_primary: text_primary,
+                text_secondary: text_secondary,
+                text_dim: text_dim,
+                border_subtle: border_subtle,
+                border_normal: border_normal,
+                border_bright: border_bright,
+                topbar_bg: topbar_bg,
+                topbar_border: topbar_border,
+                status_ok: status_ok,
+                status_warn: status_warn,
+                status_err: status_err,
+                status_info: status_info,
                 // Rail icon: always bright against the dark rail background.
                 // Use the accent color tinted toward white for inactive icons,
                 // and pure white for active (drawn on accent bg).
@@ -793,8 +844,8 @@ impl UiSystem {
                     // Bright accents (yellow, neon green) need black; dark accents need white.
                     let a = accent_primary;
                     let luminance = 0.2126 * (a.r() as f32 / 255.0)
-                                  + 0.7152 * (a.g() as f32 / 255.0)
-                                  + 0.0722 * (a.b() as f32 / 255.0);
+                        + 0.7152 * (a.g() as f32 / 255.0)
+                        + 0.0722 * (a.b() as f32 / 255.0);
                     if luminance > 0.45 {
                         egui::Color32::BLACK
                     } else {
@@ -814,7 +865,7 @@ impl UiSystem {
     /// Auto-save UI state if needed.
     pub fn auto_save_ui_state(&mut self) {
         const AUTO_SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
-        
+
         if self.ui_state_dirty && self.save_timer.elapsed() >= AUTO_SAVE_INTERVAL {
             if let Err(e) = self.state.save() {
                 log::warn!("Failed to auto-save UI state: {}", e);
@@ -840,7 +891,7 @@ impl UiSystem {
     ///
     /// Call this after all UI rendering is complete.
     pub fn end_frame(
-        &mut self, 
+        &mut self,
         dock_manager: &mut crate::ui::dock::DockManager,
         genome: &mut crate::genome::Genome,
         editor_state: &mut crate::ui::panel_context::GenomeEditorState,
@@ -875,6 +926,8 @@ impl UiSystem {
 
         // Show branded top bar
         let mut ui_state_copy = self.state.clone();
+        let gpu_headless_ui = ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu
+            && ui_state_copy.gpu_headless_mode;
 
         // Pending mutations from inside egui closures (can't borrow self inside them).
         let mut pending_toasts: Vec<crate::ui::toast::Toast> = Vec::new();
@@ -884,12 +937,26 @@ impl UiSystem {
 
         // Read the active theme palette once - used throughout this frame.
         let p = palette();
-        let (tb_bg, tb_border, tb_accent, tb_text_primary, tb_text_secondary, tb_text_dim, tb_border_normal) =
-            (p.topbar_bg, p.topbar_border, p.accent_primary, p.text_primary, p.text_secondary, p.text_dim, p.border_normal);
+        let (
+            tb_bg,
+            tb_border,
+            tb_accent,
+            tb_text_primary,
+            tb_text_secondary,
+            tb_text_dim,
+            tb_border_normal,
+        ) = (
+            p.topbar_bg,
+            p.topbar_border,
+            p.accent_primary,
+            p.text_primary,
+            p.text_secondary,
+            p.text_dim,
+            p.border_normal,
+        );
 
-        if !ui_state_copy.hide_ui {
-
-        #[allow(deprecated)]
+        if !ui_state_copy.hide_ui && !gpu_headless_ui {
+            #[allow(deprecated)]
         egui::Panel::top("top_bar")
             .frame(
                 egui::Frame::none()
@@ -1086,196 +1153,198 @@ impl UiSystem {
                 });
             });
 
-        // Show bottom status bar
-        let cell_count = scene_manager.gpu_scene().map(|s| s.current_cell_count).unwrap_or_else(|| {
-            scene_manager.active_scene().cell_count() as u32
-        });
-        let cell_capacity = scene_manager.gpu_scene().map(|s| s.capacity()).unwrap_or(0);
-        let sim_time = scene_manager.active_scene().current_time();
-        let is_paused = scene_manager.active_scene().is_paused();
-        let mem_used_gb = performance.memory_used() as f64 / (1024.0 * 1024.0 * 1024.0);
-        let fps = performance.fps();
-        let cpu_usage = performance.cpu_usage_total();
+            // Show bottom status bar
+            let cell_count = scene_manager
+                .gpu_scene()
+                .map(|s| s.current_cell_count)
+                .unwrap_or_else(|| scene_manager.active_scene().cell_count() as u32);
+            let cell_capacity = scene_manager.gpu_scene().map(|s| s.capacity()).unwrap_or(0);
+            let sim_time = scene_manager.active_scene().current_time();
+            let is_paused = scene_manager.active_scene().is_paused();
+            let mem_used_gb = performance.memory_used() as f64 / (1024.0 * 1024.0 * 1024.0);
+            let fps = performance.fps();
+            let cpu_usage = performance.cpu_usage_total();
 
-        #[allow(deprecated)]
-        egui::Panel::bottom("status_bar")
-            .frame(
-                egui::Frame::none()
-                    .fill(p.topbar_bg)
-                    .inner_margin(egui::Margin { left: 12, right: 12, top: 4, bottom: 4 })
-                    .stroke(egui::Stroke::new(1.0, p.border_subtle)),
-            )
-            .show(&self.ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
+            #[allow(deprecated)]
+            egui::Panel::bottom("status_bar")
+                .frame(
+                    egui::Frame::none()
+                        .fill(p.topbar_bg)
+                        .inner_margin(egui::Margin {
+                            left: 12,
+                            right: 12,
+                            top: 4,
+                            bottom: 4,
+                        })
+                        .stroke(egui::Stroke::new(1.0, p.border_subtle)),
+                )
+                .show(&self.ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
 
-                    // Status indicator
-                    let (status_label, status_color) = if ui_state_copy.current_mode
-                        == crate::ui::types::SimulationMode::Preview
-                    {
-                        ("PREVIEW", p.accent_secondary)
-                    } else if is_paused {
-                        ("PAUSED", p.status_warn)
-                    } else if cell_count > 0 {
-                        ("RUNNING", p.status_ok)
-                    } else {
-                        ("IDLE", p.text_secondary)
-                    };
+                        // Status indicator
+                        let (status_label, status_color) = if ui_state_copy.current_mode
+                            == crate::ui::types::SimulationMode::Preview
+                        {
+                            ("PREVIEW", p.accent_secondary)
+                        } else if is_paused {
+                            ("PAUSED", p.status_warn)
+                        } else if cell_count > 0 {
+                            ("RUNNING", p.status_ok)
+                        } else {
+                            ("IDLE", p.text_secondary)
+                        };
 
-                    status_field(ui, "SIMULATION STATUS", &|ui| {
-                        let (dot_rect, _) = ui.allocate_exact_size(
-                            egui::vec2(8.0, 8.0),
-                            egui::Sense::hover(),
-                        );
-                        let t = ui.input(|i| i.time) as f32;
-                        let pulse = (t * 2.5).sin() * 0.4 + 0.6;
-                        let dot_color = egui::Color32::from_rgba_premultiplied(
-                            (status_color.r() as f32 * pulse) as u8,
-                            (status_color.g() as f32 * pulse) as u8,
-                            (status_color.b() as f32 * pulse) as u8,
-                            255,
-                        );
-                        ui.painter().circle_filled(dot_rect.center(), 3.5, dot_color);
-                        ui.label(
-                            egui::RichText::new(status_label)
-                                .strong()
-                                .size(11.5)
-                                .color(status_color),
-                        );
-                        ui.ctx().request_repaint();
-                    });
+                        status_field(ui, "SIMULATION STATUS", &|ui| {
+                            let (dot_rect, _) =
+                                ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                            let t = ui.input(|i| i.time) as f32;
+                            let pulse = (t * 2.5).sin() * 0.4 + 0.6;
+                            let dot_color = egui::Color32::from_rgba_premultiplied(
+                                (status_color.r() as f32 * pulse) as u8,
+                                (status_color.g() as f32 * pulse) as u8,
+                                (status_color.b() as f32 * pulse) as u8,
+                                255,
+                            );
+                            ui.painter()
+                                .circle_filled(dot_rect.center(), 3.5, dot_color);
+                            ui.label(
+                                egui::RichText::new(status_label)
+                                    .strong()
+                                    .size(11.5)
+                                    .color(status_color),
+                            );
+                            ui.ctx().request_repaint();
+                        });
 
-                    status_separator(ui);
+                        status_separator(ui);
 
-                    // Sim Time
-                    let total_seconds = sim_time as u64;
-                    let h = total_seconds / 3600;
-                    let m = (total_seconds % 3600) / 60;
-                    let s = total_seconds % 60;
-                    let time_str = if h > 0 {
-                        format!("{}h {:02}m {:02}s", h, m, s)
-                    } else {
-                        format!("{:.1}s", sim_time)
-                    };
-                    status_field(ui, "SIM TIME", &|ui| {
-                        ui.label(
-                            egui::RichText::new(time_str.clone())
-                                .strong()
-                                .size(11.5)
-                                .color(p.text_primary),
-                        );
-                    });
+                        // Sim Time
+                        let total_seconds = sim_time as u64;
+                        let h = total_seconds / 3600;
+                        let m = (total_seconds % 3600) / 60;
+                        let s = total_seconds % 60;
+                        let time_str = if h > 0 {
+                            format!("{}h {:02}m {:02}s", h, m, s)
+                        } else {
+                            format!("{:.1}s", sim_time)
+                        };
+                        status_field(ui, "SIM TIME", &|ui| {
+                            ui.label(
+                                egui::RichText::new(time_str.clone())
+                                    .strong()
+                                    .size(11.5)
+                                    .color(p.text_primary),
+                            );
+                        });
 
-                    status_separator(ui);
+                        status_separator(ui);
 
-                    // Cells
-                    let cells_str = if cell_capacity > 0 {
-                        format!("{} / {}k", cell_count, cell_capacity / 1000)
-                    } else {
-                        format!("{}", cell_count)
-                    };
-                    status_field(ui, "CELLS", &|ui| {
-                        ui.label(
-                            egui::RichText::new(cells_str.clone())
-                                .strong()
-                                .size(11.5)
-                                .color(p.text_primary),
-                        );
-                    });
+                        // Cells
+                        let cells_str = if cell_capacity > 0 {
+                            format!("{} / {}k", cell_count, cell_capacity / 1000)
+                        } else {
+                            format!("{}", cell_count)
+                        };
+                        status_field(ui, "CELLS", &|ui| {
+                            ui.label(
+                                egui::RichText::new(cells_str.clone())
+                                    .strong()
+                                    .size(11.5)
+                                    .color(p.text_primary),
+                            );
+                        });
 
-                    status_separator(ui);
+                        status_separator(ui);
 
-                    // System load (CPU usage)
-                    let cpu_color = if cpu_usage > 80.0 {
-                        p.status_err
-                    } else if cpu_usage > 50.0 {
-                        p.status_warn
-                    } else {
-                        p.status_ok
-                    };
-                    status_field(ui, "SYSTEM LOAD", &|ui| {
-                        ui.label(
-                            egui::RichText::new(format!("{:.0}%", cpu_usage))
-                                .strong()
-                                .size(11.5)
-                                .color(cpu_color),
-                        );
-                        let (bar_rect, _) = ui.allocate_exact_size(
-                            egui::vec2(40.0, 6.0),
-                            egui::Sense::hover(),
-                        );
-                        ui.painter().rect_filled(bar_rect, 1.0, p.bg_darkest);
-                        let fill_w = (cpu_usage / 100.0).clamp(0.0, 1.0) * bar_rect.width();
-                        let fill_rect = egui::Rect::from_min_size(
-                            bar_rect.min,
-                            egui::vec2(fill_w, bar_rect.height()),
-                        );
-                        ui.painter().rect_filled(fill_rect, 1.0, cpu_color);
-                    });
-
-                    status_separator(ui);
-
-                    // Process memory (RSS)
-                    let mem_str = if mem_used_gb >= 1.0 {
-                        format!("{:.1} GB", mem_used_gb)
-                    } else {
-                        format!("{:.0} MB", mem_used_gb * 1024.0)
-                    };
-                    let mem_color = if mem_used_gb >= 3.5 {
-                        p.status_err
-                    } else if mem_used_gb >= 2.0 {
-                        p.status_warn
-                    } else {
-                        p.status_info
-                    };
-                    status_field(ui, "MEMORY", &|ui| {
-                        ui.label(
-                            egui::RichText::new(mem_str.clone())
-                                .strong()
-                                .size(11.5)
-                                .color(p.text_primary),
-                        );
-                        let (bar_rect, _) = ui.allocate_exact_size(
-                            egui::vec2(40.0, 6.0),
-                            egui::Sense::hover(),
-                        );
-                        ui.painter().rect_filled(bar_rect, 1.0, p.bg_darkest);
-                        // Bar scaled to 4 GB reference
-                        let mem_pct = (mem_used_gb / 4.0).clamp(0.0, 1.0) as f32;
-                        let fill_w = mem_pct * bar_rect.width();
-                        let fill_rect = egui::Rect::from_min_size(
-                            bar_rect.min,
-                            egui::vec2(fill_w, bar_rect.height()),
-                        );
-                        ui.painter().rect_filled(fill_rect, 1.0, mem_color);
-                    });
-
-                    // FPS on the far right
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let fps_color = if fps >= 50.0 {
-                            p.status_ok
-                        } else if fps >= 30.0 {
+                        // System load (CPU usage)
+                        let cpu_color = if cpu_usage > 80.0 {
+                            p.status_err
+                        } else if cpu_usage > 50.0 {
                             p.status_warn
                         } else {
-                            p.status_err
+                            p.status_ok
                         };
-                        status_field(ui, "FPS", &|ui| {
+                        status_field(ui, "SYSTEM LOAD", &|ui| {
                             ui.label(
-                                egui::RichText::new(format!("{:.0}", fps))
+                                egui::RichText::new(format!("{:.0}%", cpu_usage))
                                     .strong()
-                                    .size(13.0)
-                                    .color(fps_color),
+                                    .size(11.5)
+                                    .color(cpu_color),
                             );
+                            let (bar_rect, _) =
+                                ui.allocate_exact_size(egui::vec2(40.0, 6.0), egui::Sense::hover());
+                            ui.painter().rect_filled(bar_rect, 1.0, p.bg_darkest);
+                            let fill_w = (cpu_usage / 100.0).clamp(0.0, 1.0) * bar_rect.width();
+                            let fill_rect = egui::Rect::from_min_size(
+                                bar_rect.min,
+                                egui::vec2(fill_w, bar_rect.height()),
+                            );
+                            ui.painter().rect_filled(fill_rect, 1.0, cpu_color);
+                        });
+
+                        status_separator(ui);
+
+                        // Process memory (RSS)
+                        let mem_str = if mem_used_gb >= 1.0 {
+                            format!("{:.1} GB", mem_used_gb)
+                        } else {
+                            format!("{:.0} MB", mem_used_gb * 1024.0)
+                        };
+                        let mem_color = if mem_used_gb >= 3.5 {
+                            p.status_err
+                        } else if mem_used_gb >= 2.0 {
+                            p.status_warn
+                        } else {
+                            p.status_info
+                        };
+                        status_field(ui, "MEMORY", &|ui| {
+                            ui.label(
+                                egui::RichText::new(mem_str.clone())
+                                    .strong()
+                                    .size(11.5)
+                                    .color(p.text_primary),
+                            );
+                            let (bar_rect, _) =
+                                ui.allocate_exact_size(egui::vec2(40.0, 6.0), egui::Sense::hover());
+                            ui.painter().rect_filled(bar_rect, 1.0, p.bg_darkest);
+                            // Bar scaled to 4 GB reference
+                            let mem_pct = (mem_used_gb / 4.0).clamp(0.0, 1.0) as f32;
+                            let fill_w = mem_pct * bar_rect.width();
+                            let fill_rect = egui::Rect::from_min_size(
+                                bar_rect.min,
+                                egui::vec2(fill_w, bar_rect.height()),
+                            );
+                            ui.painter().rect_filled(fill_rect, 1.0, mem_color);
+                        });
+
+                        // FPS on the far right
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let fps_color = if fps >= 50.0 {
+                                p.status_ok
+                            } else if fps >= 30.0 {
+                                p.status_warn
+                            } else {
+                                p.status_err
+                            };
+                            status_field(ui, "FPS", &|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{:.0}", fps))
+                                        .strong()
+                                        .size(13.0)
+                                        .color(fps_color),
+                                );
+                            });
                         });
                     });
                 });
-            });
-        
         } // end if !ui_state_copy.hide_ui (top bar and status bar)
 
         // Apply pending mutations collected from inside egui closures.
         self.toasts.extend(pending_toasts);
-        if pending_browser_open_load { self.genome_browser.open_load(); }
+        if pending_browser_open_load {
+            self.genome_browser.open_load();
+        }
         if pending_browser_refresh {
             self.genome_browser.needs_refresh = true;
             self.genome_browser.force_full_reload = true;
@@ -1284,11 +1353,7 @@ impl UiSystem {
             if editor_state.gif_capture.is_none() {
                 editor_state.request_gif_capture = true;
                 editor_state.gif_capture_save_path = Some(save_path.clone());
-                crate::ui::toast::upsert_progress_toast(
-                    &mut self.toasts,
-                    "Preparing GIF…",
-                    0.0,
-                );
+                crate::ui::toast::upsert_progress_toast(&mut self.toasts, "Preparing GIF…", 0.0);
             }
         }
 
@@ -1301,379 +1366,406 @@ impl UiSystem {
             .frame(
                 egui::Frame::none()
                     .fill(p.topbar_bg)
-                    .inner_margin(egui::Margin { left: 4, right: 4, top: 8, bottom: 8 })
+                    .inner_margin(egui::Margin {
+                        left: 4,
+                        right: 4,
+                        top: 8,
+                        bottom: 8,
+                    })
                     .stroke(egui::Stroke::new(1.0, p.border_subtle)),
             )
             .show(&self.ctx, |ui| {
                 render_side_rail(ui, &mut ui_state_copy, editor_state, dock_manager);
             });
 
-        // Show dock area in remaining space
-        let mut style = egui_dock::Style::from_egui(self.ctx.global_style().as_ref());
-        style.separator.extra = 75.0;
-
-        const DOCK_GUTTER: i8 = 5;
-        style.dock_area_padding = Some(egui::Margin::same(DOCK_GUTTER));
-        style.main_surface_border_stroke = egui::Stroke::NONE;
-
-        // Tab bar
-        style.tab_bar.bg_fill = p.bg_panel;
-        style.tab_bar.height = 26.0;
-        style.tab_bar.hline_color = p.border_subtle;
-        style.tab_bar.corner_radius = egui::CornerRadius::ZERO;
-        style.tab_bar.fill_tab_bar = false;
-        style.tab_bar.inner_margin = egui::Margin::symmetric(2, 0);
-
-        style.tab.hline_below_active_tab_name = false;
-        style.tab.spacing = 4.0;
-
-        let tab_fill = p.bg_panel;
-        // Active tab gets a slightly lighter background tint so it stands out
-        // from inactive tabs even when the glow is subtle.
-        let active_tab_fill = egui::Color32::from_rgba_unmultiplied(
-            p.accent_primary.r().saturating_add(8),
-            p.accent_primary.g().saturating_add(8),
-            p.accent_primary.b().saturating_add(8),
-            18,
-        );
-        let active_tab_bg = egui::Color32::from_rgba_unmultiplied(
-            (p.bg_panel.r() as u16 + active_tab_fill.r() as u16).min(255) as u8,
-            (p.bg_panel.g() as u16 + active_tab_fill.g() as u16).min(255) as u8,
-            (p.bg_panel.b() as u16 + active_tab_fill.b() as u16).min(255) as u8,
-            255,
-        );
-        // Glow oval: full accent color at high opacity so it reads on any theme.
-        let active_glow = egui::Color32::from_rgba_unmultiplied(
-            p.accent_primary.r(),
-            p.accent_primary.g(),
-            p.accent_primary.b(),
-            200,
-        );
-        let hover_glow = egui::Color32::from_rgba_unmultiplied(
-            p.accent_primary.r(),
-            p.accent_primary.g(),
-            p.accent_primary.b(),
-            80,
-        );
-        const GLOW_ASPECT: f32 = 0.28;
-
-        // Active
-        style.tab.active.bg_fill        = active_tab_bg;
-        style.tab.active.text_color     = p.accent_primary;
-        style.tab.active.outline_color  = egui::Color32::TRANSPARENT;
-        style.tab.active.corner_radius  = egui::CornerRadius::same(3);
-        style.tab.active.glow_color     = active_glow;
-        style.tab.active.glow_radius_factor = 0.85;
-        style.tab.active.glow_aspect    = GLOW_ASPECT;
-
-        // Focused
-        style.tab.focused.bg_fill       = active_tab_bg;
-        style.tab.focused.text_color    = p.accent_primary;
-        style.tab.focused.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.focused.corner_radius = egui::CornerRadius::same(3);
-        style.tab.focused.glow_color    = active_glow;
-        style.tab.focused.glow_radius_factor = 0.85;
-        style.tab.focused.glow_aspect   = GLOW_ASPECT;
-
-        // Inactive
-        style.tab.inactive.bg_fill      = tab_fill;
-        style.tab.inactive.text_color   = p.text_dim;
-        style.tab.inactive.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.inactive.corner_radius = egui::CornerRadius::same(3);
-        style.tab.inactive.glow_color   = egui::Color32::TRANSPARENT;
-
-        // Hovered
-        style.tab.hovered.bg_fill       = tab_fill;
-        style.tab.hovered.text_color    = p.text_primary;
-        style.tab.hovered.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.hovered.corner_radius = egui::CornerRadius::same(3);
-        style.tab.hovered.glow_color    = hover_glow;
-        style.tab.hovered.glow_radius_factor = 0.85;
-        style.tab.hovered.glow_aspect   = GLOW_ASPECT;
-
-        // KB-focus variants
-        style.tab.active_with_kb_focus.bg_fill       = active_tab_bg;
-        style.tab.active_with_kb_focus.text_color    = p.accent_primary;
-        style.tab.active_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.active_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
-        style.tab.active_with_kb_focus.glow_color    = active_glow;
-        style.tab.active_with_kb_focus.glow_radius_factor = 0.85;
-        style.tab.active_with_kb_focus.glow_aspect   = GLOW_ASPECT;
-
-        style.tab.inactive_with_kb_focus.bg_fill       = tab_fill;
-        style.tab.inactive_with_kb_focus.text_color    = p.text_secondary;
-        style.tab.inactive_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.inactive_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
-        style.tab.inactive_with_kb_focus.glow_color    = egui::Color32::TRANSPARENT;
-
-        style.tab.focused_with_kb_focus.bg_fill       = active_tab_bg;
-        style.tab.focused_with_kb_focus.text_color    = p.accent_primary;
-        style.tab.focused_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.focused_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
-        style.tab.focused_with_kb_focus.glow_color    = active_glow;
-        style.tab.focused_with_kb_focus.glow_radius_factor = 0.85;
-        style.tab.focused_with_kb_focus.glow_aspect   = GLOW_ASPECT;
-
-        // Tab bar background matches tab fill
-        style.tab_bar.bg_fill      = tab_fill;
-        style.tab_bar.hline_color  = egui::Color32::TRANSPARENT;
-
-        // Tab body
-        style.tab.tab_body.bg_fill      = tab_fill;
-        style.tab.tab_body.stroke       = egui::Stroke::NONE;
-        style.tab.tab_body.corner_radius = egui::CornerRadius::ZERO;
-        style.tab.tab_body.inner_margin = egui::Margin { left: 6, right: 4, top: 4, bottom: 4 };
-
-        // Buttons
-        style.buttons.close_tab_color        = p.text_dim;
-        style.buttons.close_tab_active_color = p.status_err;
-        style.buttons.close_tab_bg_fill      = egui::Color32::TRANSPARENT;
-        style.buttons.add_tab_color          = p.text_secondary;
-        style.buttons.add_tab_active_color   = p.accent_primary;
-        style.buttons.add_tab_bg_fill        = egui::Color32::TRANSPARENT;
-        style.buttons.add_tab_border_color   = p.border_subtle;
-
-        // Separator
-        style.separator.color_idle    = p.bg_darkest;
-        style.separator.color_hovered = p.accent_primary;
-        style.separator.color_dragged = p.accent_primary;
-        style.separator.width         = DOCK_GUTTER as f32;
-
-        // Drop overlay
-        style.overlay.selection_color      = p.accent_primary.linear_multiply(0.35);
-        style.overlay.button_color         = p.bg_widget;
-        style.overlay.button_border_stroke = egui::Stroke::new(1.0, p.accent_primary);
-
-        // Apply lock settings to hide tab bar height if locked
-        if ui_state_copy.lock_tab_bar {
-            style.tab_bar.height = 0.0;
-        }
-
-        // When hide_ui is active, make the dock chrome invisible so only the
-        // viewport content shows. The dock layout is preserved - no panels are
-        // closed or moved.
-        if ui_state_copy.hide_ui {
-            let transparent = egui::Color32::TRANSPARENT;
-            style.tab_bar.bg_fill = transparent;
-            style.tab_bar.hline_color = transparent;
-            style.tab_bar.height = 0.0;
-            style.tab.active.bg_fill = transparent;
-            style.tab.active.text_color = transparent;
-            style.tab.active.outline_color = transparent;
-            style.tab.active.glow_color = transparent;
-            style.tab.focused.bg_fill = transparent;
-            style.tab.focused.text_color = transparent;
-            style.tab.focused.outline_color = transparent;
-            style.tab.focused.glow_color = transparent;
-            style.tab.inactive.bg_fill = transparent;
-            style.tab.inactive.text_color = transparent;
-            style.tab.inactive.outline_color = transparent;
-            style.tab.inactive.glow_color = transparent;
-            style.tab.hovered.bg_fill = transparent;
-            style.tab.hovered.text_color = transparent;
-            style.tab.hovered.outline_color = transparent;
-            style.tab.hovered.glow_color = transparent;
-            style.tab.active_with_kb_focus.bg_fill = transparent;
-            style.tab.active_with_kb_focus.text_color = transparent;
-            style.tab.active_with_kb_focus.outline_color = transparent;
-            style.tab.active_with_kb_focus.glow_color = transparent;
-            style.tab.inactive_with_kb_focus.bg_fill = transparent;
-            style.tab.inactive_with_kb_focus.text_color = transparent;
-            style.tab.inactive_with_kb_focus.outline_color = transparent;
-            style.tab.inactive_with_kb_focus.glow_color = transparent;
-            style.tab.focused_with_kb_focus.bg_fill = transparent;
-            style.tab.focused_with_kb_focus.text_color = transparent;
-            style.tab.focused_with_kb_focus.outline_color = transparent;
-            style.tab.focused_with_kb_focus.glow_color = transparent;
-            style.tab.tab_body.bg_fill = transparent;
-            style.tab.tab_body.stroke = egui::Stroke::NONE;
-            style.separator.color_idle = transparent;
-            style.separator.color_hovered = transparent;
-            style.separator.color_dragged = transparent;
-            style.separator.width = 0.0;
-            style.overlay.selection_color = transparent;
-            style.overlay.button_color = transparent;
-            style.overlay.button_border_stroke = egui::Stroke::NONE;
-            style.dock_area_padding = Some(egui::Margin::same(0));
-            style.buttons.close_tab_color = transparent;
-            style.buttons.add_tab_color = transparent;
-        }
-
-        // Create panel context for PanelTabViewer
-        let current_mode = ui_state_copy.current_mode;
-        let hide_ui = ui_state_copy.hide_ui;
-        
-        // Show dock area (scoped to release borrows after)
-        {
-            let mut panel_context = crate::ui::panel_context::PanelContext::new(
-                genome,
-                editor_state,
-                scene_manager,
-                camera,
-                scene_request,
-                current_mode,
-                performance,
-                ui_state_copy.hide_ui,
-            );
-            
-            let mut dock_area = egui_dock::DockArea::new(dock_manager.current_tree_mut())
-                .style(style)
-                .show_leaf_collapse_buttons(false)
-                .show_leaf_close_all_buttons(false)
-                .draggable_tabs(true)
-                .window_bounds(self.ctx.content_rect());
-
-            // Apply lock settings for tabs and close buttons
-            if ui_state_copy.lock_tabs {
-                dock_area = dock_area
-                    .show_tab_name_on_hover(false)
-                    .draggable_tabs(false);
-            }
-
-            if ui_state_copy.lock_close_buttons {
-                dock_area = dock_area.show_close_buttons(false);
-            }
-
-            let mut tab_viewer = crate::ui::tab_viewer::PanelTabViewer::new(
+        if gpu_headless_ui {
+            render_gpu_headless_overlay(
+                &self.ctx,
                 &mut ui_state_copy,
-                &mut panel_context,
-                &mut self.viewport_rect,
+                scene_manager,
+                scene_request,
+                performance,
             );
+        } else {
+            // Show dock area in remaining space
+            let mut style = egui_dock::Style::from_egui(self.ctx.global_style().as_ref());
+            style.separator.extra = 75.0;
 
-            // Host the dock inside a *transparent* CentralPanel so the 3D
-            // scene rendered behind egui shows through any tabs that opt out
-            // of background clearing (the Viewport).
-            //
-            // We then paint a black border around the dock's inset region
-            // (the area defined by `dock_area_padding`) by hand - this gives
-            // us the black gutter from the concept art around the panel
-            // cluster without obscuring the viewport.
-            const GUTTER: f32 = DOCK_GUTTER as f32;
-            #[allow(deprecated)]
-            egui::CentralPanel::default()
-                .frame(
-                    egui::Frame::none()
-                        .fill(egui::Color32::TRANSPARENT)
-                        .inner_margin(egui::Margin::ZERO),
-                )
-                .show(&self.ctx, |ui| {
-                    let area = ui.max_rect();
-                    let gutter_color = p.bg_darkest;
+            const DOCK_GUTTER: i8 = 5;
+            style.dock_area_padding = Some(egui::Margin::same(DOCK_GUTTER));
+            style.main_surface_border_stroke = egui::Stroke::NONE;
 
-                    // Render the dock first so its panel/tab body fills paint
-                    // their backgrounds, then overlay the black gutter strips
-                    // on top. Painting the gutters last guarantees they cover
-                    // every pixel of the outer 8px frame regardless of how
-                    // the dock has clipped or rounded its contents.
-                    dock_area.show_inside(ui, &mut tab_viewer);
+            // Tab bar
+            style.tab_bar.bg_fill = p.bg_panel;
+            style.tab_bar.height = 26.0;
+            style.tab_bar.hline_color = p.border_subtle;
+            style.tab_bar.corner_radius = egui::CornerRadius::ZERO;
+            style.tab_bar.fill_tab_bar = false;
+            style.tab_bar.inner_margin = egui::Margin::symmetric(2, 0);
 
-                    // Copy the viewport rect out of the tab_viewer before
-                    // the gutter/bracket paint so we have a clean local copy.
-                    let vp_rect = *tab_viewer.viewport_rect;
+            style.tab.hline_below_active_tab_name = false;
+            style.tab.spacing = 4.0;
 
-                    let painter = ui.painter();
-                    // Top gutter strip
-                    painter.rect_filled(
-                        egui::Rect::from_min_max(
-                            area.left_top(),
-                            egui::pos2(area.right(), area.top() + GUTTER),
-                        ),
-                        0.0,
-                        gutter_color,
-                    );
-                    // Bottom gutter strip
-                    painter.rect_filled(
-                        egui::Rect::from_min_max(
-                            egui::pos2(area.left(), area.bottom() - GUTTER),
-                            area.right_bottom(),
-                        ),
-                        0.0,
-                        gutter_color,
-                    );
-                    // Left gutter strip
-                    painter.rect_filled(
-                        egui::Rect::from_min_max(
-                            area.left_top(),
-                            egui::pos2(area.left() + GUTTER, area.bottom()),
-                        ),
-                        0.0,
-                        gutter_color,
-                    );
-                    // Right gutter strip
-                    painter.rect_filled(
-                        egui::Rect::from_min_max(
-                            egui::pos2(area.right() - GUTTER, area.top()),
-                            area.right_bottom(),
-                        ),
-                        0.0,
-                        gutter_color,
-                    );
+            let tab_fill = p.bg_panel;
+            // Active tab gets a slightly lighter background tint so it stands out
+            // from inactive tabs even when the glow is subtle.
+            let active_tab_fill = egui::Color32::from_rgba_unmultiplied(
+                p.accent_primary.r().saturating_add(8),
+                p.accent_primary.g().saturating_add(8),
+                p.accent_primary.b().saturating_add(8),
+                18,
+            );
+            let active_tab_bg = egui::Color32::from_rgba_unmultiplied(
+                (p.bg_panel.r() as u16 + active_tab_fill.r() as u16).min(255) as u8,
+                (p.bg_panel.g() as u16 + active_tab_fill.g() as u16).min(255) as u8,
+                (p.bg_panel.b() as u16 + active_tab_fill.b() as u16).min(255) as u8,
+                255,
+            );
+            // Glow oval: full accent color at high opacity so it reads on any theme.
+            let active_glow = egui::Color32::from_rgba_unmultiplied(
+                p.accent_primary.r(),
+                p.accent_primary.g(),
+                p.accent_primary.b(),
+                200,
+            );
+            let hover_glow = egui::Color32::from_rgba_unmultiplied(
+                p.accent_primary.r(),
+                p.accent_primary.g(),
+                p.accent_primary.b(),
+                80,
+            );
+            const GLOW_ASPECT: f32 = 0.28;
 
-                    // Paint the corner brackets on the GPU viewport AFTER the
-                    // dock has rendered AND the gutters are down so they sit
-                    // on top of everything. Use a foreground layer painter
-                    // so the brackets are never clipped by any panel's clip rect.
-                    // Fall back to the previous frame's rect on the first frame
-                    // after switching to GPU mode (before the Viewport tab renders).
-                    if current_mode == crate::ui::types::SimulationMode::Gpu {
-                        // Only paint brackets when we have a rect from THIS frame's
-                        // Viewport tab render. Never fall back to a stale rect from
-                        // a different scene - one missed frame is fine.
-                        if let Some(viewport_rect) = vp_rect {
-                            let bracket_painter = ui.ctx().layer_painter(
-                                egui::LayerId::new(
+            // Active
+            style.tab.active.bg_fill = active_tab_bg;
+            style.tab.active.text_color = p.accent_primary;
+            style.tab.active.outline_color = egui::Color32::TRANSPARENT;
+            style.tab.active.corner_radius = egui::CornerRadius::same(3);
+            style.tab.active.glow_color = active_glow;
+            style.tab.active.glow_radius_factor = 0.85;
+            style.tab.active.glow_aspect = GLOW_ASPECT;
+
+            // Focused
+            style.tab.focused.bg_fill = active_tab_bg;
+            style.tab.focused.text_color = p.accent_primary;
+            style.tab.focused.outline_color = egui::Color32::TRANSPARENT;
+            style.tab.focused.corner_radius = egui::CornerRadius::same(3);
+            style.tab.focused.glow_color = active_glow;
+            style.tab.focused.glow_radius_factor = 0.85;
+            style.tab.focused.glow_aspect = GLOW_ASPECT;
+
+            // Inactive
+            style.tab.inactive.bg_fill = tab_fill;
+            style.tab.inactive.text_color = p.text_dim;
+            style.tab.inactive.outline_color = egui::Color32::TRANSPARENT;
+            style.tab.inactive.corner_radius = egui::CornerRadius::same(3);
+            style.tab.inactive.glow_color = egui::Color32::TRANSPARENT;
+
+            // Hovered
+            style.tab.hovered.bg_fill = tab_fill;
+            style.tab.hovered.text_color = p.text_primary;
+            style.tab.hovered.outline_color = egui::Color32::TRANSPARENT;
+            style.tab.hovered.corner_radius = egui::CornerRadius::same(3);
+            style.tab.hovered.glow_color = hover_glow;
+            style.tab.hovered.glow_radius_factor = 0.85;
+            style.tab.hovered.glow_aspect = GLOW_ASPECT;
+
+            // KB-focus variants
+            style.tab.active_with_kb_focus.bg_fill = active_tab_bg;
+            style.tab.active_with_kb_focus.text_color = p.accent_primary;
+            style.tab.active_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
+            style.tab.active_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
+            style.tab.active_with_kb_focus.glow_color = active_glow;
+            style.tab.active_with_kb_focus.glow_radius_factor = 0.85;
+            style.tab.active_with_kb_focus.glow_aspect = GLOW_ASPECT;
+
+            style.tab.inactive_with_kb_focus.bg_fill = tab_fill;
+            style.tab.inactive_with_kb_focus.text_color = p.text_secondary;
+            style.tab.inactive_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
+            style.tab.inactive_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
+            style.tab.inactive_with_kb_focus.glow_color = egui::Color32::TRANSPARENT;
+
+            style.tab.focused_with_kb_focus.bg_fill = active_tab_bg;
+            style.tab.focused_with_kb_focus.text_color = p.accent_primary;
+            style.tab.focused_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
+            style.tab.focused_with_kb_focus.corner_radius = egui::CornerRadius::same(3);
+            style.tab.focused_with_kb_focus.glow_color = active_glow;
+            style.tab.focused_with_kb_focus.glow_radius_factor = 0.85;
+            style.tab.focused_with_kb_focus.glow_aspect = GLOW_ASPECT;
+
+            // Tab bar background matches tab fill
+            style.tab_bar.bg_fill = tab_fill;
+            style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
+
+            // Tab body
+            style.tab.tab_body.bg_fill = tab_fill;
+            style.tab.tab_body.stroke = egui::Stroke::NONE;
+            style.tab.tab_body.corner_radius = egui::CornerRadius::ZERO;
+            style.tab.tab_body.inner_margin = egui::Margin {
+                left: 6,
+                right: 4,
+                top: 4,
+                bottom: 4,
+            };
+
+            // Buttons
+            style.buttons.close_tab_color = p.text_dim;
+            style.buttons.close_tab_active_color = p.status_err;
+            style.buttons.close_tab_bg_fill = egui::Color32::TRANSPARENT;
+            style.buttons.add_tab_color = p.text_secondary;
+            style.buttons.add_tab_active_color = p.accent_primary;
+            style.buttons.add_tab_bg_fill = egui::Color32::TRANSPARENT;
+            style.buttons.add_tab_border_color = p.border_subtle;
+
+            // Separator
+            style.separator.color_idle = p.bg_darkest;
+            style.separator.color_hovered = p.accent_primary;
+            style.separator.color_dragged = p.accent_primary;
+            style.separator.width = DOCK_GUTTER as f32;
+
+            // Drop overlay
+            style.overlay.selection_color = p.accent_primary.linear_multiply(0.35);
+            style.overlay.button_color = p.bg_widget;
+            style.overlay.button_border_stroke = egui::Stroke::new(1.0, p.accent_primary);
+
+            // Apply lock settings to hide tab bar height if locked
+            if ui_state_copy.lock_tab_bar {
+                style.tab_bar.height = 0.0;
+            }
+
+            // When hide_ui is active, make the dock chrome invisible so only the
+            // viewport content shows. The dock layout is preserved - no panels are
+            // closed or moved.
+            if ui_state_copy.hide_ui {
+                let transparent = egui::Color32::TRANSPARENT;
+                style.tab_bar.bg_fill = transparent;
+                style.tab_bar.hline_color = transparent;
+                style.tab_bar.height = 0.0;
+                style.tab.active.bg_fill = transparent;
+                style.tab.active.text_color = transparent;
+                style.tab.active.outline_color = transparent;
+                style.tab.active.glow_color = transparent;
+                style.tab.focused.bg_fill = transparent;
+                style.tab.focused.text_color = transparent;
+                style.tab.focused.outline_color = transparent;
+                style.tab.focused.glow_color = transparent;
+                style.tab.inactive.bg_fill = transparent;
+                style.tab.inactive.text_color = transparent;
+                style.tab.inactive.outline_color = transparent;
+                style.tab.inactive.glow_color = transparent;
+                style.tab.hovered.bg_fill = transparent;
+                style.tab.hovered.text_color = transparent;
+                style.tab.hovered.outline_color = transparent;
+                style.tab.hovered.glow_color = transparent;
+                style.tab.active_with_kb_focus.bg_fill = transparent;
+                style.tab.active_with_kb_focus.text_color = transparent;
+                style.tab.active_with_kb_focus.outline_color = transparent;
+                style.tab.active_with_kb_focus.glow_color = transparent;
+                style.tab.inactive_with_kb_focus.bg_fill = transparent;
+                style.tab.inactive_with_kb_focus.text_color = transparent;
+                style.tab.inactive_with_kb_focus.outline_color = transparent;
+                style.tab.inactive_with_kb_focus.glow_color = transparent;
+                style.tab.focused_with_kb_focus.bg_fill = transparent;
+                style.tab.focused_with_kb_focus.text_color = transparent;
+                style.tab.focused_with_kb_focus.outline_color = transparent;
+                style.tab.focused_with_kb_focus.glow_color = transparent;
+                style.tab.tab_body.bg_fill = transparent;
+                style.tab.tab_body.stroke = egui::Stroke::NONE;
+                style.separator.color_idle = transparent;
+                style.separator.color_hovered = transparent;
+                style.separator.color_dragged = transparent;
+                style.separator.width = 0.0;
+                style.overlay.selection_color = transparent;
+                style.overlay.button_color = transparent;
+                style.overlay.button_border_stroke = egui::Stroke::NONE;
+                style.dock_area_padding = Some(egui::Margin::same(0));
+                style.buttons.close_tab_color = transparent;
+                style.buttons.add_tab_color = transparent;
+            }
+
+            // Create panel context for PanelTabViewer
+            let current_mode = ui_state_copy.current_mode;
+            let hide_ui = ui_state_copy.hide_ui;
+
+            // Show dock area (scoped to release borrows after)
+            {
+                let mut panel_context = crate::ui::panel_context::PanelContext::new(
+                    genome,
+                    editor_state,
+                    scene_manager,
+                    camera,
+                    scene_request,
+                    current_mode,
+                    performance,
+                    ui_state_copy.hide_ui,
+                );
+
+                let mut dock_area = egui_dock::DockArea::new(dock_manager.current_tree_mut())
+                    .style(style)
+                    .show_leaf_collapse_buttons(false)
+                    .show_leaf_close_all_buttons(false)
+                    .draggable_tabs(true)
+                    .window_bounds(self.ctx.content_rect());
+
+                // Apply lock settings for tabs and close buttons
+                if ui_state_copy.lock_tabs {
+                    dock_area = dock_area
+                        .show_tab_name_on_hover(false)
+                        .draggable_tabs(false);
+                }
+
+                if ui_state_copy.lock_close_buttons {
+                    dock_area = dock_area.show_close_buttons(false);
+                }
+
+                let mut tab_viewer = crate::ui::tab_viewer::PanelTabViewer::new(
+                    &mut ui_state_copy,
+                    &mut panel_context,
+                    &mut self.viewport_rect,
+                );
+
+                // Host the dock inside a *transparent* CentralPanel so the 3D
+                // scene rendered behind egui shows through any tabs that opt out
+                // of background clearing (the Viewport).
+                //
+                // We then paint a black border around the dock's inset region
+                // (the area defined by `dock_area_padding`) by hand - this gives
+                // us the black gutter from the concept art around the panel
+                // cluster without obscuring the viewport.
+                const GUTTER: f32 = DOCK_GUTTER as f32;
+                #[allow(deprecated)]
+                egui::CentralPanel::default()
+                    .frame(
+                        egui::Frame::none()
+                            .fill(egui::Color32::TRANSPARENT)
+                            .inner_margin(egui::Margin::ZERO),
+                    )
+                    .show(&self.ctx, |ui| {
+                        let area = ui.max_rect();
+                        let gutter_color = p.bg_darkest;
+
+                        // Render the dock first so its panel/tab body fills paint
+                        // their backgrounds, then overlay the black gutter strips
+                        // on top. Painting the gutters last guarantees they cover
+                        // every pixel of the outer 8px frame regardless of how
+                        // the dock has clipped or rounded its contents.
+                        dock_area.show_inside(ui, &mut tab_viewer);
+
+                        // Copy the viewport rect out of the tab_viewer before
+                        // the gutter/bracket paint so we have a clean local copy.
+                        let vp_rect = *tab_viewer.viewport_rect;
+
+                        let painter = ui.painter();
+                        // Top gutter strip
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                area.left_top(),
+                                egui::pos2(area.right(), area.top() + GUTTER),
+                            ),
+                            0.0,
+                            gutter_color,
+                        );
+                        // Bottom gutter strip
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(area.left(), area.bottom() - GUTTER),
+                                area.right_bottom(),
+                            ),
+                            0.0,
+                            gutter_color,
+                        );
+                        // Left gutter strip
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                area.left_top(),
+                                egui::pos2(area.left() + GUTTER, area.bottom()),
+                            ),
+                            0.0,
+                            gutter_color,
+                        );
+                        // Right gutter strip
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(area.right() - GUTTER, area.top()),
+                                area.right_bottom(),
+                            ),
+                            0.0,
+                            gutter_color,
+                        );
+
+                        // Paint the corner brackets on the GPU viewport AFTER the
+                        // dock has rendered AND the gutters are down so they sit
+                        // on top of everything. Use a foreground layer painter
+                        // so the brackets are never clipped by any panel's clip rect.
+                        // Fall back to the previous frame's rect on the first frame
+                        // after switching to GPU mode (before the Viewport tab renders).
+                        if current_mode == crate::ui::types::SimulationMode::Gpu {
+                            // Only paint brackets when we have a rect from THIS frame's
+                            // Viewport tab render. Never fall back to a stale rect from
+                            // a different scene - one missed frame is fine.
+                            if let Some(viewport_rect) = vp_rect {
+                                let bracket_painter = ui.ctx().layer_painter(egui::LayerId::new(
                                     egui::Order::Foreground,
                                     egui::Id::new("viewport_brackets"),
-                                )
-                            );
-                            paint_viewport_brackets(&bracket_painter, viewport_rect);
+                                ));
+                                paint_viewport_brackets(&bracket_painter, viewport_rect);
+                            }
                         }
-                    }
 
-                    // Paint rounded corners on the Preview viewport - black
-                    // quarter-circle fills at each corner make the viewport
-                    // appear to have rounded corners against the black gutter.
-                    // Hidden when UI is hidden so the full viewport is unobstructed.
-                    if current_mode == crate::ui::types::SimulationMode::Preview
-                        && !hide_ui
-                    {
-                        if let Some(viewport_rect) = vp_rect {
-                            let panel_rect = viewport_rect.expand2(egui::vec2(6.0, 4.0));
-                            paint_viewport_rounded_corners(ui.painter(), panel_rect, 40.0, gutter_color);
+                        // Paint rounded corners on the Preview viewport - black
+                        // quarter-circle fills at each corner make the viewport
+                        // appear to have rounded corners against the black gutter.
+                        // Hidden when UI is hidden so the full viewport is unobstructed.
+                        if current_mode == crate::ui::types::SimulationMode::Preview && !hide_ui {
+                            if let Some(viewport_rect) = vp_rect {
+                                let panel_rect = viewport_rect.expand2(egui::vec2(6.0, 4.0));
+                                paint_viewport_rounded_corners(
+                                    ui.painter(),
+                                    panel_rect,
+                                    40.0,
+                                    gutter_color,
+                                );
+                            }
                         }
-                    }
-                });
+                    });
+            }
         }
-        
+
         // -- Genome browser window ---------------------------------------------
         // Floats above the dock. Renders in Preview mode only.
-        if current_mode == crate::ui::types::SimulationMode::Preview {
+        if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Preview {
             // Process open requests from panels/buttons
             if editor_state.open_genome_browser_save {
                 editor_state.open_genome_browser_save = false;
                 let name = genome.name.trim().to_string();
                 if !name.is_empty() {
-                    let path = crate::app_dirs::genomes_dir()
-                        .join(format!("{}.genome", crate::app_dirs::sanitize_filename(&name)));
+                    let path = crate::app_dirs::genomes_dir().join(format!(
+                        "{}.genome",
+                        crate::app_dirs::sanitize_filename(&name)
+                    ));
                     match genome.save_to_file(&path) {
                         Ok(()) => {
-                            self.toasts.push(crate::ui::toast::Toast::success(
-                                format!("✓ Saved — {}.genome", name)
-                            ));
+                            self.toasts.push(crate::ui::toast::Toast::success(format!(
+                                "✓ Saved — {}.genome",
+                                name
+                            )));
                             self.genome_browser.needs_refresh = true;
                             self.genome_browser.force_full_reload = true;
                             if editor_state.gif_capture.is_none() {
                                 editor_state.request_gif_capture = true;
                                 editor_state.gif_capture_save_path = Some(path.clone());
                                 crate::ui::toast::upsert_progress_toast(
-                                    &mut self.toasts, "Preparing GIF…", 0.0,
+                                    &mut self.toasts,
+                                    "Preparing GIF…",
+                                    0.0,
                                 );
                             }
                         }
                         Err(e) => {
-                            self.toasts.push(crate::ui::toast::Toast::error(
-                                format!("Save failed: {}", e)
-                            ));
+                            self.toasts.push(crate::ui::toast::Toast::error(format!(
+                                "Save failed: {}",
+                                e
+                            )));
                         }
                     }
                 }
@@ -1767,8 +1859,7 @@ impl UiSystem {
                                 .add_sized(
                                     [btn_w, 30.0],
                                     egui::Button::new(
-                                        egui::RichText::new("Keep Open")
-                                            .color(p.accent_primary),
+                                        egui::RichText::new("Keep Open").color(p.accent_primary),
                                     )
                                     .fill(egui::Color32::from_rgba_unmultiplied(
                                         p.accent_primary.r(),
@@ -1821,23 +1912,57 @@ impl UiSystem {
                 .show(&self.ctx, |ui| {
                     ui.set_min_width(300.0);
                     ui.vertical_centered(|ui| {
-                        ui.label(egui::RichText::new("New Genome").size(14.0).strong().color(p.text_primary));
+                        ui.label(
+                            egui::RichText::new("New Genome")
+                                .size(14.0)
+                                .strong()
+                                .color(p.text_primary),
+                        );
                         ui.add_space(8.0);
-                        ui.label(egui::RichText::new("Unsaved changes will be lost.")
-                            .size(12.0).color(p.text_primary));
-                        ui.label(egui::RichText::new("Create a new blank genome?")
-                            .size(11.0).color(p.text_dim));
+                        ui.label(
+                            egui::RichText::new("Unsaved changes will be lost.")
+                                .size(12.0)
+                                .color(p.text_primary),
+                        );
+                        ui.label(
+                            egui::RichText::new("Create a new blank genome?")
+                                .size(11.0)
+                                .color(p.text_dim),
+                        );
                         ui.add_space(14.0);
                         ui.horizontal(|ui| {
-                            if ui.add(egui::Button::new(egui::RichText::new("Cancel").size(12.0).color(p.text_secondary))
-                                .fill(p.bg_widget).stroke(egui::Stroke::new(1.0, p.border_normal))
-                                .min_size(egui::Vec2::new(90.0, 28.0)).corner_radius(egui::CornerRadius::same(4))).clicked() {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("Cancel")
+                                            .size(12.0)
+                                            .color(p.text_secondary),
+                                    )
+                                    .fill(p.bg_widget)
+                                    .stroke(egui::Stroke::new(1.0, p.border_normal))
+                                    .min_size(egui::Vec2::new(90.0, 28.0))
+                                    .corner_radius(egui::CornerRadius::same(4)),
+                                )
+                                .clicked()
+                            {
                                 cancel_new = true;
                             }
                             ui.add_space(8.0);
-                            if ui.add(egui::Button::new(egui::RichText::new("✦ New Genome").size(12.0).strong().color(p.bg_darkest))
-                                .fill(p.accent_primary).stroke(egui::Stroke::new(1.0, p.accent_primary))
-                                .min_size(egui::Vec2::new(110.0, 28.0)).corner_radius(egui::CornerRadius::same(4))).clicked() {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("✦ New Genome")
+                                            .size(12.0)
+                                            .strong()
+                                            .color(p.bg_darkest),
+                                    )
+                                    .fill(p.accent_primary)
+                                    .stroke(egui::Stroke::new(1.0, p.accent_primary))
+                                    .min_size(egui::Vec2::new(110.0, 28.0))
+                                    .corner_radius(egui::CornerRadius::same(4)),
+                                )
+                                .clicked()
+                            {
                                 do_new = true;
                             }
                         });
@@ -1850,9 +1975,13 @@ impl UiSystem {
                 editor_state.selected_mode_indices = vec![0];
                 editor_state.genome_just_loaded = true;
                 editor_state.confirm_new_genome = false;
-                self.toasts.push(crate::ui::toast::Toast::info("New genome created".to_string()));
+                self.toasts.push(crate::ui::toast::Toast::info(
+                    "New genome created".to_string(),
+                ));
             }
-            if cancel_new { editor_state.confirm_new_genome = false; }
+            if cancel_new {
+                editor_state.confirm_new_genome = false;
+            }
         }
 
         // -- Name dialog (shown when saving with an empty name) ----------------
@@ -1861,12 +1990,17 @@ impl UiSystem {
             // Re-read from disk every frame so deleted genomes free up their names immediately.
             let used: Vec<String> = crate::genome::Genome::list_genomes_dir()
                 .into_iter()
-                .filter_map(|p| p.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_lowercase()))
+                .filter_map(|p| {
+                    p.file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.to_lowercase())
+                })
                 .collect();
             let procedural = crate::genome::procedural_name::generate_unique(
-                genome, editor_state.name_dialog_seed, &used);
+                genome,
+                editor_state.name_dialog_seed,
+                &used,
+            );
             let mut do_save_name: Option<String> = None;
             let mut cancel = false;
             let mut regenerate = false;
@@ -1886,11 +2020,18 @@ impl UiSystem {
                 .show(&self.ctx, |ui| {
                     ui.set_min_width(340.0);
 
-                    ui.label(egui::RichText::new("Name Your Genome")
-                        .size(14.0).strong().color(p.text_primary));
+                    ui.label(
+                        egui::RichText::new("Name Your Genome")
+                            .size(14.0)
+                            .strong()
+                            .color(p.text_primary),
+                    );
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new("Enter a custom name or use the suggested one.")
-                        .size(11.0).color(p.text_dim));
+                    ui.label(
+                        egui::RichText::new("Enter a custom name or use the suggested one.")
+                            .size(11.0)
+                            .color(p.text_dim),
+                    );
                     ui.add_space(12.0);
 
                     // Procedural suggestion
@@ -1901,26 +2042,48 @@ impl UiSystem {
                         .inner_margin(egui::Margin::symmetric(10, 8))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("Suggested:").size(10.0).color(p.text_dim));
+                                ui.label(
+                                    egui::RichText::new("Suggested:")
+                                        .size(10.0)
+                                        .color(p.text_dim),
+                                );
                                 ui.add_space(4.0);
-                                ui.label(egui::RichText::new(&procedural).size(12.0).color(p.accent_primary));
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.add(egui::Button::new(
-                                        egui::RichText::new("🔀").size(11.0).color(p.text_secondary))
-                                        .fill(egui::Color32::TRANSPARENT)
-                                        .stroke(egui::Stroke::NONE)
-                                        .min_size(egui::Vec2::new(22.0, 22.0)))
-                                        .on_hover_text("Generate a different name")
-                                        .clicked() {
-                                        regenerate = true;
-                                    }
-                                });
+                                ui.label(
+                                    egui::RichText::new(&procedural)
+                                        .size(12.0)
+                                        .color(p.accent_primary),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new("🔀")
+                                                        .size(11.0)
+                                                        .color(p.text_secondary),
+                                                )
+                                                .fill(egui::Color32::TRANSPARENT)
+                                                .stroke(egui::Stroke::NONE)
+                                                .min_size(egui::Vec2::new(22.0, 22.0)),
+                                            )
+                                            .on_hover_text("Generate a different name")
+                                            .clicked()
+                                        {
+                                            regenerate = true;
+                                        }
+                                    },
+                                );
                             });
                         });
                     ui.add_space(8.0);
 
                     // Custom name field
-                    ui.label(egui::RichText::new("Custom name:").size(10.0).color(p.text_dim));
+                    ui.label(
+                        egui::RichText::new("Custom name:")
+                            .size(10.0)
+                            .color(p.text_dim),
+                    );
                     ui.add_space(2.0);
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut editor_state.name_dialog_buffer)
@@ -1947,12 +2110,20 @@ impl UiSystem {
 
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
-                        if ui.add(egui::Button::new(
-                            egui::RichText::new("Cancel").size(12.0).color(p.text_secondary))
-                            .fill(p.bg_widget)
-                            .stroke(egui::Stroke::new(1.0, p.border_normal))
-                            .min_size(egui::Vec2::new(80.0, 28.0))
-                            .corner_radius(egui::CornerRadius::same(4))).clicked() {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("Cancel")
+                                        .size(12.0)
+                                        .color(p.text_secondary),
+                                )
+                                .fill(p.bg_widget)
+                                .stroke(egui::Stroke::new(1.0, p.border_normal))
+                                .min_size(egui::Vec2::new(80.0, 28.0))
+                                .corner_radius(egui::CornerRadius::same(4)),
+                            )
+                            .clicked()
+                        {
                             cancel = true;
                         }
                         ui.add_space(8.0);
@@ -1961,49 +2132,80 @@ impl UiSystem {
                         let save_label = if custom.is_empty() {
                             "✨ Use Suggested".to_string()
                         } else {
-                            format!("⬆ Save as \"{}\"", if custom.len() > 18 { format!("{}…", &custom[..18]) } else { custom.clone() })
+                            format!(
+                                "⬆ Save as \"{}\"",
+                                if custom.len() > 18 {
+                                    format!("{}…", &custom[..18])
+                                } else {
+                                    custom.clone()
+                                }
+                            )
                         };
-                        if ui.add(egui::Button::new(
-                            egui::RichText::new(&save_label).size(12.0).strong()
-                                .color(p.bg_darkest))
-                            .fill(p.accent_primary)
-                            .stroke(egui::Stroke::new(1.0, p.accent_primary))
-                            .min_size(egui::Vec2::new(120.0, 28.0))
-                            .corner_radius(egui::CornerRadius::same(4))).clicked() {
-                            let chosen = if custom.is_empty() { procedural.clone() } else { custom };
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(&save_label)
+                                        .size(12.0)
+                                        .strong()
+                                        .color(p.bg_darkest),
+                                )
+                                .fill(p.accent_primary)
+                                .stroke(egui::Stroke::new(1.0, p.accent_primary))
+                                .min_size(egui::Vec2::new(120.0, 28.0))
+                                .corner_radius(egui::CornerRadius::same(4)),
+                            )
+                            .clicked()
+                        {
+                            let chosen = if custom.is_empty() {
+                                procedural.clone()
+                            } else {
+                                custom
+                            };
                             do_save_name = Some(chosen);
                         }
                     });
                 });
 
-            if regenerate { editor_state.name_dialog_seed = editor_state.name_dialog_seed.wrapping_add(1); }
-            if let Some(name) = do_save_name {                editor_state.show_name_dialog = false;
+            if regenerate {
+                editor_state.name_dialog_seed = editor_state.name_dialog_seed.wrapping_add(1);
+            }
+            if let Some(name) = do_save_name {
+                editor_state.show_name_dialog = false;
                 genome.name = name.clone();
-                let path = crate::app_dirs::genomes_dir()
-                    .join(format!("{}.genome", crate::app_dirs::sanitize_filename(&name)));
+                let path = crate::app_dirs::genomes_dir().join(format!(
+                    "{}.genome",
+                    crate::app_dirs::sanitize_filename(&name)
+                ));
                 match genome.save_to_file(&path) {
                     Ok(()) => {
-                        self.toasts.push(crate::ui::toast::Toast::success(
-                            format!("✓ Saved — {}.genome", name)
-                        ));
+                        self.toasts.push(crate::ui::toast::Toast::success(format!(
+                            "✓ Saved — {}.genome",
+                            name
+                        )));
                         self.genome_browser.needs_refresh = true;
                         self.genome_browser.force_full_reload = true;
                         if editor_state.gif_capture.is_none() {
                             crate::ui::toast::upsert_progress_toast(
-                                &mut self.toasts, "Preparing GIF…", 0.0,
+                                &mut self.toasts,
+                                "Preparing GIF…",
+                                0.0,
                             );
                             editor_state.request_gif_capture = true;
                             editor_state.gif_capture_save_path = Some(path.clone());
                         }
                     }
                     Err(e) => {
-                        self.toasts.push(crate::ui::toast::Toast::error(
-                            format!("Save failed: {}", e)
-                        ));
+                        self.toasts.push(crate::ui::toast::Toast::error(format!(
+                            "Save failed: {}",
+                            e
+                        )));
                     }
                 }
             }
-            if cancel { editor_state.show_name_dialog = false; editor_state.name_dialog_focused = false; }
+            if cancel {
+                editor_state.show_name_dialog = false;
+                editor_state.name_dialog_focused = false;
+            }
         }
 
         // Handle mode graph panel toggle request
@@ -2016,20 +2218,24 @@ impl UiSystem {
                 dock_manager.current_tree_mut().remove_tab(location);
             } else {
                 // Panel is closed - restore to original location if available
-                if let Some((surface_index, node_index, tab_index)) = editor_state.mode_graph_panel_location {
+                if let Some((surface_index, node_index, tab_index)) =
+                    editor_state.mode_graph_panel_location
+                {
                     // Try to restore to the original location
                     let dock_state = dock_manager.current_tree_mut();
-                    
+
                     // Check if the surface still exists and has the node
-                    let can_restore = dock_state.get_surface(surface_index)
+                    let can_restore = dock_state
+                        .get_surface(surface_index)
                         .map(|surface| match surface {
-                            egui_dock::Surface::Main(tree) | egui_dock::Surface::Window(tree, _) => {
+                            egui_dock::Surface::Main(tree)
+                            | egui_dock::Surface::Window(tree, _) => {
                                 node_index.0 < tree.len() && tree[node_index].is_leaf()
                             }
                             egui_dock::Surface::Empty => false,
                         })
                         .unwrap_or(false);
-                    
+
                     if can_restore {
                         // Restore to the original location
                         dock_state[surface_index][node_index].insert_tab(tab_index, panel);
@@ -2071,28 +2277,35 @@ impl UiSystem {
             editor_state.light_params_dirty = true;
             editor_state.save_light_settings();
         }
-        
+
         // Render radial menu overlay (GPU mode only)
         // Now editor_state is no longer borrowed by panel_context
-        if current_mode == crate::ui::types::SimulationMode::Gpu {
+        if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu && !gpu_headless_ui {
             crate::ui::radial_menu::show_radial_menu(&self.ctx, &mut editor_state.radial_menu);
             // Only show the tool cursor icon when the pointer is over the viewport,
             // not over a panel - over panels the system cursor is visible instead.
             if !self.wants_pointer_input() {
                 crate::ui::radial_menu::show_tool_cursor(&self.ctx, &editor_state.radial_menu);
             }
-            
+
             // Check for low FPS and show warning dialog
             let fps = performance.fps();
-            let sim_speed = scene_manager.gpu_scene().map(|s| s.time_scale).unwrap_or(1.0);
-            
+            let sim_speed = scene_manager
+                .gpu_scene()
+                .map(|s| s.time_scale)
+                .unwrap_or(1.0);
+
             // Only show dialog if FPS < 15 and speed > 1x and dialog not already shown and not suppressed
-            if fps < 15.0 && sim_speed > 1.0 && !ui_state_copy.show_low_fps_dialog && !ui_state_copy.suppress_low_fps_dialog {
+            if fps < 15.0
+                && sim_speed > 1.0
+                && !ui_state_copy.show_low_fps_dialog
+                && !ui_state_copy.suppress_low_fps_dialog
+            {
                 ui_state_copy.show_low_fps_dialog = true;
                 // Pause simulation while dialog is shown
                 *scene_request = crate::ui::panel_context::SceneModeRequest::TogglePause;
             }
-            
+
             // Render low FPS dialog
             if ui_state_copy.show_low_fps_dialog {
                 egui::Window::new("⚠ Low Frame Rate")
@@ -2100,26 +2313,36 @@ impl UiSystem {
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(&self.ctx, |ui| {
-                        ui.label(format!("Frame rate dropped to {:.0} FPS at {:.1}x speed.", fps, sim_speed));
+                        ui.label(format!(
+                            "Frame rate dropped to {:.0} FPS at {:.1}x speed.",
+                            fps, sim_speed
+                        ));
                         ui.add_space(8.0);
                         ui.label("Simulation paused. What would you like to do?");
                         ui.add_space(12.0);
-                        
+
                         ui.horizontal(|ui| {
                             if ui.button("Set to 1x & Resume").clicked() {
-                                *scene_request = crate::ui::panel_context::SceneModeRequest::SetSpeedAndUnpause(1.0);
+                                *scene_request =
+                                    crate::ui::panel_context::SceneModeRequest::SetSpeedAndUnpause(
+                                        1.0,
+                                    );
                                 ui_state_copy.show_low_fps_dialog = false;
                             }
                             if ui.button("Resume at Current Speed").clicked() {
-                                *scene_request = crate::ui::panel_context::SceneModeRequest::TogglePause;
+                                *scene_request =
+                                    crate::ui::panel_context::SceneModeRequest::TogglePause;
                                 ui_state_copy.show_low_fps_dialog = false;
                             }
                         });
                         ui.add_space(4.0);
-                        ui.checkbox(&mut ui_state_copy.suppress_low_fps_dialog, "Don't ask again this session");
+                        ui.checkbox(
+                            &mut ui_state_copy.suppress_low_fps_dialog,
+                            "Don't ask again this session",
+                        );
                     });
             }
-            
+
             // Render reset confirmation dialog
             if ui_state_copy.show_reset_dialog {
                 egui::Window::new("⟲ Reset Simulation")
@@ -2129,15 +2352,24 @@ impl UiSystem {
                     .show(&self.ctx, |ui| {
                         ui.label("What would you like to reset?");
                         ui.add_space(12.0);
-                        
+
                         ui.vertical(|ui| {
-                            if ui.button("Reset Everything").on_hover_text("Remove all cells and clear water/fluid").clicked() {
+                            if ui
+                                .button("Reset Everything")
+                                .on_hover_text("Remove all cells and clear water/fluid")
+                                .clicked()
+                            {
                                 *scene_request = crate::ui::panel_context::SceneModeRequest::Reset;
                                 ui_state_copy.show_reset_dialog = false;
                             }
                             ui.add_space(4.0);
-                            if ui.button("Reset Cells Only").on_hover_text("Remove all cells but keep water/fluid").clicked() {
-                                *scene_request = crate::ui::panel_context::SceneModeRequest::ResetCellsOnly;
+                            if ui
+                                .button("Reset Cells Only")
+                                .on_hover_text("Remove all cells but keep water/fluid")
+                                .clicked()
+                            {
+                                *scene_request =
+                                    crate::ui::panel_context::SceneModeRequest::ResetCellsOnly;
                                 ui_state_copy.show_reset_dialog = false;
                             }
                             ui.add_space(4.0);
@@ -2198,7 +2430,7 @@ impl UiSystem {
                 // app.rs clears show_loading_popup once the work completes.
             }
         }
-        
+
         // -- Toast notifications -----------------------------------------------
         crate::ui::toast::tick_toasts(&mut self.toasts, 1.0 / 60.0);
         crate::ui::toast::render_toasts(&self.ctx, &self.toasts);
@@ -2209,7 +2441,8 @@ impl UiSystem {
             self.loading_gif_timer += 1.0 / 60.0;
             if self.loading_gif_timer >= 1.0 / 20.0 {
                 self.loading_gif_timer = 0.0;
-                self.loading_gif_frame = (self.loading_gif_frame + 1) % self.loading_gif_frames.len();
+                self.loading_gif_frame =
+                    (self.loading_gif_frame + 1) % self.loading_gif_frames.len();
             }
             #[allow(deprecated)]
             let screen = self.ctx.screen_rect();
@@ -2254,7 +2487,7 @@ impl UiSystem {
         // Apply any changes back to the original state
         let state_changed = self.state != ui_state_copy;
         self.state = ui_state_copy;
-        
+
         // Mark UI state as dirty if it changed
         if state_changed {
             self.mark_ui_state_dirty();
@@ -2262,13 +2495,17 @@ impl UiSystem {
 
         // Handle global click to clear label text selection
         if self.ctx.input(|i| i.pointer.any_click()) {
-            let plugin = self.ctx.plugin::<egui::text_selection::LabelSelectionState>();
+            let plugin = self
+                .ctx
+                .plugin::<egui::text_selection::LabelSelectionState>();
             plugin.lock().clear_selection();
         }
-        
+
         // Also clear text selection if Escape is pressed
         if self.ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            let plugin = self.ctx.plugin::<egui::text_selection::LabelSelectionState>();
+            let plugin = self
+                .ctx
+                .plugin::<egui::text_selection::LabelSelectionState>();
             plugin.lock().clear_selection();
         }
 
@@ -2291,23 +2528,20 @@ impl UiSystem {
         // Handle platform output (clipboard, cursor, etc.)
         // Note: We don't have access to window here, so platform output
         // should be handled separately if needed
-        
+
         // Process texture updates
         for (id, image_delta) in &output.textures_delta.set {
-            self.renderer.update_texture(device, queue, *id, image_delta);
+            self.renderer
+                .update_texture(device, queue, *id, image_delta);
         }
 
         // Tessellate shapes into primitives
         let paint_jobs = self.ctx.tessellate(output.shapes, output.pixels_per_point);
 
         // Update buffers and get any callback command buffers
-        let _command_buffers = self.renderer.update_buffers(
-            device,
-            queue,
-            encoder,
-            &paint_jobs,
-            &screen_descriptor,
-        );
+        let _command_buffers =
+            self.renderer
+                .update_buffers(device, queue, encoder, &paint_jobs, &screen_descriptor);
 
         // Create render pass and render egui
         {
@@ -2361,9 +2595,13 @@ impl UiSystem {
 }
 
 /// Show the Themes menu for selecting the active UI color theme.
-fn show_themes_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager: &mut crate::ui::dock::DockManager) {
-    use crate::ui::types::UiTheme;
+fn show_themes_menu(
+    ui: &mut egui::Ui,
+    state: &mut GlobalUiState,
+    dock_manager: &mut crate::ui::dock::DockManager,
+) {
     use crate::ui::panel::Panel;
+    use crate::ui::types::UiTheme;
 
     ui.label("Color Theme:");
     ui.add_space(4.0);
@@ -2374,11 +2612,15 @@ fn show_themes_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager: 
 
         ui.horizontal(|ui| {
             // Colored swatch dot
-            let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+            let (dot_rect, _) =
+                ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
             ui.painter().circle_filled(dot_rect.center(), 4.5, accent);
 
             // Selectable label - clicking sets the theme
-            if ui.selectable_label(is_selected, theme_choice.display_name()).clicked() {
+            if ui
+                .selectable_label(is_selected, theme_choice.display_name())
+                .clicked()
+            {
                 state.selected_theme = theme_choice;
                 // When Custom is selected, open the Theme Editor panel automatically.
                 if theme_choice == UiTheme::Custom {
@@ -2394,7 +2636,11 @@ fn show_themes_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager: 
 }
 
 /// Show the Windows menu for panel visibility toggles.
-fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager: &mut crate::ui::dock::DockManager) {
+fn show_windows_menu(
+    ui: &mut egui::Ui,
+    state: &mut GlobalUiState,
+    dock_manager: &mut crate::ui::dock::DockManager,
+) {
     use crate::ui::panel::Panel;
 
     // UI Scale radio buttons
@@ -2454,14 +2700,17 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
 
             ui.horizontal(|ui| {
                 // Window toggle button
-                if ui.selectable_label(is_open, format!("  {}", panel.display_name())).clicked() {
+                if ui
+                    .selectable_label(is_open, format!("  {}", panel.display_name()))
+                    .clicked()
+                {
                     if is_open {
                         close_panel(dock_manager.current_tree_mut(), panel);
                     } else {
                         open_panel(dock_manager.current_tree_mut(), panel);
                     }
                 }
-                
+
                 // Lock/Unlock button
                 let lock_icon = if is_locked { "🔒" } else { "🔓" };
                 if ui.small_button(lock_icon).clicked() {
@@ -2475,7 +2724,7 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
 
     // Layout Panels
     ui.label("Layout Panels:");
-    
+
     let layout_panels = [
         Panel::LeftPanel,
         Panel::RightPanel,
@@ -2483,7 +2732,7 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
         Panel::Viewport,
         Panel::GizmoSettings,
     ];
-    
+
     for panel in &layout_panels {
         let is_open = is_panel_open(dock_manager.current_tree(), panel);
         let panel_name = format!("{:?}", panel);
@@ -2491,14 +2740,17 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
 
         ui.horizontal(|ui| {
             // Window toggle button
-            if ui.selectable_label(is_open, format!("  {}", panel.display_name())).clicked() {
+            if ui
+                .selectable_label(is_open, format!("  {}", panel.display_name()))
+                .clicked()
+            {
                 if is_open {
                     close_panel(dock_manager.current_tree_mut(), panel);
                 } else {
                     open_panel(dock_manager.current_tree_mut(), panel);
                 }
             }
-            
+
             // Lock/Unlock button
             let lock_icon = if is_locked { "🔒" } else { "🔓" };
             if ui.small_button(lock_icon).clicked() {
@@ -2516,16 +2768,19 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
     let scene_manager_open = is_panel_open(dock_manager.current_tree(), &Panel::SceneManager);
     let scene_manager_name = format!("{:?}", Panel::SceneManager);
     let scene_manager_locked = state.is_panel_locked(&scene_manager_name);
-    
+
     ui.horizontal(|ui| {
-        if ui.selectable_label(scene_manager_open, "  Scene Manager").clicked() {
+        if ui
+            .selectable_label(scene_manager_open, "  Scene Manager")
+            .clicked()
+        {
             if scene_manager_open {
                 close_panel(dock_manager.current_tree_mut(), &Panel::SceneManager);
             } else {
                 open_panel(dock_manager.current_tree_mut(), &Panel::SceneManager);
             }
         }
-        
+
         let lock_icon = if scene_manager_locked { "🔒" } else { "🔓" };
         if ui.small_button(lock_icon).clicked() {
             state.set_panel_locked(&scene_manager_name, !scene_manager_locked);
@@ -2536,7 +2791,7 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
     let perf_open = is_panel_open(dock_manager.current_tree(), &Panel::PerformanceMonitor);
     let perf_name = format!("{:?}", Panel::PerformanceMonitor);
     let perf_locked = state.is_panel_locked(&perf_name);
-    
+
     ui.horizontal(|ui| {
         if ui.selectable_label(perf_open, "  Performance").clicked() {
             if perf_open {
@@ -2545,7 +2800,7 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
                 open_panel(dock_manager.current_tree_mut(), &Panel::PerformanceMonitor);
             }
         }
-        
+
         let lock_icon = if perf_locked { "🔒" } else { "🔓" };
         if ui.small_button(lock_icon).clicked() {
             state.set_panel_locked(&perf_name, !perf_locked);
@@ -2556,16 +2811,19 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
     let inspector_open = is_panel_open(dock_manager.current_tree(), &Panel::CellInspector);
     let inspector_name = format!("{:?}", Panel::CellInspector);
     let inspector_locked = state.is_panel_locked(&inspector_name);
-    
+
     ui.horizontal(|ui| {
-        if ui.selectable_label(inspector_open, "  Cell Inspector").clicked() {
+        if ui
+            .selectable_label(inspector_open, "  Cell Inspector")
+            .clicked()
+        {
             if inspector_open {
                 close_panel(dock_manager.current_tree_mut(), &Panel::CellInspector);
             } else {
                 open_panel(dock_manager.current_tree_mut(), &Panel::CellInspector);
             }
         }
-        
+
         let lock_icon = if inspector_locked { "🔒" } else { "🔓" };
         if ui.small_button(lock_icon).clicked() {
             state.set_panel_locked(&inspector_name, !inspector_locked);
@@ -2577,7 +2835,7 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
         let cave_open = is_panel_open(dock_manager.current_tree(), &Panel::CaveSystem);
         let cave_name = format!("{:?}", Panel::CaveSystem);
         let cave_locked = state.is_panel_locked(&cave_name);
-        
+
         ui.horizontal(|ui| {
             if ui.selectable_label(cave_open, "  Cave System").clicked() {
                 if cave_open {
@@ -2586,18 +2844,18 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
                     open_panel(dock_manager.current_tree_mut(), &Panel::CaveSystem);
                 }
             }
-            
+
             let lock_icon = if cave_locked { "🔒" } else { "🔓" };
             if ui.small_button(lock_icon).clicked() {
                 state.set_panel_locked(&cave_name, !cave_locked);
             }
         });
-        
+
         // Fluid Settings (GPU mode only)
         let fluid_open = is_panel_open(dock_manager.current_tree(), &Panel::FluidSettings);
         let fluid_name = format!("{:?}", Panel::FluidSettings);
         let fluid_locked = state.is_panel_locked(&fluid_name);
-        
+
         ui.horizontal(|ui| {
             if ui.selectable_label(fluid_open, "  Fluid System").clicked() {
                 if fluid_open {
@@ -2606,38 +2864,41 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
                     open_panel(dock_manager.current_tree_mut(), &Panel::FluidSettings);
                 }
             }
-            
+
             let lock_icon = if fluid_locked { "🔒" } else { "🔓" };
             if ui.small_button(lock_icon).clicked() {
                 state.set_panel_locked(&fluid_name, !fluid_locked);
             }
         });
-        
+
         // World Settings (GPU mode only)
         let world_open = is_panel_open(dock_manager.current_tree(), &Panel::WorldSettings);
         let world_name = format!("{:?}", Panel::WorldSettings);
         let world_locked = state.is_panel_locked(&world_name);
-        
+
         ui.horizontal(|ui| {
-            if ui.selectable_label(world_open, "  World Settings").clicked() {
+            if ui
+                .selectable_label(world_open, "  World Settings")
+                .clicked()
+            {
                 if world_open {
                     close_panel(dock_manager.current_tree_mut(), &Panel::WorldSettings);
                 } else {
                     open_panel(dock_manager.current_tree_mut(), &Panel::WorldSettings);
                 }
             }
-            
+
             let lock_icon = if world_locked { "🔒" } else { "🔓" };
             if ui.small_button(lock_icon).clicked() {
                 state.set_panel_locked(&world_name, !world_locked);
             }
         });
-        
+
         // Lighting Settings (GPU mode only)
         let light_open = is_panel_open(dock_manager.current_tree(), &Panel::LightSettings);
         let light_name = format!("{:?}", Panel::LightSettings);
         let light_locked = state.is_panel_locked(&light_name);
-        
+
         ui.horizontal(|ui| {
             if ui.selectable_label(light_open, "  Lighting").clicked() {
                 if light_open {
@@ -2646,7 +2907,7 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
                     open_panel(dock_manager.current_tree_mut(), &Panel::LightSettings);
                 }
             }
-            
+
             let lock_icon = if light_locked { "🔒" } else { "🔓" };
             if ui.small_button(lock_icon).clicked() {
                 state.set_panel_locked(&light_name, !light_locked);
@@ -2658,27 +2919,27 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
 
     // Layout Management
     ui.label("Layout Management:");
-    
+
     // Reset to default layout button
     if ui.button("🔄 Reset to Default").clicked() {
         dock_manager.reset_current_to_default();
     }
-    
+
     ui.separator();
-    
+
     // Layout file information
     ui.label("Layout Files:");
     ui.small("Current layout files:");
-    
+
     let current_mode = dock_manager.current_mode();
     let layout_file = format!("dock_state_{}.ron", current_mode.dock_file_suffix());
     let default_file = format!("default_dock_state_{}.ron", current_mode.dock_file_suffix());
-    
+
     ui.horizontal(|ui| {
         ui.small("• Active:");
         ui.small(&layout_file);
     });
-    
+
     ui.horizontal(|ui| {
         ui.small("• Default:");
         if std::path::Path::new(&default_file).exists() {
@@ -2690,18 +2951,27 @@ fn show_windows_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager:
 }
 
 /// Check if a panel is currently open in the dock tree
-fn is_panel_open(tree: &egui_dock::DockState<crate::ui::panel::Panel>, panel: &crate::ui::panel::Panel) -> bool {
+fn is_panel_open(
+    tree: &egui_dock::DockState<crate::ui::panel::Panel>,
+    panel: &crate::ui::panel::Panel,
+) -> bool {
     tree.iter_all_tabs().any(|(_, tab)| tab == panel)
 }
 
 /// Close a panel in the dock tree
-fn close_panel(tree: &mut egui_dock::DockState<crate::ui::panel::Panel>, panel: &crate::ui::panel::Panel) {
+fn close_panel(
+    tree: &mut egui_dock::DockState<crate::ui::panel::Panel>,
+    panel: &crate::ui::panel::Panel,
+) {
     // Simple approach: just remove all instances of this panel
     tree.retain_tabs(|tab| tab != panel);
 }
 
 /// Open a panel in the dock tree as a floating window
-fn open_panel(tree: &mut egui_dock::DockState<crate::ui::panel::Panel>, panel: &crate::ui::panel::Panel) {
+fn open_panel(
+    tree: &mut egui_dock::DockState<crate::ui::panel::Panel>,
+    panel: &crate::ui::panel::Panel,
+) {
     // Create a new floating window with the panel
     // Ensure we always pass a non-empty vector to prevent crashes
     let _surface_index = tree.add_window(vec![*panel]);
@@ -2716,10 +2986,7 @@ fn open_panel(tree: &mut egui_dock::DockState<crate::ui::panel::Panel>, panel: &
 /// not blocking GPU work), stores the chosen path in `pending_load_path`, and
 /// sets `show_loading_popup = true`.  The popup renders for one frame, then
 /// `app.rs` fires the restore work on the next frame.
-fn show_save_load_menu(
-    ui: &mut egui::Ui,
-    ui_state: &mut GlobalUiState,
-) {
+fn show_save_load_menu(ui: &mut egui::Ui, ui_state: &mut GlobalUiState) {
     if ui
         .button("💾  Save Sphere…")
         .on_hover_text("Save the current simulation state to a .sphere file")
@@ -2751,7 +3018,6 @@ fn show_save_load_menu(
         }
     }
 }
-
 
 // -----------------------------------------------------------------------------
 // Top bar / status bar helpers
@@ -2791,11 +3057,7 @@ fn draw_logo_glyph(painter: &egui::Painter, rect: egui::Rect, color: egui::Color
 fn status_field(ui: &mut egui::Ui, label: &str, content: &dyn Fn(&mut egui::Ui)) {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 1.0;
-        ui.label(
-            egui::RichText::new(label)
-                .size(8.5)
-                .color(theme::TEXT_DIM),
-        );
+        ui.label(egui::RichText::new(label).size(8.5).color(theme::TEXT_DIM));
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             content(ui);
@@ -2818,10 +3080,347 @@ fn status_separator(ui: &mut egui::Ui) {
 /// darker top-bar fill.
 fn topbar_divider(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 18.0), egui::Sense::hover());
-    ui.painter()
-        .rect_filled(rect, 0.0, theme::BORDER_NORMAL);
+    ui.painter().rect_filled(rect, 0.0, theme::BORDER_NORMAL);
 }
 
+fn render_gpu_headless_overlay(
+    ctx: &egui::Context,
+    state: &mut GlobalUiState,
+    scene_manager: &mut crate::scene::SceneManager,
+    scene_request: &mut crate::ui::panel_context::SceneModeRequest,
+    performance: &crate::ui::performance::PerformanceMetrics,
+) {
+    let p = palette();
+    let fps = performance.fps();
+    let frame_ms = performance.average_frame_time_ms();
+    let min_ms = performance.min_frame_time_ms();
+    let max_ms = performance.max_frame_time_ms();
+    let frame_times: Vec<f32> = performance.frame_time_history().collect();
+    let avg_fps = average_fps_for_last_samples(&frame_times, 60);
+    let long_avg_fps = average_fps_for_last_samples(&frame_times, 120);
+
+    let (mut sim_speed, is_paused, sim_time, cell_count, capacity) =
+        if let Some(gpu_scene) = scene_manager.gpu_scene() {
+            (
+                gpu_scene.time_scale,
+                gpu_scene.paused,
+                gpu_scene.current_time,
+                gpu_scene.current_cell_count,
+                gpu_scene.capacity(),
+            )
+        } else {
+            (1.0, true, 0.0, 0, 0)
+        };
+
+    #[allow(deprecated)]
+    egui::CentralPanel::default()
+        .frame(
+            egui::Frame::none()
+                .fill(p.bg_darkest)
+                .inner_margin(egui::Margin::same(0)),
+        )
+        .show(ctx, |ui| {
+            let available = ui.max_rect();
+            let panel_width = available.width().min(980.0);
+            let panel_rect = egui::Rect::from_center_size(
+                available.center(),
+                egui::vec2(panel_width, available.height().min(720.0)),
+            );
+
+            ui.allocate_ui_at_rect(panel_rect, |ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading(
+                            egui::RichText::new("GPU Headless")
+                                .size(24.0)
+                                .color(p.text_primary),
+                        );
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("scene rendering disabled")
+                                .size(12.0)
+                                .color(p.text_secondary),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Exit").clicked() {
+                                state.gpu_headless_mode = false;
+                            }
+                            if ui
+                                .button(if is_paused { "Resume" } else { "Pause" })
+                                .clicked()
+                            {
+                                *scene_request =
+                                    crate::ui::panel_context::SceneModeRequest::TogglePause;
+                            }
+                        });
+                    });
+
+                    ui.add_space(10.0);
+                    ui.columns(4, |cols| {
+                        headless_metric(
+                            &mut cols[0],
+                            "FPS",
+                            &format!("{:.1}", fps),
+                            fps_color(fps, p),
+                        );
+                        headless_metric(
+                            &mut cols[1],
+                            "Frame",
+                            &format!("{:.2} ms", frame_ms),
+                            p.text_primary,
+                        );
+                        headless_metric(
+                            &mut cols[2],
+                            "Sim Speed",
+                            &format!("{:.2}x", sim_speed),
+                            p.accent_primary,
+                        );
+                        headless_metric(
+                            &mut cols[3],
+                            "Cells",
+                            &format!("{} / {}k", cell_count, capacity / 1000),
+                            p.text_primary,
+                        );
+                    });
+
+                    ui.add_space(12.0);
+                    draw_headless_fps_graph(ui, &frame_times, 220.0, state.gpu_headless_target_fps);
+
+                    ui.add_space(10.0);
+                    egui::Grid::new("headless_stats_grid")
+                        .num_columns(4)
+                        .spacing([18.0, 5.0])
+                        .show(ui, |ui| {
+                            stat_label(ui, "1s avg", &format!("{:.1} FPS", avg_fps));
+                            stat_label(ui, "2s avg", &format!("{:.1} FPS", long_avg_fps));
+                            stat_label(ui, "min/max", &format!("{:.2}/{:.2} ms", min_ms, max_ms));
+                            stat_label(ui, "sim time", &format!("{:.1}s", sim_time));
+                            ui.end_row();
+                        });
+
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Simulation speed")
+                                .size(12.0)
+                                .color(p.text_secondary),
+                        );
+                        let speed_response = ui.add(
+                            egui::Slider::new(&mut sim_speed, 0.1..=20.0)
+                                .logarithmic(true)
+                                .suffix("x"),
+                        );
+                        if speed_response.changed() {
+                            state.gpu_headless_auto_speed = false;
+                            *scene_request =
+                                crate::ui::panel_context::SceneModeRequest::SetSpeed(sim_speed);
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        for speed in [1.0_f32, 2.0, 5.0, 10.0] {
+                            if ui.button(format!("{:.0}x", speed)).clicked() {
+                                state.gpu_headless_auto_speed = false;
+                                *scene_request =
+                                    crate::ui::panel_context::SceneModeRequest::SetSpeed(speed);
+                            }
+                        }
+                        ui.add_space(10.0);
+                        if ui.button("Benchmark").clicked() {
+                            state.gpu_headless_auto_speed = false;
+                            state.gpu_readbacks_enabled = false;
+                            *scene_request =
+                                crate::ui::panel_context::SceneModeRequest::SetSpeed(5.0);
+                        }
+                        if ui.button("Adaptive").clicked() {
+                            state.gpu_headless_auto_speed = true;
+                            state.gpu_headless_target_fps = 30.0;
+                        }
+                        if ui.button("Fast Forward").clicked() {
+                            state.gpu_headless_auto_speed = true;
+                            state.gpu_headless_target_fps = 30.0;
+                            *scene_request = crate::ui::panel_context::SceneModeRequest::SetSpeed(
+                                state.gpu_headless_max_speed,
+                            );
+                        }
+                    });
+
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut state.gpu_headless_auto_speed, "Auto target FPS");
+                        ui.add(
+                            egui::Slider::new(&mut state.gpu_headless_target_fps, 15.0..=60.0)
+                                .suffix(" FPS"),
+                        );
+                        ui.label(
+                            egui::RichText::new(state.gpu_headless_auto_status.display_name())
+                                .color(if state.gpu_headless_auto_speed {
+                                    p.accent_secondary
+                                } else {
+                                    p.text_dim
+                                }),
+                        );
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Auto bounds")
+                                .size(12.0)
+                                .color(p.text_secondary),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut state.gpu_headless_min_speed, 0.1..=20.0)
+                                .logarithmic(true)
+                                .prefix("min ")
+                                .suffix("x"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut state.gpu_headless_max_speed, 0.1..=20.0)
+                                .logarithmic(true)
+                                .prefix("max ")
+                                .suffix("x"),
+                        );
+                        if state.gpu_headless_min_speed > state.gpu_headless_max_speed {
+                            std::mem::swap(
+                                &mut state.gpu_headless_min_speed,
+                                &mut state.gpu_headless_max_speed,
+                            );
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU readbacks");
+                        ui.label(
+                            egui::RichText::new(if state.gpu_readbacks_enabled {
+                                "live counts enabled"
+                            } else {
+                                "reduced CPU/GPU synchronization"
+                            })
+                            .color(p.text_dim),
+                        );
+                    });
+                });
+            });
+        });
+
+    ctx.request_repaint();
+}
+
+fn headless_metric(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) {
+    let p = palette();
+    ui.vertical(|ui| {
+        ui.label(
+            egui::RichText::new(label.to_ascii_uppercase())
+                .size(10.5)
+                .color(p.text_dim),
+        );
+        ui.label(egui::RichText::new(value).size(24.0).strong().color(color));
+    });
+}
+
+fn stat_label(ui: &mut egui::Ui, label: &str, value: &str) {
+    let p = palette();
+    ui.label(
+        egui::RichText::new(label)
+            .size(11.0)
+            .color(p.text_secondary),
+    );
+    ui.label(egui::RichText::new(value).size(11.0).color(p.text_primary));
+}
+
+fn average_fps_for_last_samples(frame_times_ms: &[f32], samples: usize) -> f32 {
+    if frame_times_ms.is_empty() {
+        return 0.0;
+    }
+    let start = frame_times_ms.len().saturating_sub(samples);
+    let slice = &frame_times_ms[start..];
+    let avg_ms = slice.iter().sum::<f32>() / slice.len() as f32;
+    if avg_ms > 0.0 {
+        1000.0 / avg_ms
+    } else {
+        0.0
+    }
+}
+
+fn fps_color(fps: f32, p: ActivePalette) -> egui::Color32 {
+    if fps >= 50.0 {
+        p.status_ok
+    } else if fps >= 30.0 {
+        p.status_warn
+    } else {
+        p.status_err
+    }
+}
+
+fn draw_headless_fps_graph(
+    ui: &mut egui::Ui,
+    frame_times_ms: &[f32],
+    height: f32,
+    target_fps: f32,
+) {
+    let p = palette();
+    let (response, painter) = ui.allocate_painter(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
+    let rect = response.rect;
+    painter.rect_filled(rect, egui::CornerRadius::same(6), p.bg_panel);
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(6),
+        egui::Stroke::new(1.0, p.border_subtle),
+        egui::StrokeKind::Inside,
+    );
+
+    if frame_times_ms.is_empty() {
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "waiting for samples",
+            egui::FontId::proportional(13.0),
+            p.text_dim,
+        );
+        return;
+    }
+
+    let max_fps = 90.0_f32;
+    for guide in [30.0_f32, 60.0_f32, target_fps] {
+        let y = rect.bottom() - (guide / max_fps).clamp(0.0, 1.0) * rect.height();
+        let color = if (guide - target_fps).abs() < 0.1 {
+            p.accent_secondary
+        } else {
+            p.border_normal
+        };
+        painter.line_segment(
+            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            egui::Stroke::new(1.0, color.linear_multiply(0.7)),
+        );
+        painter.text(
+            egui::pos2(rect.left() + 8.0, y - 2.0),
+            egui::Align2::LEFT_BOTTOM,
+            format!("{:.0}", guide),
+            egui::FontId::proportional(10.0),
+            color,
+        );
+    }
+
+    let bar_width = (rect.width() / frame_times_ms.len() as f32).max(1.0);
+    for (i, &time) in frame_times_ms.iter().enumerate() {
+        let fps_val = if time > 0.0 { 1000.0 / time } else { 0.0 };
+        let x = rect.left() + i as f32 * bar_width;
+        let h = (fps_val / max_fps).clamp(0.0, 1.0) * rect.height();
+        let y = rect.bottom() - h;
+        let color = fps_color(fps_val, p);
+        painter.rect_filled(
+            egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(bar_width, h)),
+            0.0,
+            color,
+        );
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Left side rail - quick access to mode-specific panels
@@ -2869,7 +3468,10 @@ fn render_side_rail(
             }
 
             // Mode graph toggle
-            let graph_open = is_panel_open(dock_manager.current_tree(), &crate::ui::panel::Panel::ModeGraph);
+            let graph_open = is_panel_open(
+                dock_manager.current_tree(),
+                &crate::ui::panel::Panel::ModeGraph,
+            );
             if rail_button_toggle(ui, "🕸", "Toggle Mode Graph", graph_open, &p) {
                 editor_state.toggle_mode_graph_panel = true;
             }
@@ -2893,7 +3495,13 @@ fn render_side_rail(
         crate::ui::types::SimulationMode::Gpu => {
             // Advanced Options toggle
             let adv_active = state.show_advanced_options;
-            if rail_button_toggle(ui, "⚙", "Advanced Options (toggle fine-tuning sliders)", adv_active, &p) {
+            if rail_button_toggle(
+                ui,
+                "⚙",
+                "Advanced Options (toggle fine-tuning sliders)",
+                adv_active,
+                &p,
+            ) {
                 state.show_advanced_options = !adv_active;
             }
 
@@ -2901,6 +3509,21 @@ fn render_side_rail(
             let hide_active = state.hide_ui;
             if rail_button_toggle(ui, "👁", "Hide UI (toggle)", hide_active, &p) {
                 state.hide_ui = !hide_active;
+            }
+
+            // Headless no-render mode
+            let headless_active = state.gpu_headless_mode;
+            if rail_button_toggle(
+                ui,
+                "H",
+                "Headless Performance Mode (toggle scene rendering)",
+                headless_active,
+                &p,
+            ) {
+                state.gpu_headless_mode = !headless_active;
+                if state.gpu_headless_mode {
+                    state.hide_ui = false;
+                }
             }
 
             // Water fill toggle
@@ -2969,15 +3592,33 @@ fn rail_button(ui: &mut egui::Ui, icon: &str, tooltip: &str, p: &ActivePalette) 
 
 /// Render a toggleable icon button on the side rail.
 /// When `active` is true the button is highlighted with the accent colour.
-fn rail_button_toggle(ui: &mut egui::Ui, icon: &str, tooltip: &str, active: bool, p: &ActivePalette) -> bool {
+fn rail_button_toggle(
+    ui: &mut egui::Ui,
+    icon: &str,
+    tooltip: &str,
+    active: bool,
+    p: &ActivePalette,
+) -> bool {
     let size = egui::vec2(32.0, 32.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     let resp = resp.on_hover_text(tooltip);
 
     let painter = ui.painter();
-    let bg_color = if active { p.accent_primary } else { p.bg_widget };
-    let border_color = if active { p.accent_primary } else { p.border_subtle };
-    let text_color = if active { p.rail_icon_active } else { p.rail_icon };
+    let bg_color = if active {
+        p.accent_primary
+    } else {
+        p.bg_widget
+    };
+    let border_color = if active {
+        p.accent_primary
+    } else {
+        p.border_subtle
+    };
+    let text_color = if active {
+        p.rail_icon_active
+    } else {
+        p.rail_icon
+    };
 
     painter.rect_filled(rect, egui::CornerRadius::same(3), bg_color);
     painter.rect_stroke(
@@ -3022,7 +3663,6 @@ fn load_app_icon_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
         egui::TextureOptions::LINEAR,
     ))
 }
-
 
 /// Load the user-provided loading animation GIF from `assets/loading.gif`.
 /// Returns an empty Vec if the file doesn't exist - callers fall back to a
@@ -3070,11 +3710,15 @@ fn load_loading_gif_frames(ctx: &egui::Context) -> Vec<egui::TextureHandle> {
     }
 
     if !frames.is_empty() {
-        log::info!("Loaded loading animation: {} frames ({}×{})", frames.len(), w, h);
+        log::info!(
+            "Loaded loading animation: {} frames ({}×{})",
+            frames.len(),
+            w,
+            h
+        );
     }
     frames
 }
-
 
 /// Paint L-shaped teal corner brackets around the GPU-mode viewport rect.
 fn paint_viewport_brackets(painter: &egui::Painter, viewport_rect: egui::Rect) {
@@ -3092,7 +3736,7 @@ fn paint_viewport_brackets(painter: &egui::Painter, viewport_rect: egui::Rect) {
     // Arm length: 4% of the smaller dimension, clamped 20-50px.
     let arm = (r.width().min(r.height()) * 0.04).clamp(20.0, 50.0);
 
-    let color  = theme::ACCENT_TEAL;
+    let color = theme::ACCENT_TEAL;
     let stroke = egui::Stroke::new(1.5, color);
 
     // Each bracket is a single connected polyline (3 points forming an L).
@@ -3101,27 +3745,27 @@ fn paint_viewport_brackets(painter: &egui::Painter, viewport_rect: egui::Rect) {
     let brackets: [&[egui::Pos2; 3]; 4] = [
         // Top-left
         &[
-            egui::pos2(r.left(),        r.top() + arm),
-            egui::pos2(r.left(),        r.top()),
-            egui::pos2(r.left() + arm,  r.top()),
+            egui::pos2(r.left(), r.top() + arm),
+            egui::pos2(r.left(), r.top()),
+            egui::pos2(r.left() + arm, r.top()),
         ],
         // Top-right
         &[
             egui::pos2(r.right() - arm, r.top()),
-            egui::pos2(r.right(),       r.top()),
-            egui::pos2(r.right(),       r.top() + arm),
+            egui::pos2(r.right(), r.top()),
+            egui::pos2(r.right(), r.top() + arm),
         ],
         // Bottom-left
         &[
-            egui::pos2(r.left(),        r.bottom() - arm),
-            egui::pos2(r.left(),        r.bottom()),
-            egui::pos2(r.left() + arm,  r.bottom()),
+            egui::pos2(r.left(), r.bottom() - arm),
+            egui::pos2(r.left(), r.bottom()),
+            egui::pos2(r.left() + arm, r.bottom()),
         ],
         // Bottom-right
         &[
             egui::pos2(r.right() - arm, r.bottom()),
-            egui::pos2(r.right(),       r.bottom()),
-            egui::pos2(r.right(),       r.bottom() - arm),
+            egui::pos2(r.right(), r.bottom()),
+            egui::pos2(r.right(), r.bottom() - arm),
         ],
     ];
 
@@ -3165,29 +3809,37 @@ fn paint_viewport_rounded_corners(
     let r = viewport_rect;
     let corners: [(egui::Pos2, egui::Pos2, egui::Pos2, f32, f32); 4] = [
         // top-left: arc centre (left+r, top+r), sweep 180 deg->270 deg (points toward corner)
-        (r.left_top(),
-         egui::pos2(r.left() + radius, r.top()),          // along top edge
-         egui::pos2(r.left(),          r.top() + radius), // along left edge
-         std::f32::consts::PI,
-         std::f32::consts::PI * 1.5),
+        (
+            r.left_top(),
+            egui::pos2(r.left() + radius, r.top()), // along top edge
+            egui::pos2(r.left(), r.top() + radius), // along left edge
+            std::f32::consts::PI,
+            std::f32::consts::PI * 1.5,
+        ),
         // top-right: arc centre (right-r, top+r), sweep 270 deg->360 deg
-        (r.right_top(),
-         egui::pos2(r.right(),          r.top() + radius), // along right edge
-         egui::pos2(r.right() - radius, r.top()),          // along top edge
-         std::f32::consts::PI * 1.5,
-         std::f32::consts::TAU),
+        (
+            r.right_top(),
+            egui::pos2(r.right(), r.top() + radius), // along right edge
+            egui::pos2(r.right() - radius, r.top()), // along top edge
+            std::f32::consts::PI * 1.5,
+            std::f32::consts::TAU,
+        ),
         // bottom-right: arc centre (right-r, bottom-r), sweep 0 deg->90 deg
-        (r.right_bottom(),
-         egui::pos2(r.right() - radius, r.bottom()),       // along bottom edge
-         egui::pos2(r.right(),          r.bottom() - radius), // along right edge
-         0.0_f32,
-         std::f32::consts::FRAC_PI_2),
+        (
+            r.right_bottom(),
+            egui::pos2(r.right() - radius, r.bottom()), // along bottom edge
+            egui::pos2(r.right(), r.bottom() - radius), // along right edge
+            0.0_f32,
+            std::f32::consts::FRAC_PI_2,
+        ),
         // bottom-left: arc centre (left+r, bottom-r), sweep 90 deg->180 deg
-        (r.left_bottom(),
-         egui::pos2(r.left(),          r.bottom() - radius), // along left edge
-         egui::pos2(r.left() + radius, r.bottom()),          // along bottom edge
-         std::f32::consts::FRAC_PI_2,
-         std::f32::consts::PI),
+        (
+            r.left_bottom(),
+            egui::pos2(r.left(), r.bottom() - radius), // along left edge
+            egui::pos2(r.left() + radius, r.bottom()), // along bottom edge
+            std::f32::consts::FRAC_PI_2,
+            std::f32::consts::PI,
+        ),
     ];
 
     for (corner, edge_a, edge_b, start_angle, end_angle) in corners {

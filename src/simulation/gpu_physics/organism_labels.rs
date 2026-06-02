@@ -27,14 +27,14 @@ use super::{AdhesionBuffers, GpuTripleBufferSystem};
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct LabelState {
-    _pad0:    u32,
-    _pad1:    u32,
-    _pad2:    u32,
-    _pad3:    u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
     run_init: u32,
-    run_hc:   u32,
-    _pad4:    u32,
-    _pad5:    u32,
+    run_hc: u32,
+    _pad4: u32,
+    _pad5: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<LabelState>() == 32);
@@ -60,16 +60,16 @@ pub struct OrganismLabelSystem {
     label_state_buffer: wgpu::Buffer,
 
     // Label pipelines
-    controller_pipeline:     wgpu::ComputePipeline,
-    init_pipeline:           wgpu::ComputePipeline,
-    hook_pipeline:           wgpu::ComputePipeline,
-    clear_sizes_pipeline:        wgpu::ComputePipeline,
+    controller_pipeline: wgpu::ComputePipeline,
+    init_pipeline: wgpu::ComputePipeline,
+    hook_pipeline: wgpu::ComputePipeline,
+    clear_sizes_pipeline: wgpu::ComputePipeline,
     count_sizes_accumulate_pipeline: wgpu::ComputePipeline,
-    count_sizes_broadcast_pipeline:  wgpu::ComputePipeline,
+    count_sizes_broadcast_pipeline: wgpu::ComputePipeline,
     label_bind_group: wgpu::BindGroup,
 
     // Stable ID pipelines
-    assign_stable_ids_pipeline:    wgpu::ComputePipeline,
+    assign_stable_ids_pipeline: wgpu::ComputePipeline,
     broadcast_stable_ids_pipeline: wgpu::ComputePipeline,
     stable_id_bind_group: wgpu::BindGroup,
     #[allow(dead_code)]
@@ -113,11 +113,20 @@ impl OrganismLabelSystem {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         });
 
-        let initial_state = LabelState { _pad0:0,_pad1:0,_pad2:0,_pad3:0, run_init:0, run_hc:0, _pad4:0,_pad5:0 };
+        let initial_state = LabelState {
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+            _pad3: 0,
+            run_init: 0,
+            run_hc: 0,
+            _pad4: 0,
+            _pad5: 0,
+        };
         let label_state_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label:    Some("Organism Label State"),
+            label: Some("Organism Label State"),
             contents: bytemuck::bytes_of(&initial_state),
-            usage:    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
         // -- Stable ID buffers -------------------------------------------------
@@ -131,64 +140,95 @@ impl OrganismLabelSystem {
         });
 
         // stable_id_counter: single atomic u32, starts at 0 (IDs assigned as counter+1).
-        let stable_id_counter_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Stable ID Counter"),
-            contents: bytemuck::bytes_of(&0u32),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let stable_id_counter_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Stable ID Counter"),
+                contents: bytemuck::bytes_of(&0u32),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
 
         // stable_id_per_cell: output - one u32 per cell, the stable ID for that cell.
-        let stable_id_per_cell_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Stable ID Per Cell"),
-            contents: bytemuck::cast_slice(&vec![0u32; cell_capacity as usize]),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
+        let stable_id_per_cell_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Stable ID Per Cell"),
+                contents: bytemuck::cast_slice(&vec![0u32; cell_capacity as usize]),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            });
 
         // -- Label bind group layout & pipelines -------------------------------
 
         let label_layout = Self::create_label_bind_group_layout(device);
         let label_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label:  Some("Organism Label Shader"),
+            label: Some("Organism Label Shader"),
             source: wgpu::ShaderSource::Wgsl(
                 include_str!("../../../shaders/organism_label.wgsl").into(),
             ),
         });
-        let label_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label:                Some("Organism Label Pipeline Layout"),
-            bind_group_layouts:   &[&label_layout],
-            push_constant_ranges: &[],
-        });
+        let label_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Organism Label Pipeline Layout"),
+                bind_group_layouts: &[&label_layout],
+                push_constant_ranges: &[],
+            });
 
         let make_label = |entry: &str, lbl: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label:               Some(lbl),
-                layout:              Some(&label_pipeline_layout),
-                module:              &label_shader,
-                entry_point:         Some(entry),
+                label: Some(lbl),
+                layout: Some(&label_pipeline_layout),
+                module: &label_shader,
+                entry_point: Some(entry),
                 compilation_options: Default::default(),
-                cache:               None,
+                cache: None,
             })
         };
 
         let controller_pipeline = make_label("label_controller", "Label Controller");
-        let init_pipeline       = make_label("init_labels",       "Label Init");
-        let hook_pipeline       = make_label("hook_labels",       "Label Hook");
-        let clear_sizes_pipeline                = make_label("clear_organism_sizes",             "Organism Size Clear");
-        let count_sizes_accumulate_pipeline     = make_label("count_organism_sizes_accumulate",  "Organism Size Accumulate");
-        let count_sizes_broadcast_pipeline      = make_label("count_organism_sizes_broadcast",   "Organism Size Broadcast");
+        let init_pipeline = make_label("init_labels", "Label Init");
+        let hook_pipeline = make_label("hook_labels", "Label Hook");
+        let clear_sizes_pipeline = make_label("clear_organism_sizes", "Organism Size Clear");
+        let count_sizes_accumulate_pipeline = make_label(
+            "count_organism_sizes_accumulate",
+            "Organism Size Accumulate",
+        );
+        let count_sizes_broadcast_pipeline =
+            make_label("count_organism_sizes_broadcast", "Organism Size Broadcast");
 
         let label_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label:  Some("Organism Label BG"),
+            label: Some("Organism Label BG"),
             layout: &label_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: label_state_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: triple_buffers.cell_count_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: adhesion_buffers.adhesion_counts.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: label_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: triple_buffers.death_flags.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: adhesion_buffers.cell_adhesion_indices.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: adhesion_buffers.adhesion_connections.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 7, resource: organism_size_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: label_state_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: triple_buffers.cell_count_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: adhesion_buffers.adhesion_counts.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: label_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: triple_buffers.death_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: adhesion_buffers.cell_adhesion_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: adhesion_buffers.adhesion_connections.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: organism_size_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -196,42 +236,65 @@ impl OrganismLabelSystem {
 
         let stable_layout = Self::create_stable_id_bind_group_layout(device);
         let stable_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label:  Some("Organism Stable ID Shader"),
+            label: Some("Organism Stable ID Shader"),
             source: wgpu::ShaderSource::Wgsl(
                 include_str!("../../../shaders/organism_stable_id.wgsl").into(),
             ),
         });
-        let stable_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label:                Some("Organism Stable ID Pipeline Layout"),
-            bind_group_layouts:   &[&stable_layout],
-            push_constant_ranges: &[],
-        });
+        let stable_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Organism Stable ID Pipeline Layout"),
+                bind_group_layouts: &[&stable_layout],
+                push_constant_ranges: &[],
+            });
 
         let make_stable = |entry: &str, lbl: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label:               Some(lbl),
-                layout:              Some(&stable_pipeline_layout),
-                module:              &stable_shader,
-                entry_point:         Some(entry),
+                label: Some(lbl),
+                layout: Some(&stable_pipeline_layout),
+                module: &stable_shader,
+                entry_point: Some(entry),
                 compilation_options: Default::default(),
-                cache:               None,
+                cache: None,
             })
         };
 
-        let assign_stable_ids_pipeline    = make_stable("assign_stable_ids",    "Stable ID Assign");
-        let broadcast_stable_ids_pipeline = make_stable("broadcast_stable_ids", "Stable ID Broadcast");
+        let assign_stable_ids_pipeline = make_stable("assign_stable_ids", "Stable ID Assign");
+        let broadcast_stable_ids_pipeline =
+            make_stable("broadcast_stable_ids", "Stable ID Broadcast");
 
         let stable_id_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label:  Some("Stable ID BG"),
+            label: Some("Stable ID BG"),
             layout: &stable_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: label_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: organism_size_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: stable_id_map_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: stable_id_counter_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: stable_id_per_cell_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: triple_buffers.cell_count_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: triple_buffers.death_flags.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: label_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: organism_size_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: stable_id_map_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: stable_id_counter_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: stable_id_per_cell_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: triple_buffers.cell_count_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: triple_buffers.death_flags.as_entire_binding(),
+                },
             ],
         });
 
@@ -323,7 +386,7 @@ impl OrganismLabelSystem {
         let update_sizes = !is_reset_frame && (self.debug_frame % SIZE_PERIOD == 0);
 
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label:            Some("Organism Label Pass"),
+            label: Some("Organism Label Pass"),
             timestamp_writes: None,
         });
         pass.set_bind_group(0, &self.label_bind_group, &[]);
@@ -364,7 +427,7 @@ impl OrganismLabelSystem {
         // Stable ID passes (separate compute pass - need label+size results visible).
         if update_stable_ids && update_sizes {
             let mut stable_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label:            Some("Organism Stable ID Pass"),
+                label: Some("Organism Stable ID Pass"),
                 timestamp_writes: None,
             });
             stable_pass.set_bind_group(0, &self.stable_id_bind_group, &[]);
@@ -395,10 +458,14 @@ impl OrganismLabelSystem {
         //   [_pad0(0), _pad1(4), _pad2(8), _pad3(12), run_init(16), run_hc(20), _pad4(24), _pad5(28)]
         // run_hc is set to 0 here; the controller shader sets it to 1 at pass start.
         let state = LabelState {
-            _pad0: 0, _pad1: 0, _pad2: 0, _pad3: 0,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+            _pad3: 0,
             run_init: if is_reset { 1 } else { 0 },
             run_hc: 0,
-            _pad4: 0, _pad5: 0,
+            _pad4: 0,
+            _pad5: 0,
         };
         queue.write_buffer(&self.label_state_buffer, 0, bytemuck::bytes_of(&state));
     }
@@ -407,9 +474,11 @@ impl OrganismLabelSystem {
         // Start the map_async on the first poll after a copy was recorded.
         if self.debug_copy_pending && self.debug_map_receiver.is_none() {
             let (tx, rx) = std::sync::mpsc::channel();
-            self.debug_staging.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-                tx.send(r).ok();
-            });
+            self.debug_staging
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |r| {
+                    tx.send(r).ok();
+                });
             self.debug_map_receiver = Some(rx);
             self.debug_copy_pending = false;
         }
@@ -436,13 +505,23 @@ impl OrganismLabelSystem {
 
     fn create_label_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         let rw = |b: u32| wgpu::BindGroupLayoutEntry {
-            binding: b, visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None },
+            binding: b,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
             count: None,
         };
         let ro = |b: u32| wgpu::BindGroupLayoutEntry {
-            binding: b, visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+            binding: b,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
             count: None,
         };
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -462,13 +541,23 @@ impl OrganismLabelSystem {
 
     fn create_stable_id_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         let rw = |b: u32| wgpu::BindGroupLayoutEntry {
-            binding: b, visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None },
+            binding: b,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
             count: None,
         };
         let ro = |b: u32| wgpu::BindGroupLayoutEntry {
-            binding: b, visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+            binding: b,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
             count: None,
         };
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

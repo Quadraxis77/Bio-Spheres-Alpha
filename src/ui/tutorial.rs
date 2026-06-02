@@ -52,74 +52,81 @@ pub enum StepGate {
     /// At least one mode has `split_mass` different from the default (1.5).
     AnySplitMassChanged,
     /// Both child mode numbers of `mode_idx` must match `a_target` and `b_target`.
-    ChildRouting { mode_idx: usize, a_target: i32, b_target: i32 },
+    ChildRouting {
+        mode_idx: usize,
+        a_target: i32,
+        b_target: i32,
+    },
 }
 
 impl StepGate {
-    pub fn is_satisfied(
-        &self,
-        genome: &crate::genome::Genome,
-        selected_mode: usize,
-    ) -> bool {
+    pub fn is_satisfied(&self, genome: &crate::genome::Genome, selected_mode: usize) -> bool {
         match self {
             StepGate::None => true,
 
             StepGate::ModeSelected(idx) => selected_mode == *idx,
 
             StepGate::CellTypeSet { mode_idx, expected } => genome
-                .modes.get(*mode_idx)
+                .modes
+                .get(*mode_idx)
                 .map(|m| m.cell_type == *expected)
                 .unwrap_or(false),
 
-            StepGate::AnyCellTypeChanged =>
-                genome.modes.iter().any(|m| m.cell_type != 0),
+            StepGate::AnyCellTypeChanged => genome.modes.iter().any(|m| m.cell_type != 0),
 
             StepGate::AdhesionEnabled(mode_idx) => genome
-                .modes.get(*mode_idx)
+                .modes
+                .get(*mode_idx)
                 .map(|m| m.parent_make_adhesion)
                 .unwrap_or(false),
 
-            StepGate::AnyAdhesionEnabled =>
-                genome.modes.iter().any(|m| m.parent_make_adhesion),
+            StepGate::AnyAdhesionEnabled => genome.modes.iter().any(|m| m.parent_make_adhesion),
 
-            StepGate::AnyAdhesionDisabled =>
-                genome.modes.iter().any(|m| !m.parent_make_adhesion),
+            StepGate::AnyAdhesionDisabled => genome.modes.iter().any(|m| !m.parent_make_adhesion),
 
             StepGate::ChildBMode { mode_idx, target } => genome
-                .modes.get(*mode_idx)
+                .modes
+                .get(*mode_idx)
                 .map(|m| m.child_b.mode_number == *target)
                 .unwrap_or(false),
 
-            StepGate::AnyChildBDifferentMode =>
-                genome.modes.iter().any(|m| {
-                    m.child_b.mode_number != m.child_a.mode_number
-                }),
+            StepGate::AnyChildBDifferentMode => genome
+                .modes
+                .iter()
+                .any(|m| m.child_b.mode_number != m.child_a.mode_number),
 
             StepGate::MaxSplitsSet { mode_idx, expected } => genome
-                .modes.get(*mode_idx)
+                .modes
+                .get(*mode_idx)
                 .map(|m| m.max_splits == *expected)
                 .unwrap_or(false),
 
-            StepGate::AnyFiniteMaxSplits =>
-                genome.modes.iter().any(|m| m.max_splits >= 0),
+            StepGate::AnyFiniteMaxSplits => genome.modes.iter().any(|m| m.max_splits >= 0),
 
             StepGate::ChildAKeepAdhesionOff(mode_idx) => genome
-                .modes.get(*mode_idx)
+                .modes
+                .get(*mode_idx)
                 .map(|m| !m.child_a.keep_adhesion)
                 .unwrap_or(false),
 
-            StepGate::AnySplitIntervalChanged =>
-                genome.modes.iter().any(|m| (m.split_interval - 1.0).abs() > 0.05),
+            StepGate::AnySplitIntervalChanged => genome
+                .modes
+                .iter()
+                .any(|m| (m.split_interval - 1.0).abs() > 0.05),
 
-            StepGate::AnySplitMassChanged =>
-                genome.modes.iter().any(|m| (m.split_mass - 1.5).abs() > 0.05),
+            StepGate::AnySplitMassChanged => genome
+                .modes
+                .iter()
+                .any(|m| (m.split_mass - 1.5).abs() > 0.05),
 
-            StepGate::ChildRouting { mode_idx, a_target, b_target } => genome
-                .modes.get(*mode_idx)
-                .map(|m| {
-                    m.child_a.mode_number == *a_target
-                        && m.child_b.mode_number == *b_target
-                })
+            StepGate::ChildRouting {
+                mode_idx,
+                a_target,
+                b_target,
+            } => genome
+                .modes
+                .get(*mode_idx)
+                .map(|m| m.child_a.mode_number == *a_target && m.child_b.mode_number == *b_target)
                 .unwrap_or(false),
         }
     }
@@ -153,23 +160,23 @@ pub enum TutorialTarget {
 impl TutorialTarget {
     pub fn panel_key(&self) -> Option<String> {
         match self {
-            TutorialTarget::ModesPanel            => Some("Modes".to_string()),
-            TutorialTarget::NameTypePanel         => Some("Modes".to_string()),
-            TutorialTarget::ParentSettingsPanel   => Some("ParentSettings".to_string()),
+            TutorialTarget::ModesPanel => Some("Modes".to_string()),
+            TutorialTarget::NameTypePanel => Some("Modes".to_string()),
+            TutorialTarget::ParentSettingsPanel => Some("ParentSettings".to_string()),
             TutorialTarget::AdhesionSettingsPanel => Some("AdhesionSettings".to_string()),
-            TutorialTarget::ChildRotationPanel    => Some("QuaternionBall".to_string()),
-            TutorialTarget::CircleSlidersPanel    => Some("CircleSliders".to_string()),
-            TutorialTarget::TimeSliderPanel       => Some("TimeSlider".to_string()),
-            TutorialTarget::SceneManagerPanel     => Some("SceneManager".to_string()),
-            TutorialTarget::None                  => None,
-            TutorialTarget::ModeRow(idx)          => Some(format!("mode_row_{}", idx)),
-            TutorialTarget::CellTypeDropdown      => Some("cell_type_dropdown".to_string()),
-            TutorialTarget::MakeAdhesionCheckbox  => Some("make_adhesion_checkbox".to_string()),
-            TutorialTarget::MaxSplitsSlider       => Some("max_splits_slider".to_string()),
-            TutorialTarget::AfterSplitsChildA     => Some("after_splits_child_a".to_string()),
-            TutorialTarget::AfterSplitsChildB     => Some("after_splits_child_b".to_string()),
-            TutorialTarget::ChildAKeepAdhesion    => Some("child_a_keep_adhesion".to_string()),
-            TutorialTarget::ChildBKeepAdhesion    => Some("child_b_keep_adhesion".to_string()),
+            TutorialTarget::ChildRotationPanel => Some("QuaternionBall".to_string()),
+            TutorialTarget::CircleSlidersPanel => Some("CircleSliders".to_string()),
+            TutorialTarget::TimeSliderPanel => Some("TimeSlider".to_string()),
+            TutorialTarget::SceneManagerPanel => Some("SceneManager".to_string()),
+            TutorialTarget::None => None,
+            TutorialTarget::ModeRow(idx) => Some(format!("mode_row_{}", idx)),
+            TutorialTarget::CellTypeDropdown => Some("cell_type_dropdown".to_string()),
+            TutorialTarget::MakeAdhesionCheckbox => Some("make_adhesion_checkbox".to_string()),
+            TutorialTarget::MaxSplitsSlider => Some("max_splits_slider".to_string()),
+            TutorialTarget::AfterSplitsChildA => Some("after_splits_child_a".to_string()),
+            TutorialTarget::AfterSplitsChildB => Some("after_splits_child_b".to_string()),
+            TutorialTarget::ChildAKeepAdhesion => Some("child_a_keep_adhesion".to_string()),
+            TutorialTarget::ChildBKeepAdhesion => Some("child_b_keep_adhesion".to_string()),
         }
     }
 
@@ -579,9 +586,10 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                part's behaviour without any direct wiring — a sensor at the \
                front can change the speed of a swimmer at the back.\n\n\
                There are 16 channels (0–15). Channels 0–7 are sensory \
-               channels — used for detection signals from oculocytes, \
-               photocytes, lipocytes, and similar. Locomotion cells \
-               (flagellocyte, ciliocyte, myocyte) read from these. \
+               channels — emitted and read by sensory cell types such as \
+               oculocytes, photocytes, lipocytes, cognocytes, and \
+               memorocytes. Locomotion cells (flagellocyte, ciliocyte, \
+               myocyte) also read from these. \
                Channels 8–15 are developmental/regulation channels — any \
                cell type can emit and read them, and they can gate \
                division, apoptosis, and mode switching. A signal is just \
@@ -593,23 +601,46 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
     },
 
     TutorialStepData {
-        title: "Emitting a Signal",
-        body: "An Oculocyte fires a ray in the direction it faces and emits \
-               a signal when it detects something — food, other cells, \
-               light, or a wall. Set its Sense Type and Signal Channel to \
-               control what triggers it and which channel it broadcasts on.\n\n\
-               Signal Value sets how strong the emission is. Signal Hops \
-               sets how many adhesion bonds the signal can travel before \
-               it fades out. A signal with 3 hops can reach any cell \
-               within 3 bond-steps of the emitter.\n\n\
-               Other cell types can also emit on sensory channels — \
-               Lipocytes and Photocytes can emit on 0–7 based on storage \
-               or light level. Any mode can emit unconditionally on \
-               developmental channels 8–15. Cognocytes and memorocytes \
-               can read from and write to any channel.",
+        title: "Two Ways to Emit",
+        body: "There are two kinds of emitter, and they work very differently.\n\n\
+               Sensory (event-driven) — sensory cell types such as oculocytes, \
+               photocytes, and lipocytes emit on channels 0–7 only when they \
+               detect a target or cross an internal threshold. The signal is \
+               absent between events, so receivers can distinguish \
+               'condition met' from 'no condition'. Many cell types share \
+               this range — an oculocyte spots food, a photocyte reports \
+               light level, a lipocyte reports fat reserves, all on the \
+               same set of channels.\n\n\
+               Regulation Emit (continuous) — any mode can turn on a constant \
+               broadcast on any developmental channel (8–15). Every frame that \
+               cell is alive it writes its configured value onto the channel. \
+               There is no on/off edge — the signal is simply always present \
+               while the cell exists. Use this for positional identity, \
+               maturity markers, or body-wide pressure signals.",
         gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::CellTypeDropdown,
+        target_pos: [0.5, 0.5],
+    },
+
+    TutorialStepData {
+        title: "How Signals Travel — Summation",
+        body: "Each propagation step, a cell looks at every bonded neighbor \
+               and SUMS the attenuated contributions it can receive on that \
+               channel. Hops is the maximum across all contributors.\n\n\
+               This means signal strength reflects how many sources are \
+               nearby, not just whether any single source is strong enough. \
+               Two cells each emitting value 10 combine to produce value ~20 \
+               at a shared neighbor.\n\n\
+               Signal attenuates 50% per bond-hop beyond the emitter, so \
+               distant sources contribute less than close ones. The combined \
+               value is clamped at 2047 (the 11-bit maximum).\n\n\
+               Practical implication: set a threshold higher than any single \
+               emitter's value and the receiver only fires when a cluster of \
+               emitters surrounds it — quorum sensing.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::AdhesionSettingsPanel,
         target_pos: [0.5, 0.5],
     },
 
@@ -646,10 +677,37 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                and be connected by an unbroken chain of adhesion bonds \
                within the hops limit. If any of those three conditions \
                isn't met, the receiver sees nothing regardless of what \
-               the emitter does.",
+               the emitter does.\n\n\
+               Invert threshold — check 'Invert' to flip the logic: the \
+               cell reacts when the signal DROPS below the threshold. Use \
+               this for absence gating — a cell that goes dormant when its \
+               support signal disappears.",
         gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::CellTypeDropdown,
+        target_pos: [0.5, 0.5],
+    },
+
+    TutorialStepData {
+        title: "Mode Switch (No Division)",
+        body: "Under Signal Conditions, 'Mode Switch (No Division)' changes a \
+               cell's mode in-place without dividing. Pick a trigger channel \
+               (8–15), a threshold, and a target mode. When the signal on \
+               that channel exceeds the threshold the cell immediately \
+               becomes the target mode — new cell type, new split settings, \
+               everything.\n\n\
+               Important channel rule: do not use the same channel number \
+               for both a mode's Regulation Emit and its Mode Switch trigger. \
+               The cell would see its own emission and fire the switch every \
+               frame. The engine blocks self-triggers from the same frame, \
+               but the safest design is to use separate channels — emit on \
+               Ch 8, switch on Ch 9, for example.\n\n\
+               A common pattern: stem cells emit a 'maturity' signal on \
+               Ch 8 after enough divisions; neighbouring cells watch Ch 8 \
+               and switch to their terminal mode when they receive it.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::ParentSettingsPanel,
         target_pos: [0.5, 0.5],
     },
 
@@ -688,6 +746,11 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                Signal Channel to a regulation channel (8–15) and a threshold. \
                The cell only divides when it receives that signal. Use this \
                to synchronise growth across the body.\n\n\
+               Quorum sensing — because signals from multiple emitters SUM \
+               at each receiver, you can set a threshold higher than any \
+               single emitter's value. The gate only opens when enough \
+               nearby cells are broadcasting — useful for triggering \
+               differentiation only once a tissue reaches a critical mass.\n\n\
                Glueocyte — bonds to other organisms or cave walls on contact. \
                Combine with a Devorocyte (steals nutrients from bonded cells) \
                for a predatory organism.\n\n\
@@ -717,12 +780,18 @@ pub struct TutorialState {
 
 impl Default for TutorialState {
     fn default() -> Self {
-        Self { active: false, current_step: 0, ever_shown: false }
+        Self {
+            active: false,
+            current_step: 0,
+            ever_shown: false,
+        }
     }
 }
 
 impl TutorialState {
-    pub fn total_steps() -> usize { TUTORIAL_STEPS.len() }
+    pub fn total_steps() -> usize {
+        TUTORIAL_STEPS.len()
+    }
 
     pub fn current(&self) -> &TutorialStepData {
         &TUTORIAL_STEPS[self.current_step.min(TUTORIAL_STEPS.len() - 1)]
@@ -738,7 +807,9 @@ impl TutorialState {
     }
 
     pub fn prev(&mut self) {
-        if self.current_step > 0 { self.current_step -= 1; }
+        if self.current_step > 0 {
+            self.current_step -= 1;
+        }
     }
 
     pub fn start(&mut self) {
@@ -747,22 +818,24 @@ impl TutorialState {
         self.ever_shown = true;
     }
 
-    pub fn close(&mut self) { self.active = false; }
+    pub fn close(&mut self) {
+        self.active = false;
+    }
 }
 
 // -----------------------------------------------------------------------------
 // Visual constants
 // -----------------------------------------------------------------------------
 
-const TEAL:        egui::Color32 = egui::Color32::from_rgb(0, 220, 175);
-const TEAL_DIM:    egui::Color32 = egui::Color32::from_rgb(0, 100, 80);
-const PANEL_GLOW:  egui::Color32 = egui::Color32::from_rgba_premultiplied(0, 0, 0, 0);
+const TEAL: egui::Color32 = egui::Color32::from_rgb(0, 220, 175);
+const TEAL_DIM: egui::Color32 = egui::Color32::from_rgb(0, 100, 80);
+const PANEL_GLOW: egui::Color32 = egui::Color32::from_rgba_premultiplied(0, 0, 0, 0);
 const GATE_LOCKED: egui::Color32 = egui::Color32::from_rgb(220, 160, 40);
-const GATE_OPEN:   egui::Color32 = egui::Color32::from_rgb(80, 220, 120);
-const LINE_W:      f32 = 1.5;
-const DOT_R:       f32 = 3.5;
-const ARROW_LEN:   f32 = 11.0;
-const ARROW_HALF:  f32 = 5.0;
+const GATE_OPEN: egui::Color32 = egui::Color32::from_rgb(80, 220, 120);
+const LINE_W: f32 = 1.5;
+const DOT_R: f32 = 3.5;
+const ARROW_LEN: f32 = 11.0;
+const ARROW_HALF: f32 = 5.0;
 
 // -----------------------------------------------------------------------------
 // Public render entry point
@@ -771,19 +844,29 @@ const ARROW_HALF:  f32 = 5.0;
 /// Render the tutorial overlay.  Call once per frame after the dock area
 /// renders (so panel rects are populated) and before `ctx.end_pass()`.
 pub fn render_tutorial(
-    ctx:           &egui::Context,
-    state:         &mut TutorialState,
-    panel_rects:   &HashMap<String, egui::Rect>,
-    genome:        &crate::genome::Genome,
+    ctx: &egui::Context,
+    state: &mut TutorialState,
+    panel_rects: &HashMap<String, egui::Rect>,
+    genome: &crate::genome::Genome,
     selected_mode: usize,
 ) {
-    if !state.active { return; }
+    if !state.active {
+        return;
+    }
 
     let step_index = state.current_step;
-    let total      = TutorialState::total_steps();
+    let total = TutorialState::total_steps();
 
-    let (gate_ok, has_hint, target_key, target_pos, target_is_element,
-         step_title, step_body, step_gate_hint) = {
+    let (
+        gate_ok,
+        has_hint,
+        target_key,
+        target_pos,
+        target_is_element,
+        step_title,
+        step_body,
+        step_gate_hint,
+    ) = {
         let step = state.current();
         (
             step.gate.is_satisfied(genome, selected_mode),
@@ -822,8 +905,8 @@ pub fn render_tutorial(
 
     // -- Dialogue window ------------------------------------------------------
     let mut dialogue_rect: Option<egui::Rect> = None;
-    let mut next_clicked  = false;
-    let mut prev_clicked  = false;
+    let mut next_clicked = false;
+    let mut prev_clicked = false;
     let mut close_clicked = false;
 
     let frame = egui::Frame::window(&ctx.global_style())
@@ -900,14 +983,21 @@ pub fn render_tutorial(
                         .color(egui::Color32::GRAY),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(egui::RichText::new("✕ Close").size(12.0)).clicked() {
+                    if ui
+                        .button(egui::RichText::new("✕ Close").size(12.0))
+                        .clicked()
+                    {
                         close_clicked = true;
                     }
                     ui.add_space(4.0);
 
-                    let is_last   = step_index + 1 >= total;
-                    let next_text = if is_last { "  Finish ✓  " } else { "  Next ›  " };
-                    let next_btn  = egui::Button::new(
+                    let is_last = step_index + 1 >= total;
+                    let next_text = if is_last {
+                        "  Finish ✓  "
+                    } else {
+                        "  Next ›  "
+                    };
+                    let next_btn = egui::Button::new(
                         egui::RichText::new(next_text).size(12.0).strong(),
                     )
                     .fill(if gate_ok {
@@ -922,7 +1012,9 @@ pub fn render_tutorial(
                     ui.add_space(4.0);
 
                     if step_index > 0
-                        && ui.button(egui::RichText::new("‹ Back").size(12.0)).clicked()
+                        && ui
+                            .button(egui::RichText::new("‹ Back").size(12.0))
+                            .clicked()
                     {
                         prev_clicked = true;
                     }
@@ -934,9 +1026,15 @@ pub fn render_tutorial(
         dialogue_rect = Some(r.response.rect);
     }
 
-    if close_clicked { state.close(); return; }
-    if next_clicked  { state.next(); }
-    else if prev_clicked { state.prev(); }
+    if close_clicked {
+        state.close();
+        return;
+    }
+    if next_clicked {
+        state.next();
+    } else if prev_clicked {
+        state.prev();
+    }
 
     // -- Schematic pointer line -----------------------------------------------
     if let (Some(d_rect), Some(ref key)) = (dialogue_rect, target_key) {
@@ -944,8 +1042,8 @@ pub fn render_tutorial(
             let tip = if target_is_element {
                 let tp = target_pos;
                 egui::pos2(
-                    p_rect.left() + p_rect.width()  * tp[0],
-                    p_rect.top()  + p_rect.height() * tp[1],
+                    p_rect.left() + p_rect.width() * tp[0],
+                    p_rect.top() + p_rect.height() * tp[1],
                 )
             } else {
                 nearest_edge_midpoint(p_rect, d_rect.center())
@@ -967,18 +1065,24 @@ pub fn render_tutorial(
 
 fn draw_schematic_pointer(
     painter: &egui::Painter,
-    d_rect:  egui::Rect,
-    tip:     egui::Pos2,
-    ctx:     &egui::Context,
+    d_rect: egui::Rect,
+    tip: egui::Pos2,
+    ctx: &egui::Context,
     gate_ok: bool,
 ) {
     let line_color = if gate_ok { TEAL } else { GATE_LOCKED };
-    let dim_color  = if gate_ok { TEAL_DIM } else { egui::Color32::from_rgb(100, 70, 0) };
+    let dim_color = if gate_ok {
+        TEAL_DIM
+    } else {
+        egui::Color32::from_rgb(100, 70, 0)
+    };
 
     let start = nearest_edge_midpoint(d_rect, tip);
-    let end   = tip;
+    let end = tip;
 
-    if (end - start).length() < 10.0 { return; }
+    if (end - start).length() < 10.0 {
+        return;
+    }
 
     let dx = (end.x - start.x).abs();
     let dy = (end.y - start.y).abs();
@@ -988,13 +1092,13 @@ fn draw_schematic_pointer(
         egui::Pos2::new(start.x, end.y)
     };
 
-    let stroke     = egui::Stroke::new(LINE_W, line_color);
+    let stroke = egui::Stroke::new(LINE_W, line_color);
     let dim_stroke = egui::Stroke::new(LINE_W * 0.5, dim_color);
 
     painter.line_segment([start, corner], stroke);
 
     let dir2 = (end - corner).normalized();
-    let pre  = end - dir2 * ARROW_LEN;
+    let pre = end - dir2 * ARROW_LEN;
     if (pre - corner).length() > 1.0 {
         painter.line_segment([corner, pre], stroke);
     }
@@ -1002,7 +1106,7 @@ fn draw_schematic_pointer(
     let seg2_len = (pre - corner).length();
     if seg2_len > 40.0 {
         let count = ((seg2_len / 20.0) as usize).max(1).min(14);
-        let perp  = egui::Vec2::new(-dir2.y, dir2.x);
+        let perp = egui::Vec2::new(-dir2.y, dir2.x);
         for i in 1..=count {
             let t = i as f32 / (count + 1) as f32;
             let c = corner + (pre - corner) * t;
@@ -1014,16 +1118,20 @@ fn draw_schematic_pointer(
     painter.circle_filled(corner, DOT_R, line_color);
     painter.circle_stroke(start, 4.0, egui::Stroke::new(1.5, line_color));
 
-    let t      = ctx.input(|i| i.time) as f32;
+    let t = ctx.input(|i| i.time) as f32;
     let period = 1.8_f32;
-    let phase  = (t % period) / period;
+    let phase = (t % period) / period;
 
     let total_path = (corner - start).length() + (end - corner).length();
-    let traveled   = phase * total_path;
-    let seg1_len   = (corner - start).length();
+    let traveled = phase * total_path;
+    let seg1_len = (corner - start).length();
 
     let scan_pos = if traveled <= seg1_len || seg1_len < 1.0 {
-        let dir1 = if seg1_len > 0.001 { (corner - start).normalized() } else { dir2 };
+        let dir1 = if seg1_len > 0.001 {
+            (corner - start).normalized()
+        } else {
+            dir2
+        };
         start + dir1 * traveled.min(seg1_len)
     } else {
         let rem = traveled - seg1_len;
@@ -1031,15 +1139,19 @@ fn draw_schematic_pointer(
     };
 
     let alpha = ((t * 4.0).sin() * 0.5 + 0.5) * 200.0 + 55.0;
-    let (sr, sg, sb) = if gate_ok { (0, 220, 175) } else { (220, 160, 40) };
-    let scan_col  = egui::Color32::from_rgba_premultiplied(sr, sg, sb, alpha as u8);
+    let (sr, sg, sb) = if gate_ok {
+        (0, 220, 175)
+    } else {
+        (220, 160, 40)
+    };
+    let scan_col = egui::Color32::from_rgba_premultiplied(sr, sg, sb, alpha as u8);
     let scan_ring = egui::Color32::from_rgba_premultiplied(sr, sg, sb, 70);
     painter.circle_filled(scan_pos, 3.0, scan_col);
     painter.circle_stroke(scan_pos, 4.5, egui::Stroke::new(1.0, scan_ring));
 }
 
 fn nearest_edge_midpoint(rect: egui::Rect, toward: egui::Pos2) -> egui::Pos2 {
-    let c  = rect.center();
+    let c = rect.center();
     let dx = toward.x - c.x;
     let dy = toward.y - c.y;
 
@@ -1050,12 +1162,7 @@ fn nearest_edge_midpoint(rect: egui::Rect, toward: egui::Pos2) -> egui::Pos2 {
     }
 }
 
-fn draw_arrowhead(
-    painter: &egui::Painter,
-    tip:     egui::Pos2,
-    dir:     egui::Vec2,
-    color:   egui::Color32,
-) {
+fn draw_arrowhead(painter: &egui::Painter, tip: egui::Pos2, dir: egui::Vec2, color: egui::Color32) {
     let perp = egui::Vec2::new(-dir.y, dir.x);
     let base = tip - dir * ARROW_LEN;
     painter.add(egui::Shape::convex_polygon(

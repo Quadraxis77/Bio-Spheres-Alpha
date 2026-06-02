@@ -12,9 +12,9 @@
 //!
 //! See `.kiro/specs/cell-rendering-pipeline/` for full design documentation.
 
-use crate::cell::types::{CellType, CellTypeVisuals};
-use crate::cell::type_registry::CellTypeRegistry;
 use crate::cell::behaviors::{create_behavior, CellBehavior};
+use crate::cell::type_registry::CellTypeRegistry;
+use crate::cell::types::{CellType, CellTypeVisuals};
 use crate::genome::{Genome, ModeSettings};
 use crate::rendering::instance_builder::{CellInstance, InstanceBuilder};
 use crate::simulation::CanonicalState;
@@ -65,49 +65,49 @@ pub struct CellGroup {
 pub struct CellRenderer {
     /// Current render target width
     pub width: u32,
-    
+
     /// Current render target height
     pub height: u32,
-    
+
     /// Depth texture view for render pass attachment
     pub depth_view: wgpu::TextureView,
-    
+
     /// Depth texture for depth testing
     depth_texture: wgpu::Texture,
-    
+
     /// Cell type registry with per-type pipelines
     type_registry: CellTypeRegistry,
-    
+
     /// Shared depth-only pipeline for all cell types.
     /// Currently unused - depth pre-pass is skipped for ray-marched billboards.
     /// Kept for future optimization with proper depth shader.
     #[allow(dead_code)]
     depth_pipeline: wgpu::RenderPipeline,
-    
+
     /// Camera uniform buffer
     camera_buffer: wgpu::Buffer,
-    
+
     /// Lighting uniform buffer
     lighting_buffer: wgpu::Buffer,
-    
+
     /// Light color RGB
     light_color: [f32; 3],
-    
+
     /// Light direction
     light_dir: [f32; 3],
-    
+
     /// Bind group for camera and lighting uniforms
     bind_group: wgpu::BindGroup,
-    
+
     /// Instance buffer for cell data
     instance_buffer: wgpu::Buffer,
-    
+
     /// Current instance buffer capacity
     instance_capacity: usize,
-    
+
     /// Behavior handlers indexed by CellType
     behaviors: Vec<Box<dyn CellBehavior>>,
-    
+
     /// Shadow field bind group (set each frame from light field system)
     shadow_bind_group: Option<wgpu::BindGroup>,
 }
@@ -115,7 +115,7 @@ pub struct CellRenderer {
 impl CellRenderer {
     /// Depth texture format used by the renderer.
     pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-    
+
     /// Create a new cell renderer.
     ///
     /// # Arguments
@@ -132,16 +132,16 @@ impl CellRenderer {
     ) -> Self {
         let width = config.width;
         let height = config.height;
-        
+
         // Create depth texture
         let (depth_texture, depth_view) = Self::create_depth_texture(device, width, height);
-        
+
         // Create cell type registry with per-type pipelines
         let type_registry = CellTypeRegistry::new(device, config.format, Self::DEPTH_FORMAT);
-        
+
         // Create shared depth pipeline
         let depth_pipeline = Self::create_depth_pipeline(device, &type_registry.bind_group_layout);
-        
+
         // Create camera uniform buffer
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Cell Renderer Camera Buffer"),
@@ -149,7 +149,7 @@ impl CellRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // Create lighting uniform buffer
         let lighting_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Cell Renderer Lighting Buffer"),
@@ -157,10 +157,10 @@ impl CellRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // Bake hex pattern texture via compute shader
         let (hex_texture_view, hex_sampler) = Self::bake_hex_texture(device, queue);
-        
+
         // Create bind group with hex bake texture
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cell Renderer Bind Group"),
@@ -184,7 +184,7 @@ impl CellRenderer {
                 },
             ],
         });
-        
+
         // Create instance buffer
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Cell Renderer Instance Buffer"),
@@ -192,16 +192,18 @@ impl CellRenderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // Create behavior handlers for all cell types
         let mut behaviors: Vec<Box<dyn CellBehavior>> = Vec::with_capacity(CellType::COUNT);
         for cell_type in CellType::iter() {
             behaviors.push(create_behavior(cell_type));
         }
-        
+
         // Create a default dummy shadow bind group (shadow disabled, empty light field)
         // This ensures the pipeline always has a valid group(1) even without a light field system.
-        let shadow_params_size = std::mem::size_of::<crate::simulation::gpu_physics::light_field::ShadowFieldParams>() as u64;
+        let shadow_params_size = std::mem::size_of::<
+            crate::simulation::gpu_physics::light_field::ShadowFieldParams,
+        >() as u64;
         let dummy_shadow_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy Shadow Params Buffer"),
             size: shadow_params_size,
@@ -209,15 +211,19 @@ impl CellRenderer {
             mapped_at_creation: false,
         });
         // Write shadow_enabled = 0 so shadows are disabled by default
-        queue.write_buffer(&dummy_shadow_params_buffer, 0, &vec![0u8; shadow_params_size as usize]);
-        
+        queue.write_buffer(
+            &dummy_shadow_params_buffer,
+            0,
+            &vec![0u8; shadow_params_size as usize],
+        );
+
         let dummy_light_field_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy Light Field Buffer"),
             size: 4, // Minimum size for storage buffer
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        
+
         let dummy_shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Dummy Shadow Bind Group"),
             layout: &type_registry.shadow_bind_group_layout,
@@ -232,7 +238,7 @@ impl CellRenderer {
                 },
             ],
         });
-        
+
         Self {
             width,
             height,
@@ -243,7 +249,7 @@ impl CellRenderer {
             camera_buffer,
             lighting_buffer,
             light_color: [1.0, 0.98, 0.95], // Default warm white
-            light_dir: [-0.5, -0.7, -0.5], // Default light direction
+            light_dir: [-0.5, -0.7, -0.5],  // Default light direction
             bind_group,
             instance_buffer,
             instance_capacity: capacity,
@@ -251,16 +257,19 @@ impl CellRenderer {
             shadow_bind_group: Some(dummy_shadow_bind_group),
         }
     }
-    
+
     /// Bake the Goldberg hex triplet pattern into an equirectangular texture via compute shader.
     /// Returns (texture_view, sampler). Run once at init - the texture is static.
-    
+
     /// Set the shadow bind group (called each frame from gpu_scene)
     pub fn set_shadow_bind_group(&mut self, bind_group: wgpu::BindGroup) {
         self.shadow_bind_group = Some(bind_group);
     }
-    
-    fn bake_hex_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::TextureView, wgpu::Sampler) {
+
+    fn bake_hex_texture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> (wgpu::TextureView, wgpu::Sampler) {
         let tex_width = 512u32;
         let tex_height = 256u32;
 
@@ -297,10 +306,10 @@ impl CellRenderer {
             source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/hex_bake.wgsl").into()),
         });
 
-        let bake_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Hex Bake Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let bake_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Hex Bake Bind Group Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
@@ -309,9 +318,8 @@ impl CellRenderer {
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     count: None,
-                },
-            ],
-        });
+                }],
+            });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Hex Bake Pipeline Layout"),
@@ -331,12 +339,10 @@ impl CellRenderer {
         let bake_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Hex Bake Bind Group"),
             layout: &bake_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture_view),
-                },
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&texture_view),
+            }],
         });
 
         // Dispatch compute shader
@@ -351,11 +357,7 @@ impl CellRenderer {
             pass.set_pipeline(&compute_pipeline);
             pass.set_bind_group(0, &bake_bind_group, &[]);
             // Workgroup size is 8x8, dispatch enough to cover tex_width x tex_height
-            pass.dispatch_workgroups(
-                (tex_width + 7) / 8,
-                (tex_height + 7) / 8,
-                1,
-            );
+            pass.dispatch_workgroups((tex_width + 7) / 8, (tex_height + 7) / 8, 1);
         }
         queue.submit(std::iter::once(encoder.finish()));
 
@@ -384,7 +386,7 @@ impl CellRenderer {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         (texture, view)
     }
-    
+
     /// Create the shared depth-only pipeline.
     fn create_depth_pipeline(
         device: &wgpu::Device,
@@ -393,16 +395,18 @@ impl CellRenderer {
         // Load depth shader (uses unified cell shader)
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Cell Depth Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/cells/cell_unified.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/cells/cell_unified.wgsl").into(),
+            ),
         });
-        
+
         // Create pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Cell Depth Pipeline Layout"),
             bind_group_layouts: &[bind_group_layout],
             push_constant_ranges: &[],
         });
-        
+
         // Create depth-only render pipeline - uses fs_depth which writes correct
         // sphere depth so the subsequent color pass can use LessEqual to skip overdraw.
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -441,7 +445,7 @@ impl CellRenderer {
             cache: None,
         })
     }
-    
+
     /// Get the vertex buffer layout for cell instances.
     fn instance_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -508,7 +512,6 @@ impl CellRenderer {
         self.depth_view = depth_view;
     }
 
-    
     /// Ensure instance buffer has sufficient capacity.
     fn ensure_capacity(&mut self, device: &wgpu::Device, required: usize) {
         if required > self.instance_capacity {
@@ -522,7 +525,7 @@ impl CellRenderer {
             self.instance_capacity = new_capacity;
         }
     }
-    
+
     /// Update camera uniform buffer.
     fn update_camera(
         &self,
@@ -537,13 +540,13 @@ impl CellRenderer {
     ) {
         // Calculate view matrix from camera position and rotation
         let view = Mat4::from_rotation_translation(camera_rotation, camera_pos).inverse();
-        
+
         // Calculate projection matrix (perspective)
         let aspect = self.width as f32 / self.height as f32;
         let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 1000.0);
-        
+
         let view_proj = proj * view;
-        
+
         let camera_uniform = CameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),
@@ -553,20 +556,20 @@ impl CellRenderer {
             lod_threshold_medium,
             lod_threshold_high,
         };
-        
+
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
     }
-    
+
     /// Set the light color.
     pub fn set_light_color(&mut self, color: [f32; 3]) {
         self.light_color = color;
     }
-    
+
     /// Set the light direction.
     pub fn set_light_dir(&mut self, dir: [f32; 3]) {
         self.light_dir = dir;
     }
-    
+
     /// Update lighting uniform buffer.
     fn update_lighting(&self, queue: &wgpu::Queue, outline_width: f32) {
         let lighting_uniform = LightingUniform {
@@ -575,10 +578,14 @@ impl CellRenderer {
             light_color: self.light_color,
             outline_width,
         };
-        
-        queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting_uniform));
+
+        queue.write_buffer(
+            &self.lighting_buffer,
+            0,
+            bytemuck::bytes_of(&lighting_uniform),
+        );
     }
-    
+
     /// Group cells by type for batched rendering.
     ///
     /// Returns a list of cell groups, each containing a cell type and the
@@ -591,10 +598,10 @@ impl CellRenderer {
         if state.cell_count == 0 {
             return Vec::new();
         }
-        
+
         // Count cells per type
         let mut type_counts = [0u32; CellType::COUNT];
-        
+
         for i in 0..state.cell_count {
             let mode_index = state.mode_indices[i];
             let cell_type_index = if let Some(g) = genome {
@@ -606,15 +613,15 @@ impl CellRenderer {
             } else {
                 0
             };
-            
+
             let cell_type_index = cell_type_index.min(CellType::COUNT - 1);
             type_counts[cell_type_index] += 1;
         }
-        
+
         // Build groups with ranges
         let mut groups = Vec::new();
         let mut offset = 0u32;
-        
+
         for (type_index, &count) in type_counts.iter().enumerate() {
             if count > 0 {
                 if let Some(cell_type) = CellType::from_index(type_index as u32) {
@@ -626,10 +633,10 @@ impl CellRenderer {
                 }
             }
         }
-        
+
         groups
     }
-    
+
     /// Build instance data for all cells.
     ///
     /// Reads cell_type from mode settings and populates type_data from
@@ -650,10 +657,10 @@ impl CellRenderer {
         if state.cell_count == 0 {
             return Vec::new();
         }
-        
+
         // First pass: collect cells with their types for sorting
         let mut cells_with_types: Vec<(usize, usize)> = Vec::with_capacity(state.cell_count);
-        
+
         for i in 0..state.cell_count {
             let mode_index = state.mode_indices[i];
             let cell_type_index = if let Some(g) = genome {
@@ -665,39 +672,39 @@ impl CellRenderer {
             } else {
                 0
             };
-            
+
             let cell_type_index = cell_type_index.min(CellType::COUNT - 1);
             cells_with_types.push((i, cell_type_index));
         }
-        
+
         // Sort by cell type for batched rendering
         cells_with_types.sort_by_key(|&(_, type_idx)| type_idx);
-        
+
         // Second pass: build instance data
         let mut instances = Vec::with_capacity(state.cell_count);
-        
+
         // Simulate camera position for LOD calculation (center of world)
         let _camera_pos = Vec3::new(0.0, 0.0, 0.0);
-        
+
         for (cell_index, cell_type_index) in cells_with_types {
             let position = state.positions[cell_index];
             let rotation = state.rotations[cell_index];
             let radius = state.radii[cell_index];
             let mode_index = state.mode_indices[cell_index];
-            
+
             // Get mode settings
             let mode_settings = if let Some(g) = genome {
                 g.modes.get(mode_index).cloned().unwrap_or_default()
             } else {
                 ModeSettings::default()
             };
-            
+
             // Get cell type visuals
             let visuals = cell_type_visuals
                 .and_then(|v| v.get(cell_type_index))
                 .copied()
                 .unwrap_or_default();
-            
+
             // Get type-specific instance data from behavior module
             // All cell types use their behavior modules for consistent handling
             // IMPORTANT: data[7] must contain cell_type for the hybrid shader to branch correctly
@@ -706,16 +713,23 @@ impl CellRenderer {
             } else {
                 crate::cell::behaviors::TypeSpecificInstanceData::empty()
             };
-            
+
             // Ensure cell_type is stored in data[7] for hybrid shader branching
             data.data[4] = visuals.nucleus_scale;
             data.data[5] = visuals.membrane_noise_speed; // animation speed (Glueocyte slime)
-            data.data[6] = if selected_mode_indices.contains(&mode_index) { 1.0 } else { 0.0 }; // yellow outline highlight
+            data.data[6] = if selected_mode_indices.contains(&mode_index) {
+                1.0
+            } else {
+                0.0
+            }; // yellow outline highlight
             data.data[7] = cell_type_index as f32;
-            
+
             // Pack type_data[0..3]: route each type to its correct visual params.
             // Must match the logic in build_instances.wgsl exactly.
-            let cell_type = CellType::all().get(cell_type_index).copied().unwrap_or(CellType::Test);
+            let cell_type = CellType::all()
+                .get(cell_type_index)
+                .copied()
+                .unwrap_or(CellType::Test);
             if cell_type == CellType::Ciliocyte {
                 // [effective_speed, ring_frequency, ring_depth, ring_speed]
                 let cilia_speed = mode_settings.cilia_speed;
@@ -725,10 +739,14 @@ impl CellRenderer {
                 data.data[3] = visuals.cilia_ring_speed;
             } else if cell_type == CellType::Flagellocyte {
                 // Flagellocyte tail params already packed by its behavior module - leave data[0..3] alone
-            } else if matches!(cell_type,
-                CellType::Test | CellType::Phagocyte | CellType::Lipocyte |
-                CellType::Buoyocyte | CellType::Devorocyte)
-            {
+            } else if matches!(
+                cell_type,
+                CellType::Test
+                    | CellType::Phagocyte
+                    | CellType::Lipocyte
+                    | CellType::Buoyocyte
+                    | CellType::Devorocyte
+            ) {
                 // Types with dedicated param_a/b/c/d slots
                 data.data[0] = visuals.param_a;
                 data.data[1] = visuals.param_b;
@@ -742,9 +760,9 @@ impl CellRenderer {
                 data.data[2] = visuals.goldberg_meander;
                 data.data[3] = visuals.goldberg_ridge_strength;
             }
-            
+
             let type_data = data;
-            
+
             // Build instance
             let instance = CellInstance {
                 position: position.to_array(),
@@ -764,13 +782,13 @@ impl CellRenderer {
                 rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
                 type_data: type_data.data,
             };
-            
+
             instances.push(instance);
         }
-        
+
         instances
     }
-    
+
     /// Render cells with depth pre-pass for PreviewScene.
     ///
     /// This method handles the complete render pipeline:
@@ -800,43 +818,52 @@ impl CellRenderer {
         if state.cell_count == 0 {
             return;
         }
-        
+
         // Build instance data
         let instances = self.build_instances(
-            state, 
-            genome, 
-            cell_type_visuals, 
-            lod_scale_factor, 
-            lod_threshold_low, 
-            lod_threshold_medium, 
+            state,
+            genome,
+            cell_type_visuals,
+            lod_scale_factor,
+            lod_threshold_low,
+            lod_threshold_medium,
             lod_threshold_high,
             _lod_debug_colors,
             selected_mode_indices,
         );
         let instance_count = instances.len() as u32;
-        
+
         if instance_count == 0 {
             return;
         }
-        
+
         // Ensure buffer capacity
         self.ensure_capacity(device, instances.len());
-        
+
         // Upload instance data
         queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
-        
+
         // Update uniforms
-        self.update_camera(queue, camera_pos, camera_rotation, current_time, lod_scale_factor, lod_threshold_low, lod_threshold_medium, lod_threshold_high);
+        self.update_camera(
+            queue,
+            camera_pos,
+            camera_rotation,
+            current_time,
+            lod_scale_factor,
+            lod_threshold_low,
+            lod_threshold_medium,
+            lod_threshold_high,
+        );
         self.update_lighting(queue, outline_width);
-        
+
         // Get cell groups for batched rendering
         let groups = self.group_cells_by_type(state, genome);
-        
+
         // Create command encoder
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Cell Renderer Encoder"),
         });
-        
+
         // Depth prepass: fs_depth performs ray-sphere intersection and writes the
         // correct sphere-surface depth, so the subsequent color pass can use
         // LessEqual to reject occluded fragments via early-z.
@@ -891,22 +918,22 @@ impl CellRenderer {
                 color_pass.set_bind_group(1, shadow_bg, &[]);
             }
             color_pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-            
+
             // Render each cell type group with its specific pipeline
             for group in &groups {
                 if group.range.is_empty() {
                     continue;
                 }
-                
+
                 let pipeline = self.type_registry.get_pipeline(group.cell_type);
                 color_pass.set_pipeline(pipeline);
                 color_pass.draw(0..4, group.range.clone());
             }
         }
-        
+
         queue.submit(std::iter::once(encoder.finish()));
     }
-    
+
     /// Render cells using pre-built instance buffer from InstanceBuilder (for GpuScene).
     ///
     /// This method is used when instance data is built on the GPU via compute shaders.
@@ -937,9 +964,18 @@ impl CellRenderer {
         }
 
         // Update uniforms with LOD settings from UI
-        self.update_camera(queue, camera_pos, camera_rotation, current_time, lod_scale_factor, lod_threshold_low, lod_threshold_medium, lod_threshold_high);
+        self.update_camera(
+            queue,
+            camera_pos,
+            camera_rotation,
+            current_time,
+            lod_scale_factor,
+            lod_threshold_low,
+            lod_threshold_medium,
+            lod_threshold_high,
+        );
         self.update_lighting(queue, outline_width);
-        
+
         // Depth prepass: populate correct sphere depths using fs_depth.
         // Must CLEAR depth first (this texture is private to the cell renderer).
         // The color pass then uses Load+LessEqual so each pixel only runs the
@@ -976,7 +1012,7 @@ impl CellRenderer {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
-                                   store: wgpu::StoreOp::Store,
+                        store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
                 })],

@@ -6,8 +6,8 @@
 //! Photocytes are stationary (no swim force) and gain nutrients based on
 //! ambient light intensity in the simulation.
 
-use crate::genome::ModeSettings;
 use super::{CellBehavior, TypeSpecificInstanceData};
+use crate::genome::ModeSettings;
 
 /// Behavior implementation for Photocyte cells.
 ///

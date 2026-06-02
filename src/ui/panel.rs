@@ -222,7 +222,10 @@ impl Panel {
 
     /// Check if this panel is a placeholder layout panel.
     pub fn is_placeholder(&self) -> bool {
-        matches!(self, Panel::LeftPanel | Panel::RightPanel | Panel::BottomPanel | Panel::Viewport)
+        matches!(
+            self,
+            Panel::LeftPanel | Panel::RightPanel | Panel::BottomPanel | Panel::Viewport
+        )
     }
 
     /// Check if this panel should be closeable by the user.

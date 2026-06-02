@@ -1,5 +1,5 @@
 //! Per-Genome Buffer Management System
-//! 
+//!
 //! This module implements isolated buffer groups for each genome to eliminate
 //! indexing conflicts and enable independent genome management.
 
@@ -14,7 +14,7 @@ fn create_aligned_buffer(
 ) -> wgpu::Buffer {
     // Align size to 16-byte boundary for GPU compatibility
     let aligned_size = (size + 15) & !15; // Round up to nearest 16 bytes
-    
+
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size: aligned_size,
@@ -33,61 +33,57 @@ pub const MAX_GENOMES: usize = 20_000;
 pub struct GenomeBufferGroup {
     /// Genome ID (index in the global genomes array)
     pub genome_id: usize,
-    
+
     /// Number of modes in this genome
     pub mode_count: usize,
-    
+
     /// Mode properties buffer (per-mode data for division)
-    /// Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval, 
+    /// Layout per mode: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval,
     ///                  split_mass, nutrient_priority, swim_force, prioritize_when_low, max_splits, padding x3]
     pub mode_properties: wgpu::Buffer,
-    
+
     /// Mode cell types lookup table
     pub mode_cell_types: wgpu::Buffer,
-    
+
     /// Child mode indices (for division)
     pub child_mode_indices: wgpu::Buffer,
-    
+
     /// Parent make adhesion flags
     pub parent_make_adhesion_flags: wgpu::Buffer,
-    
+
     /// Child keep adhesion flags
     pub child_a_keep_adhesion_flags: wgpu::Buffer,
     pub child_b_keep_adhesion_flags: wgpu::Buffer,
-    
+
     /// Genome mode data (child orientations, split directions)
     pub genome_mode_data: wgpu::Buffer,
-    
+
     /// Per-mode glueocyte environment adhesion flags (one u32 per mode)
     pub glueocyte_env_adhesion_flags: wgpu::Buffer,
 
     /// Reference count - how many cells are using this genome
     pub reference_count: u32,
-    
+
     /// Whether this genome group is marked for deletion
     pub marked_for_deletion: bool,
-    
+
     /// Whether buffers need synchronization with CPU data
     pub needs_sync: bool,
 }
 
 impl GenomeBufferGroup {
     /// Create a new genome buffer group for the given genome
-    pub fn new(
-        device: &wgpu::Device,
-        genome_id: usize,
-        genome: &Genome,
-    ) -> Self {
+    pub fn new(device: &wgpu::Device, genome_id: usize, genome: &Genome) -> Self {
         let mode_count = genome.modes.len();
-        
+
         // Calculate buffer sizes
         let mode_properties_size = mode_count * 80; // 80 bytes per mode (20 floats, includes min/max adhesions)
-        let mode_cell_types_size = mode_count * 4;  // 4 bytes per mode
+        let mode_cell_types_size = mode_count * 4; // 4 bytes per mode
         let child_mode_indices_size = mode_count * 8; // 8 bytes per mode (2 i32)
-        let parent_flags_size = mode_count * 4;      // 4 bytes per mode
-        let child_flags_size = mode_count * 4;       // 4 bytes per mode
+        let parent_flags_size = mode_count * 4; // 4 bytes per mode
+        let child_flags_size = mode_count * 4; // 4 bytes per mode
         let genome_mode_data_size = mode_count * 80; // 80 bytes per mode (5 vec4)
-        
+
         // Create buffers
         let mode_properties = create_aligned_buffer(
             device,
@@ -95,42 +91,42 @@ impl GenomeBufferGroup {
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             &format!("Genome {} Mode Properties", genome_id),
         );
-        
+
         let mode_cell_types = create_aligned_buffer(
             device,
             mode_cell_types_size as u64,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             &format!("Genome {} Mode Cell Types", genome_id),
         );
-        
+
         let child_mode_indices = create_aligned_buffer(
             device,
             child_mode_indices_size as u64,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             &format!("Genome {} Child Mode Indices", genome_id),
         );
-        
+
         let parent_make_adhesion_flags = create_aligned_buffer(
             device,
             parent_flags_size as u64,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             &format!("Genome {} Parent Make Adhesion Flags", genome_id),
         );
-        
+
         let child_a_keep_adhesion_flags = create_aligned_buffer(
             device,
             child_flags_size as u64,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             &format!("Genome {} Child A Keep Adhesion Flags", genome_id),
         );
-        
+
         let child_b_keep_adhesion_flags = create_aligned_buffer(
             device,
             child_flags_size as u64,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             &format!("Genome {} Child B Keep Adhesion Flags", genome_id),
         );
-        
+
         let genome_mode_data = create_aligned_buffer(
             device,
             genome_mode_data_size as u64,
@@ -144,7 +140,7 @@ impl GenomeBufferGroup {
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             &format!("Genome {} Glueocyte Env Adhesion Flags", genome_id),
         );
-        
+
         Self {
             genome_id,
             mode_count,
@@ -161,7 +157,7 @@ impl GenomeBufferGroup {
             needs_sync: true,
         }
     }
-    
+
     /// Synchronize this genome's data from the CPU genome to GPU buffers
     pub fn sync_from_genome(&mut self, queue: &wgpu::Queue, genome: &Genome) {
         if self.mode_count != genome.modes.len() {
@@ -170,131 +166,219 @@ impl GenomeBufferGroup {
             self.needs_sync = true;
             return;
         }
-        
+
         // Sync mode properties
-        let mode_properties_data: Vec<[f32; 20]> = genome.modes.iter().map(|mode| {
-            [
-                mode.nutrient_gain_rate,
-                mode.max_cell_size,
-                mode.membrane_stiffness,
-                mode.split_interval,
-                mode.split_mass,
-                mode.nutrient_priority,
-                mode.swim_force,
-                if mode.prioritize_when_low { 1.0 } else { 0.0 },
-                if mode.max_splits < 0 { -1.0 } else { mode.max_splits as f32 },
-                mode.split_ratio, // split_ratio for dynamic equatorial zone
-                mode.flagellocyte_signal_channel as f32, // index 10
-                mode.flagellocyte_speed_a,               // index 11
-                mode.flagellocyte_speed_b,               // index 12
-                mode.flagellocyte_threshold_c,           // index 13
-                if mode.flagellocyte_use_signal { 1.0 } else { 0.0 }, // index 14
-                mode.min_adhesions as f32, // index 15: min_adhesions for division gate
-                mode.max_adhesions as f32, // index 16: max_adhesions for division gate
-                if mode.mode_a_after_splits < 0 { -1.0 } else { mode.mode_a_after_splits.max(0) as f32 }, // index 17: mode_a_after_splits (local)
-                if mode.mode_b_after_splits < 0 { -1.0 } else { mode.mode_b_after_splits.max(0) as f32 }, // index 18: mode_b_after_splits (local)
-                0.0, // index 19: padding
-            ]
-        }).collect();
-        
+        let mode_properties_data: Vec<[f32; 20]> = genome
+            .modes
+            .iter()
+            .map(|mode| {
+                [
+                    mode.nutrient_gain_rate,
+                    mode.max_cell_size,
+                    mode.membrane_stiffness,
+                    mode.split_interval,
+                    mode.split_mass,
+                    mode.nutrient_priority,
+                    mode.swim_force,
+                    if mode.prioritize_when_low { 1.0 } else { 0.0 },
+                    if mode.max_splits < 0 {
+                        -1.0
+                    } else {
+                        mode.max_splits as f32
+                    },
+                    mode.split_ratio, // split_ratio for dynamic equatorial zone
+                    mode.flagellocyte_signal_channel as f32, // index 10
+                    mode.flagellocyte_speed_a, // index 11
+                    mode.flagellocyte_speed_b, // index 12
+                    mode.flagellocyte_threshold_c, // index 13
+                    if mode.flagellocyte_use_signal {
+                        1.0
+                    } else {
+                        0.0
+                    }, // index 14
+                    mode.min_adhesions as f32, // index 15: min_adhesions for division gate
+                    mode.max_adhesions as f32, // index 16: max_adhesions for division gate
+                    if mode.mode_a_after_splits < 0 {
+                        -1.0
+                    } else {
+                        mode.mode_a_after_splits.max(0) as f32
+                    }, // index 17: mode_a_after_splits (local)
+                    if mode.mode_b_after_splits < 0 {
+                        -1.0
+                    } else {
+                        mode.mode_b_after_splits.max(0) as f32
+                    }, // index 18: mode_b_after_splits (local)
+                    0.0,              // index 19: padding
+                ]
+            })
+            .collect();
+
         if !mode_properties_data.is_empty() {
-            queue.write_buffer(&self.mode_properties, 0, bytemuck::cast_slice(&mode_properties_data));
+            queue.write_buffer(
+                &self.mode_properties,
+                0,
+                bytemuck::cast_slice(&mode_properties_data),
+            );
         }
-        
+
         // Sync mode cell types
-        let mode_cell_types_data: Vec<u32> = genome.modes.iter()
+        let mode_cell_types_data: Vec<u32> = genome
+            .modes
+            .iter()
             .map(|mode| mode.cell_type as u32)
             .collect();
-        
+
         if !mode_cell_types_data.is_empty() {
-            queue.write_buffer(&self.mode_cell_types, 0, bytemuck::cast_slice(&mode_cell_types_data));
+            queue.write_buffer(
+                &self.mode_cell_types,
+                0,
+                bytemuck::cast_slice(&mode_cell_types_data),
+            );
         }
-        
+
         // Sync child mode indices
-        let child_mode_indices_data: Vec<[i32; 2]> = genome.modes.iter().map(|mode| {
-            [mode.child_a.mode_number as i32, mode.child_b.mode_number as i32]
-        }).collect();
-        
+        let child_mode_indices_data: Vec<[i32; 2]> = genome
+            .modes
+            .iter()
+            .map(|mode| {
+                [
+                    mode.child_a.mode_number as i32,
+                    mode.child_b.mode_number as i32,
+                ]
+            })
+            .collect();
+
         if !child_mode_indices_data.is_empty() {
-            queue.write_buffer(&self.child_mode_indices, 0, bytemuck::cast_slice(&child_mode_indices_data));
+            queue.write_buffer(
+                &self.child_mode_indices,
+                0,
+                bytemuck::cast_slice(&child_mode_indices_data),
+            );
         }
-        
+
         // Sync parent make adhesion flags
-        let parent_flags_data: Vec<u32> = genome.modes.iter()
+        let parent_flags_data: Vec<u32> = genome
+            .modes
+            .iter()
             .map(|mode| if mode.parent_make_adhesion { 1 } else { 0 })
             .collect();
-        
+
         if !parent_flags_data.is_empty() {
-            queue.write_buffer(&self.parent_make_adhesion_flags, 0, bytemuck::cast_slice(&parent_flags_data));
+            queue.write_buffer(
+                &self.parent_make_adhesion_flags,
+                0,
+                bytemuck::cast_slice(&parent_flags_data),
+            );
         }
-        
+
         // Sync child keep adhesion flags
-        let child_a_flags_data: Vec<u32> = genome.modes.iter()
+        let child_a_flags_data: Vec<u32> = genome
+            .modes
+            .iter()
             .map(|mode| if mode.child_a.keep_adhesion { 1 } else { 0 })
             .collect();
-        
-        let child_b_flags_data: Vec<u32> = genome.modes.iter()
+
+        let child_b_flags_data: Vec<u32> = genome
+            .modes
+            .iter()
             .map(|mode| if mode.child_b.keep_adhesion { 1 } else { 0 })
             .collect();
-        
+
         if !child_a_flags_data.is_empty() {
-            queue.write_buffer(&self.child_a_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_a_flags_data));
+            queue.write_buffer(
+                &self.child_a_keep_adhesion_flags,
+                0,
+                bytemuck::cast_slice(&child_a_flags_data),
+            );
         }
-        
+
         if !child_b_flags_data.is_empty() {
-            queue.write_buffer(&self.child_b_keep_adhesion_flags, 0, bytemuck::cast_slice(&child_b_flags_data));
+            queue.write_buffer(
+                &self.child_b_keep_adhesion_flags,
+                0,
+                bytemuck::cast_slice(&child_b_flags_data),
+            );
         }
 
         // Sync glueocyte env adhesion flags
-        let env_adhesion_flags_data: Vec<u32> = genome.modes.iter()
+        let env_adhesion_flags_data: Vec<u32> = genome
+            .modes
+            .iter()
             .map(|mode| if mode.glueocyte_env_adhesion { 1 } else { 0 })
             .collect();
         if !env_adhesion_flags_data.is_empty() {
-            queue.write_buffer(&self.glueocyte_env_adhesion_flags, 0, bytemuck::cast_slice(&env_adhesion_flags_data));
+            queue.write_buffer(
+                &self.glueocyte_env_adhesion_flags,
+                0,
+                bytemuck::cast_slice(&env_adhesion_flags_data),
+            );
         }
-        
-        // Sync genome mode data (child orientations, split orientations, split directions)
-        let genome_mode_data: Vec<[f32; 20]> = genome.modes.iter().map(|mode| {
-            let child_a_orientation = mode.child_a.orientation;
-            let child_b_orientation = mode.child_b.orientation;
-            let child_a_split_orientation = mode.child_a_after_split_orientation;
-            let child_b_split_orientation = mode.child_b_after_split_orientation;
-            
-            // Compute the exact split rotation quaternion from pitch/yaw using YXZ Euler order.
-            // We send the full quaternion rather than just the direction vector so the GPU
-            // shader can use it directly. Previously the shader reconstructed a quaternion
-            // from the direction vector via quat_from_z_to_dir(), which produces the
-            // shortest-arc rotation (zero roll) - a different quaternion from the YXZ Euler
-            // one even though both map Z to the same direction. That difference caused 20 deg+
-            // errors in child orientations and adhesion anchor directions.
-            let pitch = mode.parent_split_direction.x.to_radians();
-            let yaw = mode.parent_split_direction.y.to_radians();
-            let split_quat = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0);
 
-            [
-                // Regular child orientations (8 floats)
-                child_a_orientation.x, child_a_orientation.y, child_a_orientation.z, child_a_orientation.w,
-                child_b_orientation.x, child_b_orientation.y, child_b_orientation.z, child_b_orientation.w,
-                // Split orientations (8 floats)
-                child_a_split_orientation.x, child_a_split_orientation.y, child_a_split_orientation.z, child_a_split_orientation.w,
-                child_b_split_orientation.x, child_b_split_orientation.y, child_b_split_orientation.z, child_b_split_orientation.w,
-                // Split rotation quaternion (4 floats) - XYZW order matching glam convention
-                split_quat.x, split_quat.y, split_quat.z, split_quat.w,
-            ]
-        }).collect();
-        
+        // Sync genome mode data (child orientations, split orientations, split directions)
+        let genome_mode_data: Vec<[f32; 20]> = genome
+            .modes
+            .iter()
+            .map(|mode| {
+                let child_a_orientation = mode.child_a.orientation;
+                let child_b_orientation = mode.child_b.orientation;
+                let child_a_split_orientation = mode.child_a_after_split_orientation;
+                let child_b_split_orientation = mode.child_b_after_split_orientation;
+
+                // Compute the exact split rotation quaternion from pitch/yaw using YXZ Euler order.
+                // We send the full quaternion rather than just the direction vector so the GPU
+                // shader can use it directly. Previously the shader reconstructed a quaternion
+                // from the direction vector via quat_from_z_to_dir(), which produces the
+                // shortest-arc rotation (zero roll) - a different quaternion from the YXZ Euler
+                // one even though both map Z to the same direction. That difference caused 20 deg+
+                // errors in child orientations and adhesion anchor directions.
+                let pitch = mode.parent_split_direction.x.to_radians();
+                let yaw = mode.parent_split_direction.y.to_radians();
+                let split_quat = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0);
+
+                [
+                    // Regular child orientations (8 floats)
+                    child_a_orientation.x,
+                    child_a_orientation.y,
+                    child_a_orientation.z,
+                    child_a_orientation.w,
+                    child_b_orientation.x,
+                    child_b_orientation.y,
+                    child_b_orientation.z,
+                    child_b_orientation.w,
+                    // Split orientations (8 floats)
+                    child_a_split_orientation.x,
+                    child_a_split_orientation.y,
+                    child_a_split_orientation.z,
+                    child_a_split_orientation.w,
+                    child_b_split_orientation.x,
+                    child_b_split_orientation.y,
+                    child_b_split_orientation.z,
+                    child_b_split_orientation.w,
+                    // Split rotation quaternion (4 floats) - XYZW order matching glam convention
+                    split_quat.x,
+                    split_quat.y,
+                    split_quat.z,
+                    split_quat.w,
+                ]
+            })
+            .collect();
+
         if !genome_mode_data.is_empty() {
-            queue.write_buffer(&self.genome_mode_data, 0, bytemuck::cast_slice(&genome_mode_data));
+            queue.write_buffer(
+                &self.genome_mode_data,
+                0,
+                bytemuck::cast_slice(&genome_mode_data),
+            );
         }
-        
+
         self.needs_sync = false;
     }
-    
+
     /// Increment reference count
     pub fn add_reference(&mut self) {
         self.reference_count += 1;
     }
-    
+
     /// Decrement reference count, returns true if count reaches zero
     pub fn remove_reference(&mut self) -> bool {
         if self.reference_count > 0 {
@@ -302,12 +386,12 @@ impl GenomeBufferGroup {
         }
         self.reference_count == 0
     }
-    
+
     /// Mark this genome for deletion
     pub fn mark_for_deletion(&mut self) {
         self.marked_for_deletion = true;
     }
-    
+
     /// Check if this genome can be safely deleted
     pub fn can_delete(&self) -> bool {
         self.marked_for_deletion && self.reference_count == 0
@@ -318,13 +402,13 @@ impl GenomeBufferGroup {
 pub struct GenomeBufferManager {
     /// All genome buffer groups
     genome_groups: Vec<Option<GenomeBufferGroup>>,
-    
+
     /// Free slots in the genome_groups array
     free_slots: Vec<usize>,
-    
+
     /// Next genome ID to assign
     next_genome_id: usize,
-    
+
     /// Maximum capacity
     max_genomes: usize,
 }
@@ -339,61 +423,70 @@ impl GenomeBufferManager {
             max_genomes,
         }
     }
-    
+
     /// Add a new genome buffer group
     /// Returns the genome ID or None if at capacity
-    pub fn add_genome(
-        &mut self,
-        device: &wgpu::Device,
-        genome: &Genome,
-    ) -> Option<usize> {
+    pub fn add_genome(&mut self, device: &wgpu::Device, genome: &Genome) -> Option<usize> {
         // Validate genome
         if genome.modes.is_empty() {
             log::warn!("Attempted to add genome with no modes");
             return None;
         }
-        
+
         if genome.modes.len() > 1024 {
-            log::warn!("Genome has too many modes: {} (max: 1024)", genome.modes.len());
+            log::warn!(
+                "Genome has too many modes: {} (max: 1024)",
+                genome.modes.len()
+            );
             return None;
         }
-        
+
         if self.free_slots.is_empty() {
             log::warn!("At maximum genome capacity: {}", self.max_genomes);
             return None; // At capacity
         }
-        
+
         let slot = self.free_slots.remove(0);
         let genome_id = self.next_genome_id;
         self.next_genome_id += 1;
-        
+
         // Validate genome ID doesn't exceed limits
         if genome_id >= self.max_genomes {
-            log::error!("Genome ID {} exceeds maximum {}", genome_id, self.max_genomes);
+            log::error!(
+                "Genome ID {} exceeds maximum {}",
+                genome_id,
+                self.max_genomes
+            );
             return None;
         }
-        
+
         let buffer_group = GenomeBufferGroup::new(device, genome_id, genome);
         self.genome_groups[slot] = Some(buffer_group);
-        
-        log::info!("Added genome {} with {} modes (ID: {})", genome.name, genome.modes.len(), genome_id);
+
+        log::info!(
+            "Added genome {} with {} modes (ID: {})",
+            genome.name,
+            genome.modes.len(),
+            genome_id
+        );
         Some(slot)
     }
-    
+
     /// Get a mutable reference to a genome buffer group
     pub fn get_genome_group_mut(&mut self, genome_id: usize) -> Option<&mut GenomeBufferGroup> {
-        self.genome_groups.iter_mut().find(|group| {
-            group.as_ref().map_or(false, |g| g.genome_id == genome_id)
-        }).and_then(|group| group.as_mut())
+        self.genome_groups
+            .iter_mut()
+            .find(|group| group.as_ref().map_or(false, |g| g.genome_id == genome_id))
+            .and_then(|group| group.as_mut())
     }
-    
+
     /// Get an immutable reference to a genome buffer group
     pub fn get_genome_group(&self, genome_id: usize) -> Option<&GenomeBufferGroup> {
-        self.genome_groups.iter().find_map(|group| {
-            group.as_ref().filter(|g| g.genome_id == genome_id)
-        })
+        self.genome_groups
+            .iter()
+            .find_map(|group| group.as_ref().filter(|g| g.genome_id == genome_id))
     }
-    
+
     /// Remove a genome buffer group (marks for deletion, actual removal happens in compact)
     pub fn remove_genome(&mut self, genome_id: usize) -> bool {
         if let Some(group) = self.get_genome_group_mut(genome_id) {
@@ -403,7 +496,7 @@ impl GenomeBufferManager {
             false
         }
     }
-    
+
     /// Increment reference count for a genome
     pub fn add_reference(&mut self, genome_id: usize) -> bool {
         if let Some(group) = self.get_genome_group_mut(genome_id) {
@@ -413,7 +506,7 @@ impl GenomeBufferManager {
             false
         }
     }
-    
+
     /// Decrement reference count for a genome
     pub fn remove_reference(&mut self, genome_id: usize) -> bool {
         if let Some(group) = self.get_genome_group_mut(genome_id) {
@@ -422,12 +515,12 @@ impl GenomeBufferManager {
             false
         }
     }
-    
+
     /// Compact genome buffer groups, removing those marked for deletion with zero references
     /// Returns the number of genomes removed
     pub fn compact(&mut self) -> usize {
         let mut removed_count = 0;
-        
+
         for (slot, group) in self.genome_groups.iter_mut().enumerate() {
             if let Some(buffer_group) = group.as_ref() {
                 if buffer_group.can_delete() {
@@ -438,22 +531,23 @@ impl GenomeBufferManager {
                 }
             }
         }
-        
+
         // Sort free slots for deterministic allocation
         self.free_slots.sort_unstable();
         self.free_slots.dedup();
-        
+
         removed_count
     }
-    
+
     /// Get all active genome buffer groups
     pub fn active_genomes(&self) -> Vec<&GenomeBufferGroup> {
-        self.genome_groups.iter()
+        self.genome_groups
+            .iter()
             .filter_map(|group| group.as_ref())
             .filter(|group| !group.marked_for_deletion)
             .collect()
     }
-    
+
     /// Sync all genomes that need synchronization
     pub fn sync_dirty_genomes(&mut self, queue: &wgpu::Queue, genomes: &[Genome]) {
         for group in self.genome_groups.iter_mut() {
@@ -466,14 +560,15 @@ impl GenomeBufferManager {
             }
         }
     }
-    
+
     /// Get genome count
     pub fn genome_count(&self) -> usize {
-        self.genome_groups.iter()
+        self.genome_groups
+            .iter()
             .filter(|group| group.is_some())
             .count()
     }
-    
+
     /// Check if at capacity
     pub fn at_capacity(&self) -> bool {
         self.free_slots.is_empty()

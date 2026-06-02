@@ -4,11 +4,23 @@
 //! Optimized for large-scale simulations with thousands of cells.
 
 use crate::genome::Genome;
-use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, DeathParticleRenderer, DepthOfFieldRenderer, GpuAdhesionLineRenderer, GpuSurfaceNets, InstanceBuilder, NutrientParticleRenderer, OrganismSkinRenderer, SkyboxRenderer, SteamParticleRenderer, SunRenderer, TailRenderer, VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer};
+use crate::rendering::{
+    CaveSystemRenderer, CellRenderer, CullingMode, DeathParticleRenderer, DepthOfFieldRenderer,
+    GpuAdhesionLineRenderer, GpuSurfaceNets, InstanceBuilder, NutrientParticleRenderer,
+    OrganismSkinRenderer, SkyboxRenderer, SteamParticleRenderer, SunRenderer, TailRenderer,
+    VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer,
+};
 use crate::scene::Scene;
-use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
-use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, execute_signal_system, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem, DevorocyteConsumptionSystem, MossSystem, BoulderSystem, GametocyteMergeSystem, GameteMergeEvent, PhysicsFeatureFlags};
+use crate::simulation::gpu_physics::{
+    execute_gpu_mechanics_step, execute_gpu_physics_step, execute_lifecycle_pipeline,
+    execute_signal_system, AdhesionBuffers, AsyncReadbackManager, BoulderSystem, CachedBindGroups,
+    DevorocyteConsumptionSystem, GameteMergeEvent, GametocyteMergeSystem, GenomeBufferManager,
+    GpuCellInsertion, GpuCellInspector, GpuPhysicsPipelines, GpuToolOperations,
+    GpuTripleBufferSystem, LightFieldSystem, MossSystem, PhagocyteConsumptionSystem,
+    PhysicsFeatureFlags,
+};
+use crate::simulation::PhysicsConfig;
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
@@ -120,6 +132,8 @@ pub struct GpuScene {
     readbacks_enabled: bool,
     /// Time scale multiplier (1.0 = normal, 2.0 = 2x speed)
     pub time_scale: f32,
+    /// When true, simulation work continues but visual scene render passes are skipped.
+    pub headless_no_render: bool,
     /// Pending inspect tool result (temporary until GPU spatial queries are integrated)
     pending_inspect_result: Option<usize>,
     /// Pending drag tool result (temporary until GPU spatial queries are integrated)
@@ -133,7 +147,7 @@ pub struct GpuScene {
     /// Both are x1000 fixed-point; 0 means "use cell_type default".
     pending_cell_insertion: Option<(glam::Vec3, Genome, u32, u32)>,
     /// Pending tool query position and type for GPU spatial query
-    pending_query_position: Option<(f32, f32, ToolQueryType)>,  // (screen_x, screen_y, query_type)
+    pending_query_position: Option<(f32, f32, ToolQueryType)>, // (screen_x, screen_y, query_type)
     /// Active query type waiting for GPU result
     active_query_type: Option<ToolQueryType>,
     /// Pending position update for drag tool (cell_index, new_position)
@@ -181,10 +195,10 @@ pub struct GpuScene {
     /// Index: 0=Empty (unused), 1=Water, 2=Lava, 3=Steam
     pub lateral_flow_probabilities: [f32; 4],
     /// Phase change probabilities for fluid simulation (0.0 to 1.0)
-    pub condensation_probability: f32,  // Steam to Water
-    pub vaporization_probability: f32,  // Water to Steam
+    pub condensation_probability: f32, // Steam to Water
+    pub vaporization_probability: f32, // Water to Steam
     /// Nutrient particle density for noise-based spawning (0.0 to 1.0)
-    pub nutrient_density: f32,  // Controls threshold for nutrient spawning
+    pub nutrient_density: f32, // Controls threshold for nutrient spawning
     /// Nutrient epoch duration in seconds (how long one nutrient pattern lasts)
     pub nutrient_epoch_duration: f32,
     /// Nutrient epoch spacing in seconds (time between epoch starts; < duration = overlap)
@@ -220,7 +234,7 @@ pub struct GpuScene {
     pub show_fluid_voxels: bool,
     /// Current voxel instance count for rendering
     voxel_instance_count: u32,
-        /// GPU-based surface nets renderer for density field visualization
+    /// GPU-based surface nets renderer for density field visualization
     pub gpu_surface_nets: Option<GpuSurfaceNets>,
     /// Whether to show GPU surface nets density mesh
     pub show_gpu_density_mesh: bool,
@@ -451,7 +465,13 @@ impl GpuScene {
         surface_config: &wgpu::SurfaceConfiguration,
         capacity: u32,
     ) -> Self {
-        Self::with_capacity_and_radius(device, queue, surface_config, capacity, PhysicsConfig::default().sphere_radius)
+        Self::with_capacity_and_radius(
+            device,
+            queue,
+            surface_config,
+            capacity,
+            PhysicsConfig::default().sphere_radius,
+        )
     }
 
     pub fn with_capacity_and_radius(
@@ -465,48 +485,53 @@ impl GpuScene {
         config.sphere_radius = world_radius;
 
         let renderer = CellRenderer::new(device, queue, surface_config, capacity as usize);
-        
+
         // Create GPU adhesion line renderer
         // Each connection shared by 2 cells: capacity * MAX_ADHESIONS_PER_CELL / 2
         let max_adhesions: u32 = capacity * 20 / 2; // 20 = MAX_ADHESIONS_PER_CELL
         let adhesion_renderer = GpuAdhesionLineRenderer::new(device, surface_config, max_adhesions);
-        
+
         // Create world sphere renderer for boundary visualization
         // Radius matches physics config sphere_radius
-        let mut world_sphere_renderer = WorldSphereRenderer::new(
-            device,
-            surface_config,
-            wgpu::TextureFormat::Depth32Float,
-        );
+        let mut world_sphere_renderer =
+            WorldSphereRenderer::new(device, surface_config, wgpu::TextureFormat::Depth32Float);
         // Sync world sphere radius with physics boundary
         world_sphere_renderer.set_radius(queue, config.sphere_radius);
-        
+
         // Create instance builder - culling mode will be set per-frame in render()
         let instance_builder = InstanceBuilder::new(device, capacity as usize);
-        
+
         // Create GPU physics components
         let gpu_physics_pipelines = GpuPhysicsPipelines::new(device);
         let gpu_triple_buffers = GpuTripleBufferSystem::new(device, capacity);
-        
+
         // Initialize cell_count_buffer to [0, 0] - CRITICAL: buffer is uninitialized after creation!
         // Without this, the cell insertion shader may read garbage and fail capacity checks.
         let cell_counts: [u32; 2] = [0, 0];
-        queue.write_buffer(&gpu_triple_buffers.cell_count_buffer, 0, bytemuck::cast_slice(&cell_counts));
-        
+        queue.write_buffer(
+            &gpu_triple_buffers.cell_count_buffer,
+            0,
+            bytemuck::cast_slice(&cell_counts),
+        );
+
         // Initialize next_cell_id to 0 - CRITICAL: buffer is uninitialized after creation!
         // Without this, cell IDs may start from garbage values.
         let next_id: [u32; 1] = [0];
-        queue.write_buffer(&gpu_triple_buffers.next_cell_id, 0, bytemuck::cast_slice(&next_id));
-        
+        queue.write_buffer(
+            &gpu_triple_buffers.next_cell_id,
+            0,
+            bytemuck::cast_slice(&next_id),
+        );
+
         // Create adhesion buffer system with split sub-buffers (3 x 128 MB) to stay under
         // wgpu's 256 MB/buffer limit. The mutation shader writes adhesion settings for all
         // 8M possible mode slots; splitting into 3 x vec4 sub-buffers matches the pattern
         // used by mode_properties_v0..v4 in triple_buffer.rs.
         let mut adhesion_buffers = AdhesionBuffers::new(device, capacity);
-        
+
         // Initialize adhesion buffers with default values
         adhesion_buffers.initialize(queue);
-        
+
         // Create signal sense world params uniform buffer (48 bytes = 12 floats)
         // Matches SignalSenseWorldParams in signal_sense.wgsl
         let signal_sense_world_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -519,13 +544,24 @@ impl GpuScene {
         // in sense_barrier works from the very first frame, before run_physics is called.
         {
             let initial_params: [f32; 12] = [
-                world_radius,   // boundary_radius
-                -0.5, 0.7, 0.5, // light_dir (default)
-                0.0, 1.0,       // grid_resolution (0 = no grid), cell_size
-                0.0, 0.0, 0.0,  // grid_origin
-                0.0, 0.0, 0.0,  // padding
+                world_radius, // boundary_radius
+                -0.5,
+                0.7,
+                0.5, // light_dir (default)
+                0.0,
+                1.0, // grid_resolution (0 = no grid), cell_size
+                0.0,
+                0.0,
+                0.0, // grid_origin
+                0.0,
+                0.0,
+                0.0, // padding
             ];
-            queue.write_buffer(&signal_sense_world_params_buffer, 0, bytemuck::cast_slice(&initial_params));
+            queue.write_buffer(
+                &signal_sense_world_params_buffer,
+                0,
+                bytemuck::cast_slice(&initial_params),
+            );
         }
         // Dummy storage buffers (4 bytes each) - used until real systems are initialized
         let signal_sense_dummy_nutrient_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -554,18 +590,16 @@ impl GpuScene {
         });
 
         // Create organism label system (always-on, GPU self-throttled)
-        let organism_label_system = Some(
-            crate::simulation::gpu_physics::OrganismLabelSystem::new(
-                device,
-                &gpu_triple_buffers,
-                &adhesion_buffers,
-            ),
-        );
+        let organism_label_system = Some(crate::simulation::gpu_physics::OrganismLabelSystem::new(
+            device,
+            &gpu_triple_buffers,
+            &adhesion_buffers,
+        ));
 
         // Create mutation system for GPU-driven genome mutation
-        let mutation_system = Some(
-            crate::simulation::gpu_physics::MutationSystem::new(device, queue, capacity),
-        );
+        let mutation_system = Some(crate::simulation::gpu_physics::MutationSystem::new(
+            device, queue, capacity,
+        ));
 
         // Create cached bind groups (once, not per-frame!)
         // Pass organism label buffer for self-collision filtering
@@ -579,28 +613,31 @@ impl GpuScene {
             &signal_sense_dummy_solid_buffer,
             &signal_sense_dummy_density_buffer,
             organism_label_system.as_ref().map(|s| &s.label_buffer),
-            organism_label_system.as_ref().map(|s| &s.organism_size_buffer),
+            organism_label_system
+                .as_ref()
+                .map(|s| &s.organism_size_buffer),
             None, // boulder_buffers - created later
         );
 
         // Create GPU cell inspector system (will be initialized later with device)
         let cell_inspector = None; // Will be initialized when needed
-        
+
         // Create GPU cell insertion system (will be initialized later)
         let cell_insertion = None; // Will be initialized when needed
-        
+
         // Create GPU tool operations system (will be initialized later)
         let tool_operations = None; // Will be initialized when needed
-        
+
         // Create async readback manager for coordinating all readback operations
         let readback_manager = None; // Will be initialized when needed
-        
+
         // Create genome buffer manager for per-genome GPU resources
-        let genome_buffer_manager = GenomeBufferManager::new(crate::simulation::gpu_physics::MAX_GENOMES);
-        
+        let genome_buffer_manager =
+            GenomeBufferManager::new(crate::simulation::gpu_physics::MAX_GENOMES);
+
         // Create tail renderer for flagellocyte cells
         let tail_renderer = TailRenderer::new(device, surface_config.format, capacity as usize);
-        
+
         // Cave system will be initialized on demand
         let cave_renderer = None;
 
@@ -637,6 +674,7 @@ impl GpuScene {
             first_frame: true,
             readbacks_enabled: true,
             time_scale: 1.0,
+            headless_no_render: false,
             pending_inspect_result: None,
             pending_drag_result: None,
             pending_remove_result: None,
@@ -717,7 +755,7 @@ impl GpuScene {
             water_render_bind_group: None,
             nutrient_particle_renderer: None,
             show_nutrient_particles: true,
-            nutrient_spawn_probability: 0.05,  // 5% spawn probability
+            nutrient_spawn_probability: 0.05, // 5% spawn probability
             nutrient_extract_bind_group: None,
             nutrient_render_bind_group: None,
             death_particle_renderer: None,
@@ -802,7 +840,7 @@ impl GpuScene {
     ) -> Self {
         Self::with_capacity(device, queue, surface_config, 100_000)
     }
-    
+
     /// Get the current cell capacity.
     pub fn capacity(&self) -> u32 {
         self.gpu_triple_buffers.capacity
@@ -823,7 +861,7 @@ impl GpuScene {
         // The GPU buffer is reset to 0 below, so last_written must differ from
         // dragged_cell_index (u32::MAX) to trigger the change-detection write.
         self.last_written_dragged_index = 0;
-        
+
         // Reset adhesion buffers
         self.adhesion_buffers.reset(queue);
         // Clear all genomes since no cells reference them
@@ -840,10 +878,19 @@ impl GpuScene {
         self.instance_builder.mark_all_dirty();
         // Reset GPU cell count buffer to 0 immediately
         let cell_counts: [u32; 2] = [0, 0];
-        queue.write_buffer(&self.gpu_triple_buffers.cell_count_buffer, 0, bytemuck::cast_slice(&cell_counts));
+        queue.write_buffer(
+            &self.gpu_triple_buffers.cell_count_buffer,
+            0,
+            bytemuck::cast_slice(&cell_counts),
+        );
+        self.gpu_triple_buffers.reset_cell_count_readback();
         // Reset GPU next_cell_id buffer to 0
         let next_id: [u32; 1] = [0];
-        queue.write_buffer(&self.gpu_triple_buffers.next_cell_id, 0, bytemuck::cast_slice(&next_id));
+        queue.write_buffer(
+            &self.gpu_triple_buffers.next_cell_id,
+            0,
+            bytemuck::cast_slice(&next_id),
+        );
         // Reset deterministic cell addition system
         self.gpu_triple_buffers.reset_slot_allocator();
         // Reset ring buffers to empty state
@@ -852,7 +899,11 @@ impl GpuScene {
         // Clear env anchor buffer so no stale anchors persist across resets
         let capacity = self.gpu_triple_buffers.capacity as usize;
         let zero_anchors: Vec<f32> = vec![0.0; capacity * 4];
-        queue.write_buffer(&self.gpu_triple_buffers.env_anchor_buffer, 0, bytemuck::cast_slice(&zero_anchors));
+        queue.write_buffer(
+            &self.gpu_triple_buffers.env_anchor_buffer,
+            0,
+            bytemuck::cast_slice(&zero_anchors),
+        );
 
         // Mark GPU buffers as needing sync (will be no-op since cell_count is 0)
         self.gpu_triple_buffers.mark_needs_sync();
@@ -870,7 +921,7 @@ impl GpuScene {
             bs.clear(queue);
         }
     }
-    
+
     /// Remove unused genomes from the scene.
     /// Uses the new reference counting system to safely remove unused genomes.
     /// Returns the number of genomes removed.
@@ -884,25 +935,26 @@ impl GpuScene {
             }
             return 0;
         }
-        
+
         // Compact the genome buffer manager first
         let removed_count = self.genome_buffer_manager.compact();
-        
+
         // Remove genomes that have no corresponding buffer groups
         let _genome_count_before = self.genomes.len();
         self.genomes.retain(|_genome| true); // Keep all for now - reference counting will handle cleanup
-        
+
         // Rebuild parent_make_adhesion_flags
         self.parent_make_adhesion_flags.clear();
         for genome in &self.genomes {
             for mode in &genome.modes {
-                self.parent_make_adhesion_flags.push(mode.parent_make_adhesion);
+                self.parent_make_adhesion_flags
+                    .push(mode.parent_make_adhesion);
             }
         }
-        
+
         removed_count
     }
-    
+
     /// Set the culling mode for the instance builder.
     pub fn set_culling_mode(&mut self, mode: CullingMode) {
         self.instance_builder.set_culling_mode(mode);
@@ -929,7 +981,8 @@ impl GpuScene {
         // GPU path: read genome metadata to find mode range
         let mutation_system = self.mutation_system.as_ref()?;
         let meta = self.read_back_buffer_range::<crate::simulation::gpu_physics::GenomeMeta>(
-            device, queue,
+            device,
+            queue,
             mutation_system.genome_meta_buffer(),
             genome_id as u64,
             1,
@@ -937,91 +990,177 @@ impl GpuScene {
         let meta = match meta {
             Some(m) => m,
             None => {
-                log::warn!("read_back_genome: failed to read genome_meta for genome_id={}", genome_id);
+                log::warn!(
+                    "read_back_genome: failed to read genome_meta for genome_id={}",
+                    genome_id
+                );
                 return None;
             }
         };
         let meta = meta[0];
         let mode_count = meta.mode_count as usize;
         let base_offset = meta.base_mode_offset as usize;
-        let initial_mode_local = meta.initial_mode_local as i32;
+        let initial_mode_local =
+            (meta.initial_mode_local as i32).clamp(0, mode_count.saturating_sub(1) as i32);
 
-        if mode_count == 0 || mode_count > 40 {
+        if mode_count == 0 || mode_count > crate::genome::MAX_MODES {
             log::warn!("read_back_genome: invalid metadata for genome_id={}: mode_count={}, base_offset={}", genome_id, mode_count, base_offset);
             return None;
         }
 
-        log::debug!("read_back_genome: genome_id={} mode_count={} base_offset={}", genome_id, mode_count, base_offset);
+        log::debug!(
+            "read_back_genome: genome_id={} mode_count={} base_offset={}",
+            genome_id,
+            mode_count,
+            base_offset
+        );
 
         // Read back all mode buffers for this genome's mode range (split into 5 sub-buffers each)
-        let mp_v0 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.mode_properties_v0, base_offset as u64, mode_count)?;
-        let mp_v1 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.mode_properties_v1, base_offset as u64, mode_count)?;
-        let mp_v2 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.mode_properties_v2, base_offset as u64, mode_count)?;
-        let mp_v3 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.mode_properties_v3, base_offset as u64, mode_count)?;
-        let mp_v4 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.mode_properties_v4, base_offset as u64, mode_count)?;
-        let mode_props: Vec<[f32; 20]> = (0..mode_count).map(|i| {
-            let mut p = [0f32; 20];
-            p[0..4].copy_from_slice(&mp_v0[i]); p[4..8].copy_from_slice(&mp_v1[i]);
-            p[8..12].copy_from_slice(&mp_v2[i]); p[12..16].copy_from_slice(&mp_v3[i]);
-            p[16..20].copy_from_slice(&mp_v4[i]); p
-        }).collect();
+        let mp_v0 = self.read_back_buffer_range::<[f32; 4]>(
+            device,
+            queue,
+            &self.gpu_triple_buffers.mode_properties_v0,
+            base_offset as u64,
+            mode_count,
+        )?;
+        let mp_v1 = self.read_back_buffer_range::<[f32; 4]>(
+            device,
+            queue,
+            &self.gpu_triple_buffers.mode_properties_v1,
+            base_offset as u64,
+            mode_count,
+        )?;
+        let mp_v2 = self.read_back_buffer_range::<[f32; 4]>(
+            device,
+            queue,
+            &self.gpu_triple_buffers.mode_properties_v2,
+            base_offset as u64,
+            mode_count,
+        )?;
+        let mp_v3 = self.read_back_buffer_range::<[f32; 4]>(
+            device,
+            queue,
+            &self.gpu_triple_buffers.mode_properties_v3,
+            base_offset as u64,
+            mode_count,
+        )?;
+        let mp_v4 = self.read_back_buffer_range::<[f32; 4]>(
+            device,
+            queue,
+            &self.gpu_triple_buffers.mode_properties_v4,
+            base_offset as u64,
+            mode_count,
+        )?;
+        let mode_props: Vec<[f32; 20]> = (0..mode_count)
+            .map(|i| {
+                let mut p = [0f32; 20];
+                p[0..4].copy_from_slice(&mp_v0[i]);
+                p[4..8].copy_from_slice(&mp_v1[i]);
+                p[8..12].copy_from_slice(&mp_v2[i]);
+                p[12..16].copy_from_slice(&mp_v3[i]);
+                p[16..20].copy_from_slice(&mp_v4[i]);
+                p
+            })
+            .collect();
 
-        let gmd_v0 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.genome_mode_data_v0, base_offset as u64, mode_count)?;
-        let gmd_v1 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.genome_mode_data_v1, base_offset as u64, mode_count)?;
-        let gmd_v2 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.genome_mode_data_v2, base_offset as u64, mode_count)?;
-        let gmd_v3 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.genome_mode_data_v3, base_offset as u64, mode_count)?;
-        let gmd_v4 = self.read_back_buffer_range::<[f32; 4]>(device, queue, &self.gpu_triple_buffers.genome_mode_data_v4, base_offset as u64, mode_count)?;
-        let mode_data: Vec<[f32; 20]> = (0..mode_count).map(|i| {
-            let mut d = [0f32; 20];
-            d[0..4].copy_from_slice(&gmd_v0[i]); d[4..8].copy_from_slice(&gmd_v1[i]);
-            d[8..12].copy_from_slice(&gmd_v2[i]); d[12..16].copy_from_slice(&gmd_v3[i]);
-            d[16..20].copy_from_slice(&gmd_v4[i]); d
-        }).collect();
+        let gmd_v0 = self.read_back_buffer_range::<[f32; 4]>(
+            device,
+            queue,
+            &self.gpu_triple_buffers.genome_mode_data_v0,
+            base_offset as u64,
+            mode_count,
+        )?;
+        let gmd_v1 = self.read_back_buffer_range::<[f32; 4]>(
+            device,
+            queue,
+            &self.gpu_triple_buffers.genome_mode_data_v1,
+            base_offset as u64,
+            mode_count,
+        )?;
+        let gmd_v2 = self.read_back_buffer_range::<[f32; 4]>(
+            device,
+            queue,
+            &self.gpu_triple_buffers.genome_mode_data_v2,
+            base_offset as u64,
+            mode_count,
+        )?;
+        let gmd_v3 = self.read_back_buffer_range::<[f32; 4]>(
+            device,
+            queue,
+            &self.gpu_triple_buffers.genome_mode_data_v3,
+            base_offset as u64,
+            mode_count,
+        )?;
+        let gmd_v4 = self.read_back_buffer_range::<[f32; 4]>(
+            device,
+            queue,
+            &self.gpu_triple_buffers.genome_mode_data_v4,
+            base_offset as u64,
+            mode_count,
+        )?;
+        let mode_data: Vec<[f32; 20]> = (0..mode_count)
+            .map(|i| {
+                let mut d = [0f32; 20];
+                d[0..4].copy_from_slice(&gmd_v0[i]);
+                d[4..8].copy_from_slice(&gmd_v1[i]);
+                d[8..12].copy_from_slice(&gmd_v2[i]);
+                d[12..16].copy_from_slice(&gmd_v3[i]);
+                d[16..20].copy_from_slice(&gmd_v4[i]);
+                d
+            })
+            .collect();
 
         let child_indices = self.read_back_buffer_range::<[i32; 2]>(
-            device, queue,
+            device,
+            queue,
             &self.gpu_triple_buffers.child_mode_indices,
             base_offset as u64,
             mode_count,
         )?;
 
         let cell_types = self.read_back_buffer_range::<u32>(
-            device, queue,
+            device,
+            queue,
             &self.gpu_triple_buffers.mode_cell_types,
             base_offset as u64,
             mode_count,
         )?;
 
         let parent_make_flags = self.read_back_buffer_range::<u32>(
-            device, queue,
+            device,
+            queue,
             &self.gpu_triple_buffers.parent_make_adhesion_flags,
             base_offset as u64,
             mode_count,
         )?;
 
         let child_a_keep_flags = self.read_back_buffer_range::<u32>(
-            device, queue,
+            device,
+            queue,
             &self.gpu_triple_buffers.child_a_keep_adhesion_flags,
             base_offset as u64,
             mode_count,
         )?;
 
         let child_b_keep_flags = self.read_back_buffer_range::<u32>(
-            device, queue,
+            device,
+            queue,
             &self.gpu_triple_buffers.child_b_keep_adhesion_flags,
             base_offset as u64,
             mode_count,
         )?;
 
         let glueocyte_flags = self.read_back_buffer_range::<u32>(
-            device, queue,
+            device,
+            queue,
             &self.gpu_triple_buffers.glueocyte_env_adhesion_flags,
             base_offset as u64,
             mode_count,
         )?;
 
         let oculocyte_params = self.read_back_buffer_range::<[u32; 4]>(
-            device, queue,
+            device,
+            queue,
             &self.gpu_triple_buffers.oculocyte_params,
             base_offset as u64,
             mode_count,
@@ -1030,7 +1169,8 @@ impl GpuScene {
         // Regulation params: [channel(u32), value_bits(u32), hops(u32), padding(u32)]
         // channel == 0xFFFFFFFF means disabled (-1); otherwise 8-15.
         let regulation_params = self.read_back_buffer_range::<[u32; 4]>(
-            device, queue,
+            device,
+            queue,
             &self.gpu_triple_buffers.regulation_params,
             base_offset as u64,
             mode_count,
@@ -1038,13 +1178,15 @@ impl GpuScene {
 
         // mode_visuals: read colors (1 vec4 per mode) and emissive (1 vec4 per mode) separately
         let colors_raw = self.read_back_buffer_range::<[f32; 4]>(
-            device, queue,
+            device,
+            queue,
             self.instance_builder.mode_colors_buffer(),
             base_offset as u64,
             mode_count,
         )?;
         let emissive_raw = self.read_back_buffer_range::<[f32; 4]>(
-            device, queue,
+            device,
+            queue,
             self.instance_builder.mode_emissive_buffer(),
             base_offset as u64,
             mode_count,
@@ -1052,19 +1194,36 @@ impl GpuScene {
 
         // adhesion_settings: read from split sub-buffers (v0/v1/v2), each 16 bytes per mode.
         // All 8M mode slots are covered so no bounds check needed.
-        let adhesion_settings_raw: Vec<crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings> = {
+        let adhesion_settings_raw: Vec<
+            crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings,
+        > = {
             let v0 = self.read_back_buffer_range::<[f32; 4]>(
-                device, queue, &self.adhesion_buffers.adhesion_settings_v0, base_offset as u64, mode_count,
+                device,
+                queue,
+                &self.adhesion_buffers.adhesion_settings_v0,
+                base_offset as u64,
+                mode_count,
             );
             let v1 = self.read_back_buffer_range::<[f32; 4]>(
-                device, queue, &self.adhesion_buffers.adhesion_settings_v1, base_offset as u64, mode_count,
+                device,
+                queue,
+                &self.adhesion_buffers.adhesion_settings_v1,
+                base_offset as u64,
+                mode_count,
             );
             let v2 = self.read_back_buffer_range::<[f32; 4]>(
-                device, queue, &self.adhesion_buffers.adhesion_settings_v2, base_offset as u64, mode_count,
+                device,
+                queue,
+                &self.adhesion_buffers.adhesion_settings_v2,
+                base_offset as u64,
+                mode_count,
             );
             match (v0, v1, v2) {
-                (Some(v0), Some(v1), Some(v2)) => {
-                    v0.iter().zip(v1.iter()).zip(v2.iter()).map(|((a, b), c)| {
+                (Some(v0), Some(v1), Some(v2)) => v0
+                    .iter()
+                    .zip(v1.iter())
+                    .zip(v2.iter())
+                    .map(|((a, b), c)| {
                         crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings {
                             can_break: a[0] as i32,
                             break_force: a[1],
@@ -1079,22 +1238,37 @@ impl GpuScene {
                             enable_twist_constraint: c[2] as i32,
                             _padding: 0,
                         }
-                    }).collect()
-                }
-                _ => vec![crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings::default(); mode_count],
+                    })
+                    .collect(),
+                _ => vec![
+                    crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings::default();
+                    mode_count
+                ],
             }
         };
 
         // Reconstruct Genome from raw data
         let mut modes = Vec::with_capacity(mode_count);
+        let max_local_mode = mode_count.saturating_sub(1) as i32;
+        let to_local_mode = |absolute_mode: i32| -> i32 {
+            (absolute_mode - base_offset as i32).clamp(0, max_local_mode)
+        };
+        let to_optional_local_mode = |absolute_mode: f32| -> i32 {
+            if absolute_mode < 0.0 {
+                -1
+            } else {
+                to_local_mode(absolute_mode as i32)
+            }
+        };
+
         for i in 0..mode_count {
             let props = &mode_props[i];
             let data = &mode_data[i];
             let ci = &child_indices[i];
 
             // Convert absolute child mode indices back to genome-local
-            let child_a_local = (ci[0] - base_offset as i32).max(0);
-            let child_b_local = (ci[1] - base_offset as i32).max(0);
+            let child_a_local = to_local_mode(ci[0]);
+            let child_b_local = to_local_mode(ci[1]);
 
             // Reconstruct orientations from genome_mode_data
             let qa = glam::Quat::from_xyzw(data[0], data[1], data[2], data[3]);
@@ -1112,7 +1286,11 @@ impl GpuScene {
 
             // Reconstruct max_splits: negative GPU value means infinite (-1)
             let gpu_max_splits = props[8];
-            let max_splits = if gpu_max_splits < 0.0 { -1 } else { gpu_max_splits as i32 };
+            let max_splits = if gpu_max_splits < 0.0 {
+                -1
+            } else {
+                gpu_max_splits as i32
+            };
 
             let mode = crate::genome::ModeSettings {
                 name: format!("Mode {}", i + 1),
@@ -1134,8 +1312,8 @@ impl GpuScene {
                 min_adhesions: props[15] as i32,
                 enable_parent_angle_snapping: false,
                 max_splits,
-                mode_a_after_splits: if props[17] < 0.0 { -1 } else { (props[17] as i32 - base_offset as i32).max(0) },
-                mode_b_after_splits: if props[18] < 0.0 { -1 } else { (props[18] as i32 - base_offset as i32).max(0) },
+                mode_a_after_splits: to_optional_local_mode(props[17]),
+                mode_b_after_splits: to_optional_local_mode(props[18]),
                 child_a_after_split_orientation: qa_split,
                 child_b_after_split_orientation: qb_split,
                 child_a_after_split_keep_adhesion: false,
@@ -1174,7 +1352,11 @@ impl GpuScene {
                 membrane_stiffness: props[2],
                 regulation_emit_channel: {
                     let ch = regulation_params[i][0];
-                    if ch == 0xFFFFFFFFu32 { -1i32 } else { ch.clamp(8, 15) as i32 }
+                    if ch == 0xFFFFFFFFu32 {
+                        -1i32
+                    } else {
+                        ch.clamp(8, 15) as i32
+                    }
                 },
                 regulation_emit_value: f32::from_bits(regulation_params[i][1]),
                 regulation_emit_hops: regulation_params[i][2].clamp(1, 20) as i32,
@@ -1239,18 +1421,24 @@ impl GpuScene {
                     orientation: qa,
                     keep_adhesion: child_a_keep_flags[i] != 0,
                     enable_angle_snapping: false,
-                    x_axis_lat: 0.0, x_axis_lon: 0.0,
-                    y_axis_lat: 0.0, y_axis_lon: 0.0,
-                    z_axis_lat: 0.0, z_axis_lon: 0.0,
+                    x_axis_lat: 0.0,
+                    x_axis_lon: 0.0,
+                    y_axis_lat: 0.0,
+                    y_axis_lon: 0.0,
+                    z_axis_lat: 0.0,
+                    z_axis_lon: 0.0,
                 },
                 child_b: crate::genome::ChildSettings {
                     mode_number: child_b_local,
                     orientation: qb,
                     keep_adhesion: child_b_keep_flags[i] != 0,
                     enable_angle_snapping: false,
-                    x_axis_lat: 0.0, x_axis_lon: 0.0,
-                    y_axis_lat: 0.0, y_axis_lon: 0.0,
-                    z_axis_lat: 0.0, z_axis_lon: 0.0,
+                    x_axis_lat: 0.0,
+                    x_axis_lon: 0.0,
+                    y_axis_lat: 0.0,
+                    y_axis_lon: 0.0,
+                    z_axis_lat: 0.0,
+                    z_axis_lon: 0.0,
                 },
                 adhesion_settings: {
                     let gpu_as = &adhesion_settings_raw[i];
@@ -1278,6 +1466,130 @@ impl GpuScene {
             initial_orientation: glam::Quat::IDENTITY,
             modes,
         })
+    }
+
+    /// Read back the genome associated with an inspected cell.
+    ///
+    /// The inspector reports both a per-cell `genome_id` and an absolute
+    /// `mode_index`. In normal cases the genome ID is authoritative. If the
+    /// reported ID is stale, the absolute mode index still points into the
+    /// mutated genome's GPU mode range, so resolve from metadata before loading.
+    pub fn read_back_genome_for_inspected_cell(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        reported_genome_id: u32,
+        absolute_mode_index: u32,
+    ) -> Option<crate::genome::Genome> {
+        let resolved_genome_id = self.resolve_genome_id_for_absolute_mode(
+            device,
+            queue,
+            reported_genome_id,
+            absolute_mode_index,
+        );
+
+        if resolved_genome_id != reported_genome_id {
+            log::info!(
+                "Resolved inspected genome from reported_id={} mode_index={} to genome_id={}",
+                reported_genome_id,
+                absolute_mode_index,
+                resolved_genome_id
+            );
+        }
+
+        self.read_back_genome(device, queue, resolved_genome_id)
+    }
+
+    fn resolve_genome_id_for_absolute_mode(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        reported_genome_id: u32,
+        absolute_mode_index: u32,
+    ) -> u32 {
+        if self.absolute_mode_belongs_to_cpu_genome(reported_genome_id, absolute_mode_index) {
+            return reported_genome_id;
+        }
+
+        let Some(mutation_system) = self.mutation_system.as_ref() else {
+            return reported_genome_id;
+        };
+
+        let Some(meta) = self.read_back_buffer_range::<crate::simulation::gpu_physics::GenomeMeta>(
+            device,
+            queue,
+            mutation_system.genome_meta_buffer(),
+            0,
+            crate::simulation::gpu_physics::mutation::GENOME_RING_CAPACITY as usize,
+        ) else {
+            return reported_genome_id;
+        };
+
+        for (genome_id, entry) in meta.iter().enumerate() {
+            let mode_count = entry.mode_count;
+            if mode_count == 0 {
+                continue;
+            }
+
+            let start = entry.base_mode_offset;
+            let end = start.saturating_add(mode_count);
+            if absolute_mode_index >= start && absolute_mode_index < end {
+                return genome_id as u32;
+            }
+        }
+
+        reported_genome_id
+    }
+
+    fn absolute_mode_belongs_to_cpu_genome(
+        &self,
+        genome_id: u32,
+        absolute_mode_index: u32,
+    ) -> bool {
+        let genome_id = genome_id as usize;
+        if genome_id >= self.genomes.len() {
+            return false;
+        }
+
+        let start: usize = self.genomes[..genome_id]
+            .iter()
+            .map(|g| g.modes.len())
+            .sum();
+        let end = start + self.genomes[genome_id].modes.len();
+        let mode = absolute_mode_index as usize;
+        mode >= start && mode < end
+    }
+
+    /// Returns whether an inspected cell's reported genome ID is consistent
+    /// with its absolute mode index for CPU-known genomes.
+    pub fn reported_genome_matches_absolute_mode(
+        &self,
+        genome_id: u32,
+        absolute_mode_index: u32,
+    ) -> bool {
+        self.absolute_mode_belongs_to_cpu_genome(genome_id, absolute_mode_index)
+    }
+
+    /// User-facing mode label for inspector output.
+    ///
+    /// GPU cells store mode indices as absolute slots in the flat mode buffers.
+    /// CPU-known genomes can be converted back to local `M#` labels. For mutated
+    /// GPU genomes, avoid showing absolute slots as if they were editor mode numbers.
+    pub fn inspected_mode_label(&self, genome_id: u32, absolute_mode_index: u32) -> String {
+        let genome_id = genome_id as usize;
+        if genome_id < self.genomes.len() {
+            let start: usize = self.genomes[..genome_id]
+                .iter()
+                .map(|g| g.modes.len())
+                .sum();
+            let end = start + self.genomes[genome_id].modes.len();
+            let mode = absolute_mode_index as usize;
+            if mode >= start && mode < end {
+                return format!("M{}", mode - start);
+            }
+        }
+
+        "mutated GPU mode".to_string()
     }
 
     /// Synchronous GPU buffer readback helper.
@@ -1348,50 +1660,50 @@ impl GpuScene {
             }
         }
     }
-    
+
     /// Get the current culling mode.
     pub fn culling_mode(&self) -> CullingMode {
         self.instance_builder.culling_mode()
     }
-    
+
     /// Get culling statistics from the last frame.
     pub fn culling_stats(&self) -> crate::rendering::CullingStats {
         self.instance_builder.culling_stats()
     }
-    
+
     /// Set the occlusion bias for culling.
     /// Negative values = more aggressive culling (cull more cells).
     /// Positive values = more conservative culling (cull fewer cells).
     pub fn set_occlusion_bias(&mut self, bias: f32) {
         self.instance_builder.set_occlusion_bias(bias);
     }
-    
+
     /// Get the current occlusion bias.
     pub fn occlusion_bias(&self) -> f32 {
         self.instance_builder.occlusion_bias()
     }
-    
+
     /// Set the mip level override for occlusion culling.
     pub fn set_occlusion_mip_override(&mut self, mip: i32) {
         self.instance_builder.set_occlusion_mip_override(mip);
     }
-    
+
     /// Set the minimum screen-space size for occlusion culling.
     pub fn set_occlusion_min_screen_size(&mut self, size: f32) {
         self.instance_builder.set_min_screen_size(size);
     }
-    
+
     /// Set the minimum distance for occlusion culling.
     pub fn set_occlusion_min_distance(&mut self, distance: f32) {
         self.instance_builder.set_min_distance(distance);
     }
-    
+
     /// Set LOD parameters for texture atlas rendering.
     pub fn set_lod_settings(
-        &mut self, 
-        scale_factor: f32, 
-        threshold_low: f32, 
-        threshold_medium: f32, 
+        &mut self,
+        scale_factor: f32,
+        threshold_low: f32,
+        threshold_medium: f32,
         threshold_high: f32,
         debug_colors: bool,
     ) {
@@ -1401,33 +1713,33 @@ impl GpuScene {
         self.lod_threshold_high = threshold_high;
         self.lod_debug_colors = debug_colors;
     }
-    
+
     /// Set whether GPU readbacks are enabled (cell count, etc.)
     /// Disabling this can improve performance by avoiding CPU-GPU sync overhead.
     pub fn set_readbacks_enabled(&mut self, enabled: bool) {
         self.readbacks_enabled = enabled;
     }
-    
+
     /// Set surface pressure for radial fluid mode (tangential smoothing strength).
     pub fn set_surface_pressure(&mut self, pressure: f32) {
         self.surface_pressure = pressure.clamp(0.0, 1.0);
     }
-    
+
     /// Set whether to show the world boundary sphere.
     pub fn set_show_world_sphere(&mut self, enabled: bool) {
         self.show_world_sphere = enabled;
     }
-    
+
     /// Get the world sphere renderer for customization.
     pub fn world_sphere_renderer(&self) -> &WorldSphereRenderer {
         &self.world_sphere_renderer
     }
-    
+
     /// Get mutable access to the world sphere renderer for customization.
     pub fn world_sphere_renderer_mut(&mut self) -> &mut WorldSphereRenderer {
         &mut self.world_sphere_renderer
     }
-    
+
     /// Read culling statistics from GPU (blocking).
     pub fn read_culling_stats(&mut self, device: &wgpu::Device) -> crate::rendering::CullingStats {
         self.instance_builder.read_culling_stats_blocking(device)
@@ -1438,7 +1750,14 @@ impl GpuScene {
     }
 
     /// Run physics step using GPU compute shaders with zero CPU involvement.
-    fn run_physics(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, delta_time: f32, world_diameter: f32) {
+    fn run_physics(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        delta_time: f32,
+        world_diameter: f32,
+    ) {
         // Note: No CPU-side early-out on current_cell_count here.
         // The GPU shaders check cell_count_buffer[0] (high water mark) internally.
         // Using the async-readback live count would cause premature physics freeze
@@ -1458,8 +1777,11 @@ impl GpuScene {
         if has_phagocytes || self.show_nutrient_particles {
             if let Some(ref simulator) = self.fluid_simulator {
                 simulator.populate_nutrients(
-                    device, queue, encoder,
-                    self.nutrient_density, delta_time,
+                    device,
+                    queue,
+                    encoder,
+                    self.nutrient_density,
+                    delta_time,
                     self.nutrient_epoch_duration,
                     self.nutrient_epoch_spacing,
                     self.nutrient_spawn_end,
@@ -1500,14 +1822,18 @@ impl GpuScene {
                 bs.update(device, queue, delta_time);
             }
         }
-        
+
         // Update signal sense world params (boundary_radius, light_dir, fluid grid params)
         {
             let boundary_radius = world_diameter * 0.5;
-            let light_dir = self.light_field_system.as_ref()
+            let light_dir = self
+                .light_field_system
+                .as_ref()
                 .map(|lfs| lfs.light_dir())
                 .unwrap_or([-0.5, 0.7, 0.5]);
-            let (grid_resolution, cell_size, grid_origin) = self.fluid_simulator.as_ref()
+            let (grid_resolution, cell_size, grid_origin) = self
+                .fluid_simulator
+                .as_ref()
                 .map(|fs| {
                     let (wr, wc) = fs.grid_params();
                     let wd = wr * 2.0;
@@ -1518,13 +1844,23 @@ impl GpuScene {
                 .unwrap_or((0u32, 1.0, [0.0, 0.0, 0.0]));
             let params: [f32; 12] = [
                 boundary_radius,
-                light_dir[0], light_dir[1], light_dir[2],
+                light_dir[0],
+                light_dir[1],
+                light_dir[2],
                 f32::from_bits(grid_resolution),
                 cell_size,
-                grid_origin[0], grid_origin[1], grid_origin[2],
-                0.0, 0.0, 0.0, // padding
+                grid_origin[0],
+                grid_origin[1],
+                grid_origin[2],
+                0.0,
+                0.0,
+                0.0, // padding
             ];
-            queue.write_buffer(&self.signal_sense_world_params_buffer, 0, bytemuck::cast_slice(&params));
+            queue.write_buffer(
+                &self.signal_sense_world_params_buffer,
+                0,
+                bytemuck::cast_slice(&params),
+            );
         }
 
         // Cell count is read from GPU buffer by shaders
@@ -1561,15 +1897,20 @@ impl GpuScene {
             self.total_cell_slots,
             self.constraint_iterations,
             self.solo_metabolism_multiplier,
-            self.boulder_system.as_ref().map(|bs| bs.active_count()).unwrap_or(0),
-            self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_force_accum),
+            self.boulder_system
+                .as_ref()
+                .map(|bs| bs.active_count())
+                .unwrap_or(0),
+            self.boulder_system
+                .as_ref()
+                .map(|bs| &bs.buffers.boulder_force_accum),
             physics_features,
         );
-        
+
         // Increment frame counter for time-based shader logic
         self.current_frame = self.current_frame.wrapping_add(1);
         self.last_delta_time = delta_time;
-        
+
         // Execute lifecycle pipeline for cell division (4 compute shader stages)
         // This handles death detection, free slot compaction, and cell division
         // Cell count is updated on GPU by division shader
@@ -1590,14 +1931,9 @@ impl GpuScene {
         // Mutation pass: collect candidates from division results, then apply mutations.
         // Runs after division execute so division_flags and division_slot_assignments are set.
         if let Some(mutation_system) = &mut self.mutation_system {
-            mutation_system.dispatch(
-                device,
-                encoder,
-                queue,
-                self.current_frame as u32,
-            );
+            mutation_system.dispatch(device, encoder, queue, self.current_frame as u32);
         }
-        
+
         // NOTE: Spatial grid rebuild after lifecycle is unnecessary because the grid
         // is rebuilt at the START of each physics step (stages 1-3). Nothing between
         // lifecycle and the next physics step reads the spatial grid. Removing this
@@ -1609,10 +1945,17 @@ impl GpuScene {
         // NOTE: copy_buffers_to_instance_builder is called once per frame in render(),
         // after all physics steps complete. No need to copy after each step.
     }
-    
+
     /// Run mechanics-only physics step (no nutrient transport, no mass accumulation, no lifecycle).
     /// Used when paused and dragging so connected cells follow via spring forces.
-    fn run_mechanics_only(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, delta_time: f32, world_diameter: f32) {
+    fn run_mechanics_only(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        delta_time: f32,
+        world_diameter: f32,
+    ) {
         execute_gpu_mechanics_step(
             device,
             encoder,
@@ -1634,30 +1977,40 @@ impl GpuScene {
             self.constraint_iterations,
             self.physics_features,
         );
-        
+
         // NOTE: copy_buffers_to_instance_builder is called once per frame in render(),
         // after mechanics step completes. No need to copy here.
     }
-    
+
     /// Run phagocyte nutrient consumption compute shader
-    fn run_phagocyte_consumption(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
+    fn run_phagocyte_consumption(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+    ) {
         // Note: No CPU-side early-out on current_cell_count here.
         // The GPU shader reads cell_count_buffer[0] (high water mark) for bounds checking.
         // Using the async-readback live count would cause premature consumption freeze
         // when the readback lags behind the actual GPU state.
-        
-        let (consumption_system, fluid_sim) = match (&self.phagocyte_consumption, &self.fluid_simulator) {
-            (Some(c), Some(f)) => (c, f),
-            _ => return,
-        };
-        
+
+        let (consumption_system, fluid_sim) =
+            match (&self.phagocyte_consumption, &self.fluid_simulator) {
+                (Some(c), Some(f)) => (c, f),
+                _ => return,
+            };
+
         // Update params with current grid settings
         let world_diameter = self.config.sphere_radius * 2.0;
         let grid_resolution = 128u32;
         let cell_size = world_diameter / grid_resolution as f32;
-        let grid_origin = [-world_diameter / 2.0, -world_diameter / 2.0, -world_diameter / 2.0];
+        let grid_origin = [
+            -world_diameter / 2.0,
+            -world_diameter / 2.0,
+            -world_diameter / 2.0,
+        ];
         consumption_system.update_params(queue, grid_resolution, cell_size, grid_origin);
-        
+
         // Cache physics bind groups (one per triple buffer index) instead of creating per-frame
         if self.phagocyte_physics_bind_groups.is_none() {
             self.phagocyte_physics_bind_groups = Some([
@@ -1681,41 +2034,55 @@ impl GpuScene {
                 ),
             ]);
         }
-        
+
         // Create nutrient bind group (can be cached as these buffers don't change)
         if self.phagocyte_nutrient_bind_group.is_none() {
-            self.phagocyte_nutrient_bind_group = Some(consumption_system.create_nutrient_bind_group(
-                device,
-                fluid_sim.current_state_buffer(),
-                fluid_sim.nutrient_voxels_buffer(),
-                &self.gpu_triple_buffers.cell_types,
-                &self.gpu_triple_buffers.nutrients_buffer,
-                &self.gpu_triple_buffers.split_nutrient_thresholds,
-                &self.gpu_triple_buffers.death_flags,
-            ));
+            self.phagocyte_nutrient_bind_group =
+                Some(consumption_system.create_nutrient_bind_group(
+                    device,
+                    fluid_sim.current_state_buffer(),
+                    fluid_sim.nutrient_voxels_buffer(),
+                    &self.gpu_triple_buffers.cell_types,
+                    &self.gpu_triple_buffers.nutrients_buffer,
+                    &self.gpu_triple_buffers.split_nutrient_thresholds,
+                    &self.gpu_triple_buffers.death_flags,
+                ));
         }
-        
+
         // Use cached bind groups - select by output buffer index (where physics wrote positions)
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
-        if let (Some(ref physics_bgs), Some(ref nutrient_bg)) = (&self.phagocyte_physics_bind_groups, &self.phagocyte_nutrient_bind_group) {
+        if let (Some(ref physics_bgs), Some(ref nutrient_bg)) = (
+            &self.phagocyte_physics_bind_groups,
+            &self.phagocyte_nutrient_bind_group,
+        ) {
             // Dispatch at full capacity - the shader reads cell_count_buffer[0] internally.
             // Using total_cell_slots (async readback, lags 1-3 frames) would under-dispatch
             // and miss cells at higher slot indices during the lag window.
-            consumption_system.run(encoder, &physics_bgs[output_idx], nutrient_bg, self.gpu_triple_buffers.capacity);
+            consumption_system.run(
+                encoder,
+                &physics_bgs[output_idx],
+                nutrient_bg,
+                self.gpu_triple_buffers.capacity,
+            );
         }
     }
-    
+
     /// Run light field computation only (no photocyte consumption).
     /// Must run every frame (even with 0 cells) so cave shadows are computed for volumetric fog.
     /// Photocyte consumption runs separately inside each physics step.
-    fn run_light_field(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
+    fn run_light_field(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+    ) {
         let (light_field, fluid_sim) = match (&self.light_field_system, &self.fluid_simulator) {
             (Some(l), Some(f)) => (l, f),
             _ => return,
         };
-        
+
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
-        
+
         // Cache occupancy bind groups (one per triple buffer index)
         if self.cached_occupancy_bind_groups.is_none() {
             self.cached_occupancy_bind_groups = Some([
@@ -1736,32 +2103,32 @@ impl GpuScene {
                 ),
             ]);
         }
-        
+
         // Cache light field bind group (solid_mask buffer doesn't change)
         if self.cached_light_field_bind_group.is_none() {
             self.cached_light_field_bind_group = Some(
-                light_field.create_light_field_bind_group(device, fluid_sim.solid_mask_buffer())
+                light_field.create_light_field_bind_group(device, fluid_sim.solid_mask_buffer()),
             );
         }
-        
+
         // Use cached bind groups instead of creating per-frame
         light_field.update_light_field_params(queue, self.current_time);
         light_field.update_occupancy_params(queue);
-        
+
         let total_voxels = 128u32 * 128 * 128;
         let light_workgroups = (total_voxels + 63) / 64;
-        
+
         // Clear occupancy grid using DMA (faster than compute dispatch)
         encoder.clear_buffer(light_field.cell_occupancy_buffer_ref(), 0, None);
-        
+
         // Clear light field buffer so stale values don't persist when the compute
         // dispatch is skipped (e.g. no cells + fog off). Without this, the last
         // frame's shadow pattern burns into the camera until cells reappear.
         encoder.clear_buffer(light_field.light_field_buffer(), 0, None);
-        
+
         let occupancy_bg = &self.cached_occupancy_bind_groups.as_ref().unwrap()[output_idx];
         let light_field_bg = self.cached_light_field_bind_group.as_ref().unwrap();
-        
+
         if self.current_cell_count > 0 {
             let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -1772,7 +2139,7 @@ impl GpuScene {
             pass.set_bind_group(0, occupancy_bg, &[]);
             pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
-        
+
         // Compute light field - skip entirely when there are no cells and volumetric fog
         // is not shown. The ray-march dispatches 32,768 workgroups (128^3/64) every frame;
         // with no photocytes the result is a uniform dark field, so the work is wasted.
@@ -1792,22 +2159,27 @@ impl GpuScene {
             pass.dispatch_workgroups(light_workgroups, 1, 1);
         }
     }
-    
+
     /// Run photocyte light consumption compute shader.
     /// Called inside each physics step so photocytes gain/lose mass at the same rate as other cells.
-    fn run_photocyte_light_consumption(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
+    fn run_photocyte_light_consumption(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+    ) {
         // Note: No CPU-side early-out on current_cell_count here.
         // The GPU shader reads cell_count_buffer[0] (high water mark) for bounds checking.
         // Using the async-readback live count would cause premature consumption freeze
         // when the readback lags behind the actual GPU state.
-        
+
         let light_field = match &self.light_field_system {
             Some(l) => l,
             None => return,
         };
-        
+
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
-        
+
         // Cache photocyte physics bind groups (one per triple buffer index)
         if self.cached_photocyte_physics_bind_groups.is_none() {
             self.cached_photocyte_physics_bind_groups = Some([
@@ -1831,26 +2203,26 @@ impl GpuScene {
                 ),
             ]);
         }
-        
+
         // Cache photocyte system bind group (buffers don't change)
         if self.cached_photocyte_system_bind_group.is_none() {
-            self.cached_photocyte_system_bind_group = Some(
-                light_field.create_photocyte_system_bind_group(
+            self.cached_photocyte_system_bind_group =
+                Some(light_field.create_photocyte_system_bind_group(
                     device,
                     &self.gpu_triple_buffers.cell_types,
                     &self.gpu_triple_buffers.nutrients_buffer,
                     &self.gpu_triple_buffers.split_nutrient_thresholds,
                     &self.gpu_triple_buffers.death_flags,
-                )
-            );
+                ));
         }
-        
+
         // Use cached bind groups
         light_field.update_photocyte_params(queue);
-        
-        let photocyte_physics_bg = &self.cached_photocyte_physics_bind_groups.as_ref().unwrap()[output_idx];
+
+        let photocyte_physics_bg =
+            &self.cached_photocyte_physics_bind_groups.as_ref().unwrap()[output_idx];
         let photocyte_system_bg = self.cached_photocyte_system_bind_group.as_ref().unwrap();
-        
+
         // Dispatch at full capacity - the shader reads cell_count_buffer[0] (the GPU-side
         // high-water mark) for its own bounds check. Using total_cell_slots (the async
         // readback value, which lags 1-3 frames) would under-dispatch and miss photocytes
@@ -1865,9 +2237,9 @@ impl GpuScene {
         pass.set_bind_group(1, photocyte_system_bg, &[]);
         pass.dispatch_workgroups(cell_workgroups, 1, 1);
     }
-    
+
     /// Copy data from triple buffers to instance builder
-    /// 
+    ///
     /// This copies positions, rotations, mode_indices, cell_ids, and genome_ids
     /// from the GPU triple buffer system to the instance builder's buffers.
     /// The build_instances shader will use cell_count_buffer to know how many cells to process.
@@ -1895,7 +2267,7 @@ impl GpuScene {
             0,
             vec4_copy_size,
         );
-        
+
         // Copy rotations (Vec4: quaternion)
         encoder.copy_buffer_to_buffer(
             &self.gpu_triple_buffers.rotations[output_idx],
@@ -1904,7 +2276,7 @@ impl GpuScene {
             0,
             vec4_copy_size,
         );
-        
+
         // Copy mode indices (u32) - critical for correct cell colors after division
         encoder.copy_buffer_to_buffer(
             &self.gpu_triple_buffers.mode_indices,
@@ -1913,7 +2285,7 @@ impl GpuScene {
             0,
             u32_copy_size,
         );
-        
+
         // Copy cell IDs (u32) - needed for stable animation offsets
         encoder.copy_buffer_to_buffer(
             &self.gpu_triple_buffers.cell_ids,
@@ -1922,7 +2294,7 @@ impl GpuScene {
             0,
             u32_copy_size,
         );
-        
+
         // Copy genome IDs (u32) - needed for cell type visuals lookup
         encoder.copy_buffer_to_buffer(
             &self.gpu_triple_buffers.genome_ids,
@@ -1931,7 +2303,7 @@ impl GpuScene {
             0,
             u32_copy_size,
         );
-        
+
         // Copy cell types (u32) - needed for flagella type_data population
         encoder.copy_buffer_to_buffer(
             &self.gpu_triple_buffers.cell_types,
@@ -1940,7 +2312,7 @@ impl GpuScene {
             0,
             u32_copy_size,
         );
-        
+
         // Copy mode properties v0 only (16 bytes/mode) - needed for swim_force -> tail_speed
         // (swim_force is index 6, in v1: [split_mass, nutrient_priority, swim_force, prioritize_when_low])
         // instance_builder.mode_properties_buffer() now holds only v1 (swim_force sub-buffer)
@@ -1968,7 +2340,7 @@ impl GpuScene {
                 mode_properties_v5_copy_size,
             );
         }
-        
+
         // Copy mode cell types (1 u32 per mode = 4 bytes) - critical for correct cell type rendering
         // This ensures the InstanceBuilder has the same mode_cell_types as GpuTripleBufferSystem
         let mode_cell_types_copy_size = (total_modes * 4) as u64;
@@ -1981,7 +2353,7 @@ impl GpuScene {
                 mode_cell_types_copy_size,
             );
         }
-        
+
         // Clear dirty flags since we just copied from GPU
         self.instance_builder.clear_positions_dirty();
         self.instance_builder.clear_rotations_dirty();
@@ -1990,17 +2362,20 @@ impl GpuScene {
         self.instance_builder.clear_genome_ids_dirty();
         self.instance_builder.clear_cell_types_dirty();
     }
-    
 
-    
     /// Find an existing genome by name, or return None.
     pub fn find_genome_id(&self, name: &str) -> Option<usize> {
         self.genomes.iter().position(|g| g.name == name)
     }
-    
+
     /// Update the working genome with new settings.
     /// Performs incremental update to avoid affecting other genomes
-    pub fn update_genome(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, genome: &Genome) -> Option<usize> {
+    pub fn update_genome(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        genome: &Genome,
+    ) -> Option<usize> {
         // Find existing genome by name
         let genome_id = match self.genomes.iter().position(|g| g.name == genome.name) {
             Some(id) => id,
@@ -2009,29 +2384,29 @@ impl GpuScene {
                 return self.add_genome(device, genome.clone()).map(|(id, _)| id);
             }
         };
-        
+
         // Check if genome actually changed by comparing key fields including mode contents
         let existing_genome = &self.genomes[genome_id];
-        let genome_unchanged = existing_genome.name == genome.name 
+        let genome_unchanged = existing_genome.name == genome.name
             && existing_genome.modes.len() == genome.modes.len()
             && existing_genome.initial_mode == genome.initial_mode
             && existing_genome.initial_orientation == genome.initial_orientation
             && Self::modes_are_identical(&existing_genome.modes, &genome.modes);
-            
+
         if genome_unchanged {
             return Some(genome_id); // No change needed
         }
-        
+
         // Update the genome in place
         self.genomes[genome_id] = genome.clone();
         self.genomes_dirty = true;
-        
+
         // Perform incremental sync of only this genome's data
         self.incremental_sync_genome(device, queue, genome_id);
-        
+
         Some(genome_id)
     }
-    
+
     /// Add a genome to the scene and return its ID and whether it needs GPU sync.
     /// If an IDENTICAL genome exists (same name AND content), reuses it.
     /// If content differs, adds as a NEW genome to preserve existing cells' behavior.
@@ -2046,7 +2421,11 @@ impl GpuScene {
                 && Self::modes_are_identical(&existing.modes, &genome.modes)
             {
                 // Genome is truly identical, reuse it
-                log::info!("Reusing identical genome {} (total: {})", id, self.genomes.len());
+                log::info!(
+                    "Reusing identical genome {} (total: {})",
+                    id,
+                    self.genomes.len()
+                );
                 return Some((id, false)); // needs_sync = false, nothing changed
             }
         }
@@ -2056,19 +2435,22 @@ impl GpuScene {
         let id = self.genomes.len();
         self.genomes.push(genome);
         self.genomes_dirty = true;
-        
+
         // Update has_oculocytes flag
         self.update_has_oculocytes();
 
         log::info!("Added new genome {} (total: {})", id, self.genomes.len());
         Some((id, true)) // needs_sync = true because genome was added
     }
-    
+
     /// Check if two mode lists are identical (for genome deduplication)
-    fn modes_are_identical(a: &[crate::genome::ModeSettings], b: &[crate::genome::ModeSettings]) -> bool {
+    fn modes_are_identical(
+        a: &[crate::genome::ModeSettings],
+        b: &[crate::genome::ModeSettings],
+    ) -> bool {
         a == b
     }
-    
+
     /// Update has_oculocytes flag based on current genomes.
     /// Also activates the signal system for regulation emitters (channels 8-15),
     /// which use the same signal_flags buffers and propagation pipeline.
@@ -2123,7 +2505,9 @@ impl GpuScene {
                 }
                 if m.cell_type == oculocyte_type {
                     self.has_oculocytes = true;
-                    self.max_signal_hops = self.max_signal_hops.max(m.oculocyte_signal_hops.clamp(1, 20) as u32);
+                    self.max_signal_hops = self
+                        .max_signal_hops
+                        .max(m.oculocyte_signal_hops.clamp(1, 20) as u32);
                 }
                 // Regulation emitters (channels 8-15) also need the signal system.
                 // Without this, genomes with no oculocytes but with regulation signals
@@ -2131,196 +2515,377 @@ impl GpuScene {
                 // and division/apoptosis/mode-switch gates never open.
                 if m.regulation_emit_channel >= 8 {
                     self.has_oculocytes = true;
-                    self.max_signal_hops = self.max_signal_hops.max(m.regulation_emit_hops.clamp(1, 20) as u32);
+                    self.max_signal_hops = self
+                        .max_signal_hops
+                        .max(m.regulation_emit_hops.clamp(1, 20) as u32);
                 }
             }
         }
         self.physics_features.has_glueocytes = self.has_glueocytes;
     }
-    
+
     /// Incremental sync of a single genome's data to GPU buffers
     /// This avoids rebuilding the entire buffer layout which would affect other genomes
-    fn incremental_sync_genome(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, genome_id: usize) {
+    fn incremental_sync_genome(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        genome_id: usize,
+    ) {
         // Calculate global mode index range for this genome
         let global_start_index = self.get_global_mode_index(genome_id, 0);
         let mode_count = self.genomes[genome_id].modes.len();
-        
+
         // Update adhesion settings for this genome's modes only
         self.incremental_sync_adhesion_settings(queue, genome_id, global_start_index, mode_count);
-        
+
         // Clone genome to avoid borrow conflicts
         let genome = self.genomes[genome_id].clone();
-        
+
         // Update mode properties for this genome's modes only
-        self.gpu_triple_buffers.incremental_sync_mode_properties(queue, &genome, global_start_index);
-        
+        self.gpu_triple_buffers.incremental_sync_mode_properties(
+            queue,
+            &genome,
+            global_start_index,
+        );
+
         // Update cilia mode properties for this genome's modes only
-        self.gpu_triple_buffers.incremental_sync_cilia_mode_properties(queue, &genome, global_start_index);
-        
+        self.gpu_triple_buffers
+            .incremental_sync_cilia_mode_properties(queue, &genome, global_start_index);
+
         // Update myocyte mode properties for this genome's modes only
-        self.gpu_triple_buffers.incremental_sync_myocyte_mode_properties(queue, &genome, global_start_index);
+        self.gpu_triple_buffers
+            .incremental_sync_myocyte_mode_properties(queue, &genome, global_start_index);
 
         // Update embryocyte mode properties for this genome's modes only
-        self.gpu_triple_buffers.incremental_sync_embryocyte_mode_properties(queue, &genome, global_start_index);
+        self.gpu_triple_buffers
+            .incremental_sync_embryocyte_mode_properties(queue, &genome, global_start_index);
         // Update devorocyte mode properties for this genome's modes only
-        self.gpu_triple_buffers.incremental_sync_devorocyte_mode_properties(queue, &genome, global_start_index);
+        self.gpu_triple_buffers
+            .incremental_sync_devorocyte_mode_properties(queue, &genome, global_start_index);
         // Update vasculocyte mode properties for this genome's modes only
-        self.gpu_triple_buffers.incremental_sync_vasculocyte_mode_properties(queue, &genome, global_start_index);
+        self.gpu_triple_buffers
+            .incremental_sync_vasculocyte_mode_properties(queue, &genome, global_start_index);
         // Update gametocyte mode properties for this genome's modes only
-        self.gpu_triple_buffers.incremental_sync_gametocyte_mode_properties(queue, &genome, global_start_index);
+        self.gpu_triple_buffers
+            .incremental_sync_gametocyte_mode_properties(queue, &genome, global_start_index);
 
         // Update child mode indices for this genome's modes only
-        self.gpu_triple_buffers.incremental_sync_child_mode_indices(device, genome_id, global_start_index, mode_count);
-        
+        self.gpu_triple_buffers.incremental_sync_child_mode_indices(
+            device,
+            genome_id,
+            global_start_index,
+            mode_count,
+        );
+
         // Update genome mode data for this genome's modes only
-        self.gpu_triple_buffers.incremental_sync_genome_mode_data(device, genome_id, global_start_index, mode_count);
-        
+        self.gpu_triple_buffers.incremental_sync_genome_mode_data(
+            device,
+            genome_id,
+            global_start_index,
+            mode_count,
+        );
+
         // Update mode cell types for this genome's modes only
-        self.gpu_triple_buffers.incremental_sync_mode_cell_types(queue, &genome, global_start_index);
-        
+        self.gpu_triple_buffers.incremental_sync_mode_cell_types(
+            queue,
+            &genome,
+            global_start_index,
+        );
+
         // Update parent_make_adhesion flags for this genome's modes only
-        self.incremental_sync_parent_make_adhesion_flags(queue, genome_id, global_start_index, mode_count);
-        
+        self.incremental_sync_parent_make_adhesion_flags(
+            queue,
+            genome_id,
+            global_start_index,
+            mode_count,
+        );
+
         // Update child keep adhesion flags for this genome's modes only
-        self.incremental_sync_child_keep_adhesion_flags(queue, genome_id, global_start_index, mode_count);
+        self.incremental_sync_child_keep_adhesion_flags(
+            queue,
+            genome_id,
+            global_start_index,
+            mode_count,
+        );
 
         // Update glueocyte env adhesion flags for this genome's modes only
-        let env_flags: Vec<u32> = self.genomes[genome_id].modes.iter()
-            .map(|mode| if mode.glueocyte_env_adhesion { 1u32 } else { 0u32 })
+        let env_flags: Vec<u32> = self.genomes[genome_id]
+            .modes
+            .iter()
+            .map(|mode| {
+                if mode.glueocyte_env_adhesion {
+                    1u32
+                } else {
+                    0u32
+                }
+            })
             .collect();
         if !env_flags.is_empty() {
             let offset = (global_start_index * 4) as u64;
-            queue.write_buffer(&self.gpu_triple_buffers.glueocyte_env_adhesion_flags, offset, bytemuck::cast_slice(&env_flags));
+            queue.write_buffer(
+                &self.gpu_triple_buffers.glueocyte_env_adhesion_flags,
+                offset,
+                bytemuck::cast_slice(&env_flags),
+            );
         }
 
         // Update signal-conditional settings (division gating, apoptosis, mode switching)
         // and regulation/oculocyte emission params for this genome's modes only.
         // These have no incremental variant so we write the full slice for this genome.
         let genome_ref = &self.genomes[genome_id];
-        let signal_v0: Vec<[f32; 4]> = genome_ref.modes.iter().map(|mode| [
-            mode.division_signal_channel as f32,
-            mode.division_signal_threshold,
-            if mode.division_signal_invert { 1.0 } else { 0.0 },
-            mode.apoptosis_signal_channel as f32,
-        ]).collect();
-        let signal_v1: Vec<[f32; 4]> = genome_ref.modes.iter().map(|mode| [
-            mode.apoptosis_signal_threshold,
-            if mode.apoptosis_signal_invert { 1.0 } else { 0.0 },
-            mode.signal_child_a_channel as f32,
-            mode.signal_child_a_threshold,
-        ]).collect();
+        let signal_v0: Vec<[f32; 4]> = genome_ref
+            .modes
+            .iter()
+            .map(|mode| {
+                [
+                    mode.division_signal_channel as f32,
+                    mode.division_signal_threshold,
+                    if mode.division_signal_invert {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    mode.apoptosis_signal_channel as f32,
+                ]
+            })
+            .collect();
+        let signal_v1: Vec<[f32; 4]> = genome_ref
+            .modes
+            .iter()
+            .map(|mode| {
+                [
+                    mode.apoptosis_signal_threshold,
+                    if mode.apoptosis_signal_invert {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    mode.signal_child_a_channel as f32,
+                    mode.signal_child_a_threshold,
+                ]
+            })
+            .collect();
         // v2 and v3 contain child routing mode indices - must remap local -> absolute
         let remap = |local: i32| -> f32 {
-            if local < 0 { -1.0 } else { (global_start_index as i32 + local.max(0)) as f32 }
+            if local < 0 {
+                -1.0
+            } else {
+                (global_start_index as i32 + local.max(0)) as f32
+            }
         };
-        let signal_v2: Vec<[f32; 4]> = genome_ref.modes.iter().map(|mode| [
-            remap(mode.signal_child_a_mode_above),
-            remap(mode.signal_child_a_mode_below),
-            mode.signal_child_b_channel as f32,
-            mode.signal_child_b_threshold,
-        ]).collect();
-        let signal_v3: Vec<[f32; 4]> = genome_ref.modes.iter().map(|mode| [
-            remap(mode.signal_child_b_mode_above),
-            remap(mode.signal_child_b_mode_below),
-            mode.mode_switch_signal_channel as f32,
-            mode.mode_switch_signal_threshold,
-        ]).collect();
-        let signal_v4: Vec<[f32; 4]> = genome_ref.modes.iter().map(|mode| [
-            remap(mode.mode_switch_target),
-            if mode.mode_switch_invert { 1.0 } else { 0.0 },
-            0.0,
-            0.0,
-        ]).collect();
+        let signal_v2: Vec<[f32; 4]> = genome_ref
+            .modes
+            .iter()
+            .map(|mode| {
+                [
+                    remap(mode.signal_child_a_mode_above),
+                    remap(mode.signal_child_a_mode_below),
+                    mode.signal_child_b_channel as f32,
+                    mode.signal_child_b_threshold,
+                ]
+            })
+            .collect();
+        let signal_v3: Vec<[f32; 4]> = genome_ref
+            .modes
+            .iter()
+            .map(|mode| {
+                [
+                    remap(mode.signal_child_b_mode_above),
+                    remap(mode.signal_child_b_mode_below),
+                    mode.mode_switch_signal_channel as f32,
+                    mode.mode_switch_signal_threshold,
+                ]
+            })
+            .collect();
+        let signal_v4: Vec<[f32; 4]> = genome_ref
+            .modes
+            .iter()
+            .map(|mode| {
+                [
+                    remap(mode.mode_switch_target),
+                    if mode.mode_switch_invert { 1.0 } else { 0.0 },
+                    0.0,
+                    0.0,
+                ]
+            })
+            .collect();
         if !signal_v0.is_empty() {
             let offset = (global_start_index * 16) as u64;
-            queue.write_buffer(&self.gpu_triple_buffers.signal_settings_v0, offset, bytemuck::cast_slice(&signal_v0));
-            queue.write_buffer(&self.gpu_triple_buffers.signal_settings_v1, offset, bytemuck::cast_slice(&signal_v1));
-            queue.write_buffer(&self.gpu_triple_buffers.signal_settings_v2, offset, bytemuck::cast_slice(&signal_v2));
-            queue.write_buffer(&self.gpu_triple_buffers.signal_settings_v3, offset, bytemuck::cast_slice(&signal_v3));
-            queue.write_buffer(&self.gpu_triple_buffers.signal_settings_v4, offset, bytemuck::cast_slice(&signal_v4));
+            queue.write_buffer(
+                &self.gpu_triple_buffers.signal_settings_v0,
+                offset,
+                bytemuck::cast_slice(&signal_v0),
+            );
+            queue.write_buffer(
+                &self.gpu_triple_buffers.signal_settings_v1,
+                offset,
+                bytemuck::cast_slice(&signal_v1),
+            );
+            queue.write_buffer(
+                &self.gpu_triple_buffers.signal_settings_v2,
+                offset,
+                bytemuck::cast_slice(&signal_v2),
+            );
+            queue.write_buffer(
+                &self.gpu_triple_buffers.signal_settings_v3,
+                offset,
+                bytemuck::cast_slice(&signal_v3),
+            );
+            queue.write_buffer(
+                &self.gpu_triple_buffers.signal_settings_v4,
+                offset,
+                bytemuck::cast_slice(&signal_v4),
+            );
         }
         // Regulation params: [channel(u32), value_bits(u32), hops(u32), padding(u32)]
-        let reg_params: Vec<[u32; 4]> = genome_ref.modes.iter().map(|mode| {
-            let channel = if mode.regulation_emit_channel < 0 {
-                0xFFFFFFFFu32
-            } else {
-                (mode.regulation_emit_channel as u32).clamp(8, 15)
-            };
-            [
-                channel,
-                mode.regulation_emit_value.clamp(0.0, 2047.0).to_bits(),
-                mode.regulation_emit_hops.clamp(1, 20) as u32,
-                0u32,
-            ]
-        }).collect();
+        let reg_params: Vec<[u32; 4]> = genome_ref
+            .modes
+            .iter()
+            .map(|mode| {
+                let channel = if mode.regulation_emit_channel < 0 {
+                    0xFFFFFFFFu32
+                } else {
+                    (mode.regulation_emit_channel as u32).clamp(8, 15)
+                };
+                [
+                    channel,
+                    mode.regulation_emit_value.clamp(0.0, 2047.0).to_bits(),
+                    mode.regulation_emit_hops.clamp(1, 20) as u32,
+                    0u32,
+                ]
+            })
+            .collect();
         if !reg_params.is_empty() {
             let offset = (global_start_index * 16) as u64;
-            queue.write_buffer(&self.gpu_triple_buffers.regulation_params, offset, bytemuck::cast_slice(&reg_params));
+            queue.write_buffer(
+                &self.gpu_triple_buffers.regulation_params,
+                offset,
+                bytemuck::cast_slice(&reg_params),
+            );
         }
 
         // Oculocyte params: [sense_type(u32), ray_length_bits(u32), hops(u32), channel(u32)]
-        let oculo_params: Vec<[u32; 4]> = genome_ref.modes.iter().map(|mode| {
-            [
-                mode.oculocyte_sense_type, // u32 bitmask, no clamping needed
-                mode.oculocyte_ray_length.to_bits(),
-                mode.oculocyte_signal_hops.clamp(1, 20) as u32,
-                mode.oculocyte_signal_channel.clamp(0, 7) as u32,
-            ]
-        }).collect();
+        let oculo_params: Vec<[u32; 4]> = genome_ref
+            .modes
+            .iter()
+            .map(|mode| {
+                [
+                    mode.oculocyte_sense_type, // u32 bitmask, no clamping needed
+                    mode.oculocyte_ray_length.to_bits(),
+                    mode.oculocyte_signal_hops.clamp(1, 20) as u32,
+                    mode.oculocyte_signal_channel.clamp(0, 7) as u32,
+                ]
+            })
+            .collect();
         if !oculo_params.is_empty() {
             let offset = (global_start_index * 16) as u64;
-            queue.write_buffer(&self.gpu_triple_buffers.oculocyte_params, offset, bytemuck::cast_slice(&oculo_params));
+            queue.write_buffer(
+                &self.gpu_triple_buffers.oculocyte_params,
+                offset,
+                bytemuck::cast_slice(&oculo_params),
+            );
         }
 
         // Oculocyte signal values: one f32 per mode
-        let oculo_signal_values: Vec<f32> = genome_ref.modes.iter().map(|mode| {
-            mode.oculocyte_signal_value.clamp(0.0, 2047.0)
-        }).collect();
+        let oculo_signal_values: Vec<f32> = genome_ref
+            .modes
+            .iter()
+            .map(|mode| mode.oculocyte_signal_value.clamp(0.0, 2047.0))
+            .collect();
         if !oculo_signal_values.is_empty() {
             let offset = (global_start_index * 4) as u64;
-            queue.write_buffer(&self.gpu_triple_buffers.oculocyte_signal_values, offset, bytemuck::cast_slice(&oculo_signal_values));
+            queue.write_buffer(
+                &self.gpu_triple_buffers.oculocyte_signal_values,
+                offset,
+                bytemuck::cast_slice(&oculo_signal_values),
+            );
         }
 
         // Refresh has_oculocytes / max_signal_hops in case oculocyte or regulation settings changed
         self.update_has_oculocytes();
-        
-        log::info!("Incrementally synced genome {} (modes: {} at global index {})", 
-            genome_id, mode_count, global_start_index);
+
+        log::info!(
+            "Incrementally synced genome {} (modes: {} at global index {})",
+            genome_id,
+            mode_count,
+            global_start_index
+        );
     }
-    
+
     /// Incremental sync of adhesion settings for a single genome
-    fn incremental_sync_adhesion_settings(&mut self, queue: &wgpu::Queue, genome_id: usize, global_start_index: usize, _mode_count: usize) {
+    fn incremental_sync_adhesion_settings(
+        &mut self,
+        queue: &wgpu::Queue,
+        genome_id: usize,
+        global_start_index: usize,
+        _mode_count: usize,
+    ) {
         let genome = &self.genomes[genome_id];
-        
+
         let mut v0: Vec<[f32; 4]> = Vec::new();
         let mut v1: Vec<[f32; 4]> = Vec::new();
         let mut v2: Vec<[f32; 4]> = Vec::new();
-        
+
         for mode in &genome.modes {
             let s = &mode.adhesion_settings;
-            v0.push([if s.can_break { 1.0 } else { 0.0 }, s.break_force, s.rest_length, s.linear_spring_stiffness]);
-            v1.push([s.linear_spring_damping, s.orientation_spring_stiffness, s.orientation_spring_damping, s.max_angular_deviation]);
-            v2.push([s.twist_constraint_stiffness, s.twist_constraint_damping, if s.enable_twist_constraint { 1.0 } else { 0.0 }, 0.0]);
+            v0.push([
+                if s.can_break { 1.0 } else { 0.0 },
+                s.break_force,
+                s.rest_length,
+                s.linear_spring_stiffness,
+            ]);
+            v1.push([
+                s.linear_spring_damping,
+                s.orientation_spring_stiffness,
+                s.orientation_spring_damping,
+                s.max_angular_deviation,
+            ]);
+            v2.push([
+                s.twist_constraint_stiffness,
+                s.twist_constraint_damping,
+                if s.enable_twist_constraint { 1.0 } else { 0.0 },
+                0.0,
+            ]);
         }
-        
+
         if !v0.is_empty() {
             let byte_offset = (global_start_index * 16) as u64;
-            queue.write_buffer(&self.adhesion_buffers.adhesion_settings_v0, byte_offset, bytemuck::cast_slice(&v0));
-            queue.write_buffer(&self.adhesion_buffers.adhesion_settings_v1, byte_offset, bytemuck::cast_slice(&v1));
-            queue.write_buffer(&self.adhesion_buffers.adhesion_settings_v2, byte_offset, bytemuck::cast_slice(&v2));
+            queue.write_buffer(
+                &self.adhesion_buffers.adhesion_settings_v0,
+                byte_offset,
+                bytemuck::cast_slice(&v0),
+            );
+            queue.write_buffer(
+                &self.adhesion_buffers.adhesion_settings_v1,
+                byte_offset,
+                bytemuck::cast_slice(&v1),
+            );
+            queue.write_buffer(
+                &self.adhesion_buffers.adhesion_settings_v2,
+                byte_offset,
+                bytemuck::cast_slice(&v2),
+            );
         }
     }
-    
+
     /// Incremental sync of parent_make_adhesion flags for a single genome
-    fn incremental_sync_parent_make_adhesion_flags(&mut self, queue: &wgpu::Queue, genome_id: usize, global_start_index: usize, mode_count: usize) {
+    fn incremental_sync_parent_make_adhesion_flags(
+        &mut self,
+        queue: &wgpu::Queue,
+        genome_id: usize,
+        global_start_index: usize,
+        mode_count: usize,
+    ) {
         let genome = &self.genomes[genome_id];
-        
+
         // Ensure parent_make_adhesion_flags is large enough
         let total_required_size = global_start_index + mode_count;
         if self.parent_make_adhesion_flags.len() < total_required_size {
-            self.parent_make_adhesion_flags.resize(total_required_size, false);
+            self.parent_make_adhesion_flags
+                .resize(total_required_size, false);
         }
-        
+
         // Update flags for this genome's modes only
         let mut flags_data: Vec<u32> = Vec::with_capacity(mode_count);
         for (i, mode) in genome.modes.iter().enumerate() {
@@ -2328,136 +2893,207 @@ impl GpuScene {
             self.parent_make_adhesion_flags[global_index] = mode.parent_make_adhesion;
             flags_data.push(if mode.parent_make_adhesion { 1 } else { 0 });
         }
-        
+
         // Sync to GPU buffer at the correct offset
         if !flags_data.is_empty() {
             let offset = (global_start_index * std::mem::size_of::<u32>()) as u64;
-            queue.write_buffer(&self.gpu_triple_buffers.parent_make_adhesion_flags, offset, bytemuck::cast_slice(&flags_data));
+            queue.write_buffer(
+                &self.gpu_triple_buffers.parent_make_adhesion_flags,
+                offset,
+                bytemuck::cast_slice(&flags_data),
+            );
         }
     }
-    
+
     /// Incremental sync of child keep adhesion flags for a single genome
-    fn incremental_sync_child_keep_adhesion_flags(&self, queue: &wgpu::Queue, genome_id: usize, global_start_index: usize, mode_count: usize) {
+    fn incremental_sync_child_keep_adhesion_flags(
+        &self,
+        queue: &wgpu::Queue,
+        genome_id: usize,
+        global_start_index: usize,
+        mode_count: usize,
+    ) {
         let genome = &self.genomes[genome_id];
-        
+
         let mut child_a_flags: Vec<u32> = Vec::with_capacity(mode_count);
         let mut child_b_flags: Vec<u32> = Vec::with_capacity(mode_count);
         let mut child_a_after_split_flags: Vec<u32> = Vec::with_capacity(mode_count);
         let mut child_b_after_split_flags: Vec<u32> = Vec::with_capacity(mode_count);
-        
+
         for mode in &genome.modes {
             child_a_flags.push(if mode.child_a.keep_adhesion { 1 } else { 0 });
             child_b_flags.push(if mode.child_b.keep_adhesion { 1 } else { 0 });
-            child_a_after_split_flags.push(if mode.child_a_after_split_keep_adhesion { 1 } else { 0 });
-            child_b_after_split_flags.push(if mode.child_b_after_split_keep_adhesion { 1 } else { 0 });
+            child_a_after_split_flags.push(if mode.child_a_after_split_keep_adhesion {
+                1
+            } else {
+                0
+            });
+            child_b_after_split_flags.push(if mode.child_b_after_split_keep_adhesion {
+                1
+            } else {
+                0
+            });
         }
-        
+
         if !child_a_flags.is_empty() {
             let offset = (global_start_index * std::mem::size_of::<u32>()) as u64;
-            queue.write_buffer(&self.gpu_triple_buffers.child_a_keep_adhesion_flags, offset, bytemuck::cast_slice(&child_a_flags));
-            queue.write_buffer(&self.gpu_triple_buffers.child_b_keep_adhesion_flags, offset, bytemuck::cast_slice(&child_b_flags));
-            queue.write_buffer(&self.gpu_triple_buffers.child_a_after_split_keep_adhesion_flags, offset, bytemuck::cast_slice(&child_a_after_split_flags));
-            queue.write_buffer(&self.gpu_triple_buffers.child_b_after_split_keep_adhesion_flags, offset, bytemuck::cast_slice(&child_b_after_split_flags));
+            queue.write_buffer(
+                &self.gpu_triple_buffers.child_a_keep_adhesion_flags,
+                offset,
+                bytemuck::cast_slice(&child_a_flags),
+            );
+            queue.write_buffer(
+                &self.gpu_triple_buffers.child_b_keep_adhesion_flags,
+                offset,
+                bytemuck::cast_slice(&child_b_flags),
+            );
+            queue.write_buffer(
+                &self
+                    .gpu_triple_buffers
+                    .child_a_after_split_keep_adhesion_flags,
+                offset,
+                bytemuck::cast_slice(&child_a_after_split_flags),
+            );
+            queue.write_buffer(
+                &self
+                    .gpu_triple_buffers
+                    .child_b_after_split_keep_adhesion_flags,
+                offset,
+                bytemuck::cast_slice(&child_b_after_split_flags),
+            );
         }
     }
-    
+
     /// Sync adhesion settings from genomes to GPU
     /// Call this after adding genomes to ensure settings are uploaded to GPU
     pub fn sync_adhesion_settings(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         // Grow mode pool if needed before syncing
         let total_modes: u64 = self.genomes.iter().map(|g| g.modes.len() as u64).sum();
         if total_modes > 0 {
-            self.gpu_triple_buffers.grow_mode_pool_if_needed(device, total_modes);
-            self.adhesion_buffers.grow_adhesion_mode_pool_if_needed(device, total_modes);
+            self.gpu_triple_buffers
+                .grow_mode_pool_if_needed(device, total_modes);
+            self.adhesion_buffers
+                .grow_adhesion_mode_pool_if_needed(device, total_modes);
         }
 
-        self.adhesion_buffers.sync_adhesion_settings(queue, &self.genomes);
-        
+        self.adhesion_buffers
+            .sync_adhesion_settings(queue, &self.genomes);
+
         // Sync parent_make_adhesion_flags to triple buffer system
-        self.gpu_triple_buffers.sync_parent_make_adhesion_flags(queue, &self.genomes);
-        
+        self.gpu_triple_buffers
+            .sync_parent_make_adhesion_flags(queue, &self.genomes);
+
         // Sync child keep adhesion flags for zone-based inheritance
-        self.gpu_triple_buffers.sync_child_keep_adhesion_flags(queue, &self.genomes);
-        
+        self.gpu_triple_buffers
+            .sync_child_keep_adhesion_flags(queue, &self.genomes);
+
         // Sync mode properties (nutrient_gain_rate, max_cell_size, etc.) for division
-        self.gpu_triple_buffers.sync_mode_properties(queue, &self.genomes);
-        
+        self.gpu_triple_buffers
+            .sync_mode_properties(queue, &self.genomes);
+
         // Sync cilia mode properties for cilia_force shader (v5, v6)
-        self.gpu_triple_buffers.sync_cilia_mode_properties(queue, &self.genomes);
-        
+        self.gpu_triple_buffers
+            .sync_cilia_mode_properties(queue, &self.genomes);
+
         // Sync myocyte mode properties for muscle_contraction shader (v7, v8)
-        self.gpu_triple_buffers.sync_myocyte_mode_properties(queue, &self.genomes);
+        self.gpu_triple_buffers
+            .sync_myocyte_mode_properties(queue, &self.genomes);
 
         // Sync embryocyte mode properties for lifecycle shaders (v9, v10)
-        self.gpu_triple_buffers.sync_embryocyte_mode_properties(queue, &self.genomes);
+        self.gpu_triple_buffers
+            .sync_embryocyte_mode_properties(queue, &self.genomes);
         // Sync devorocyte mode properties (v11)
-        self.gpu_triple_buffers.sync_devorocyte_mode_properties(queue, &self.genomes);
+        self.gpu_triple_buffers
+            .sync_devorocyte_mode_properties(queue, &self.genomes);
         // Sync vasculocyte mode properties (v12)
-        self.gpu_triple_buffers.sync_vasculocyte_mode_properties(queue, &self.genomes);
+        self.gpu_triple_buffers
+            .sync_vasculocyte_mode_properties(queue, &self.genomes);
         // Sync gametocyte mode properties (v13)
-        self.gpu_triple_buffers.sync_gametocyte_mode_properties(queue, &self.genomes);
+        self.gpu_triple_buffers
+            .sync_gametocyte_mode_properties(queue, &self.genomes);
 
         // Sync mode cell types lookup table (for deriving cell_type from mode_index)
-        self.gpu_triple_buffers.sync_mode_cell_types(queue, &self.genomes);
+        self.gpu_triple_buffers
+            .sync_mode_cell_types(queue, &self.genomes);
 
         // Sync behavior flags for all cell types (applies_swim_force, etc.)
         self.gpu_triple_buffers.sync_behavior_flags(queue);
 
         // Sync glueocyte env adhesion flags (one u32 per mode)
-        self.gpu_triple_buffers.sync_glueocyte_env_adhesion_flags(queue, &self.genomes);
-        self.gpu_triple_buffers.sync_glueocyte_boulder_adhesion_flags(queue, &self.genomes);
+        self.gpu_triple_buffers
+            .sync_glueocyte_env_adhesion_flags(queue, &self.genomes);
+        self.gpu_triple_buffers
+            .sync_glueocyte_boulder_adhesion_flags(queue, &self.genomes);
 
         // Sync glueocyte cell adhesion flags (4 u32 per mode: enabled, channel, threshold, padding)
-        self.gpu_triple_buffers.sync_glueocyte_cell_adhesion_flags(queue, &self.genomes);
+        self.gpu_triple_buffers
+            .sync_glueocyte_cell_adhesion_flags(queue, &self.genomes);
 
         // Sync oculocyte parameters (sense_type, sense_range, signal_hops, signal_channel per mode)
-        self.gpu_triple_buffers.sync_oculocyte_params(queue, &self.genomes);
+        self.gpu_triple_buffers
+            .sync_oculocyte_params(queue, &self.genomes);
 
         // Sync regulation emission parameters (emit_channel, emit_value, emit_hops per mode)
-        self.gpu_triple_buffers.sync_regulation_params(queue, &self.genomes);
+        self.gpu_triple_buffers
+            .sync_regulation_params(queue, &self.genomes);
 
         // Sync signal-conditional settings (division gating, apoptosis, child routing, mode switching)
-        self.gpu_triple_buffers.sync_signal_settings(queue, &self.genomes);
+        self.gpu_triple_buffers
+            .sync_signal_settings(queue, &self.genomes);
 
         // Sync child mode indices for division (CRITICAL: determines what mode children get)
-        self.gpu_triple_buffers.sync_child_mode_indices(queue, &self.genomes);
-        
+        self.gpu_triple_buffers
+            .sync_child_mode_indices(queue, &self.genomes);
+
         // Sync genome mode data (child orientations, split direction) for division
-        self.gpu_triple_buffers.sync_genome_mode_data(queue, &self.genomes);
-        
+        self.gpu_triple_buffers
+            .sync_genome_mode_data(queue, &self.genomes);
+
         // Cache parent_make_adhesion flags for quick lookup during division
         // The flags are stored sequentially: genome0_mode0, genome0_mode1, ..., genome1_mode0, genome1_mode1, ...
         // This matches the adhesion settings buffer layout and the global mode index calculation
         self.parent_make_adhesion_flags.clear();
         for genome in &self.genomes {
             for mode in &genome.modes {
-                self.parent_make_adhesion_flags.push(mode.parent_make_adhesion);
+                self.parent_make_adhesion_flags
+                    .push(mode.parent_make_adhesion);
             }
         }
     }
-    
+
     /// Get parent_make_adhesion flag for a specific mode index
     /// Returns false if mode index is out of bounds
     pub fn get_parent_make_adhesion_flag(&self, mode_index: usize) -> bool {
-        self.parent_make_adhesion_flags.get(mode_index).copied().unwrap_or(false)
+        self.parent_make_adhesion_flags
+            .get(mode_index)
+            .copied()
+            .unwrap_or(false)
     }
-    
+
     /// Convert local mode index to global mode index for adhesion settings lookup
     /// Returns the global mode index that can be used to access adhesion settings
     pub fn get_global_mode_index(&self, genome_id: usize, local_mode_index: usize) -> usize {
         // Validate bounds
         if genome_id >= self.genomes.len() {
-            log::warn!("Invalid genome ID: {} (max: {})", genome_id, self.genomes.len());
+            log::warn!(
+                "Invalid genome ID: {} (max: {})",
+                genome_id,
+                self.genomes.len()
+            );
             return 0; // Fallback to first mode
         }
-        
+
         let genome = &self.genomes[genome_id];
         if local_mode_index >= genome.modes.len() {
-            log::warn!("Invalid local mode index: {} for genome {} (max: {})", 
-                local_mode_index, genome_id, genome.modes.len());
+            log::warn!(
+                "Invalid local mode index: {} for genome {} (max: {})",
+                local_mode_index,
+                genome_id,
+                genome.modes.len()
+            );
             return 0; // Fallback to first mode
         }
-        
+
         let mut global_index = 0;
         for (i, genome) in self.genomes.iter().enumerate() {
             if i == genome_id {
@@ -2467,13 +3103,13 @@ impl GpuScene {
         }
         global_index + local_mode_index // Fallback if genome_id is out of bounds
     }
-    
+
     /// Queue a cell insertion to be processed during the next render frame.
     /// This allows cell insertion to be initiated from input handling without needing device/encoder/queue.
     pub fn queue_cell_insertion(&mut self, world_position: glam::Vec3, genome: Genome) {
         self.pending_cell_insertion = Some((world_position, genome, 0, 0));
     }
-    
+
     /// Process any pending cell insertion during render frame when device/encoder/queue are available.
     /// Returns true if a cell was inserted.
     pub fn process_pending_insertion(
@@ -2482,13 +3118,24 @@ impl GpuScene {
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
     ) -> bool {
-        if let Some((world_position, genome, initial_reserve, initial_nutrients)) = self.pending_cell_insertion.take() {
-            self.insert_cell_from_genome(device, encoder, queue, world_position, &genome, initial_reserve, initial_nutrients).is_some()
+        if let Some((world_position, genome, initial_reserve, initial_nutrients)) =
+            self.pending_cell_insertion.take()
+        {
+            self.insert_cell_from_genome(
+                device,
+                encoder,
+                queue,
+                world_position,
+                &genome,
+                initial_reserve,
+                initial_nutrients,
+            )
+            .is_some()
         } else {
             false
         }
     }
-    
+
     /// Insert a cell at the given world position using genome settings.
     /// Adds the genome to the scene if not already present (does not overwrite existing genomes).
     /// Returns the index of the inserted cell, or None if at capacity.
@@ -2502,12 +3149,18 @@ impl GpuScene {
         initial_reserve: u32,
         initial_nutrients: u32,
     ) -> Option<usize> {
-        // Note: We don't block insertion based on current_cell_count because:
-        // 1. current_cell_count is the "high water mark" - it never decreases when cells die
-        // 2. Dead cell slots are recycled via a GPU ring buffer
-        // 3. The GPU cell_insertion shader handles slot allocation from the ring buffer
-        // 4. The shader will silently fail if truly at capacity (no ring buffer slots and at max)
-        
+        // The GPU insertion shader owns exact slot allocation and recycled-slot
+        // reuse, but avoid optimistic CPU bookkeeping once the last known live
+        // count is already at capacity.
+        if self.current_cell_count >= self.gpu_triple_buffers.capacity {
+            log::warn!(
+                "Skipping cell insertion: live cell count {} is at capacity {}",
+                self.current_cell_count,
+                self.gpu_triple_buffers.capacity
+            );
+            return None;
+        }
+
         // Find or add the genome (add_genome now updates existing genomes with same name)
         let (genome_id, needs_sync) = match self.add_genome(device, genome.clone()) {
             Some((id, sync)) => (id, sync),
@@ -2517,12 +3170,12 @@ impl GpuScene {
             }
         };
         let mode_idx = genome.initial_mode.max(0) as usize;
-        
+
         // Sync settings to GPU if genome was added or updated
         if needs_sync {
             self.sync_adhesion_settings(device, queue);
         }
-        
+
         // Calculate initial radius from mass (mass = 4/3 * pi * r^3 for unit density)
         // Set initial mass based on cell type and split mass
         // Phagocytes need enough mass to split once and have offspring survive briefly
@@ -2534,32 +3187,40 @@ impl GpuScene {
         } else {
             1.0_f32
         };
-        
+
         // Initialize GPU systems if not already done
         self.initialize_gpu_systems(device, queue);
-        
+
         // Update physics params buffer with cell_capacity before insertion
         // The cell insertion shader reads params.cell_capacity to check limits
         self.update_physics_params_for_insertion(queue);
-        
+
         // Use GPU cell insertion system
         if let Some(ref cell_insertion) = self.cell_insertion {
             cell_insertion.insert_cell_with_id(
                 encoder,
                 queue,
                 world_position,
-                glam::Vec3::ZERO,                    // velocity
-                initial_mass,                        // mass
-                genome.initial_orientation,          // rotation
-                genome_id as u32,                    // genome_id
-                mode_idx as u32,                     // mode_index (local to this genome)
-                self.current_time,                   // birth_time
-                self.next_cell_id,                   // cell_id
+                glam::Vec3::ZERO,           // velocity
+                initial_mass,               // mass
+                genome.initial_orientation, // rotation
+                genome_id as u32,           // genome_id
+                mode_idx as u32,            // mode_index (local to this genome)
+                self.current_time,          // birth_time
+                self.next_cell_id,          // cell_id
                 &self.genomes,
-                if initial_reserve != 0 { Some(initial_reserve) } else { None },
-                if initial_nutrients != 0 { Some(initial_nutrients) } else { None },
+                if initial_reserve != 0 {
+                    Some(initial_reserve)
+                } else {
+                    None
+                },
+                if initial_nutrients != 0 {
+                    Some(initial_nutrients)
+                } else {
+                    None
+                },
             );
-            
+
             // Update local tracking
             let cell_index = self.current_cell_count as usize;
             self.current_cell_count += 1;
@@ -2571,55 +3232,55 @@ impl GpuScene {
             None
         }
     }
-    
+
     /// Mark a cell as being dragged so physics skips it.
     /// The dragged cell's position will be controlled by the user via update_position shader.
     pub fn set_dragged_cell(&mut self, cell_index: u32) {
         self.dragged_cell_index = cell_index;
     }
-    
+
     /// Clear the dragged cell so physics resumes for all cells.
     pub fn clear_dragged_cell(&mut self) {
         self.dragged_cell_index = u32::MAX;
     }
-    
+
     /// Update a cell's position using GPU operations
-    /// 
+    ///
     /// This method queues a position update to be executed during the next render phase.
     /// It replaces the canonical state-based position updates.
     pub fn update_cell_position_gpu(&mut self, cell_index: u32, new_position: glam::Vec3) {
         // Note: We don't check bounds here because the GPU cell count may be higher than
         // current_cell_count due to cell division. The shader will validate bounds using
         // the actual GPU cell_count_buffer value.
-        
+
         // Queue the position update to be executed during render
         // The shader will validate cell_index against the GPU cell count
         self.pending_position_update = Some((cell_index, new_position));
     }
-    
+
     /// Update a cell's position using GPU operations.
     /// Used by the drag tool to move cells.
     pub fn set_cell_position(&mut self, cell_idx: usize, new_position: glam::Vec3) {
         // Queue the position update - shader will validate bounds
         self.pending_position_update = Some((cell_idx as u32, new_position));
     }
-    
+
     /// Update a cell's mass using GPU operations.
     /// Used by the boost tool to increase cell mass.
     pub fn set_cell_mass(&mut self, cell_idx: usize) {
         if cell_idx >= self.current_cell_count as usize {
             return;
         }
-        
+
         // TODO: Implement GPU mass update using GpuToolOperations
         // This will use the GPU mass update compute shader when integrated
         // For now, this is a placeholder - actual GPU mass update will be implemented
         // when mass update compute shaders are added to the system
-        
+
         // Mark radii dirty so instance builder updates
         self.instance_builder.mark_radii_dirty();
     }
-    
+
     /// Find the cell closest to a world position within a given radius.
     /// This method is deprecated - use start_cell_selection_query() instead.
     /// Returns None - use the async query system for cell selection.
@@ -2627,7 +3288,7 @@ impl GpuScene {
         // Use the async query system via start_cell_selection_query()
         None
     }
-    
+
     /// Remove a cell at the given index using GPU operations.
     /// Uses GPU-based cell removal without CPU state management.
     /// The cell's mass is set to 0, which causes the lifecycle death scan shader
@@ -2636,17 +3297,17 @@ impl GpuScene {
         // Note: We don't check bounds here because the GPU cell count may be higher than
         // current_cell_count due to cell division. The shader will validate bounds using
         // the actual GPU cell_count_buffer value.
-        
+
         // Queue the cell removal to be executed during render
         // The shader will validate cell_idx against the GPU cell count
         self.pending_cell_removal = Some(cell_idx as u32);
-        
+
         // Mark instance builder dirty
         self.instance_builder.mark_all_dirty();
-        
+
         true
     }
-    
+
     /// Cast a ray from screen coordinates and find the closest cell that intersects.
     /// This method is deprecated - use start_drag_selection_query() instead.
     /// Returns None - use the async query system for cell selection.
@@ -2654,37 +3315,39 @@ impl GpuScene {
         // Use the async query system via start_drag_selection_query()
         None
     }
-    
+
     /// Get the world position on a ray at a given distance from camera.
-    pub fn screen_to_world_at_distance(&self, screen_x: f32, screen_y: f32, distance: f32) -> glam::Vec3 {
+    pub fn screen_to_world_at_distance(
+        &self,
+        screen_x: f32,
+        screen_y: f32,
+        distance: f32,
+    ) -> glam::Vec3 {
         let width = self.renderer.width as f32;
         let height = self.renderer.height as f32;
-        
+
         let ndc_x = (2.0 * screen_x / width) - 1.0;
         let ndc_y = 1.0 - (2.0 * screen_y / height);
-        
+
         let aspect = width / height;
         let fov = 45.0_f32.to_radians();
         let tan_half_fov = (fov / 2.0).tan();
-        
-        let ray_view = glam::Vec3::new(
-            ndc_x * aspect * tan_half_fov,
-            ndc_y * tan_half_fov,
-            -1.0,
-        ).normalize();
-        
+
+        let ray_view =
+            glam::Vec3::new(ndc_x * aspect * tan_half_fov, ndc_y * tan_half_fov, -1.0).normalize();
+
         let ray_world = self.camera.rotation * ray_view;
         self.camera.position() + ray_world * distance
     }
-    
+
     /// Initialize all GPU systems for the scene
-    /// 
+    ///
     /// This method creates and initializes all GPU systems including:
     /// - GpuCellInspector for real-time cell data extraction
     /// - GpuCellInsertion for direct GPU cell creation  
     /// - GpuToolOperations for spatial queries and position updates
     /// Start a GPU spatial query for cell selection (inspect tool)
-    /// 
+    ///
     /// This method queues a GPU spatial query to find the closest cell to the given screen position.
     /// The query will be executed during the next render phase when GPU resources are available.
     /// The result can be polled later using poll_inspect_tool_results().
@@ -2692,9 +3355,9 @@ impl GpuScene {
         // Store screen coordinates for ray computation during render
         self.pending_query_position = Some((screen_x, screen_y, ToolQueryType::Inspect));
     }
-    
+
     /// Start a GPU spatial query for drag tool cell selection
-    /// 
+    ///
     /// This method queues a GPU spatial query to find the closest cell for dragging.
     /// The query will be executed during the next render phase when GPU resources are available.
     /// The result can be polled later using poll_drag_tool_results().
@@ -2702,9 +3365,9 @@ impl GpuScene {
         // Store screen coordinates for ray computation during render
         self.pending_query_position = Some((screen_x, screen_y, ToolQueryType::Drag));
     }
-    
+
     /// Start a GPU spatial query for cell removal (remove tool)
-    /// 
+    ///
     /// This method queues a GPU spatial query to find the closest cell for removal.
     /// The query will be executed during the next render phase when GPU resources are available.
     /// The result can be polled later using poll_remove_tool_results().
@@ -2712,9 +3375,9 @@ impl GpuScene {
         // Store screen coordinates for ray computation during render
         self.pending_query_position = Some((screen_x, screen_y, ToolQueryType::Remove));
     }
-    
+
     /// Start a GPU spatial query for cell boost (boost tool)
-    /// 
+    ///
     /// This method queues a GPU spatial query to find the closest cell for boosting.
     /// The query will be executed during the next render phase when GPU resources are available.
     /// The result can be polled later using poll_boost_tool_results().
@@ -2722,9 +3385,9 @@ impl GpuScene {
         // Store screen coordinates for ray computation during render
         self.pending_query_position = Some((screen_x, screen_y, ToolQueryType::Boost));
     }
-    
+
     /// Poll for remove tool spatial query results
-    /// 
+    ///
     /// This method checks for completed spatial query results and removes the selected cell.
     /// Uses the GPU spatial query system for cell selection.
     pub fn poll_remove_tool_results(&mut self) {
@@ -2734,9 +3397,9 @@ impl GpuScene {
             self.remove_cell(cell_idx);
         }
     }
-    
+
     /// Poll for boost tool spatial query results
-    /// 
+    ///
     /// This method checks for completed spatial query results and queues the cell for boosting.
     /// Uses the GPU spatial query system for cell selection.
     pub fn poll_boost_tool_results(&mut self) {
@@ -2748,11 +3411,14 @@ impl GpuScene {
     }
 
     /// Poll for inspect tool spatial query results
-    /// 
+    ///
     /// This method checks for completed spatial query results and updates the radial menu state.
     /// Uses the GPU spatial query system for cell selection.
     /// Also queues cell data extraction to be executed during the next render phase.
-    pub fn poll_inspect_tool_results(&mut self, radial_menu: &mut crate::ui::radial_menu::RadialMenuState) {
+    pub fn poll_inspect_tool_results(
+        &mut self,
+        radial_menu: &mut crate::ui::radial_menu::RadialMenuState,
+    ) {
         // Check for pending result from GPU spatial query (new cell selected)
         if let Some(cell_idx) = self.pending_inspect_result.take() {
             radial_menu.inspected_cell = Some(cell_idx);
@@ -2763,7 +3429,8 @@ impl GpuScene {
         // Re-queue extraction every frame while a cell is selected and no extraction
         // is already in flight - this gives live-updating data in the inspector panel.
         if let Some(cell_idx) = radial_menu.inspected_cell {
-            let inspector_idle = self.cell_inspector
+            let inspector_idle = self
+                .cell_inspector
                 .as_ref()
                 .map_or(true, |i| !i.is_extracting());
             if inspector_idle && self.pending_cell_extraction.is_none() {
@@ -2771,19 +3438,27 @@ impl GpuScene {
             }
         }
     }
-    
+
     /// Poll for drag tool spatial query results
-    /// 
+    ///
     /// This method checks for completed spatial query results and starts dragging if a cell was found.
     /// Uses the GPU spatial query system for cell selection.
-    pub fn poll_drag_tool_results(&mut self, radial_menu: &mut crate::ui::radial_menu::RadialMenuState, drag_distance: &mut f32) {
+    pub fn poll_drag_tool_results(
+        &mut self,
+        radial_menu: &mut crate::ui::radial_menu::RadialMenuState,
+        drag_distance: &mut f32,
+    ) {
         // Check for pending result from GPU spatial query
         if let Some((cell_idx, distance)) = self.pending_drag_result.take() {
             radial_menu.start_dragging(cell_idx);
             *drag_distance = distance;
             // Mark cell as dragged so physics skips it
             self.dragged_cell_index = cell_idx as u32;
-            log::info!("Started dragging cell {} at distance {}", cell_idx, distance);
+            log::info!(
+                "Started dragging cell {} at distance {}",
+                cell_idx,
+                distance
+            );
         }
     }
 
@@ -2802,7 +3477,8 @@ impl GpuScene {
         self.follow_lbl_staging = None;
         self.follow_copy_submitted = false;
         self.follow_needs_map = false;
-        self.follow_map_ready_flag.store(0, std::sync::atomic::Ordering::Release);
+        self.follow_map_ready_flag
+            .store(0, std::sync::atomic::Ordering::Release);
         self.follow_target = glam::Vec3::ZERO;
         self.switch_to_freefly();
     }
@@ -2857,7 +3533,8 @@ impl GpuScene {
         if self.follow_copy_submitted {
             let _ = device.poll(wgpu::PollType::Poll);
 
-            let ready_count = self.follow_map_ready_flag
+            let ready_count = self
+                .follow_map_ready_flag
                 .load(std::sync::atomic::Ordering::Acquire);
             if ready_count >= 2 {
                 self.follow_map_ready_flag
@@ -2884,7 +3561,11 @@ impl GpuScene {
 
                         // Resolve the organism root label from the clicked cell.
                         let root_label = if let Some(lbl) = labels.get(cell_idx).copied() {
-                            if lbl != 0xFFFF_FFFFu32 { lbl } else { cell_idx as u32 }
+                            if lbl != 0xFFFF_FFFFu32 {
+                                lbl
+                            } else {
+                                cell_idx as u32
+                            }
                         } else {
                             cell_idx as u32
                         };
@@ -2921,8 +3602,12 @@ impl GpuScene {
                 } else {
                     // Reset frame - just unmap without reading.
                     organism_alive = true; // assume still alive, check next frame
-                    if let Some(ref pos_buf) = self.follow_pos_staging { pos_buf.unmap(); }
-                    if let Some(ref lbl_buf) = self.follow_lbl_staging { lbl_buf.unmap(); }
+                    if let Some(ref pos_buf) = self.follow_pos_staging {
+                        pos_buf.unmap();
+                    }
+                    if let Some(ref lbl_buf) = self.follow_lbl_staging {
+                        lbl_buf.unmap();
+                    }
                 }
 
                 if let Some(target) = new_target {
@@ -2951,8 +3636,11 @@ impl GpuScene {
             let lbl_size = cell_count as u64 * 4;
 
             // Reallocate staging buffers if the cell count grew.
-            let pos_needs_alloc = self.follow_pos_staging
-                .as_ref().map(|b| b.size() < pos_size).unwrap_or(true);
+            let pos_needs_alloc = self
+                .follow_pos_staging
+                .as_ref()
+                .map(|b| b.size() < pos_size)
+                .unwrap_or(true);
             if pos_needs_alloc {
                 self.follow_pos_staging = Some(device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("Follow Pos Staging"),
@@ -2962,8 +3650,11 @@ impl GpuScene {
                 }));
             }
 
-            let lbl_needs_alloc = self.follow_lbl_staging
-                .as_ref().map(|b| b.size() < lbl_size).unwrap_or(true);
+            let lbl_needs_alloc = self
+                .follow_lbl_staging
+                .as_ref()
+                .map(|b| b.size() < lbl_size)
+                .unwrap_or(true);
             if lbl_needs_alloc {
                 self.follow_lbl_staging = Some(device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("Follow Label Staging"),
@@ -2987,7 +3678,8 @@ impl GpuScene {
             // Record whether this copy was taken on a label reset frame.
             // On reset frames the label buffer is temporarily set to each cell's own
             // index, so the CoM scan would find only 1 matching cell and jump.
-            self.follow_label_was_reset = self.organism_label_system
+            self.follow_label_was_reset = self
+                .organism_label_system
                 .as_ref()
                 .map(|s| s.is_reset_frame())
                 .unwrap_or(false);
@@ -3029,9 +3721,9 @@ impl GpuScene {
             });
         }
     }
-    
+
     /// Execute pending tool queries using GPU spatial query system
-    /// 
+    ///
     /// This method should be called during render when device/encoder/queue are available.
     /// It dispatches the GPU spatial query compute shader and initiates async readback.
     pub fn execute_pending_tool_queries(
@@ -3045,20 +3737,20 @@ impl GpuScene {
         if pending.is_none() {
             return;
         }
-        
+
         let (screen_x, screen_y, query_type) = pending.unwrap();
-        
+
         // Initialize GPU systems if needed
         self.initialize_gpu_systems(device, queue);
-        
+
         // Compute ray from screen coordinates
         let (ray_origin, ray_direction) = self.screen_to_ray(screen_x, screen_y);
-        
+
         // Execute GPU spatial query with ray-sphere intersection
         if let Some(ref mut tool_ops) = self.tool_operations {
             let output_idx = self.gpu_triple_buffers.output_buffer_index();
             let physics_bind_group = &self.cached_bind_groups.physics[output_idx];
-            
+
             // Use capacity for dispatch - the shader reads actual cell_count from cell_count_buffer
             // This ensures all cells are checked even if current_cell_count is out of sync with GPU
             let dispatch_count = self.gpu_triple_buffers.capacity;
@@ -3070,44 +3762,41 @@ impl GpuScene {
                 1000.0, // max_distance - raycast up to 1000 units
                 dispatch_count,
             );
-            
+
             // Store the query type for result routing
             self.active_query_type = Some(query_type);
         }
     }
-    
+
     /// Convert screen coordinates to a ray (origin and direction) for raycasting
-    /// 
+    ///
     /// Returns (ray_origin, ray_direction) where ray_origin is the camera position
     /// and ray_direction is the normalized direction from camera through the screen point.
     fn screen_to_ray(&self, screen_x: f32, screen_y: f32) -> (glam::Vec3, glam::Vec3) {
         let width = self.renderer.width as f32;
         let height = self.renderer.height as f32;
-        
+
         // Convert screen coordinates to normalized device coordinates (-1 to 1)
         let ndc_x = (2.0 * screen_x / width) - 1.0;
         let ndc_y = 1.0 - (2.0 * screen_y / height);
-        
+
         // Calculate ray direction in view space
         let aspect = width / height;
         let fov = 45.0_f32.to_radians();
         let tan_half_fov = (fov / 2.0).tan();
-        
-        let ray_view = glam::Vec3::new(
-            ndc_x * aspect * tan_half_fov,
-            ndc_y * tan_half_fov,
-            -1.0,
-        ).normalize();
-        
+
+        let ray_view =
+            glam::Vec3::new(ndc_x * aspect * tan_half_fov, ndc_y * tan_half_fov, -1.0).normalize();
+
         // Transform ray direction to world space
         let ray_direction = self.camera.rotation * ray_view;
         let ray_origin = self.camera.position();
-        
+
         (ray_origin, ray_direction)
     }
-    
+
     /// Poll GPU spatial query results and route to appropriate tool result
-    /// 
+    ///
     /// This method polls the GPU spatial query system for completed results
     /// and routes them to the appropriate pending result field based on query type.
     pub fn poll_spatial_query_results(&mut self) {
@@ -3116,14 +3805,14 @@ impl GpuScene {
             Some(qt) => qt,
             None => return,
         };
-        
+
         // Poll for spatial query completion
         if let Some(ref mut tool_ops) = self.tool_operations {
             if let Some(result) = tool_ops.poll_spatial_query() {
                 if result.found != 0 {
                     let cell_idx = result.found_cell_index as usize;
                     let distance = result.distance();
-                    
+
                     // Route result to appropriate pending field
                     match query_type {
                         ToolQueryType::Inspect => {
@@ -3150,13 +3839,20 @@ impl GpuScene {
                             // Ensure we are in Orbit mode so center is the pivot point.
                             if self.camera.mode != crate::ui::camera::CameraMode::Orbit {
                                 self.camera.mode = crate::ui::camera::CameraMode::Orbit;
-                                self.camera.distance = (self.camera.position() - self.camera.center).length().max(10.0);
+                                self.camera.distance = (self.camera.position()
+                                    - self.camera.center)
+                                    .length()
+                                    .max(10.0);
                                 self.camera.target_distance = self.camera.distance;
                             }
                         }
                     }
-                    
-                    log::info!("Spatial query found cell {} at distance {}", cell_idx, distance);
+
+                    log::info!(
+                        "Spatial query found cell {} at distance {}",
+                        cell_idx,
+                        distance
+                    );
                 } else {
                     log::info!("Spatial query found no cells");
                 }
@@ -3166,9 +3862,9 @@ impl GpuScene {
             }
         }
     }
-    
+
     /// Execute pending position updates using GPU compute shader
-    /// 
+    ///
     /// This method should be called during render when device/encoder/queue are available.
     /// It dispatches the GPU position update compute shader for drag tool operations.
     /// Returns true if a position update was executed.
@@ -3183,29 +3879,25 @@ impl GpuScene {
         if pending.is_none() {
             return false;
         }
-        
+
         let (cell_index, new_position) = pending.unwrap();
-        
+
         // Initialize GPU systems if needed
         self.initialize_gpu_systems(device, queue);
-        
+
         // Update physics params buffer with world_size for boundary clamping
         // This is needed because the position update shader reads params.world_size
         self.update_physics_params_for_position_update(queue);
-        
+
         // Execute GPU position update
         if let Some(ref mut tool_ops) = self.tool_operations {
-            tool_ops.update_cell_position(
-                encoder,
-                cell_index,
-                new_position,
-            );
+            tool_ops.update_cell_position(encoder, cell_index, new_position);
             return true;
         }
-        
+
         false
     }
-    
+
     /// Update physics params buffer for position update operations
     fn update_physics_params_for_position_update(&self, queue: &wgpu::Queue) {
         #[repr(C)]
@@ -3228,7 +3920,7 @@ impl GpuScene {
             _pad1: f32,
             _pad2: f32,
         }
-        
+
         let world_diameter = self.config.sphere_radius * 2.0;
         let params = PhysicsParams {
             delta_time: 0.0,
@@ -3248,12 +3940,16 @@ impl GpuScene {
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        
-        queue.write_buffer(&self.gpu_triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
+
+        queue.write_buffer(
+            &self.gpu_triple_buffers.physics_params,
+            0,
+            bytemuck::bytes_of(&params),
+        );
     }
-    
+
     /// Execute pending cell removals using GPU compute shader
-    /// 
+    ///
     /// This method should be called during render when device/encoder/queue are available.
     /// It dispatches the GPU cell removal compute shader to mark cells for death.
     /// Returns true if a cell removal was executed.
@@ -3268,29 +3964,26 @@ impl GpuScene {
         if pending.is_none() {
             return false;
         }
-        
+
         let cell_index = pending.unwrap();
-        
+
         // Initialize GPU systems if needed
         self.initialize_gpu_systems(device, queue);
-        
+
         // Update physics params buffer (needed for cell count validation in shader)
         self.update_physics_params_for_position_update(queue);
-        
+
         // Execute GPU cell removal
         if let Some(ref mut tool_ops) = self.tool_operations {
-            tool_ops.remove_cell(
-                encoder,
-                cell_index,
-            );
+            tool_ops.remove_cell(encoder, cell_index);
             return true;
         }
-        
+
         false
     }
-    
+
     /// Execute pending cell boosts using GPU compute shader
-    /// 
+    ///
     /// This method should be called during render when device/encoder/queue are available.
     /// It dispatches the GPU cell boost compute shader to set cell mass to maximum.
     /// Returns true if a cell boost was executed.
@@ -3305,29 +3998,26 @@ impl GpuScene {
         if pending.is_none() {
             return false;
         }
-        
+
         let cell_index = pending.unwrap();
-        
+
         // Initialize GPU systems if needed
         self.initialize_gpu_systems(device, queue);
-        
+
         // Update physics params buffer (needed for cell count validation in shader)
         self.update_physics_params_for_position_update(queue);
-        
+
         // Execute GPU cell boost
         if let Some(ref mut tool_ops) = self.tool_operations {
-            tool_ops.boost_cell(
-                encoder,
-                cell_index,
-            );
+            tool_ops.boost_cell(encoder, cell_index);
             return true;
         }
-        
+
         false
     }
 
     /// Execute pending cell extraction using GPU compute shader
-    /// 
+    ///
     /// This method should be called during render when device/encoder/queue are available.
     /// It dispatches the GPU cell data extraction compute shader for the inspect tool.
     /// Returns true if a cell extraction was executed.
@@ -3342,20 +4032,20 @@ impl GpuScene {
         if pending.is_none() {
             return false;
         }
-        
+
         let cell_index = pending.unwrap();
-        
+
         // Initialize GPU systems if needed
         self.initialize_gpu_systems(device, queue);
-        
+
         // Execute GPU cell data extraction
         self.extract_cell_data(device, queue, encoder, cell_index);
-        
+
         true
     }
 
     /// Extract cell data using GPU compute shader with async readback management
-    /// 
+    ///
     /// This method uploads the cell index, dispatches the compute shader,
     /// and initiates async readback. Call poll_cell_extraction() to check for completion.
     pub fn extract_cell_data(
@@ -3367,77 +4057,93 @@ impl GpuScene {
     ) {
         // Initialize GPU systems if not already done
         self.initialize_gpu_systems(device, queue);
-        
+
         if let Some(ref mut inspector) = self.cell_inspector {
             inspector.extract_cell_data(encoder, queue, cell_index);
         }
     }
-    
+
     /// Poll for cell extraction completion and return extracted data if available
-    /// 
+    ///
     /// Returns Some(data) if extraction is complete, None if still in progress.
-    pub fn poll_cell_extraction(&mut self, device: Option<&wgpu::Device>) -> Option<crate::simulation::gpu_physics::InspectedCellData> {
+    pub fn poll_cell_extraction(
+        &mut self,
+        device: Option<&wgpu::Device>,
+    ) -> Option<crate::simulation::gpu_physics::InspectedCellData> {
         if let Some(ref mut inspector) = self.cell_inspector {
             inspector.poll_extraction(device)
         } else {
             None
         }
     }
-    
+
     /// Check if cell extraction is currently in progress
     pub fn is_extracting_cell_data(&self) -> bool {
-        self.cell_inspector.as_ref().map_or(false, |i| i.is_extracting())
+        self.cell_inspector
+            .as_ref()
+            .map_or(false, |i| i.is_extracting())
     }
-    
+
     /// Get the most recent cell extraction result
-    pub fn get_latest_cell_extraction(&self) -> Option<&crate::simulation::gpu_physics::ReadbackResult> {
-        self.cell_inspector.as_ref().and_then(|i| i.get_latest_result())
+    pub fn get_latest_cell_extraction(
+        &self,
+    ) -> Option<&crate::simulation::gpu_physics::ReadbackResult> {
+        self.cell_inspector
+            .as_ref()
+            .and_then(|i| i.get_latest_result())
     }
-    
+
     /// Clear cached cell extraction data
     pub fn clear_cell_extraction_cache(&mut self) {
         if let Some(ref mut inspector) = self.cell_inspector {
             inspector.clear_cache();
         }
     }
-    
+
     /// Initialize cave system for procedural generation and collision
     pub fn has_cave_renderer(&self) -> bool {
         self.cave_renderer.is_some()
     }
-    
-    pub fn initialize_cave_system(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat, world_diameter: f32) -> bool {
+
+    pub fn initialize_cave_system(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+        world_diameter: f32,
+    ) -> bool {
         if self.cave_renderer.is_none() {
             let width = self.renderer.width;
             let height = self.renderer.height;
             let world_radius = world_diameter * 0.5; // Use actual world diameter instead of config
-            
-            let cave_renderer = CaveSystemRenderer::new(device, surface_format, width, height, world_radius);
-            
+
+            let cave_renderer =
+                CaveSystemRenderer::new(device, surface_format, width, height, world_radius);
+
             self.cave_renderer = Some(cave_renderer);
             // Reset shadow bind group flag so it gets recreated with the new cave renderer
             self.cave_shadow_bind_group_set = false;
-            
+
             // Create cave-specific physics bind groups
             self.create_cave_physics_bind_groups(device);
-            
+
             // Update solid mask after cave system is initialized
             self.update_solid_mask(&queue); // Note: This needs queue parameter
 
             // Initialize boulder system now that cave params are available
             self.initialize_boulder_system(device, queue, surface_format);
-            
+
             return true; // Cave was just initialized, params need to be applied
         }
         false // Cave was already initialized
     }
-    
+
     /// Create bind groups specifically for cave collision (only bindings 0-3)
     fn create_cave_physics_bind_groups(&mut self, device: &wgpu::Device) {
         if self.cave_renderer.is_none() {
             return;
         }
-        
+
         // Create a bind group layout for cave collision (in-place position/velocity updates)
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Cave Physics Bind Group Layout"),
@@ -3488,28 +4194,31 @@ impl GpuScene {
                 },
             ],
         });
-        
+
         // Create bind groups for each buffer index
         let bind_groups = [
             self.create_cave_physics_bind_group(device, &layout, 0),
             self.create_cave_physics_bind_group(device, &layout, 1),
             self.create_cave_physics_bind_group(device, &layout, 2),
         ];
-        
+
         self.cave_physics_bind_groups = Some(bind_groups);
 
         // Recreate cilia force spatial bind group with real cave params buffer
         if let Some(ref cave_renderer) = self.cave_renderer {
-            let organism_label_buffer = self.organism_label_system.as_ref().map(|s| &s.label_buffer);
-            self.cached_bind_groups.cilia_force_spatial = self.gpu_physics_pipelines.create_cilia_force_spatial_bind_group(
-                device,
-                &self.gpu_triple_buffers,
-                organism_label_buffer,
-                Some(cave_renderer.cave_params_buffer()),
-            );
+            let organism_label_buffer =
+                self.organism_label_system.as_ref().map(|s| &s.label_buffer);
+            self.cached_bind_groups.cilia_force_spatial = self
+                .gpu_physics_pipelines
+                .create_cilia_force_spatial_bind_group(
+                    device,
+                    &self.gpu_triple_buffers,
+                    organism_label_buffer,
+                    Some(cave_renderer.cave_params_buffer()),
+                );
         }
     }
-    
+
     fn create_cave_physics_bind_group(
         &self,
         device: &wgpu::Device,
@@ -3530,7 +4239,8 @@ impl GpuScene {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: self.gpu_triple_buffers.position_and_mass[write_buffer].as_entire_binding(),
+                    resource: self.gpu_triple_buffers.position_and_mass[write_buffer]
+                        .as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -3538,17 +4248,20 @@ impl GpuScene {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: self.gpu_triple_buffers.cell_count_buffer.as_entire_binding(),
+                    resource: self
+                        .gpu_triple_buffers
+                        .cell_count_buffer
+                        .as_entire_binding(),
                 },
             ],
         })
     }
-    
+
     /// Ensure the shared environment camera buffer exists and update it with current camera data.
     /// Returns the camera buffer reference. Creates the buffer on first call, then reuses it.
     fn ensure_env_camera_buffer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let camera_uniform = self.create_camera_uniform();
-        
+
         if let Some(ref buffer) = self.env_camera_buffer {
             // Reuse existing buffer - just update data
             queue.write_buffer(buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
@@ -3562,7 +4275,7 @@ impl GpuScene {
             self.env_camera_buffer = Some(buffer);
         }
     }
-    
+
     /// Ensure cached camera bind group exists for a specific environment renderer.
     /// Creates the bind group on first call using the shared camera buffer.
     fn ensure_env_camera_bind_groups(&mut self, device: &wgpu::Device) {
@@ -3570,7 +4283,7 @@ impl GpuScene {
             Some(b) => b,
             None => return,
         };
-        
+
         // Create voxel camera bind group if needed
         if self.env_camera_bind_group_voxel.is_none() {
             if self.voxel_renderer.is_some() {
@@ -3587,81 +4300,86 @@ impl GpuScene {
                         count: None,
                     }],
                 });
-                self.env_camera_bind_group_voxel = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Env Voxel Camera Bind Group"),
-                    layout: &layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: buffer.as_entire_binding(),
-                    }],
-                }));
+                self.env_camera_bind_group_voxel =
+                    Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Env Voxel Camera Bind Group"),
+                        layout: &layout,
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: buffer.as_entire_binding(),
+                        }],
+                    }));
             }
         }
-        
+
         // Create steam particle camera bind group if needed
         if self.env_camera_bind_group_steam.is_none() {
             if let Some(ref renderer) = self.steam_particle_renderer {
-                self.env_camera_bind_group_steam = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Env Steam Camera Bind Group"),
-                    layout: renderer.camera_bind_group_layout(),
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: buffer.as_entire_binding(),
-                    }],
-                }));
+                self.env_camera_bind_group_steam =
+                    Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Env Steam Camera Bind Group"),
+                        layout: renderer.camera_bind_group_layout(),
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: buffer.as_entire_binding(),
+                        }],
+                    }));
             }
         }
-        
+
         // Create water particle camera bind group if needed
         if self.env_camera_bind_group_water.is_none() {
             if let Some(ref renderer) = self.water_particle_renderer {
-                self.env_camera_bind_group_water = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Env Water Camera Bind Group"),
-                    layout: renderer.camera_bind_group_layout(),
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: buffer.as_entire_binding(),
-                    }],
-                }));
+                self.env_camera_bind_group_water =
+                    Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Env Water Camera Bind Group"),
+                        layout: renderer.camera_bind_group_layout(),
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: buffer.as_entire_binding(),
+                        }],
+                    }));
             }
         }
-        
+
         // Create nutrient particle camera bind group if needed
         if self.env_camera_bind_group_nutrient.is_none() {
             if let Some(ref renderer) = self.nutrient_particle_renderer {
-                self.env_camera_bind_group_nutrient = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Env Nutrient Camera Bind Group"),
-                    layout: renderer.camera_bind_group_layout(),
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: buffer.as_entire_binding(),
-                    }],
-                }));
+                self.env_camera_bind_group_nutrient =
+                    Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Env Nutrient Camera Bind Group"),
+                        layout: renderer.camera_bind_group_layout(),
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: buffer.as_entire_binding(),
+                        }],
+                    }));
             }
         }
-        
+
         // Create death particle camera bind group if needed
         if self.env_camera_bind_group_death.is_none() {
             if let Some(ref renderer) = self.death_particle_renderer {
-                self.env_camera_bind_group_death = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Env Death Camera Bind Group"),
-                    layout: renderer.camera_bind_group_layout(),
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: buffer.as_entire_binding(),
-                    }],
-                }));
+                self.env_camera_bind_group_death =
+                    Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Env Death Camera Bind Group"),
+                        layout: renderer.camera_bind_group_layout(),
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: buffer.as_entire_binding(),
+                        }],
+                    }));
             }
         }
     }
-    
+
     /// Ensure cached adhesion data bind groups exist (one per triple buffer index).
     /// These are created once and reused since the underlying buffers don't change.
     fn ensure_cached_adhesion_bind_groups(&mut self, device: &wgpu::Device) {
         if self.cached_adhesion_data_bind_groups.is_some() {
             return;
         }
-        
+
         let bg0 = self.adhesion_renderer.create_data_bind_group(
             device,
             &self.gpu_triple_buffers.position_and_mass[0],
@@ -3688,12 +4406,12 @@ impl GpuScene {
         );
         self.cached_adhesion_data_bind_groups = Some([bg0, bg1, bg2]);
     }
-    
+
     /// Create camera uniform for rendering
     fn create_camera_uniform(&self) -> CameraUniform {
         let camera_pos = self.camera.position();
         let camera_rotation = self.camera.rotation;
-        
+
         // Use NEG_Z for forward direction (consistent with other renderers)
         let view_matrix = Mat4::look_at_rh(
             camera_pos,
@@ -3703,7 +4421,7 @@ impl GpuScene {
         let aspect = self.renderer.width as f32 / self.renderer.height as f32;
         let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
         let view_proj = proj_matrix * view_matrix;
-        
+
         CameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
             view: view_matrix.to_cols_array_2d(),
@@ -3712,8 +4430,7 @@ impl GpuScene {
             _padding: 0.0,
         }
     }
-    
-    
+
     /// Initialize the fluid simulation system
     pub fn initialize_fluid_system(
         &mut self,
@@ -3725,25 +4442,25 @@ impl GpuScene {
         if self.fluid_buffers.is_some() {
             return false; // Already initialized
         }
-        
+
         // Get world parameters from config
         let world_radius = self.config.sphere_radius;
         let world_center = glam::Vec3::ZERO;
-        
+
         // Create fluid buffers
         let fluid_buffers = FluidBuffers::new(device, world_radius, world_center);
-        
+
         // Validate memory budget
         if let Err(e) = fluid_buffers.validate_memory_budget() {
             log::error!("Fluid system memory budget exceeded: {}", e);
             return false;
         }
-        
+
         log::info!(
             "Fluid system initialized: {:.2} MB memory usage",
             fluid_buffers.memory_usage_mb()
         );
-        
+
         // Create voxel renderer
         let max_voxel_instances = 100_000; // Maximum voxels to render at once
         let voxel_renderer = VoxelRenderer::new(
@@ -3752,11 +4469,11 @@ impl GpuScene {
             camera_bind_group_layout,
             max_voxel_instances,
         );
-        
+
         self.fluid_buffers = Some(fluid_buffers);
         self.voxel_renderer = Some(voxel_renderer);
         self.show_fluid_voxels = true;
-        
+
         // Create solid mask generator
         let solid_mask_generator = SolidMaskGenerator::new(
             crate::simulation::fluid_simulation::GRID_RESOLUTION,
@@ -3764,22 +4481,29 @@ impl GpuScene {
             world_radius,
         );
         self.solid_mask_generator = Some(solid_mask_generator);
-        
+
         // Create light field system for photocyte nutrients and volumetric fog
         let light_field_system = LightFieldSystem::new(device, world_radius);
 
         // Rebuild signal sense world data bind group with real light field buffer
         {
-            let nutrient_buf = self.fluid_simulator.as_ref()
+            let nutrient_buf = self
+                .fluid_simulator
+                .as_ref()
                 .map(|fs| fs.nutrient_voxels_buffer())
                 .unwrap_or(&self.signal_sense_dummy_nutrient_buffer);
-            let solid_buf = self.fluid_simulator.as_ref()
+            let solid_buf = self
+                .fluid_simulator
+                .as_ref()
                 .map(|fs| fs.solid_mask_buffer())
                 .unwrap_or(&self.signal_sense_dummy_solid_buffer);
-            let density_buf = self.gpu_surface_nets.as_ref()
+            let density_buf = self
+                .gpu_surface_nets
+                .as_ref()
                 .map(|sn| sn.density_buffer())
                 .unwrap_or(&self.signal_sense_dummy_density_buffer);
-            self.cached_bind_groups.signal_sense_world_data = self.gpu_physics_pipelines
+            self.cached_bind_groups.signal_sense_world_data = self
+                .gpu_physics_pipelines
                 .create_signal_sense_world_data_bind_group(
                     device,
                     &self.signal_sense_world_params_buffer,
@@ -3787,8 +4511,12 @@ impl GpuScene {
                     light_field_system.light_field_buffer(),
                     solid_buf,
                     density_buf,
-                    self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_state),
-                    self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_count),
+                    self.boulder_system
+                        .as_ref()
+                        .map(|bs| &bs.buffers.boulder_state),
+                    self.boulder_system
+                        .as_ref()
+                        .map(|bs| &bs.buffers.boulder_count),
                 );
         }
 
@@ -3796,15 +4524,25 @@ impl GpuScene {
 
         // Initialize moss system now that light field is available
         self.initialize_moss_system(device);
-        
+
         // Create volumetric fog renderer (with half-res support)
-        let volumetric_fog_renderer = VolumetricFogRenderer::new(device, surface_format, self.renderer.width, self.renderer.height);
+        let volumetric_fog_renderer = VolumetricFogRenderer::new(
+            device,
+            surface_format,
+            self.renderer.width,
+            self.renderer.height,
+        );
         self.volumetric_fog_renderer = Some(volumetric_fog_renderer);
-        
+
         // Create depth of field renderer (with half-res support)
-        let dof_renderer = DepthOfFieldRenderer::new(device, surface_format, self.renderer.width, self.renderer.height);
+        let dof_renderer = DepthOfFieldRenderer::new(
+            device,
+            surface_format,
+            self.renderer.width,
+            self.renderer.height,
+        );
         self.dof_renderer = Some(dof_renderer);
-        
+
         // Create procedural sun renderer
         let mut sun_renderer = SunRenderer::new(device, surface_format);
         sun_renderer.resize(self.renderer.width, self.renderer.height);
@@ -3813,38 +4551,39 @@ impl GpuScene {
         // Create procedural space skybox renderer
         let skybox_renderer = SkyboxRenderer::new(device, surface_format);
         self.skybox_renderer = Some(skybox_renderer);
-        
+
         true
     }
-    
+
     /// Generate test voxels for visualization
     pub fn generate_test_voxels(&mut self, queue: &wgpu::Queue) {
         use crate::rendering::VoxelInstance;
         use crate::simulation::fluid_simulation::{FluidType, GRID_RESOLUTION};
-        
+
         if self.fluid_buffers.is_none() || self.voxel_renderer.is_none() {
             return;
         }
-        
+
         let voxel_renderer = self.voxel_renderer.as_ref().unwrap();
-        
+
         // Calculate grid parameters from world size
         let world_diameter = self.config.sphere_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let world_center = glam::Vec3::ZERO;
-        
+
         // Helper function to convert grid indices to world position
         let grid_to_world = |i: u32, j: u32, k: u32| -> glam::Vec3 {
             // Grid origin is at world_center - (world_diameter / 2)
             let grid_origin = world_center - glam::Vec3::splat(world_diameter / 2.0);
             // Cell center is at grid_origin + (i + 0.5) * cell_size
-            grid_origin + glam::Vec3::new(
-                (i as f32 + 0.5) * cell_size,
-                (j as f32 + 0.5) * cell_size,
-                (k as f32 + 0.5) * cell_size,
-            )
+            grid_origin
+                + glam::Vec3::new(
+                    (i as f32 + 0.5) * cell_size,
+                    (j as f32 + 0.5) * cell_size,
+                    (k as f32 + 0.5) * cell_size,
+                )
         };
-        
+
         let mut instances = Vec::new();
         // Voxel size is half-extent. For contiguous voxels:
         // - Grid cells are cell_size apart (center to center)
@@ -3852,7 +4591,7 @@ impl GpuScene {
         // - Therefore half-extent = cell_size / 2
         // BUT the size parameter might be full extent, not half-extent. Let's use cell_size.
         let voxel_size = cell_size; // Full extent for rendering
-        
+
         // ===== SOLID (Green) - Cave/Terrain Patterns =====
         // Pattern 1: Single isolated voxel (obstacle)
         let solid_single = (30, 64, 64);
@@ -3863,13 +4602,18 @@ impl GpuScene {
             size: voxel_size,
             _padding: [0.0; 3],
         });
-        
+
         // Pattern 2: Horizontal wall (5x1x3 plane)
         let solid_wall_base = (35, 64, 62);
         for x in 0..5 {
             for z in 0..3 {
                 instances.push(VoxelInstance {
-                    position: grid_to_world(solid_wall_base.0 + x, solid_wall_base.1, solid_wall_base.2 + z).to_array(),
+                    position: grid_to_world(
+                        solid_wall_base.0 + x,
+                        solid_wall_base.1,
+                        solid_wall_base.2 + z,
+                    )
+                    .to_array(),
                     voxel_type: FluidType::Solid as u32,
                     color: [0.2, 0.8, 0.2, 0.9],
                     size: voxel_size,
@@ -3877,19 +4621,24 @@ impl GpuScene {
                 });
             }
         }
-        
+
         // Pattern 3: Vertical pillar (1x5x1 column)
         let solid_pillar_base = (42, 60, 64);
         for y in 0..5 {
             instances.push(VoxelInstance {
-                position: grid_to_world(solid_pillar_base.0, solid_pillar_base.1 + y, solid_pillar_base.2).to_array(),
+                position: grid_to_world(
+                    solid_pillar_base.0,
+                    solid_pillar_base.1 + y,
+                    solid_pillar_base.2,
+                )
+                .to_array(),
                 voxel_type: FluidType::Solid as u32,
                 color: [0.15, 0.7, 0.15, 0.9],
                 size: voxel_size,
                 _padding: [0.0; 3],
             });
         }
-        
+
         // ===== WATER (Blue) - Liquid Patterns =====
         // Pattern 1: Single droplet
         let water_droplet = (50, 68, 64);
@@ -3900,13 +4649,18 @@ impl GpuScene {
             size: voxel_size,
             _padding: [0.0; 3],
         });
-        
+
         // Pattern 2: Horizontal pool (6x1x4 shallow water)
         let water_pool_base = (52, 60, 62);
         for x in 0..6 {
             for z in 0..4 {
                 instances.push(VoxelInstance {
-                    position: grid_to_world(water_pool_base.0 + x, water_pool_base.1, water_pool_base.2 + z).to_array(),
+                    position: grid_to_world(
+                        water_pool_base.0 + x,
+                        water_pool_base.1,
+                        water_pool_base.2 + z,
+                    )
+                    .to_array(),
                     voxel_type: FluidType::Water as u32,
                     color: [0.2, 0.4, 0.9, 0.7],
                     size: voxel_size,
@@ -3914,26 +4668,36 @@ impl GpuScene {
                 });
             }
         }
-        
+
         // Pattern 3: Vertical stream (1x6x1 falling water)
         let water_stream_base = (60, 62, 64);
         for y in 0..6 {
             instances.push(VoxelInstance {
-                position: grid_to_world(water_stream_base.0, water_stream_base.1 + y, water_stream_base.2).to_array(),
+                position: grid_to_world(
+                    water_stream_base.0,
+                    water_stream_base.1 + y,
+                    water_stream_base.2,
+                )
+                .to_array(),
                 voxel_type: FluidType::Water as u32,
                 color: [0.3, 0.6, 1.0, 0.6],
                 size: voxel_size,
                 _padding: [0.0; 3],
             });
         }
-        
+
         // Pattern 4: Small cube (3x3x3 water body)
         let water_cube_base = (63, 62, 62);
         for x in 0..3 {
             for y in 0..3 {
                 for z in 0..3 {
                     instances.push(VoxelInstance {
-                        position: grid_to_world(water_cube_base.0 + x, water_cube_base.1 + y, water_cube_base.2 + z).to_array(),
+                        position: grid_to_world(
+                            water_cube_base.0 + x,
+                            water_cube_base.1 + y,
+                            water_cube_base.2 + z,
+                        )
+                        .to_array(),
                         voxel_type: FluidType::Water as u32,
                         color: [0.2, 0.4, 0.9, 0.7],
                         size: voxel_size,
@@ -3942,7 +4706,7 @@ impl GpuScene {
                 }
             }
         }
-        
+
         // ===== LAVA (Orange/Red) - Viscous Liquid Patterns =====
         // Pattern 1: Single lava blob
         let lava_blob = (72, 64, 64);
@@ -3953,7 +4717,7 @@ impl GpuScene {
             size: voxel_size,
             _padding: [0.0; 3],
         });
-        
+
         // Pattern 2: Lava flow (7x1x2 horizontal flow)
         let lava_flow_base = (74, 60, 63);
         for x in 0..7 {
@@ -3964,7 +4728,12 @@ impl GpuScene {
                     [0.9, 0.1, 0.0, 0.9] // Red
                 };
                 instances.push(VoxelInstance {
-                    position: grid_to_world(lava_flow_base.0 + x, lava_flow_base.1, lava_flow_base.2 + z).to_array(),
+                    position: grid_to_world(
+                        lava_flow_base.0 + x,
+                        lava_flow_base.1,
+                        lava_flow_base.2 + z,
+                    )
+                    .to_array(),
                     voxel_type: FluidType::Lava as u32,
                     color,
                     size: voxel_size,
@@ -3972,19 +4741,24 @@ impl GpuScene {
                 });
             }
         }
-        
+
         // Pattern 3: Lava pillar (1x4x1 rising lava)
         let lava_pillar_base = (83, 62, 64);
         for y in 0..4 {
             instances.push(VoxelInstance {
-                position: grid_to_world(lava_pillar_base.0, lava_pillar_base.1 + y, lava_pillar_base.2).to_array(),
+                position: grid_to_world(
+                    lava_pillar_base.0,
+                    lava_pillar_base.1 + y,
+                    lava_pillar_base.2,
+                )
+                .to_array(),
                 voxel_type: FluidType::Lava as u32,
                 color: [0.95, 0.2, 0.0, 0.9],
                 size: voxel_size,
                 _padding: [0.0; 3],
             });
         }
-        
+
         // Pattern 4: Lava pool (4x2x3 thick lava)
         let lava_pool_base = (85, 62, 62);
         for x in 0..4 {
@@ -3996,7 +4770,12 @@ impl GpuScene {
                         [0.9, 0.1, 0.0, 0.9]
                     };
                     instances.push(VoxelInstance {
-                        position: grid_to_world(lava_pool_base.0 + x, lava_pool_base.1 + y, lava_pool_base.2 + z).to_array(),
+                        position: grid_to_world(
+                            lava_pool_base.0 + x,
+                            lava_pool_base.1 + y,
+                            lava_pool_base.2 + z,
+                        )
+                        .to_array(),
                         voxel_type: FluidType::Lava as u32,
                         color,
                         size: voxel_size,
@@ -4005,18 +4784,19 @@ impl GpuScene {
                 }
             }
         }
-        
+
         // ===== STEAM (Grey/White) - Gas Patterns =====
         // Pattern 1: Single steam particle
         let steam_particle = (95, 68, 64);
         instances.push(VoxelInstance {
-            position: grid_to_world(steam_particle.0, steam_particle.1, steam_particle.2).to_array(),
+            position: grid_to_world(steam_particle.0, steam_particle.1, steam_particle.2)
+                .to_array(),
             voxel_type: FluidType::Steam as u32,
             color: [0.9, 0.9, 0.9, 0.4],
             size: voxel_size,
             _padding: [0.0; 3],
         });
-        
+
         // Pattern 2: Steam cloud (5x3x4 dispersed gas)
         let steam_cloud_base = (92, 64, 62);
         for x in 0..5 {
@@ -4026,7 +4806,12 @@ impl GpuScene {
                     if (x + y + z) % 2 == 0 {
                         let alpha = 0.3 + (y as f32 * 0.1); // More transparent at top
                         instances.push(VoxelInstance {
-                            position: grid_to_world(steam_cloud_base.0 + x, steam_cloud_base.1 + y, steam_cloud_base.2 + z).to_array(),
+                            position: grid_to_world(
+                                steam_cloud_base.0 + x,
+                                steam_cloud_base.1 + y,
+                                steam_cloud_base.2 + z,
+                            )
+                            .to_array(),
                             voxel_type: FluidType::Steam as u32,
                             color: [0.85, 0.85, 0.85, alpha],
                             size: voxel_size,
@@ -4036,20 +4821,25 @@ impl GpuScene {
                 }
             }
         }
-        
+
         // Pattern 3: Rising steam column (1x7x1 vertical plume)
         let steam_plume_base = (90, 60, 64);
         for y in 0..7 {
             let alpha = 0.6 - (y as f32 * 0.05); // Fade out as it rises
             instances.push(VoxelInstance {
-                position: grid_to_world(steam_plume_base.0, steam_plume_base.1 + y, steam_plume_base.2).to_array(),
+                position: grid_to_world(
+                    steam_plume_base.0,
+                    steam_plume_base.1 + y,
+                    steam_plume_base.2,
+                )
+                .to_array(),
                 voxel_type: FluidType::Steam as u32,
                 color: [0.95, 0.95, 0.95, alpha],
                 size: voxel_size,
                 _padding: [0.0; 3],
             });
         }
-        
+
         // Pattern 4: Scattered steam particles (random sparse pattern)
         let steam_scatter_base = (98, 62, 62);
         for x in 0..4 {
@@ -4058,7 +4848,12 @@ impl GpuScene {
                     // Very sparse - only 25% filled
                     if (x * 7 + y * 3 + z * 5) % 4 == 0 {
                         instances.push(VoxelInstance {
-                            position: grid_to_world(steam_scatter_base.0 + x, steam_scatter_base.1 + y, steam_scatter_base.2 + z).to_array(),
+                            position: grid_to_world(
+                                steam_scatter_base.0 + x,
+                                steam_scatter_base.1 + y,
+                                steam_scatter_base.2 + z,
+                            )
+                            .to_array(),
                             voxel_type: FluidType::Steam as u32,
                             color: [0.8, 0.8, 0.8, 0.35],
                             size: voxel_size,
@@ -4068,7 +4863,7 @@ impl GpuScene {
                 }
             }
         }
-        
+
         log::info!(
             "Generated {} diverse fluid pattern voxels aligned to 128³ grid (cell_size: {:.4})",
             instances.len(),
@@ -4078,7 +4873,7 @@ impl GpuScene {
         self.voxel_instance_count = instances.len() as u32;
         voxel_renderer.update_instances(queue, &instances);
     }
-    
+
     /// Initialize GPU-based surface nets renderer for density field visualization
     pub fn initialize_gpu_surface_nets(
         &mut self,
@@ -4088,7 +4883,7 @@ impl GpuScene {
         if self.gpu_surface_nets.is_some() {
             return;
         }
-        
+
         let gpu_surface_nets = GpuSurfaceNets::new(
             device,
             surface_format,
@@ -4097,9 +4892,11 @@ impl GpuScene {
             glam::Vec3::ZERO,
             self.renderer.width,
             self.renderer.height,
-            self.light_field_system.as_ref().map(|lf| lf.shadow_bind_group_layout()),
+            self.light_field_system
+                .as_ref()
+                .map(|lf| lf.shadow_bind_group_layout()),
         );
-        
+
         self.gpu_surface_nets = Some(gpu_surface_nets);
         self.show_gpu_density_mesh = true;
         // Reset shadow bind group flag so it gets recreated with the new renderer
@@ -4142,7 +4939,10 @@ impl GpuScene {
         self.organism_skin_count_bind_group = None;
         self.organism_skin_compute_bind_groups = None;
 
-        log::info!("Organism skin renderer initialized (grid {}³)", settings.grid_resolution);
+        log::info!(
+            "Organism skin renderer initialized (grid {}³)",
+            settings.grid_resolution
+        );
     }
 
     /// Ensure organism skin bind groups are created.
@@ -4200,31 +5000,32 @@ impl GpuScene {
     /// Generate test density data for GPU surface nets with multiple fluid types
     pub fn generate_test_density(&mut self, queue: &wgpu::Queue) {
         use crate::simulation::fluid_simulation::GRID_RESOLUTION;
-        
+
         if self.gpu_surface_nets.is_none() {
             log::warn!("GPU surface nets not initialized");
             return;
         }
-        
+
         let world_radius = self.config.sphere_radius;
         let world_center = glam::Vec3::ZERO;
         let world_diameter = world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = world_center - glam::Vec3::splat(world_diameter / 2.0);
         let total_voxels = (GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION) as usize;
-        
+
         let mut density = vec![0.0f32; total_voxels];
         let mut fluid_types = vec![0u32; total_voxels]; // 0=none, 1=water, 2=lava, 3=steam
-        
+
         // Helper to convert grid coords to world position
         let grid_to_world = |x: u32, y: u32, z: u32| -> glam::Vec3 {
-            grid_origin + glam::Vec3::new(
-                (x as f32 + 0.5) * cell_size,
-                (y as f32 + 0.5) * cell_size,
-                (z as f32 + 0.5) * cell_size,
-            )
+            grid_origin
+                + glam::Vec3::new(
+                    (x as f32 + 0.5) * cell_size,
+                    (y as f32 + 0.5) * cell_size,
+                    (z as f32 + 0.5) * cell_size,
+                )
         };
-        
+
         // Metaball contribution function
         let metaball = |pos: glam::Vec3, center: glam::Vec3, radius: f32| -> f32 {
             let dist = (pos - center).length();
@@ -4235,73 +5036,117 @@ impl GpuScene {
                 0.0
             }
         };
-        
+
         // === WATER: Large pool at bottom with droplets ===
         let water_pool_center = glam::Vec3::new(0.0, -world_radius * 0.4, 0.0);
         let water_pool_radius = world_radius * 0.5;
-        
+
         // Water droplets
         let water_droplets = vec![
-            (glam::Vec3::new(-world_radius * 0.3, -world_radius * 0.1, world_radius * 0.2), world_radius * 0.12),
-            (glam::Vec3::new(-world_radius * 0.25, 0.0, world_radius * 0.15), world_radius * 0.08),
-            (glam::Vec3::new(-world_radius * 0.35, world_radius * 0.1, world_radius * 0.1), world_radius * 0.06),
+            (
+                glam::Vec3::new(-world_radius * 0.3, -world_radius * 0.1, world_radius * 0.2),
+                world_radius * 0.12,
+            ),
+            (
+                glam::Vec3::new(-world_radius * 0.25, 0.0, world_radius * 0.15),
+                world_radius * 0.08,
+            ),
+            (
+                glam::Vec3::new(-world_radius * 0.35, world_radius * 0.1, world_radius * 0.1),
+                world_radius * 0.06,
+            ),
         ];
-        
+
         // === LAVA: Blob cluster on one side ===
         let lava_blobs = vec![
-            (glam::Vec3::new(world_radius * 0.5, -world_radius * 0.2, 0.0), world_radius * 0.25),
-            (glam::Vec3::new(world_radius * 0.4, -world_radius * 0.1, world_radius * 0.15), world_radius * 0.18),
-            (glam::Vec3::new(world_radius * 0.55, 0.0, -world_radius * 0.1), world_radius * 0.15),
-            (glam::Vec3::new(world_radius * 0.35, -world_radius * 0.3, -world_radius * 0.1), world_radius * 0.2),
+            (
+                glam::Vec3::new(world_radius * 0.5, -world_radius * 0.2, 0.0),
+                world_radius * 0.25,
+            ),
+            (
+                glam::Vec3::new(world_radius * 0.4, -world_radius * 0.1, world_radius * 0.15),
+                world_radius * 0.18,
+            ),
+            (
+                glam::Vec3::new(world_radius * 0.55, 0.0, -world_radius * 0.1),
+                world_radius * 0.15,
+            ),
+            (
+                glam::Vec3::new(
+                    world_radius * 0.35,
+                    -world_radius * 0.3,
+                    -world_radius * 0.1,
+                ),
+                world_radius * 0.2,
+            ),
         ];
-        
+
         // === STEAM: Rising wisps at top ===
         let steam_wisps = vec![
-            (glam::Vec3::new(-world_radius * 0.1, world_radius * 0.5, -world_radius * 0.2), world_radius * 0.15),
-            (glam::Vec3::new(world_radius * 0.05, world_radius * 0.6, -world_radius * 0.1), world_radius * 0.12),
-            (glam::Vec3::new(-world_radius * 0.15, world_radius * 0.45, 0.0), world_radius * 0.1),
-            (glam::Vec3::new(0.0, world_radius * 0.7, -world_radius * 0.15), world_radius * 0.08),
-            (glam::Vec3::new(world_radius * 0.1, world_radius * 0.55, world_radius * 0.1), world_radius * 0.1),
+            (
+                glam::Vec3::new(-world_radius * 0.1, world_radius * 0.5, -world_radius * 0.2),
+                world_radius * 0.15,
+            ),
+            (
+                glam::Vec3::new(world_radius * 0.05, world_radius * 0.6, -world_radius * 0.1),
+                world_radius * 0.12,
+            ),
+            (
+                glam::Vec3::new(-world_radius * 0.15, world_radius * 0.45, 0.0),
+                world_radius * 0.1,
+            ),
+            (
+                glam::Vec3::new(0.0, world_radius * 0.7, -world_radius * 0.15),
+                world_radius * 0.08,
+            ),
+            (
+                glam::Vec3::new(world_radius * 0.1, world_radius * 0.55, world_radius * 0.1),
+                world_radius * 0.1,
+            ),
         ];
-        
+
         // Fill density grid with fluid types
         for z in 0..GRID_RESOLUTION {
             for y in 0..GRID_RESOLUTION {
                 for x in 0..GRID_RESOLUTION {
-                    let idx = (x + y * GRID_RESOLUTION + z * GRID_RESOLUTION * GRID_RESOLUTION) as usize;
+                    let idx =
+                        (x + y * GRID_RESOLUTION + z * GRID_RESOLUTION * GRID_RESOLUTION) as usize;
                     let pos = grid_to_world(x, y, z);
-                    
+
                     // Track density contribution from each fluid type
                     let mut water_d = 0.0f32;
                     let mut lava_d = 0.0f32;
                     let mut steam_d = 0.0f32;
-                    
+
                     // Water pool (flattened ellipsoid)
                     let water_pos = pos - water_pool_center;
-                    let water_dist = (water_pos.x * water_pos.x + water_pos.y * water_pos.y * 4.0 + water_pos.z * water_pos.z).sqrt();
+                    let water_dist = (water_pos.x * water_pos.x
+                        + water_pos.y * water_pos.y * 4.0
+                        + water_pos.z * water_pos.z)
+                        .sqrt();
                     if water_dist < water_pool_radius {
                         water_d += (1.0 - water_dist / water_pool_radius).max(0.0);
                     }
-                    
+
                     // Water droplets
                     for (center, radius) in &water_droplets {
                         water_d += metaball(pos, *center, *radius);
                     }
-                    
+
                     // Lava blobs
                     for (center, radius) in &lava_blobs {
                         lava_d += metaball(pos, *center, *radius);
                     }
-                    
+
                     // Steam wisps
                     for (center, radius) in &steam_wisps {
                         steam_d += metaball(pos, *center, *radius);
                     }
-                    
+
                     // Total density is sum of all contributions
                     let total_d = (water_d + lava_d + steam_d).min(1.0);
                     density[idx] = total_d;
-                    
+
                     // Assign fluid type based on dominant contribution
                     if total_d > 0.01 {
                         if water_d >= lava_d && water_d >= steam_d {
@@ -4315,22 +5160,26 @@ impl GpuScene {
                 }
             }
         }
-        
+
         let gpu_surface_nets = self.gpu_surface_nets.as_ref().unwrap();
         gpu_surface_nets.upload_density(queue, &density);
         gpu_surface_nets.upload_fluid_types(queue, &fluid_types);
-        
+
         log::info!("Generated multi-fluid test density: water pool + {} droplets, {} lava blobs, {} steam wisps",
             water_droplets.len(), lava_blobs.len(), steam_wisps.len());
     }
-    
+
     /// Extract mesh from density field using GPU compute shaders
-    pub fn extract_gpu_density_mesh(&mut self, _device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+    pub fn extract_gpu_density_mesh(
+        &mut self,
+        _device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
         if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
             gpu_surface_nets.extract_mesh(encoder);
         }
     }
-    
+
     /// Read back mesh counts from GPU (call after command buffer submission)
     pub fn read_gpu_mesh_counts(&mut self, device: &wgpu::Device) {
         if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
@@ -4344,7 +5193,12 @@ impl GpuScene {
     }
 
     /// Initialize the GPU fluid simulator (starts empty)
-    pub fn initialize_fluid_simulator(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
+    pub fn initialize_fluid_simulator(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+    ) {
         // First ensure surface nets is initialized
         if self.gpu_surface_nets.is_none() {
             self.initialize_gpu_surface_nets(device, surface_format);
@@ -4359,8 +5213,13 @@ impl GpuScene {
             log::error!("Fluid buffers not initialized when creating fluid simulator");
             return;
         };
-        
-        let simulator = GpuFluidSimulator::new(device, self.config.sphere_radius, glam::Vec3::ZERO, solid_mask_buffer);
+
+        let simulator = GpuFluidSimulator::new(
+            device,
+            self.config.sphere_radius,
+            glam::Vec3::ZERO,
+            solid_mask_buffer,
+        );
 
         // Update the position update force accum bind group with real water buffers
         self.cached_bind_groups.update_water_buffers(
@@ -4376,9 +5235,11 @@ impl GpuScene {
         // Also rebuild boulder physics bind group with real water buffers if boulder system exists
         if self.boulder_system.is_some() {
             let boulder_bufs = self.boulder_system.as_ref().map(|bs| &bs.buffers);
-            self.cached_bind_groups.boulder_physics_buffers =
-                self.gpu_physics_pipelines.create_boulder_physics_buffers_bind_group(
-                    device, boulder_bufs,
+            self.cached_bind_groups.boulder_physics_buffers = self
+                .gpu_physics_pipelines
+                .create_boulder_physics_buffers_bind_group(
+                    device,
+                    boulder_bufs,
                     Some(simulator.water_grid_params_buffer()),
                     Some(simulator.water_bitfield_buffer()),
                 );
@@ -4399,13 +5260,18 @@ impl GpuScene {
 
         // Rebuild signal sense world data bind group with real buffers from fluid simulator
         {
-            let light_buf = self.light_field_system.as_ref()
+            let light_buf = self
+                .light_field_system
+                .as_ref()
                 .map(|lfs| lfs.light_field_buffer())
                 .unwrap_or(&self.signal_sense_dummy_light_buffer);
-            let density_buf = self.gpu_surface_nets.as_ref()
+            let density_buf = self
+                .gpu_surface_nets
+                .as_ref()
                 .map(|sn| sn.density_buffer())
                 .unwrap_or(&self.signal_sense_dummy_density_buffer);
-            self.cached_bind_groups.signal_sense_world_data = self.gpu_physics_pipelines
+            self.cached_bind_groups.signal_sense_world_data = self
+                .gpu_physics_pipelines
                 .create_signal_sense_world_data_bind_group(
                     device,
                     &self.signal_sense_world_params_buffer,
@@ -4413,8 +5279,12 @@ impl GpuScene {
                     light_buf,
                     simulator.solid_mask_buffer(),
                     density_buf,
-                    self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_state),
-                    self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_count),
+                    self.boulder_system
+                        .as_ref()
+                        .map(|bs| &bs.buffers.boulder_state),
+                    self.boulder_system
+                        .as_ref()
+                        .map(|bs| &bs.buffers.boulder_count),
                 );
         }
 
@@ -4458,14 +5328,14 @@ impl GpuScene {
             let world_diameter = self.config.sphere_radius * 2.0;
             let grid_resolution = 128u32;
             let cell_size = world_diameter / grid_resolution as f32;
-            let grid_origin = [-world_diameter / 2.0, -world_diameter / 2.0, -world_diameter / 2.0];
+            let grid_origin = [
+                -world_diameter / 2.0,
+                -world_diameter / 2.0,
+                -world_diameter / 2.0,
+            ];
 
-            let consumption_system = PhagocyteConsumptionSystem::new(
-                device,
-                grid_resolution,
-                cell_size,
-                grid_origin,
-            );
+            let consumption_system =
+                PhagocyteConsumptionSystem::new(device, grid_resolution, cell_size, grid_origin);
 
             self.phagocyte_consumption = Some(consumption_system);
             log::info!("Phagocyte consumption system initialized");
@@ -4482,7 +5352,11 @@ impl GpuScene {
     }
 
     /// Run devorocyte consumption compute shader - steals nutrients from and kills foreign cells.
-    fn run_devorocyte_consumption(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+    fn run_devorocyte_consumption(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
         let system = match &self.devorocyte_consumption {
             Some(s) => s,
             None => return,
@@ -4498,7 +5372,7 @@ impl GpuScene {
                     &bufs.position_and_mass[0],
                     &bufs.velocity[0],
                     &bufs.position_and_mass[0], // positions_out (same buffer - read-only in shader)
-                    &bufs.velocity[0],           // velocities_out (same buffer - read-only in shader)
+                    &bufs.velocity[0], // velocities_out (same buffer - read-only in shader)
                     &bufs.cell_count_buffer,
                 ),
                 system.create_physics_bind_group(
@@ -4558,7 +5432,13 @@ impl GpuScene {
             &self.devorocyte_spatial_bind_group,
         ) {
             // Dispatch over live cell slots only - avoids dispatching empty workgroups.
-            system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, self.total_cell_slots.max(1));
+            system.run(
+                encoder,
+                &physics_bgs[output_idx],
+                cell_bg,
+                spatial_bg,
+                self.total_cell_slots.max(1),
+            );
         }
     }
 
@@ -4571,7 +5451,12 @@ impl GpuScene {
     }
 
     /// Run gametocyte merge detection: clear events, dispatch shader, schedule readback.
-    fn run_gametocyte_merge(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
+    fn run_gametocyte_merge(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+    ) {
         let system = match &self.gametocyte_merge_system {
             Some(s) => s,
             None => return,
@@ -4584,9 +5469,33 @@ impl GpuScene {
         if self.gametocyte_physics_bind_groups.is_none() {
             let bufs = &self.gpu_triple_buffers;
             self.gametocyte_physics_bind_groups = Some([
-                system.create_physics_bind_group(device, &bufs.physics_params, &bufs.position_and_mass[0], &bufs.velocity[0], &bufs.position_and_mass[0], &bufs.velocity[0], &bufs.cell_count_buffer),
-                system.create_physics_bind_group(device, &bufs.physics_params, &bufs.position_and_mass[1], &bufs.velocity[1], &bufs.position_and_mass[1], &bufs.velocity[1], &bufs.cell_count_buffer),
-                system.create_physics_bind_group(device, &bufs.physics_params, &bufs.position_and_mass[2], &bufs.velocity[2], &bufs.position_and_mass[2], &bufs.velocity[2], &bufs.cell_count_buffer),
+                system.create_physics_bind_group(
+                    device,
+                    &bufs.physics_params,
+                    &bufs.position_and_mass[0],
+                    &bufs.velocity[0],
+                    &bufs.position_and_mass[0],
+                    &bufs.velocity[0],
+                    &bufs.cell_count_buffer,
+                ),
+                system.create_physics_bind_group(
+                    device,
+                    &bufs.physics_params,
+                    &bufs.position_and_mass[1],
+                    &bufs.velocity[1],
+                    &bufs.position_and_mass[1],
+                    &bufs.velocity[1],
+                    &bufs.cell_count_buffer,
+                ),
+                system.create_physics_bind_group(
+                    device,
+                    &bufs.physics_params,
+                    &bufs.position_and_mass[2],
+                    &bufs.velocity[2],
+                    &bufs.position_and_mass[2],
+                    &bufs.velocity[2],
+                    &bufs.cell_count_buffer,
+                ),
             ]);
         }
 
@@ -4628,7 +5537,13 @@ impl GpuScene {
             // Dispatching over total_cell_slots (live count) rather than full capacity
             // avoids dispatching twice as many workgroups as necessary.
             if self.current_frame % 4 == 0 {
-                system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, self.total_cell_slots.max(1) as usize);
+                system.run(
+                    encoder,
+                    &physics_bgs[output_idx],
+                    cell_bg,
+                    spatial_bg,
+                    self.total_cell_slots.max(1) as usize,
+                );
                 // Schedule async readback of events after dispatch
                 if !self.gamete_readback_in_flight {
                     system.schedule_readback(encoder);
@@ -4655,7 +5570,9 @@ impl GpuScene {
             let system = self.gametocyte_merge_system.as_ref().unwrap();
             let buffer_slice = system.staging_buffer.slice(..);
             let (sender, receiver) = std::sync::mpsc::channel();
-            buffer_slice.map_async(wgpu::MapMode::Read, move |r| { let _ = sender.send(r); });
+            buffer_slice.map_async(wgpu::MapMode::Read, move |r| {
+                let _ = sender.send(r);
+            });
             let _ = device.poll(wgpu::PollType::Poll);
             if let Ok(Ok(())) = receiver.try_recv() {
                 let data = buffer_slice.get_mapped_range();
@@ -4689,7 +5606,11 @@ impl GpuScene {
             let genome_b_id = event.genome_b_id as usize;
 
             if genome_a_id >= self.genomes.len() || genome_b_id >= self.genomes.len() {
-                log::warn!("Gamete merge: out-of-range genome ids {} / {}", genome_a_id, genome_b_id);
+                log::warn!(
+                    "Gamete merge: out-of-range genome ids {} / {}",
+                    genome_a_id,
+                    genome_b_id
+                );
                 continue;
             }
 
@@ -4741,8 +5662,14 @@ impl GpuScene {
             // For any other cell type: convert the reserve 1:1 into nutrients (same x1000
             // fixed-point scale), capped at 100000 (= 100.0, a full nutrient pool).
             // The reserve itself is discarded for non-storage cells.
-            let initial_reserve = if is_embryocyte { event.combined_reserve } else { 0 };
-            let initial_nutrients = if is_embryocyte { 0 } else {
+            let initial_reserve = if is_embryocyte {
+                event.combined_reserve
+            } else {
+                0
+            };
+            let initial_nutrients = if is_embryocyte {
+                0
+            } else {
                 event.combined_reserve.min(100_000)
             };
 
@@ -4758,13 +5685,23 @@ impl GpuScene {
 
             let spawn_pos = glam::Vec3::new(event.spawn_x, event.spawn_y, event.spawn_z);
             if self.pending_cell_insertion.is_none() {
-                self.pending_cell_insertion = Some((spawn_pos, offspring_genome, initial_reserve, initial_nutrients));
+                self.pending_cell_insertion = Some((
+                    spawn_pos,
+                    offspring_genome,
+                    initial_reserve,
+                    initial_nutrients,
+                ));
             }
         }
     }
 
     /// Initialize the boulder system after cave is ready
-    fn initialize_boulder_system(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
+    fn initialize_boulder_system(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+    ) {
         if self.boulder_system.is_some() {
             return;
         }
@@ -4773,10 +5710,12 @@ impl GpuScene {
             let width = self.renderer.width;
             let height = self.renderer.height;
             let mut bs = BoulderSystem::new(
-                device, queue,
+                device,
+                queue,
                 surface_format,
                 wgpu::TextureFormat::Depth32Float,
-                width, height,
+                width,
+                height,
                 cave_renderer.params(),
                 world_radius,
                 self.gravity_mode,
@@ -4787,15 +5726,17 @@ impl GpuScene {
             bs.set_radius(self.boulder_radius);
             bs.radius_min = self.boulder_radius_min;
             bs.radius_max = self.boulder_radius_max;
-            bs.moss_min   = self.boulder_moss_min;
-            bs.moss_max   = self.boulder_moss_max;
+            bs.moss_min = self.boulder_moss_min;
+            bs.moss_max = self.boulder_moss_max;
             bs.spawn_interval = self.boulder_spawn_interval;
             bs.buoyancy = self.boulder_buoyancy;
             bs.buoyancy_dirty = true; // write to GPU on first update
             self.boulder_system = Some(bs);
 
             // Build the renderer's boulder storage bind group from the real buffers.
-            let boulder_bg = self.boulder_system.as_ref()
+            let boulder_bg = self
+                .boulder_system
+                .as_ref()
                 .map(|bs| bs.renderer.create_boulder_bind_group(device, &bs.buffers));
             if let (Some(ref mut bs), Some(bg)) = (self.boulder_system.as_mut(), boulder_bg) {
                 bs.renderer.boulder_bind_group = Some(bg);
@@ -4805,33 +5746,110 @@ impl GpuScene {
             // The cached bind groups were created at init with dummy buffers;
             // they must be replaced so the shaders read from the actual boulder data.
             let boulder_bufs = self.boulder_system.as_ref().map(|bs| &bs.buffers);
-            let org_size_buf = self.organism_label_system.as_ref().map(|s| &s.organism_size_buffer);
-            let water_params_buf = self.fluid_simulator.as_ref().map(|fs| fs.water_grid_params_buffer());
-            let water_bitfield_buf = self.fluid_simulator.as_ref().map(|fs| fs.water_bitfield_buffer());
-            self.cached_bind_groups.boulder_physics_buffers =
-                self.gpu_physics_pipelines.create_boulder_physics_buffers_bind_group(device, boulder_bufs, water_params_buf, water_bitfield_buf);
-            self.cached_bind_groups.boulder_consume_spatial =
-                self.gpu_physics_pipelines.create_boulder_consume_spatial_bind_group(device, &self.gpu_triple_buffers);
+            let org_size_buf = self
+                .organism_label_system
+                .as_ref()
+                .map(|s| &s.organism_size_buffer);
+            let water_params_buf = self
+                .fluid_simulator
+                .as_ref()
+                .map(|fs| fs.water_grid_params_buffer());
+            let water_bitfield_buf = self
+                .fluid_simulator
+                .as_ref()
+                .map(|fs| fs.water_bitfield_buffer());
+            self.cached_bind_groups.boulder_physics_buffers = self
+                .gpu_physics_pipelines
+                .create_boulder_physics_buffers_bind_group(
+                    device,
+                    boulder_bufs,
+                    water_params_buf,
+                    water_bitfield_buf,
+                );
+            self.cached_bind_groups.boulder_consume_spatial = self
+                .gpu_physics_pipelines
+                .create_boulder_consume_spatial_bind_group(device, &self.gpu_triple_buffers);
             self.cached_bind_groups.boulder_consume_cell_data = [
-                self.gpu_physics_pipelines.create_boulder_consume_cell_data_bind_group(device, &self.gpu_triple_buffers, org_size_buf, 0),
-                self.gpu_physics_pipelines.create_boulder_consume_cell_data_bind_group(device, &self.gpu_triple_buffers, org_size_buf, 1),
-                self.gpu_physics_pipelines.create_boulder_consume_cell_data_bind_group(device, &self.gpu_triple_buffers, org_size_buf, 2),
+                self.gpu_physics_pipelines
+                    .create_boulder_consume_cell_data_bind_group(
+                        device,
+                        &self.gpu_triple_buffers,
+                        org_size_buf,
+                        0,
+                    ),
+                self.gpu_physics_pipelines
+                    .create_boulder_consume_cell_data_bind_group(
+                        device,
+                        &self.gpu_triple_buffers,
+                        org_size_buf,
+                        1,
+                    ),
+                self.gpu_physics_pipelines
+                    .create_boulder_consume_cell_data_bind_group(
+                        device,
+                        &self.gpu_triple_buffers,
+                        org_size_buf,
+                        2,
+                    ),
             ];
-            self.cached_bind_groups.boulder_consume_buffers =
-                self.gpu_physics_pipelines.create_boulder_consume_buffers_bind_group(device, boulder_bufs);
+            self.cached_bind_groups.boulder_consume_buffers = self
+                .gpu_physics_pipelines
+                .create_boulder_consume_buffers_bind_group(device, boulder_bufs);
 
             // Also rebuild collision and env adhesion bind groups with real boulder buffers
             // so cells can collide with boulders and glueocytes can attach to them.
             let boulder_bufs2 = self.boulder_system.as_ref().map(|bs| &bs.buffers);
             self.cached_bind_groups.collision_force_accum = [
-                self.gpu_physics_pipelines.create_collision_force_accum_bind_group(device, &self.adhesion_buffers, &self.gpu_triple_buffers, 0, boulder_bufs2),
-                self.gpu_physics_pipelines.create_collision_force_accum_bind_group(device, &self.adhesion_buffers, &self.gpu_triple_buffers, 1, boulder_bufs2),
-                self.gpu_physics_pipelines.create_collision_force_accum_bind_group(device, &self.adhesion_buffers, &self.gpu_triple_buffers, 2, boulder_bufs2),
+                self.gpu_physics_pipelines
+                    .create_collision_force_accum_bind_group(
+                        device,
+                        &self.adhesion_buffers,
+                        &self.gpu_triple_buffers,
+                        0,
+                        boulder_bufs2,
+                    ),
+                self.gpu_physics_pipelines
+                    .create_collision_force_accum_bind_group(
+                        device,
+                        &self.adhesion_buffers,
+                        &self.gpu_triple_buffers,
+                        1,
+                        boulder_bufs2,
+                    ),
+                self.gpu_physics_pipelines
+                    .create_collision_force_accum_bind_group(
+                        device,
+                        &self.adhesion_buffers,
+                        &self.gpu_triple_buffers,
+                        2,
+                        boulder_bufs2,
+                    ),
             ];
             self.cached_bind_groups.env_adhesion_force_accum = [
-                self.gpu_physics_pipelines.create_env_adhesion_force_accum_bind_group(device, &self.adhesion_buffers, &self.gpu_triple_buffers, 0, boulder_bufs2),
-                self.gpu_physics_pipelines.create_env_adhesion_force_accum_bind_group(device, &self.adhesion_buffers, &self.gpu_triple_buffers, 1, boulder_bufs2),
-                self.gpu_physics_pipelines.create_env_adhesion_force_accum_bind_group(device, &self.adhesion_buffers, &self.gpu_triple_buffers, 2, boulder_bufs2),
+                self.gpu_physics_pipelines
+                    .create_env_adhesion_force_accum_bind_group(
+                        device,
+                        &self.adhesion_buffers,
+                        &self.gpu_triple_buffers,
+                        0,
+                        boulder_bufs2,
+                    ),
+                self.gpu_physics_pipelines
+                    .create_env_adhesion_force_accum_bind_group(
+                        device,
+                        &self.adhesion_buffers,
+                        &self.gpu_triple_buffers,
+                        1,
+                        boulder_bufs2,
+                    ),
+                self.gpu_physics_pipelines
+                    .create_env_adhesion_force_accum_bind_group(
+                        device,
+                        &self.adhesion_buffers,
+                        &self.gpu_triple_buffers,
+                        2,
+                        boulder_bufs2,
+                    ),
             ];
 
             log::info!("Boulder system initialized");
@@ -4851,19 +5869,28 @@ impl GpuScene {
 
             // Rebuild signal sense world data bind group with boulder buffers
             {
-                let nutrient_buf = self.fluid_simulator.as_ref()
+                let nutrient_buf = self
+                    .fluid_simulator
+                    .as_ref()
                     .map(|fs| fs.nutrient_voxels_buffer())
                     .unwrap_or(&self.signal_sense_dummy_nutrient_buffer);
-                let light_buf = self.light_field_system.as_ref()
+                let light_buf = self
+                    .light_field_system
+                    .as_ref()
                     .map(|lfs| lfs.light_field_buffer())
                     .unwrap_or(&self.signal_sense_dummy_light_buffer);
-                let solid_buf = self.fluid_simulator.as_ref()
+                let solid_buf = self
+                    .fluid_simulator
+                    .as_ref()
                     .map(|fs| fs.solid_mask_buffer())
                     .unwrap_or(&self.signal_sense_dummy_solid_buffer);
-                let density_buf = self.gpu_surface_nets.as_ref()
+                let density_buf = self
+                    .gpu_surface_nets
+                    .as_ref()
                     .map(|sn| sn.density_buffer())
                     .unwrap_or(&self.signal_sense_dummy_density_buffer);
-                self.cached_bind_groups.signal_sense_world_data = self.gpu_physics_pipelines
+                self.cached_bind_groups.signal_sense_world_data = self
+                    .gpu_physics_pipelines
                     .create_signal_sense_world_data_bind_group(
                         device,
                         &self.signal_sense_world_params_buffer,
@@ -4871,8 +5898,12 @@ impl GpuScene {
                         light_buf,
                         solid_buf,
                         density_buf,
-                        self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_state),
-                        self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_count),
+                        self.boulder_system
+                            .as_ref()
+                            .map(|bs| &bs.buffers.boulder_state),
+                        self.boulder_system
+                            .as_ref()
+                            .map(|bs| &bs.buffers.boulder_count),
                     );
             }
         }
@@ -4889,7 +5920,11 @@ impl GpuScene {
             let world_diameter = self.config.sphere_radius * 2.0;
             let grid_resolution = 128u32;
             let cell_size = world_diameter / grid_resolution as f32;
-            let grid_origin = [-world_diameter / 2.0, -world_diameter / 2.0, -world_diameter / 2.0];
+            let grid_origin = [
+                -world_diameter / 2.0,
+                -world_diameter / 2.0,
+                -world_diameter / 2.0,
+            ];
 
             let moss = MossSystem::new(device, grid_resolution, cell_size, grid_origin);
             self.moss_system = Some(moss);
@@ -4902,14 +5937,24 @@ impl GpuScene {
     }
 
     /// Run moss growth/erosion compute pass
-    fn run_moss_growth(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, delta_time: f32) {
+    fn run_moss_growth(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        delta_time: f32,
+    ) {
         if !self.show_moss {
             return;
         }
 
         // Create growth bind group if not cached (needs immutable borrows of multiple fields)
         if self.moss_growth_bind_group.is_none() {
-            let (moss, fluid_sim, light_field) = match (&self.moss_system, &self.fluid_simulator, &self.light_field_system) {
+            let (moss, fluid_sim, light_field) = match (
+                &self.moss_system,
+                &self.fluid_simulator,
+                &self.light_field_system,
+            ) {
                 (Some(m), Some(f), Some(l)) => (m, f, l),
                 _ => return,
             };
@@ -4924,13 +5969,20 @@ impl GpuScene {
 
         // Run growth pass - needs &mut self.moss_system for frame throttle counter
         let world_radius = self.config.sphere_radius;
-        if let (Some(ref mut moss), Some(ref growth_bg)) = (&mut self.moss_system, &self.moss_growth_bind_group) {
+        if let (Some(ref mut moss), Some(ref growth_bg)) =
+            (&mut self.moss_system, &self.moss_growth_bind_group)
+        {
             moss.run_growth(encoder, queue, growth_bg, delta_time, world_radius);
         }
     }
 
     /// Run moss consumption compute pass (phagocytes eating moss)
-    fn run_moss_consumption(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue) {
+    fn run_moss_consumption(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+    ) {
         if !self.show_moss {
             return;
         }
@@ -4976,22 +6028,51 @@ impl GpuScene {
         }
 
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
-        if let (Some(ref physics_bgs), Some(ref moss_bg)) = (&self.moss_consume_physics_bind_groups, &self.moss_consume_moss_bind_group) {
+        if let (Some(ref physics_bgs), Some(ref moss_bg)) = (
+            &self.moss_consume_physics_bind_groups,
+            &self.moss_consume_moss_bind_group,
+        ) {
             // Dispatch at full capacity - the shader reads cell_count_buffer[0] internally.
-            moss.run_consumption(encoder, queue, &physics_bgs[output_idx], moss_bg, self.gpu_triple_buffers.capacity);
+            moss.run_consumption(
+                encoder,
+                queue,
+                &physics_bgs[output_idx],
+                moss_bg,
+                self.gpu_triple_buffers.capacity,
+            );
         }
     }
 
     /// Step the GPU fluid simulation and update water bitfield for cell buoyancy
-    pub fn step_fluid_simulation(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, dt: f32) {
+    pub fn step_fluid_simulation(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        dt: f32,
+    ) {
         if let Some(ref simulator) = self.fluid_simulator {
             simulator.set_gravity_mode(self.gravity_mode);
             simulator.set_surface_pressure(self.surface_pressure);
             simulator.set_water_drag_strength(queue, self.water_viscosity);
-            simulator.step(device, queue, encoder, dt, self.gravity, [self.gravity_mode == 0, self.gravity_mode == 1, self.gravity_mode == 2], self.lateral_flow_probabilities, self.condensation_probability, self.vaporization_probability);
+            simulator.step(
+                device,
+                queue,
+                encoder,
+                dt,
+                self.gravity,
+                [
+                    self.gravity_mode == 0,
+                    self.gravity_mode == 1,
+                    self.gravity_mode == 2,
+                ],
+                self.lateral_flow_probabilities,
+                self.condensation_probability,
+                self.vaporization_probability,
+            );
             // Update water bitfield for cell physics (compressed 32x for fast lookup)
             simulator.update_water_bitfield(device, encoder);
-            
+
             // NOTE: Nutrient population moved into run_physics() so it executes every
             // physics step. At high sim speeds the physics loop runs N steps per frame;
             // phagocytes consume voxel nutrients each step, so populate must also run
@@ -5000,29 +6081,50 @@ impl GpuScene {
     }
 
     /// Force immediate repopulation of nutrients (e.g., after density change)
-    pub fn repopulate_nutrients(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+    pub fn repopulate_nutrients(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
         if let Some(ref simulator) = self.fluid_simulator {
             simulator.populate_nutrients(
-                device, queue, encoder,
-                self.nutrient_density, 0.016,
+                device,
+                queue,
+                encoder,
+                self.nutrient_density,
+                0.016,
                 self.nutrient_epoch_duration,
                 self.nutrient_epoch_spacing,
                 self.nutrient_spawn_end,
                 self.nutrient_despawn_start,
             );
-            log::info!("Nutrients repopulated with density: {}", self.nutrient_density);
+            log::info!(
+                "Nutrients repopulated with density: {}",
+                self.nutrient_density
+            );
         }
     }
 
     /// Clear all fluid
-    pub fn clear_fluid(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+    pub fn clear_fluid(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
         if let Some(ref mut simulator) = self.fluid_simulator {
             simulator.clear(device, queue, encoder);
         }
     }
 
     /// Reset fluid (clear only, no sphere respawn)
-    pub fn reset_fluid(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+    pub fn reset_fluid(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
         if let Some(ref mut simulator) = self.fluid_simulator {
             simulator.clear(device, queue, encoder);
             // Removed automatic sphere generation - fluid stays empty after reset
@@ -5033,7 +6135,14 @@ impl GpuScene {
     pub fn toggle_fluid_pause(&mut self) {
         if let Some(ref mut simulator) = self.fluid_simulator {
             simulator.paused = !simulator.paused;
-            log::info!("Fluid simulation {}", if simulator.paused { "paused" } else { "resumed" });
+            log::info!(
+                "Fluid simulation {}",
+                if simulator.paused {
+                    "paused"
+                } else {
+                    "resumed"
+                }
+            );
         }
     }
 
@@ -5046,7 +6155,11 @@ impl GpuScene {
     }
 
     /// Initialize the steam particle renderer
-    pub fn initialize_steam_particle_renderer(&mut self, device: &wgpu::Device, surface_format: wgpu::TextureFormat) {
+    pub fn initialize_steam_particle_renderer(
+        &mut self,
+        device: &wgpu::Device,
+        surface_format: wgpu::TextureFormat,
+    ) {
         if self.steam_particle_renderer.is_some() {
             return;
         }
@@ -5056,18 +6169,16 @@ impl GpuScene {
         // Create camera bind group layout for steam particles
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Steam Particle Camera Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-            ],
+                count: None,
+            }],
         });
 
         let steam_particle_renderer = SteamParticleRenderer::new(
@@ -5080,7 +6191,8 @@ impl GpuScene {
         );
 
         // Create render bind group
-        self.steam_render_bind_group = Some(steam_particle_renderer.create_render_bind_group(device));
+        self.steam_render_bind_group =
+            Some(steam_particle_renderer.create_render_bind_group(device));
 
         self.steam_particle_renderer = Some(steam_particle_renderer);
         self.show_steam_particles = true;
@@ -5089,7 +6201,11 @@ impl GpuScene {
     }
 
     /// Initialize the water particle renderer
-    pub fn initialize_water_particle_renderer(&mut self, device: &wgpu::Device, surface_format: wgpu::TextureFormat) {
+    pub fn initialize_water_particle_renderer(
+        &mut self,
+        device: &wgpu::Device,
+        surface_format: wgpu::TextureFormat,
+    ) {
         if self.water_particle_renderer.is_some() {
             return;
         }
@@ -5099,18 +6215,16 @@ impl GpuScene {
         // Create camera bind group layout for water particles
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Water Particle Camera Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-            ],
+                count: None,
+            }],
         });
 
         let mut water_particle_renderer = WaterParticleRenderer::new(
@@ -5127,7 +6241,8 @@ impl GpuScene {
 
         // Create render bind group
         let water_particle_renderer = water_particle_renderer; // Make it immutable for the rest
-        self.water_render_bind_group = Some(water_particle_renderer.create_render_bind_group(device));
+        self.water_render_bind_group =
+            Some(water_particle_renderer.create_render_bind_group(device));
 
         self.water_particle_renderer = Some(water_particle_renderer);
         self.show_water_particles = true;
@@ -5136,7 +6251,13 @@ impl GpuScene {
     }
 
     /// Create or update nutrient particle renderer when fluid simulator is available
-    fn ensure_nutrient_particle_renderer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat, depth_format: wgpu::TextureFormat) {
+    fn ensure_nutrient_particle_renderer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+        depth_format: wgpu::TextureFormat,
+    ) {
         if self.nutrient_particle_renderer.is_some() {
             return;
         }
@@ -5144,18 +6265,16 @@ impl GpuScene {
         // Create camera layout (same as other renderers)
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Nutrient Camera Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-            ],
+                count: None,
+            }],
         });
 
         let mut nutrient_particle_renderer = NutrientParticleRenderer::new(
@@ -5173,7 +6292,8 @@ impl GpuScene {
 
         // Create render bind group
         let nutrient_particle_renderer = nutrient_particle_renderer; // Make it immutable for the rest
-        self.nutrient_render_bind_group = Some(nutrient_particle_renderer.create_render_bind_group(device));
+        self.nutrient_render_bind_group =
+            Some(nutrient_particle_renderer.create_render_bind_group(device));
 
         self.nutrient_particle_renderer = Some(nutrient_particle_renderer);
         self.show_nutrient_particles = true;
@@ -5182,7 +6302,12 @@ impl GpuScene {
     }
 
     /// Initialize the nutrient particle renderer
-    pub fn initialize_nutrient_particle_renderer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) {
+    pub fn initialize_nutrient_particle_renderer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+    ) {
         if self.nutrient_particle_renderer.is_some() {
             return;
         }
@@ -5295,9 +6420,11 @@ impl GpuScene {
         }
 
         if let (Some(ref particle_renderer), Some(ref fluid_sim)) =
-            (&self.steam_particle_renderer, &self.fluid_simulator) {
+            (&self.steam_particle_renderer, &self.fluid_simulator)
+        {
             self.steam_extract_bind_group = Some(
-                particle_renderer.create_extract_bind_group(device, fluid_sim.current_state_buffer())
+                particle_renderer
+                    .create_extract_bind_group(device, fluid_sim.current_state_buffer()),
             );
             log::info!("Steam extract bind group created");
         }
@@ -5314,9 +6441,15 @@ impl GpuScene {
         // Ensure bind group exists
         self.ensure_steam_extract_bind_group(device);
 
-        if let (Some(ref mut particle_renderer), Some(ref fluid_sim), Some(ref extract_bind_group)) =
-            (&mut self.steam_particle_renderer, &self.fluid_simulator, &self.steam_extract_bind_group) {
-
+        if let (
+            Some(ref mut particle_renderer),
+            Some(ref fluid_sim),
+            Some(ref extract_bind_group),
+        ) = (
+            &mut self.steam_particle_renderer,
+            &self.fluid_simulator,
+            &self.steam_extract_bind_group,
+        ) {
             let (world_radius, world_center) = fluid_sim.grid_params();
             let grid_resolution = 128u32;
             let world_diameter = world_radius * 2.0;
@@ -5349,15 +6482,14 @@ impl GpuScene {
         }
 
         if let (Some(ref particle_renderer), Some(ref fluid_sim)) =
-            (&self.nutrient_particle_renderer, &self.fluid_simulator) {
-            self.nutrient_extract_bind_group = Some(
-                particle_renderer.create_extract_bind_group(
-                    device, 
-                    fluid_sim.current_state_buffer(), 
-                    fluid_sim.solid_mask_buffer(),
-                    fluid_sim.nutrient_voxels_buffer()
-                )
-            );
+            (&self.nutrient_particle_renderer, &self.fluid_simulator)
+        {
+            self.nutrient_extract_bind_group = Some(particle_renderer.create_extract_bind_group(
+                device,
+                fluid_sim.current_state_buffer(),
+                fluid_sim.solid_mask_buffer(),
+                fluid_sim.nutrient_voxels_buffer(),
+            ));
             log::info!("Nutrient extract bind group created");
         }
     }
@@ -5373,9 +6505,15 @@ impl GpuScene {
         // Ensure bind group exists
         self.ensure_nutrient_extract_bind_group(device);
 
-        if let (Some(ref mut particle_renderer), Some(ref fluid_sim), Some(ref extract_bind_group)) =
-            (&mut self.nutrient_particle_renderer, &self.fluid_simulator, &self.nutrient_extract_bind_group) {
-
+        if let (
+            Some(ref mut particle_renderer),
+            Some(ref fluid_sim),
+            Some(ref extract_bind_group),
+        ) = (
+            &mut self.nutrient_particle_renderer,
+            &self.fluid_simulator,
+            &self.nutrient_extract_bind_group,
+        ) {
             let (world_radius, world_center) = fluid_sim.grid_params();
             let grid_resolution = 128u32;
             let world_diameter = world_radius * 2.0;
@@ -5410,10 +6548,14 @@ impl GpuScene {
         }
 
         if let (Some(ref particle_renderer), Some(ref fluid_sim)) =
-            (&self.water_particle_renderer, &self.fluid_simulator) {
-            self.water_extract_bind_group = Some(
-                particle_renderer.create_extract_bind_group(device, fluid_sim.current_state_buffer(), fluid_sim.solid_mask_buffer(), fluid_sim.water_velocity_buffer())
-            );
+            (&self.water_particle_renderer, &self.fluid_simulator)
+        {
+            self.water_extract_bind_group = Some(particle_renderer.create_extract_bind_group(
+                device,
+                fluid_sim.current_state_buffer(),
+                fluid_sim.solid_mask_buffer(),
+                fluid_sim.water_velocity_buffer(),
+            ));
             log::info!("Water extract bind group created");
         }
     }
@@ -5434,9 +6576,15 @@ impl GpuScene {
             particle_renderer.set_gravity_mode(self.gravity_mode);
         }
 
-        if let (Some(ref mut particle_renderer), Some(ref fluid_sim), Some(ref extract_bind_group)) =
-            (&mut self.water_particle_renderer, &self.fluid_simulator, &self.water_extract_bind_group) {
-
+        if let (
+            Some(ref mut particle_renderer),
+            Some(ref fluid_sim),
+            Some(ref extract_bind_group),
+        ) = (
+            &mut self.water_particle_renderer,
+            &self.fluid_simulator,
+            &self.water_extract_bind_group,
+        ) {
             let (world_radius, world_center) = fluid_sim.grid_params();
             let grid_resolution = 128u32;
             let world_diameter = world_radius * 2.0;
@@ -5470,7 +6618,7 @@ impl GpuScene {
             renderer.set_prominence_factor(self.water_particle_prominence);
         }
     }
-    
+
     /// Set phase change probabilities
     pub fn set_phase_change_probabilities(&mut self, condensation: f32, vaporization: f32) {
         self.condensation_probability = condensation.clamp(0.0, 1.0);
@@ -5478,7 +6626,10 @@ impl GpuScene {
     }
 
     /// Apply light & fog parameters from editor state to GPU systems
-    pub fn apply_light_params_from_editor(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
+    pub fn apply_light_params_from_editor(
+        &mut self,
+        editor_state: &crate::ui::panel_context::GenomeEditorState,
+    ) {
         // Update light field system parameters
         if let Some(ref mut light_field) = self.light_field_system {
             light_field.set_light_dir(editor_state.light_dir);
@@ -5486,7 +6637,9 @@ impl GpuScene {
             light_field.set_absorption_solid(editor_state.light_field_absorption_solid);
             light_field.set_absorption_cell(editor_state.light_field_absorption_cell);
             light_field.set_ambient_floor(editor_state.light_field_ambient_floor);
-            light_field.set_mass_per_second(editor_state.photocyte_mass_per_second * editor_state.sun_intensity);
+            light_field.set_mass_per_second(
+                editor_state.photocyte_mass_per_second * editor_state.sun_intensity,
+            );
             light_field.set_min_light_threshold(editor_state.photocyte_min_light_threshold);
             light_field.set_shadow_enabled(editor_state.shadow_enabled);
             light_field.set_shadow_strength(editor_state.shadow_strength);
@@ -5510,7 +6663,7 @@ impl GpuScene {
                 editor_state.sun_color[2] * editor_state.sun_intensity,
             ]);
         }
-        
+
         // Update volumetric fog renderer parameters
         if let Some(ref mut fog_renderer) = self.volumetric_fog_renderer {
             fog_renderer.enabled = editor_state.show_volumetric_fog;
@@ -5524,14 +6677,14 @@ impl GpuScene {
             fog_renderer.height_fog_density = editor_state.fog_height_density;
             fog_renderer.height_fog_falloff = editor_state.fog_height_falloff;
         }
-        
+
         // Combine sun color with intensity for all lighting
         let scaled_sun_color = [
             editor_state.sun_color[0] * editor_state.sun_intensity,
             editor_state.sun_color[1] * editor_state.sun_intensity,
             editor_state.sun_color[2] * editor_state.sun_intensity,
         ];
-        
+
         // Update cell renderer light color and direction
         self.renderer.set_light_color(scaled_sun_color);
         // Cell shader expects light_dir pointing FROM light; editor stores direction TOWARD light
@@ -5540,10 +6693,10 @@ impl GpuScene {
             -editor_state.light_dir[1],
             -editor_state.light_dir[2],
         ]);
-        
+
         // Update tail renderer light color
         self.tail_renderer.set_light_color(scaled_sun_color);
-        
+
         // Update sun renderer parameters
         self.show_sun = editor_state.show_sun;
         self.sun_intensity = editor_state.sun_intensity;
@@ -5551,7 +6704,7 @@ impl GpuScene {
             sun.sun_color = editor_state.sun_color;
             sun.sun_angular_radius = editor_state.sun_angular_radius;
         }
-        
+
         // Update depth of field parameters
         self.show_dof = editor_state.show_dof;
         if let Some(ref mut dof) = self.dof_renderer {
@@ -5562,72 +6715,84 @@ impl GpuScene {
             dof.blur_strength = editor_state.dof_blur_strength;
         }
     }
-    
+
     /// Apply cave parameters from editor state
-    pub fn apply_cave_params_from_editor(&mut self, editor_state: &crate::ui::panel_context::GenomeEditorState) {
+    pub fn apply_cave_params_from_editor(
+        &mut self,
+        editor_state: &crate::ui::panel_context::GenomeEditorState,
+    ) {
         if !editor_state.cave_params_dirty {
             return;
         }
-        
+
         if let Some(ref mut cave_renderer) = self.cave_renderer {
             let mut params = *cave_renderer.params();
             params.density = editor_state.cave_density;
             params.scale = editor_state.cave_scale; // Use user's scale directly
-            
+
             params.octaves = editor_state.cave_octaves;
             params.smoothness = editor_state.cave_smoothness;
             params.seed = editor_state.cave_seed;
             params.grid_resolution = editor_state.cave_resolution;
-            
+
             // Ensure world dimensions match the physics world
             params.world_center = [0.0, 0.0, 0.0];
             params.world_radius = self.config.sphere_radius;
-            
+
             *cave_renderer.params_mut() = params;
             self.cave_params_dirty = true;
         }
     }
-    
+
     /// Update cave parameters and regenerate mesh if needed
     pub fn update_cave_params(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         if !self.cave_params_dirty {
             return;
         }
-        
+
         if let Some(ref mut cave_renderer) = self.cave_renderer {
             let params = *cave_renderer.params();
             cave_renderer.update_params(device, queue, params);
             self.cave_params_dirty = false;
-            
+
             // Update solid mask when cave parameters change
             self.update_solid_mask(queue);
         }
     }
-    
+
     /// Update solid mask based on current cave parameters
     pub fn update_solid_mask(&mut self, queue: &wgpu::Queue) {
-        if let (Some(ref fluid_buffers), Some(ref solid_mask_generator), Some(ref cave_renderer)) = 
-            (&self.fluid_buffers, &self.solid_mask_generator, &self.cave_renderer) {
-            
+        if let (Some(ref fluid_buffers), Some(ref solid_mask_generator), Some(ref cave_renderer)) = (
+            &self.fluid_buffers,
+            &self.solid_mask_generator,
+            &self.cave_renderer,
+        ) {
             let cave_params = cave_renderer.params();
             let solid_mask = solid_mask_generator.generate_solid_mask(cave_params);
-            
+
             // Update the solid mask buffer
             fluid_buffers.update_solid_mask(queue, &solid_mask);
-            
+
             // Also update surface nets with the solid mask for greedy water surface generation
             if let Some(ref gpu_surface_nets) = self.gpu_surface_nets {
                 gpu_surface_nets.upload_solid_mask(queue, &solid_mask);
             }
-            
-            log::info!("Updated solid mask with {} solid voxels", 
-                solid_mask.iter().sum::<u32>());
+
+            log::info!(
+                "Updated solid mask with {} solid voxels",
+                solid_mask.iter().sum::<u32>()
+            );
         }
     }
-    
-// ... (rest of the code remains the same)
+
+    // ... (rest of the code remains the same)
     /// Check and update cave world radius if world diameter changed
-    pub fn check_world_diameter_change(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, world_diameter: f32) {
+    pub fn check_world_diameter_change(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        world_diameter: f32,
+    ) {
         // Check if world diameter changed significantly (more than 0.1 units)
         if (world_diameter - self.previous_world_diameter).abs() > 0.1 {
             if let Some(ref mut cave_renderer) = self.cave_renderer {
@@ -5637,29 +6802,31 @@ impl GpuScene {
             }
         }
     }
-    
+
     /// Initialize all GPU systems for the scene
-    /// 
+    ///
     /// This method creates and initializes all GPU systems including:
     /// - GpuCellInspector for real-time cell data extraction
     /// - GpuCellInsertion for direct GPU cell creation  
     /// - GpuToolOperations for spatial queries and position updates
     /// - AsyncReadbackManager for coordinating GPU-to-CPU transfers
-    /// 
+    ///
     /// Must be called after scene creation to enable GPU-only operations.
     /// Implements requirements 2.1, 3.1, 4.1, 11.1.
     pub fn initialize_gpu_systems(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         // Initialize async readback manager first (requirement 11.1)
         if self.readback_manager.is_none() {
             let max_concurrent_readbacks = 4; // Limit concurrent operations (requirement 11.6)
-            self.readback_manager = Some(AsyncReadbackManager::new(device.clone(), max_concurrent_readbacks));
+            self.readback_manager = Some(AsyncReadbackManager::new(
+                device.clone(),
+                max_concurrent_readbacks,
+            ));
         }
-        
+
         // Initialize GPU cell inspector (requirement 3.1)
         if self.cell_inspector.is_none() {
             let buffer_index = self.gpu_triple_buffers.output_buffer_index();
-            let label_buf = self.organism_label_system.as_ref()
-                .map(|s| &s.label_buffer);
+            let label_buf = self.organism_label_system.as_ref().map(|s| &s.label_buffer);
             let cell_inspector = GpuCellInspector::new(
                 device,
                 self.gpu_physics_pipelines.cell_data_extraction.clone(),
@@ -5674,7 +6841,7 @@ impl GpuScene {
             );
             self.cell_inspector = Some(cell_inspector);
         }
-        
+
         // Initialize GPU cell insertion system (requirement 2.1)
         if self.cell_insertion.is_none() {
             let cell_insertion = GpuCellInsertion::new(
@@ -5688,13 +6855,13 @@ impl GpuScene {
             );
             self.cell_insertion = Some(cell_insertion);
         }
-        
+
         // Initialize GPU tool operations system (requirement 4.1)
         if self.tool_operations.is_none() {
             use std::sync::Arc;
             let device_arc = Arc::new(device.clone());
             let queue_arc = Arc::new(queue.clone());
-            
+
             let tool_operations = GpuToolOperations::new(
                 device_arc,
                 queue_arc,
@@ -5750,8 +6917,12 @@ impl GpuScene {
                 &self.gpu_triple_buffers.signal_settings_v3,
                 &self.gpu_triple_buffers.signal_settings_v4,
                 &self.gpu_triple_buffers.regulation_params,
-                &self.gpu_triple_buffers.child_a_after_split_keep_adhesion_flags,
-                &self.gpu_triple_buffers.child_b_after_split_keep_adhesion_flags,
+                &self
+                    .gpu_triple_buffers
+                    .child_a_after_split_keep_adhesion_flags,
+                &self
+                    .gpu_triple_buffers
+                    .child_b_after_split_keep_adhesion_flags,
             );
 
             // Rebuild GC bind group (for genome recycling)
@@ -5771,9 +6942,9 @@ impl GpuScene {
             }
         }
     }
-    
+
     /// Update physics params buffer with cell_capacity for cell insertion
-    /// 
+    ///
     /// The cell insertion shader reads params.cell_capacity to check if there's room
     /// for new cells. This must be called before cell insertion to ensure the
     /// capacity is set correctly.
@@ -5799,7 +6970,7 @@ impl GpuScene {
             _pad1: f32,
             _pad2: f32,
         }
-        
+
         let world_diameter = self.config.sphere_radius * 2.0;
         let params = PhysicsParams {
             delta_time: 0.0,
@@ -5819,8 +6990,12 @@ impl GpuScene {
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        
-        queue.write_buffer(&self.gpu_triple_buffers.physics_params, 0, bytemuck::bytes_of(&params));
+
+        queue.write_buffer(
+            &self.gpu_triple_buffers.physics_params,
+            0,
+            bytemuck::bytes_of(&params),
+        );
     }
 
     /// Convert screen coordinates to world position at a fixed distance from camera.
@@ -5831,38 +7006,38 @@ impl GpuScene {
     }
 
     /// Clear all cached readback results
-    /// 
+    ///
     /// Clears cached results from all GPU systems. Call this when scene state
     /// changes significantly to invalidate cached data.
     pub fn clear_readback_caches(&mut self) {
         if let Some(ref mut inspector) = self.cell_inspector {
             inspector.clear_cache();
         }
-        
+
         if let Some(ref mut tool_operations) = self.tool_operations {
             tool_operations.clear_cache();
         }
-        
+
         if let Some(ref mut readback_manager) = self.readback_manager {
             readback_manager.clear_completed();
         }
     }
 
     /// Poll all async readback operations for completion
-    /// 
+    ///
     /// This method should be called each frame to check for completed async readbacks
     /// from all GPU systems. It coordinates readback operations across:
     /// - Cell inspector data extraction
     /// - Tool operation spatial queries
     /// - Any other GPU-to-CPU transfers
-    /// 
+    ///
     /// Implements requirement 11.3 for non-blocking async readback polling.
     pub fn poll_async_readbacks(&mut self, device: &wgpu::Device) {
         // Poll async readback manager if available
         if let Some(ref mut readback_manager) = self.readback_manager {
             readback_manager.poll_completions();
         }
-        
+
         // Poll cell inspector for extraction completion
         if let Some(ref mut inspector) = self.cell_inspector {
             if let Some(_data) = inspector.poll_extraction(Some(device)) {
@@ -5870,7 +7045,7 @@ impl GpuScene {
                 // Data is now cached in the inspector for UI access
             }
         }
-        
+
         // Poll tool operations for spatial query completion
         if let Some(ref mut tool_operations) = self.tool_operations {
             if let Some(_result) = tool_operations.poll_spatial_query() {
@@ -5883,11 +7058,7 @@ impl GpuScene {
     /// Capture the cave system into the water reflection cubemap.
     /// Renders the cave from the world center into 6 cubemap faces.
     /// Call once after the cave renderer is initialized.
-    pub fn capture_reflection_cubemap(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    ) {
+    pub fn capture_reflection_cubemap(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let surface_nets = match self.gpu_surface_nets {
             Some(ref mut sn) => sn,
             None => return,
@@ -5901,7 +7072,11 @@ impl GpuScene {
 
         let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Cubemap Capture Depth"),
-            size: wgpu::Extent3d { width: face_size, height: face_size, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: face_size,
+                height: face_size,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -5913,18 +7088,16 @@ impl GpuScene {
 
         // 6 cubemap face directions: +X, -X, +Y, -Y, +Z, -Z
         let face_directions: [(glam::Vec3, glam::Vec3); 6] = [
-            (glam::Vec3::X,     glam::Vec3::NEG_Y),
+            (glam::Vec3::X, glam::Vec3::NEG_Y),
             (glam::Vec3::NEG_X, glam::Vec3::NEG_Y),
-            (glam::Vec3::Y,     glam::Vec3::Z),
+            (glam::Vec3::Y, glam::Vec3::Z),
             (glam::Vec3::NEG_Y, glam::Vec3::NEG_Z),
-            (glam::Vec3::Z,     glam::Vec3::NEG_Y),
+            (glam::Vec3::Z, glam::Vec3::NEG_Y),
             (glam::Vec3::NEG_Z, glam::Vec3::NEG_Y),
         ];
 
         let origin = glam::Vec3::ZERO;
-        let proj = glam::Mat4::perspective_rh(
-            std::f32::consts::FRAC_PI_2, 1.0, 0.1, 1000.0,
-        );
+        let proj = glam::Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.1, 1000.0);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Cubemap Capture Encoder"),
@@ -5945,7 +7118,12 @@ impl GpuScene {
                         view: &face_view,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }),
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.0,
+                                g: 0.0,
+                                b: 0.0,
+                                a: 1.0,
+                            }),
                             store: wgpu::StoreOp::Store,
                         },
                         depth_slice: None,
@@ -5975,10 +7153,13 @@ impl GpuScene {
         }
 
         queue.submit(std::iter::once(encoder.finish()));
-        log::info!("Reflection cubemap captured ({}x{} per face, cave)", face_size, face_size);
+        log::info!(
+            "Reflection cubemap captured ({}x{} per face, cave)",
+            face_size,
+            face_size
+        );
     }
 }
-
 
 impl Scene for GpuScene {
     fn update(&mut self, dt: f32) {
@@ -6018,14 +7199,18 @@ impl Scene for GpuScene {
             // because the mutation shader writes directly to mode_visuals_buffer
             // for GPU-mutated genomes and a per-frame overwrite would clobber those.
             if !self.genomes.is_empty() {
-                self.instance_builder.update_mode_visuals_from_genomes(device, queue, &self.genomes);
+                self.instance_builder.update_mode_visuals_from_genomes(
+                    device,
+                    queue,
+                    &self.genomes,
+                );
             }
             self.genomes_dirty = false;
         }
-        
+
         // Check and update cave world radius if world diameter changed
         self.check_world_diameter_change(device, queue, world_diameter);
-        
+
         // Calculate view-projection matrix for culling
         let view_matrix = Mat4::look_at_rh(
             self.camera.position(),
@@ -6082,17 +7267,17 @@ impl Scene for GpuScene {
             self.step_fluid_simulation(device, queue, &mut encoder, dt);
 
             // Extract steam particles from fluid state (GPU compute)
-            if self.show_steam_particles {
+            if self.show_steam_particles && !self.headless_no_render {
                 self.extract_steam_particles(&mut encoder, device, queue, dt);
             }
 
             // Extract water particles from fluid state (GPU compute)
-            if self.show_water_particles {
+            if self.show_water_particles && !self.headless_no_render {
                 self.extract_water_particles(&mut encoder, device, queue, dt);
             }
 
             // Extract nutrient particles from fluid state (GPU compute)
-            if self.show_nutrient_particles {
+            if self.show_nutrient_particles && !self.headless_no_render {
                 self.extract_nutrient_particles(&mut encoder, device, queue, dt);
             }
         }
@@ -6105,7 +7290,7 @@ impl Scene for GpuScene {
 
         // Execute any pending tool queries (spatial queries for inspect/drag/remove/boost)
         self.execute_pending_tool_queries(device, &mut encoder, queue);
-        
+
         // Poll for cell extraction completion (inspect tool async readback)
         // This needs to be called each frame to check for completed async readbacks
         if let Some(ref mut inspector) = self.cell_inspector {
@@ -6160,7 +7345,7 @@ impl Scene for GpuScene {
 
         // Snapshot death_flags BEFORE physics runs - needed by spawn_new to detect
         // the alive->dead transition this frame.
-        if self.show_death_particles && !self.paused {
+        if self.show_death_particles && !self.paused && !self.headless_no_render {
             self.snapshot_death_flags_for_particles(&mut encoder);
         }
 
@@ -6196,7 +7381,11 @@ impl Scene for GpuScene {
             // per render frame. Labels change slowly (bonds form/break over many frames)
             // so one update per render frame is sufficient.
             if let Some(label_system) = &mut self.organism_label_system {
-                label_system.encode_frame(&mut encoder, self.total_cell_slots, self.show_organism_skins);
+                label_system.encode_frame(
+                    &mut encoder,
+                    self.total_cell_slots,
+                    self.show_organism_skins,
+                );
             }
         } else if is_dragging {
             // Paused but dragging: run mechanics-only physics step so adhesion-connected
@@ -6207,12 +7396,13 @@ impl Scene for GpuScene {
         }
 
         // Execute non-drag pending position updates (e.g. from other tools)
-        let position_updated = position_updated || self.execute_pending_position_updates(device, &mut encoder, queue);
+        let position_updated =
+            position_updated || self.execute_pending_position_updates(device, &mut encoder, queue);
 
         // Update death particles AFTER physics - spawn_new reads death_flags written
         // by lifecycle_unified.wgsl (death_scan) and positions from the current
         // triple-buffer slot (last completed frame, not the one being written).
-        if self.show_death_particles && !self.paused {
+        if self.show_death_particles && !self.paused && !self.headless_no_render {
             let dt = 1.0 / 60.0;
             self.update_death_particles(&mut encoder, device, queue, dt);
         }
@@ -6262,23 +7452,82 @@ impl Scene for GpuScene {
             self.tick_follow_camera(device, &mut encoder, 1.0 / 60.0);
         }
 
-        if has_cells && (!self.paused || position_updated || cell_removed || cell_boosted || cell_inserted) {
+        if has_cells
+            && (!self.paused || position_updated || cell_removed || cell_boosted || cell_inserted)
+        {
             self.copy_buffers_to_instance_builder(&mut encoder);
+        }
+
+        if self.headless_no_render {
+            let cell_count_read_pending = self.gpu_triple_buffers.is_cell_count_read_pending();
+            let should_start_readback = self.readbacks_enabled && !cell_count_read_pending;
+            if should_start_readback {
+                self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
+            }
+
+            queue.submit(std::iter::once(encoder.finish()));
+
+            if self.follow_organism_id.is_some() {
+                self.tick_follow_camera_post_submit();
+            }
+
+            if !self.paused && self.show_moss {
+                let mut moss_encoder =
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Headless Moss Growth Encoder"),
+                    });
+                let dt = self.config.fixed_timestep;
+                self.run_moss_growth(device, &mut moss_encoder, queue, dt);
+                queue.submit(std::iter::once(moss_encoder.finish()));
+            }
+
+            if let Some(label_system) = &mut self.organism_label_system {
+                label_system.poll_debug_readback(device);
+            }
+
+            if should_start_readback {
+                self.gpu_triple_buffers.initiate_cell_count_map();
+            }
+
+            if self.readbacks_enabled || cell_count_read_pending {
+                if let Some((total, live)) = self.gpu_triple_buffers.poll_cell_count(device) {
+                    self.current_cell_count = live;
+                    self.total_cell_slots = total;
+
+                    if live == 0 && total > 0 {
+                        log::info!(
+                            "All cells dead - resetting high water mark from {} to 0",
+                            total
+                        );
+                        queue.write_buffer(
+                            &self.gpu_triple_buffers.cell_count_buffer,
+                            0,
+                            bytemuck::cast_slice(&[0u32, 0u32]),
+                        );
+                        self.current_cell_count = 0;
+                        self.total_cell_slots = 0;
+                        self.gpu_triple_buffers.reset_cell_count_readback();
+                    }
+                }
+            }
+
+            return;
         }
 
         // Build instances with GPU culling (compute pass)
         // Calculate total mode count across all genomes
         // Use capacity for dispatch - shader reads actual cell_count from GPU buffer
         let total_mode_count: usize = self.genomes.iter().map(|g| g.modes.len()).sum();
-        
+
         // Mode visuals are updated in the genomes_dirty block above (not per-frame)
         // so GPU-mutated colors in mode_visuals_buffer are preserved.
-        
+
         // Update cell type visuals for membrane noise and lighting parameters
         if let Some(visuals) = cell_type_visuals {
-            self.instance_builder.update_cell_type_visuals_direct(device, queue, visuals);
+            self.instance_builder
+                .update_cell_type_visuals_direct(device, queue, visuals);
         }
-        
+
         self.instance_builder.build_instances_with_encoder(
             device,
             &mut encoder,
@@ -6406,7 +7655,7 @@ impl Scene for GpuScene {
                 scene_target,
                 &self.renderer.depth_view,
                 self.instance_builder.get_instance_buffer(),
-                self.instance_builder.get_indirect_buffer(),  // Use total visible count, not per-type
+                self.instance_builder.get_indirect_buffer(), // Use total visible count, not per-type
                 self.camera.position(),
                 self.camera.rotation,
                 self.current_time,
@@ -6428,13 +7677,18 @@ impl Scene for GpuScene {
                 light_field.update_shadow_params(queue);
                 // Create and set shadow bind group once (buffers never change, params updated via write_buffer)
                 if !self.cave_shadow_bind_group_set {
-                    let density_buf = self.gpu_surface_nets.as_ref()
+                    let density_buf = self
+                        .gpu_surface_nets
+                        .as_ref()
                         .map(|sn| sn.smoothed_density_buffer())
                         .unwrap_or(light_field.dummy_water_density());
-                    let moss_buf = self.moss_system.as_ref()
+                    let moss_buf = self
+                        .moss_system
+                        .as_ref()
                         .map(|ms| ms.moss_density_buffer())
                         .unwrap_or(light_field.dummy_water_density());
-                    let shadow_bg = light_field.create_cave_shadow_bind_group(device, density_buf, moss_buf);
+                    let shadow_bg =
+                        light_field.create_cave_shadow_bind_group(device, density_buf, moss_buf);
                     cave_renderer.set_shadow_bind_group(shadow_bg);
                     self.cave_shadow_bind_group_set = true;
                 }
@@ -6465,7 +7719,7 @@ impl Scene for GpuScene {
                 );
             }
         }
-        
+
         // Render procedural sun if enabled (after caves but before world sphere,
         // so caves occlude the sun but the translucent world sphere doesn't)
         if self.show_sun {
@@ -6491,12 +7745,13 @@ impl Scene for GpuScene {
                 );
             }
         }
-        
+
         // Render world boundary sphere if enabled (after sun so sun shows through)
         if self.show_world_sphere {
             // Update world sphere radius to match current world diameter
-            self.world_sphere_renderer.set_radius(queue, world_diameter * 0.5);
-            
+            self.world_sphere_renderer
+                .set_radius(queue, world_diameter * 0.5);
+
             self.world_sphere_renderer.render(
                 &mut encoder,
                 queue,
@@ -6555,12 +7810,13 @@ impl Scene for GpuScene {
         if self.show_organism_skins {
             self.ensure_organism_skin_bind_groups(device);
             let output_idx = self.gpu_triple_buffers.output_buffer_index();
-            let max_cells  = self.current_cell_count;
+            let max_cells = self.current_cell_count;
 
             // Compute pass: update the shrink-wrap mesh
-            if let (Some(ref renderer), Some(ref compute_bgs)) =
-                (&self.organism_skin_renderer, &self.organism_skin_compute_bind_groups)
-            {
+            if let (Some(ref renderer), Some(ref compute_bgs)) = (
+                &self.organism_skin_renderer,
+                &self.organism_skin_compute_bind_groups,
+            ) {
                 if max_cells > 0 {
                     renderer.encode_shrinkwrap_frame(
                         &mut encoder,
@@ -6585,12 +7841,18 @@ impl Scene for GpuScene {
                 }
             }
         }
-        
+
         // Render fluid voxels if enabled (uses cached camera bind group)
         if self.show_fluid_voxels {
-            if let (Some(ref voxel_renderer), Some(ref _fluid_buffers), Some(ref camera_bind_group)) = 
-                (&self.voxel_renderer, &self.fluid_buffers, &self.env_camera_bind_group_voxel) {
-                
+            if let (
+                Some(ref voxel_renderer),
+                Some(ref _fluid_buffers),
+                Some(ref camera_bind_group),
+            ) = (
+                &self.voxel_renderer,
+                &self.fluid_buffers,
+                &self.env_camera_bind_group_voxel,
+            ) {
                 let mut voxel_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Voxel Rendering Pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -6613,12 +7875,16 @@ impl Scene for GpuScene {
                     timestamp_writes: None,
                     occlusion_query_set: None,
                 });
-                
+
                 // Render voxels with tracked instance count
-                voxel_renderer.render(&mut voxel_pass, camera_bind_group, self.voxel_instance_count);
+                voxel_renderer.render(
+                    &mut voxel_pass,
+                    camera_bind_group,
+                    self.voxel_instance_count,
+                );
             }
         }
-        
+
         // Capture reflection cubemap once (cave + sun into 6 faces)
         if !self.reflection_cubemap_captured
             && self.cave_renderer.is_some()
@@ -6643,7 +7909,9 @@ impl Scene for GpuScene {
 
             if fluid_changed {
                 // First extract density from fluid simulator to surface nets buffers
-                if let (Some(ref fluid_sim), Some(ref gpu_surface_nets)) = (&self.fluid_simulator, &self.gpu_surface_nets) {
+                if let (Some(ref fluid_sim), Some(ref gpu_surface_nets)) =
+                    (&self.fluid_simulator, &self.gpu_surface_nets)
+                {
                     fluid_sim.extract_to_surface_nets(
                         device,
                         &mut encoder,
@@ -6656,7 +7924,7 @@ impl Scene for GpuScene {
                 if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
                     // Smooth the raw density: spatial blur + temporal blend
                     gpu_surface_nets.smooth_density(&mut encoder);
-                    
+
                     // Run compute shaders to extract mesh from smoothed density buffer
                     gpu_surface_nets.extract_mesh(&mut encoder);
                 }
@@ -6691,9 +7959,15 @@ impl Scene for GpuScene {
 
         // Render steam particles if enabled (uses cached camera bind group)
         if self.show_steam_particles {
-            if let (Some(ref steam_particle_renderer), Some(ref render_bind_group), Some(ref camera_bind_group)) =
-                (&self.steam_particle_renderer, &self.steam_render_bind_group, &self.env_camera_bind_group_steam) {
-
+            if let (
+                Some(ref steam_particle_renderer),
+                Some(ref render_bind_group),
+                Some(ref camera_bind_group),
+            ) = (
+                &self.steam_particle_renderer,
+                &self.steam_render_bind_group,
+                &self.env_camera_bind_group_steam,
+            ) {
                 steam_particle_renderer.render(
                     &mut encoder,
                     scene_target,
@@ -6706,9 +7980,15 @@ impl Scene for GpuScene {
 
         // Render water particles if enabled (uses cached camera bind group)
         if self.show_water_particles {
-            if let (Some(ref water_particle_renderer), Some(ref render_bind_group), Some(ref camera_bind_group)) =
-                (&self.water_particle_renderer, &self.water_render_bind_group, &self.env_camera_bind_group_water) {
-
+            if let (
+                Some(ref water_particle_renderer),
+                Some(ref render_bind_group),
+                Some(ref camera_bind_group),
+            ) = (
+                &self.water_particle_renderer,
+                &self.water_render_bind_group,
+                &self.env_camera_bind_group_water,
+            ) {
                 water_particle_renderer.render(
                     &mut encoder,
                     scene_target,
@@ -6721,9 +8001,15 @@ impl Scene for GpuScene {
 
         // Render nutrient particles if enabled (uses cached camera bind group)
         if self.show_nutrient_particles {
-            if let (Some(ref nutrient_particle_renderer), Some(ref render_bind_group), Some(ref camera_bind_group)) =
-                (&self.nutrient_particle_renderer, &self.nutrient_render_bind_group, &self.env_camera_bind_group_nutrient) {
-
+            if let (
+                Some(ref nutrient_particle_renderer),
+                Some(ref render_bind_group),
+                Some(ref camera_bind_group),
+            ) = (
+                &self.nutrient_particle_renderer,
+                &self.nutrient_render_bind_group,
+                &self.env_camera_bind_group_nutrient,
+            ) {
                 nutrient_particle_renderer.render(
                     &mut encoder,
                     scene_target,
@@ -6736,9 +8022,15 @@ impl Scene for GpuScene {
 
         // Render death particles if enabled (uses cached camera bind group)
         if self.show_death_particles {
-            if let (Some(ref death_particle_renderer), Some(ref render_bind_group), Some(ref camera_bind_group)) =
-                (&self.death_particle_renderer, &self.death_render_bind_group, &self.env_camera_bind_group_death) {
-
+            if let (
+                Some(ref death_particle_renderer),
+                Some(ref render_bind_group),
+                Some(ref camera_bind_group),
+            ) = (
+                &self.death_particle_renderer,
+                &self.death_render_bind_group,
+                &self.env_camera_bind_group_death,
+            ) {
                 death_particle_renderer.render(
                     &mut encoder,
                     scene_target,
@@ -6749,12 +8041,12 @@ impl Scene for GpuScene {
             }
         }
 
-
         // Render volumetric fog if enabled (post-process over scene, half-res + composite)
         if self.show_volumetric_fog {
-            if let (Some(ref light_field), true) =
-                (&self.light_field_system, self.volumetric_fog_renderer.is_some())
-            {
+            if let (Some(ref light_field), true) = (
+                &self.light_field_system,
+                self.volumetric_fog_renderer.is_some(),
+            ) {
                 let lf_buffer = light_field.light_field_buffer();
                 let lf_dir = light_field.light_dir();
                 let lf_cell_size = light_field.cell_size();
@@ -6797,7 +8089,6 @@ impl Scene for GpuScene {
             );
         }
 
-        
         // Start async cell count readback (copy to readback buffer)
         // Only start if no readback is pending
         let cell_count_read_pending = self.gpu_triple_buffers.is_cell_count_read_pending();
@@ -6838,21 +8129,31 @@ impl Scene for GpuScene {
         if should_start_readback {
             self.gpu_triple_buffers.initiate_cell_count_map();
         }
-        
+
         // Poll for cell count readback completion and update current_cell_count
         if self.readbacks_enabled || cell_count_read_pending {
             if let Some((total, live)) = self.gpu_triple_buffers.poll_cell_count(device) {
                 self.current_cell_count = live;
                 self.total_cell_slots = total;
-                
+
                 // CRITICAL FIX: Reset high water mark when all cells are dead.
                 // cell_count_buffer[0] is a high water mark that never decreases when cells die.
                 // This causes all GPU shaders to iterate through slots 0-N even when live count is 0,
                 // resulting in massive GPU work for no benefit. Resetting to 0 when live=0 ensures
                 // shaders early-exit immediately, eliminating the frame drop after mass starvation.
                 if live == 0 && total > 0 {
-                    log::info!("All cells dead - resetting high water mark from {} to 0", total);
-                    queue.write_buffer(&self.gpu_triple_buffers.cell_count_buffer, 0, bytemuck::cast_slice(&[0u32, 0u32]));
+                    log::info!(
+                        "All cells dead - resetting high water mark from {} to 0",
+                        total
+                    );
+                    queue.write_buffer(
+                        &self.gpu_triple_buffers.cell_count_buffer,
+                        0,
+                        bytemuck::cast_slice(&[0u32, 0u32]),
+                    );
+                    self.current_cell_count = 0;
+                    self.total_cell_slots = 0;
+                    self.gpu_triple_buffers.reset_cell_count_readback();
                 }
             }
         }
@@ -6894,32 +8195,32 @@ impl Scene for GpuScene {
         self.world_sphere_renderer.resize(width, height);
         self.tail_renderer.resize(width, height);
         self.first_frame = true;
-        
+
         // Resize cave renderer if initialized
         if let Some(ref mut cave_renderer) = self.cave_renderer {
             cave_renderer.resize(width, height);
         }
-        
+
         // Resize steam particle renderer if initialized
         if let Some(ref mut steam_particle_renderer) = self.steam_particle_renderer {
             steam_particle_renderer.resize(width, height);
         }
-        
+
         // Resize sun renderer if initialized
         if let Some(ref mut sun_renderer) = self.sun_renderer {
             sun_renderer.resize(width, height);
         }
-        
+
         // Resize volumetric fog renderer (recreates half-res texture)
         if let Some(ref mut fog_renderer) = self.volumetric_fog_renderer {
             fog_renderer.resize(device, width, height);
         }
-        
+
         // Resize depth of field renderer (recreates intermediate textures)
         if let Some(ref mut dof_renderer) = self.dof_renderer {
             dof_renderer.resize(device, width, height, self.surface_format);
         }
-        
+
         // Resize GPU surface nets (recreates OIT textures)
         if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
             gpu_surface_nets.resize(device, width, height);

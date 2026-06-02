@@ -77,33 +77,33 @@ impl AdhesionCreationRequest {
         // Calculate anchor directions in each child's local space
         // Child A points toward Child B (negative split direction in parent frame)
         // Child B points toward Child A (positive split direction in parent frame)
-        
+
         let split_dir_normalized = if split_direction.length() > 0.0001 {
             split_direction.normalize()
         } else {
             glam::Vec3::Z
         };
-        
+
         // Direction from A to B in parent's local frame
         let dir_a_to_b_parent = -split_dir_normalized;
         let dir_b_to_a_parent = split_dir_normalized;
-        
+
         // Transform to each child's local space
         let inv_child_a_orient = child_a_orientation.inverse();
         let inv_child_b_orient = child_b_orientation.inverse();
-        
+
         let anchor_a = (inv_child_a_orient * dir_a_to_b_parent).normalize();
         let anchor_b = (inv_child_b_orient * dir_b_to_a_parent).normalize();
-        
+
         // Calculate child rotations for twist reference
         let child_a_rotation = parent_rotation * child_a_orientation;
         let child_b_rotation = parent_rotation * child_b_orientation;
-        
+
         // Zone classification for sibling bonds
         // Child A is at +offset (Zone B), Child B is at -offset (Zone A)
         let zone_a = AdhesionZone::ZoneB;
         let zone_b = AdhesionZone::ZoneA;
-        
+
         Self {
             cell_a_index: child_a_index,
             cell_b_index: child_b_index,
@@ -117,7 +117,7 @@ impl AdhesionCreationRequest {
             birth_time: 0.0,
         }
     }
-    
+
     /// Create deterministic hash for sorting
     pub fn deterministic_hash(&self) -> u64 {
         // Use cell indices and mode for deterministic ordering
@@ -127,22 +127,22 @@ impl AdhesionCreationRequest {
         } else {
             (self.cell_b_index, self.cell_a_index)
         };
-        
+
         ((a as u64) << 32) | ((b as u64) << 16) | (self.mode_index as u64)
     }
 }
 
 /// Adhesion integration manager
-/// 
+///
 /// Coordinates adhesion operations between CPU and GPU.
 /// Ensures deterministic execution order.
 pub struct AdhesionIntegration {
     /// Pending adhesion creation requests
     pending_creations: Vec<AdhesionCreationRequest>,
-    
+
     /// Pending adhesion removal requests (adhesion indices)
     pending_removals: Vec<u32>,
-    
+
     /// Whether parent_make_adhesion is enabled per mode
     /// Cached from genome for quick lookup
     parent_make_adhesion_flags: Vec<bool>,
@@ -157,29 +157,30 @@ impl AdhesionIntegration {
             parent_make_adhesion_flags: Vec::new(),
         }
     }
-    
+
     /// Update parent_make_adhesion flags from genomes
     pub fn update_from_genomes(&mut self, genomes: &[crate::genome::Genome]) {
         self.parent_make_adhesion_flags.clear();
         for genome in genomes {
             for mode in &genome.modes {
-                self.parent_make_adhesion_flags.push(mode.parent_make_adhesion);
+                self.parent_make_adhesion_flags
+                    .push(mode.parent_make_adhesion);
             }
         }
     }
-    
+
     /// Queue a sibling adhesion creation (called after division)
     pub fn queue_sibling_adhesion(&mut self, request: AdhesionCreationRequest) {
         self.pending_creations.push(request);
     }
-    
+
     /// Queue an adhesion removal (called when cell dies)
     pub fn queue_adhesion_removal(&mut self, adhesion_index: u32) {
         self.pending_removals.push(adhesion_index);
     }
-    
+
     /// Process all pending adhesion operations in deterministic order
-    /// 
+    ///
     /// Returns the number of adhesions created and removed.
     pub fn process_pending(
         &mut self,
@@ -194,53 +195,74 @@ impl AdhesionIntegration {
             adhesion_buffers.remove_adhesion(adhesion_idx);
         }
         self.pending_removals.clear();
-        
+
         // Process creations in deterministic order
-        self.pending_creations.sort_by_key(|r| r.deterministic_hash());
+        self.pending_creations
+            .sort_by_key(|r| r.deterministic_hash());
         let mut creations = 0;
         for request in &self.pending_creations {
             // Check if parent_make_adhesion is enabled for this mode
             let mode_idx = request.mode_index as usize;
             let should_create = mode_idx < self.parent_make_adhesion_flags.len()
                 && self.parent_make_adhesion_flags[mode_idx];
-            
+
             if should_create {
-                if adhesion_buffers.create_sibling_adhesion(
-                    request.cell_a_index,
-                    request.cell_b_index,
-                    request.mode_index,
-                    request.anchor_a,
-                    request.anchor_b,
-                    request.twist_ref_a,
-                    request.twist_ref_b,
-                    current_time,
-                ).is_some() {
+                if adhesion_buffers
+                    .create_sibling_adhesion(
+                        request.cell_a_index,
+                        request.cell_b_index,
+                        request.mode_index,
+                        request.anchor_a,
+                        request.anchor_b,
+                        request.twist_ref_a,
+                        request.twist_ref_b,
+                        current_time,
+                    )
+                    .is_some()
+                {
                     creations += 1;
                 }
             }
         }
         self.pending_creations.clear();
-        
+
         // Sync to GPU
         adhesion_buffers.sync_to_gpu(queue);
-        
+
         (creations, removals)
     }
-    
+
     /// Handle cell division - create sibling adhesions
-    /// 
+    ///
     /// Called after division execute shader completes.
-    /// 
+    ///
     /// # Arguments
     /// * `divisions` - List of (parent_idx, child_b_idx, mode_idx, parent_rotation, child_a_orient, child_b_orient, split_dir)
     pub fn handle_divisions(
         &mut self,
-        divisions: &[(u32, u32, u32, glam::Quat, glam::Quat, glam::Quat, glam::Vec3)],
+        divisions: &[(
+            u32,
+            u32,
+            u32,
+            glam::Quat,
+            glam::Quat,
+            glam::Quat,
+            glam::Vec3,
+        )],
     ) {
-        for &(parent_idx, child_b_idx, mode_idx, parent_rot, child_a_orient, child_b_orient, split_dir) in divisions {
+        for &(
+            parent_idx,
+            child_b_idx,
+            mode_idx,
+            parent_rot,
+            child_a_orient,
+            child_b_orient,
+            split_dir,
+        ) in divisions
+        {
             let request = AdhesionCreationRequest::new_sibling(
-                parent_idx,    // Child A is at parent slot
-                child_b_idx,   // Child B is at new slot
+                parent_idx,  // Child A is at parent slot
+                child_b_idx, // Child B is at new slot
                 mode_idx,
                 parent_rot,
                 child_a_orient,
@@ -250,19 +272,15 @@ impl AdhesionIntegration {
             self.queue_sibling_adhesion(request);
         }
     }
-    
+
     /// Handle cell deaths - remove connected adhesions
-    /// 
+    ///
     /// Called when cells die.
-    /// 
+    ///
     /// # Arguments
     /// * `dead_cells` - List of dead cell indices
     /// * `adhesion_buffers` - Adhesion buffer system
-    pub fn handle_deaths(
-        &mut self,
-        dead_cells: &[u32],
-        adhesion_buffers: &AdhesionBuffers,
-    ) {
+    pub fn handle_deaths(&mut self, dead_cells: &[u32], adhesion_buffers: &AdhesionBuffers) {
         for &cell_idx in dead_cells {
             // Get all adhesions connected to this cell
             let adhesions = adhesion_buffers.get_cell_adhesions(cell_idx);
@@ -271,23 +289,23 @@ impl AdhesionIntegration {
             }
         }
     }
-    
+
     /// Get pending creation count
     pub fn pending_creation_count(&self) -> usize {
         self.pending_creations.len()
     }
-    
+
     /// Get pending removal count
     pub fn pending_removal_count(&self) -> usize {
         self.pending_removals.len()
     }
-    
+
     /// Clear all pending operations
     pub fn clear_pending(&mut self) {
         self.pending_creations.clear();
         self.pending_removals.clear();
     }
-    
+
     /// Reset the integration manager
     pub fn reset(&mut self) {
         self.pending_creations.clear();
@@ -305,31 +323,31 @@ impl Default for AdhesionIntegration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::{Vec3, Quat};
-    
+    use glam::{Quat, Vec3};
+
     #[test]
     fn test_sibling_adhesion_request() {
         let request = AdhesionCreationRequest::new_sibling(
-            0,  // child_a_index
-            1,  // child_b_index
-            0,  // mode_index
-            Quat::IDENTITY,  // parent_rotation
-            Quat::IDENTITY,  // child_a_orientation
-            Quat::IDENTITY,  // child_b_orientation
-            Vec3::Z,         // split_direction
+            0,              // child_a_index
+            1,              // child_b_index
+            0,              // mode_index
+            Quat::IDENTITY, // parent_rotation
+            Quat::IDENTITY, // child_a_orientation
+            Quat::IDENTITY, // child_b_orientation
+            Vec3::Z,        // split_direction
         );
-        
+
         // Anchor A should point toward B (negative Z in local space)
         assert!(request.anchor_a.z < 0.0);
-        
+
         // Anchor B should point toward A (positive Z in local space)
         assert!(request.anchor_b.z > 0.0);
-        
+
         // Zone classifications
         assert_eq!(request.zone_a, AdhesionZone::ZoneB);
         assert_eq!(request.zone_b, AdhesionZone::ZoneA);
     }
-    
+
     #[test]
     fn test_deterministic_hash_ordering() {
         let request1 = AdhesionCreationRequest {
@@ -344,10 +362,10 @@ mod tests {
             zone_b: AdhesionZone::ZoneA,
             birth_time: 0.0,
         };
-        
+
         let request2 = AdhesionCreationRequest {
             cell_a_index: 1,
-            cell_b_index: 0,  // Swapped order
+            cell_b_index: 0, // Swapped order
             mode_index: 0,
             anchor_a: Vec3::Z,
             anchor_b: -Vec3::Z,
@@ -357,7 +375,7 @@ mod tests {
             zone_b: AdhesionZone::ZoneA,
             birth_time: 0.0,
         };
-        
+
         // Same cells should have same hash regardless of order
         assert_eq!(request1.deterministic_hash(), request2.deterministic_hash());
     }

@@ -4,8 +4,8 @@
 //! few seconds, and stack vertically. Each toast has a kind (success, error,
 //! info) that determines its accent color.
 
-use egui::{Color32, Rect, Vec2};
 use crate::ui::ui_system::palette;
+use egui::{Color32, Rect, Vec2};
 
 /// How long a toast stays fully visible before fading (seconds).
 const TOAST_VISIBLE_SECS: f32 = 2.5;
@@ -45,16 +45,36 @@ pub struct Toast {
 
 impl Toast {
     pub fn success(msg: impl Into<String>) -> Self {
-        Self { message: msg.into(), kind: ToastKind::Success, age: 0.0, progress: None }
+        Self {
+            message: msg.into(),
+            kind: ToastKind::Success,
+            age: 0.0,
+            progress: None,
+        }
     }
     pub fn error(msg: impl Into<String>) -> Self {
-        Self { message: msg.into(), kind: ToastKind::Error, age: 0.0, progress: None }
+        Self {
+            message: msg.into(),
+            kind: ToastKind::Error,
+            age: 0.0,
+            progress: None,
+        }
     }
     pub fn info(msg: impl Into<String>) -> Self {
-        Self { message: msg.into(), kind: ToastKind::Info, age: 0.0, progress: None }
+        Self {
+            message: msg.into(),
+            kind: ToastKind::Info,
+            age: 0.0,
+            progress: None,
+        }
     }
     pub fn progress(msg: impl Into<String>, frac: f32) -> Self {
-        Self { message: msg.into(), kind: ToastKind::Progress, age: 0.0, progress: Some(frac) }
+        Self {
+            message: msg.into(),
+            kind: ToastKind::Progress,
+            age: 0.0,
+            progress: Some(frac),
+        }
     }
 
     /// Alpha 0-255 based on age.
@@ -82,7 +102,11 @@ pub fn tick_toasts(toasts: &mut Vec<Toast>, dt: f32) {
 
 /// Update the progress value of the most recent Progress toast, or push a new one.
 pub fn upsert_progress_toast(toasts: &mut Vec<Toast>, msg: &str, frac: f32) {
-    if let Some(t) = toasts.iter_mut().rev().find(|t| t.kind == ToastKind::Progress) {
+    if let Some(t) = toasts
+        .iter_mut()
+        .rev()
+        .find(|t| t.kind == ToastKind::Progress)
+    {
         t.message = msg.to_string();
         t.progress = Some(frac);
         t.age = 0.0; // reset timer so it stays visible
@@ -98,7 +122,9 @@ pub fn remove_progress_toasts(toasts: &mut Vec<Toast>) {
 
 /// Render all active toasts in the bottom-right corner of the screen.
 pub fn render_toasts(ctx: &egui::Context, toasts: &[Toast]) {
-    if toasts.is_empty() { return; }
+    if toasts.is_empty() {
+        return;
+    }
 
     let p = palette();
     #[allow(deprecated)]
@@ -109,14 +135,16 @@ pub fn render_toasts(ctx: &egui::Context, toasts: &[Toast]) {
 
     for toast in toasts.iter().rev() {
         let alpha = toast.alpha();
-        if alpha == 0 { continue; }
+        if alpha == 0 {
+            continue;
+        }
 
         let a = |c: Color32| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha);
 
         let accent = match toast.kind {
-            ToastKind::Success  => a(p.status_ok),
-            ToastKind::Error    => a(p.status_err),
-            ToastKind::Info     => a(p.accent_secondary),
+            ToastKind::Success => a(p.status_ok),
+            ToastKind::Error => a(p.status_err),
+            ToastKind::Info => a(p.accent_secondary),
             ToastKind::Progress => a(p.accent_primary),
         };
 
@@ -148,9 +176,9 @@ pub fn render_toasts(ctx: &egui::Context, toasts: &[Toast]) {
 
         // Icon
         let icon = match toast.kind {
-            ToastKind::Success  => "✓",
-            ToastKind::Error    => "✕",
-            ToastKind::Info     => "ℹ",
+            ToastKind::Success => "✓",
+            ToastKind::Error => "✕",
+            ToastKind::Info => "ℹ",
             ToastKind::Progress => "⟳",
         };
         painter.text(

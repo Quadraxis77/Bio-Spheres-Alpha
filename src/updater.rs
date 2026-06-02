@@ -58,9 +58,18 @@ pub fn run_self_replace() {
 /// user edits.
 pub fn seed_default_genomes() {
     const BUNDLED: &[(&str, &[u8])] = &[
-        ("Triangular Prism.genome", include_bytes!("../genomes/Triangular Prism.genome")),
-        ("Octo-Tube.genome",        include_bytes!("../genomes/Octo-Tube.genome")),
-        ("Octopus.genome",          include_bytes!("../genomes/Octopus.genome")),
+        (
+            "Triangular Prism.genome",
+            include_bytes!("../genomes/Triangular Prism.genome"),
+        ),
+        (
+            "Octo-Tube.genome",
+            include_bytes!("../genomes/Octo-Tube.genome"),
+        ),
+        (
+            "Octopus.genome",
+            include_bytes!("../genomes/Octopus.genome"),
+        ),
     ];
 
     let dir = crate::app_dirs::genomes_dir();
@@ -76,12 +85,15 @@ pub fn seed_default_genomes() {
 
 pub fn migrate_config_files() {
     const EMBEDDED_DEFAULTS: &[(&str, &str)] = &[
-        ("cave_settings.ron",         include_str!("../cave_settings.ron")),
-        ("cell_visuals.ron",          include_str!("../cell_visuals.ron")),
-        ("fluid_settings.ron",        include_str!("../fluid_settings.ron")),
-        ("light_settings.ron",        include_str!("../light_settings.ron")),
-        ("sun_settings.ron",          include_str!("../sun_settings.ron")),
-        ("fluid_render_settings.ron", include_str!("../fluid_render_settings.ron")),
+        ("cave_settings.ron", include_str!("../cave_settings.ron")),
+        ("cell_visuals.ron", include_str!("../cell_visuals.ron")),
+        ("fluid_settings.ron", include_str!("../fluid_settings.ron")),
+        ("light_settings.ron", include_str!("../light_settings.ron")),
+        ("sun_settings.ron", include_str!("../sun_settings.ron")),
+        (
+            "fluid_render_settings.ron",
+            include_str!("../fluid_render_settings.ron"),
+        ),
     ];
 
     for (filename, default_content) in EMBEDDED_DEFAULTS {
@@ -97,9 +109,9 @@ pub fn migrate_config_files() {
 
         // File exists - merge missing keys.
         match merge_ron_keys(&path, default_content) {
-            Ok(true)  => log::info!("Config migration: added new keys to {}", filename),
+            Ok(true) => log::info!("Config migration: added new keys to {}", filename),
             Ok(false) => {} // nothing to do
-            Err(e)    => log::warn!("Config migration failed for {}: {}", filename, e),
+            Err(e) => log::warn!("Config migration failed for {}: {}", filename, e),
         }
     }
 }
@@ -108,8 +120,8 @@ pub fn migrate_config_files() {
 
 #[cfg(target_os = "windows")]
 fn try_self_replace() -> Result<(), String> {
-    let current_exe = std::env::current_exe()
-        .map_err(|e| format!("cannot get current exe: {}", e))?;
+    let current_exe =
+        std::env::current_exe().map_err(|e| format!("cannot get current exe: {}", e))?;
 
     let canonical_path = read_canonical_path();
 
@@ -144,19 +156,15 @@ fn do_self_replace(new_exe: &Path, canonical: &Path) -> Result<(), String> {
         let _ = std::fs::remove_file(&backup);
 
         std::fs::rename(canonical, &backup)
-            .map_err(|e| format!(
-                "cannot rename {:?} to {:?}: {}",
-                canonical, backup, e
-            ))?;
+            .map_err(|e| format!("cannot rename {:?} to {:?}: {}", canonical, backup, e))?;
     }
 
     // Step 2: copy the new exe to the canonical path.
-    std::fs::copy(new_exe, canonical)
-        .map_err(|e| {
-            // Rollback: try to restore the old exe.
-            let _ = std::fs::rename(&backup, canonical);
-            format!("cannot copy new exe to {:?}: {}", canonical, e)
-        })?;
+    std::fs::copy(new_exe, canonical).map_err(|e| {
+        // Rollback: try to restore the old exe.
+        let _ = std::fs::rename(&backup, canonical);
+        format!("cannot copy new exe to {:?}: {}", canonical, e)
+    })?;
 
     // Step 3: update the stored canonical path (it hasn't changed, but
     // write it anyway to refresh the file's mtime).
@@ -198,8 +206,8 @@ fn cleanup_old_exe() {
         let backup = canonical.with_extension("exe.old");
         if backup.exists() {
             match std::fs::remove_file(&backup) {
-                Ok(())  => log::info!("Cleaned up old exe: {:?}", backup),
-                Err(e)  => log::warn!("Could not remove old exe {:?}: {}", backup, e),
+                Ok(()) => log::info!("Cleaned up old exe: {:?}", backup),
+                Err(e) => log::warn!("Could not remove old exe {:?}: {}", backup, e),
             }
         }
     }
@@ -212,14 +220,13 @@ fn cleanup_old_exe() {
 /// Returns `Ok(true)` if the file was updated, `Ok(false)` if it was already
 /// up to date, or `Err` if parsing or writing failed.
 fn merge_ron_keys(path: &Path, default_content: &str) -> Result<bool, String> {
-    let existing_text = std::fs::read_to_string(path)
-        .map_err(|e| format!("read error: {}", e))?;
+    let existing_text = std::fs::read_to_string(path).map_err(|e| format!("read error: {}", e))?;
 
     let existing_val: ron::Value = ron::from_str(&existing_text)
         .map_err(|e| format!("parse error in existing file: {}", e))?;
 
-    let default_val: ron::Value = ron::from_str(default_content)
-        .map_err(|e| format!("parse error in default: {}", e))?;
+    let default_val: ron::Value =
+        ron::from_str(default_content).map_err(|e| format!("parse error in default: {}", e))?;
 
     // Both must be maps (RON structs parse as Map).
     let mut existing_map = match existing_val {
@@ -256,8 +263,7 @@ fn merge_ron_keys(path: &Path, default_content: &str) -> Result<bool, String> {
     let new_text = ron::ser::to_string_pretty(&merged, ron::ser::PrettyConfig::default())
         .map_err(|e| format!("serialise error: {}", e))?;
 
-    std::fs::write(path, new_text)
-        .map_err(|e| format!("write error: {}", e))?;
+    std::fs::write(path, new_text).map_err(|e| format!("write error: {}", e))?;
 
     Ok(true)
 }

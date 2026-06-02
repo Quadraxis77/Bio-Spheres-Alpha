@@ -9,10 +9,9 @@
 //! - Multiple signals on the same channel are additive
 //! - Signals persist only while being actively sent (cleared each frame)
 
-use glam::Vec3;
 use crate::genome::Genome;
 use crate::simulation::canonical_state::CanonicalState;
-
+use glam::Vec3;
 
 /// Number of signal channels (0-15)
 pub const SIGNAL_CHANNELS: usize = 16;
@@ -20,11 +19,11 @@ pub const SIGNAL_CHANNELS: usize = 16;
 pub const SIGNAL_ATTENUATION_PER_HOP: f32 = 0.5; // 50% signal strength retained per hop
 
 /// Oculocyte sense type bitmask bits
-pub const SENSE_CELL: u32     = 1 << 0; // bit 0
-pub const SENSE_FOOD: u32     = 1 << 1; // bit 1
-pub const SENSE_LIGHT: u32    = 1 << 2; // bit 2
-pub const SENSE_WALL: u32     = 1 << 3; // bit 3 - world boundary sphere + cave solid voxels + water surface
-pub const SENSE_SELF: u32     = 1 << 4; // bit 4
+pub const SENSE_CELL: u32 = 1 << 0; // bit 0
+pub const SENSE_FOOD: u32 = 1 << 1; // bit 1
+pub const SENSE_LIGHT: u32 = 1 << 2; // bit 2
+pub const SENSE_WALL: u32 = 1 << 3; // bit 3 - world boundary sphere + cave solid voxels + water surface
+pub const SENSE_SELF: u32 = 1 << 4; // bit 4
 pub const SENSE_MOSSROCK: u32 = 1 << 5; // bit 5
 
 /// Oculocyte cell type index
@@ -46,7 +45,7 @@ pub fn clear_all_signals(state: &mut CanonicalState) {
         *channel = None;
     }
     state.has_any_signal = false;
-    
+
     // Clear signal flow tracking as well
     state.signal_flow_tracker.clear();
 }
@@ -97,8 +96,7 @@ pub fn sense_oculocytes(
 
         // Bitmask: detect if ANY of the enabled sense types fires.
         // Each bit is checked independently; the cell emits if at least one hits.
-        let detected =
-            ((sense_mask & SENSE_SELF) != 0)  // Self always fires
+        let detected = ((sense_mask & SENSE_SELF) != 0)  // Self always fires
             || ((sense_mask & SENSE_CELL) != 0 && sense_cells_ray(state, cell_idx, pos, forward, ray_length))
             || ((sense_mask & SENSE_WALL) != 0 && sense_barrier_ray(pos, forward, ray_length, boundary_radius))
             // Food and Light require fluid/light systems - not available in preview
@@ -153,12 +151,7 @@ fn sense_cells_ray(
 
 /// Sense barrier/world boundary along the forward ray.
 /// Ray-sphere intersection against the world boundary sphere.
-fn sense_barrier_ray(
-    pos: Vec3,
-    forward: Vec3,
-    ray_length: f32,
-    boundary_radius: f32,
-) -> bool {
+fn sense_barrier_ray(pos: Vec3, forward: Vec3, ray_length: f32, boundary_radius: f32) -> bool {
     // For a sphere centered at origin with radius R:
     // |pos + t*forward|^2 = R^2
     // t^2 + 2*(posforward)*t + (|pos|^2 - R^2) = 0
@@ -232,15 +225,24 @@ pub fn propagate_signals(
         }
 
         // Source cell receives its own emission at full (unattenuated) strength.
-        add_signal(state, emission.source_cell, emission.channel, emission.value);
+        add_signal(
+            state,
+            emission.source_cell,
+            emission.channel,
+            emission.value,
+        );
 
         if emission.hops == 0 {
             continue;
         }
 
         // Reset per-emission scratch state.
-        for v in min_hop_distance[..cell_count].iter_mut() { *v = -1; }
-        for v in signal_contribution[..cell_count].iter_mut() { *v = 0.0; }
+        for v in min_hop_distance[..cell_count].iter_mut() {
+            *v = -1;
+        }
+        for v in signal_contribution[..cell_count].iter_mut() {
+            *v = 0.0;
+        }
         min_hop_distance[emission.source_cell] = 0;
         // Seed source contribution so routing_outgoing can read it for hop 1.
         signal_contribution[emission.source_cell] = emission.value;
@@ -259,7 +261,9 @@ pub fn propagate_signals(
 
                 let neighbors = get_adhesion_neighbors(state, cell_idx);
                 for neighbor in neighbors {
-                    if neighbor >= cell_count { continue; }
+                    if neighbor >= cell_count {
+                        continue;
+                    }
                     if min_hop_distance[neighbor] == -1 {
                         // First path to reach this cell.
                         min_hop_distance[neighbor] = hop_number;
@@ -281,11 +285,22 @@ pub fn propagate_signals(
 
         // Write contributions. Skip source (written above) and relay cells.
         for cell_idx in 0..cell_count {
-            if cell_idx == emission.source_cell { continue; }
-            if min_hop_distance[cell_idx] < 0 { continue; }
-            if is_signal_sender(state, genome, cell_idx, emissions) { continue; }
+            if cell_idx == emission.source_cell {
+                continue;
+            }
+            if min_hop_distance[cell_idx] < 0 {
+                continue;
+            }
+            if is_signal_sender(state, genome, cell_idx, emissions) {
+                continue;
+            }
             if signal_contribution[cell_idx] != 0.0 {
-                add_signal(state, cell_idx, emission.channel, signal_contribution[cell_idx]);
+                add_signal(
+                    state,
+                    cell_idx,
+                    emission.channel,
+                    signal_contribution[cell_idx],
+                );
             }
         }
     }
@@ -301,7 +316,12 @@ pub fn propagate_signals(
 /// including regulation emitters - should both emit *and* receive signals normally.
 /// Regulation emitters participating as receivers is exactly how inter-cell signal
 /// gating (division, apoptosis, mode-switching) works in practice.
-fn is_signal_sender(state: &CanonicalState, genome: &Genome, cell_idx: usize, _emissions: &[SignalEmission]) -> bool {
+fn is_signal_sender(
+    state: &CanonicalState,
+    genome: &Genome,
+    cell_idx: usize,
+    _emissions: &[SignalEmission],
+) -> bool {
     let mode_idx = state.mode_indices[cell_idx];
     if let Some(mode) = genome.modes.get(mode_idx) {
         if mode.cell_type == OCULOCYTE_TYPE {
@@ -319,17 +339,14 @@ fn add_signal(state: &mut CanonicalState, cell_idx: usize, channel: usize, value
     if idx >= state.signal_channels.len() {
         return;
     }
-    state.signal_channels[idx] = Some(
-        state.signal_channels[idx].unwrap_or(0.0) + value,
-    );
+    state.signal_channels[idx] = Some(state.signal_channels[idx].unwrap_or(0.0) + value);
 }
 
 /// Get all adhesion-connected neighbors of a cell.
 fn get_adhesion_neighbors(state: &CanonicalState, cell_idx: usize) -> Vec<usize> {
-    let connections = state.adhesion_manager.get_connections_for_cell(
-        &state.adhesion_connections,
-        cell_idx,
-    );
+    let connections = state
+        .adhesion_manager
+        .get_connections_for_cell(&state.adhesion_connections, cell_idx);
 
     let mut neighbors = Vec::with_capacity(connections.len());
     for conn_idx in connections {
@@ -354,15 +371,15 @@ impl SignalFlowTracker {
             flows: std::collections::HashSet::new(),
         }
     }
-    
+
     pub fn add_flow(&mut self, source: usize, target: usize) {
         self.flows.insert((source, target));
     }
-    
+
     pub fn has_flow(&self, source: usize, target: usize) -> bool {
         self.flows.contains(&(source, target)) || self.flows.contains(&(target, source))
     }
-    
+
     pub fn clear(&mut self) {
         self.flows.clear();
     }
@@ -386,7 +403,9 @@ pub fn adhesion_has_signal(state: &CanonicalState, cell_a: usize, cell_b: usize)
     let base_a = cell_a * SIGNAL_CHANNELS;
     let base_b = cell_b * SIGNAL_CHANNELS;
     for ch in 0..SIGNAL_CHANNELS {
-        if state.signal_channels[base_a + ch].is_some() && state.signal_channels[base_b + ch].is_some() {
+        if state.signal_channels[base_a + ch].is_some()
+            && state.signal_channels[base_b + ch].is_some()
+        {
             return true;
         }
     }
@@ -410,10 +429,7 @@ fn read_channel(state: &CanonicalState, cell_idx: usize, channel: usize) -> Opti
 ///
 /// If a required input channel has no signal the cell emits nothing -
 /// misconfigured circuits go dark visibly rather than silently misbehave.
-pub fn process_cognocytes(
-    state: &CanonicalState,
-    genome: &Genome,
-) -> Vec<SignalEmission> {
+pub fn process_cognocytes(state: &CanonicalState, genome: &Genome) -> Vec<SignalEmission> {
     let mut emissions = Vec::new();
 
     for cell_idx in 0..state.cell_count {
@@ -429,7 +445,7 @@ pub fn process_cognocytes(
 
         let ch_a = mode.cognocyte_input_channel_a.clamp(0, 15) as usize;
         let ch_b = mode.cognocyte_input_channel_b.clamp(0, 15) as usize;
-        let op   = mode.cognocyte_operation;
+        let op = mode.cognocyte_operation;
 
         // NOT is unary - only A required.
         let a = match read_channel(state, cell_idx, ch_a) {
@@ -448,7 +464,7 @@ pub fn process_cognocytes(
         let result = crate::cell::behaviors::cognocyte::evaluate(op, a, b);
 
         let out_ch = mode.cognocyte_output_channel.clamp(0, 15) as usize;
-        let hops   = mode.cognocyte_output_hops.clamp(1, 20) as usize;
+        let hops = mode.cognocyte_output_hops.clamp(1, 20) as usize;
 
         emissions.push(SignalEmission {
             source_cell: cell_idx,
@@ -484,10 +500,10 @@ pub fn process_memorocytes(
             continue;
         }
 
-        let in_ch  = mode.memorocyte_input_channel.clamp(0, 15) as usize;
-        let rate   = mode.memorocyte_rate.clamp(0.0, 1.0);
+        let in_ch = mode.memorocyte_input_channel.clamp(0, 15) as usize;
+        let rate = mode.memorocyte_rate.clamp(0.0, 1.0);
         let out_ch = mode.memorocyte_output_channel.clamp(0, 15) as usize;
-        let hops   = mode.memorocyte_output_hops.clamp(1, 20) as usize;
+        let hops = mode.memorocyte_output_hops.clamp(1, 20) as usize;
 
         // Frame-rate-independent EMA: fraction of gap closed this frame.
         // effective_rate = 1 - (1 - rate)^dt
@@ -516,10 +532,7 @@ pub fn process_memorocytes(
 /// In the preview scene there is no light field, so photocytes emit unconditionally
 /// whenever their output channel is enabled. In the GPU scene the actual light check
 /// is handled by the photocyte_light shader; this path only applies to the CPU preview.
-pub fn process_photocytes(
-    state: &CanonicalState,
-    genome: &Genome,
-) -> Vec<SignalEmission> {
+pub fn process_photocytes(state: &CanonicalState, genome: &Genome) -> Vec<SignalEmission> {
     let mut emissions = Vec::new();
 
     for cell_idx in 0..state.cell_count {
@@ -536,7 +549,7 @@ pub fn process_photocytes(
             continue;
         }
 
-        let ch   = mode.photocyte_emit_channel.clamp(0, 15) as usize;
+        let ch = mode.photocyte_emit_channel.clamp(0, 15) as usize;
         let hops = mode.photocyte_emit_hops.clamp(1, 20) as usize;
 
         emissions.push(SignalEmission {
@@ -554,10 +567,7 @@ pub fn process_photocytes(
 ///
 /// Lipocytes store up to 200 nutrients. The storage fraction (0.0-1.0) is compared
 /// against `lipocyte_emit_threshold`. emit_mode 0 = emit when above, 1 = emit when below.
-pub fn process_lipocytes(
-    state: &CanonicalState,
-    genome: &Genome,
-) -> Vec<SignalEmission> {
+pub fn process_lipocytes(state: &CanonicalState, genome: &Genome) -> Vec<SignalEmission> {
     let mut emissions = Vec::new();
 
     for cell_idx in 0..state.cell_count {
@@ -575,16 +585,20 @@ pub fn process_lipocytes(
         }
 
         let nutrients = state.nutrients.get(cell_idx).copied().unwrap_or(0.0);
-        let fraction  = (nutrients / 200.0).clamp(0.0, 1.0);
+        let fraction = (nutrients / 200.0).clamp(0.0, 1.0);
         let threshold = mode.lipocyte_emit_threshold.clamp(0.0, 1.0);
-        let above     = fraction >= threshold;
-        let should_emit = if mode.lipocyte_emit_mode == 1 { !above } else { above };
+        let above = fraction >= threshold;
+        let should_emit = if mode.lipocyte_emit_mode == 1 {
+            !above
+        } else {
+            above
+        };
 
         if !should_emit {
             continue;
         }
 
-        let ch   = mode.lipocyte_emit_channel.clamp(0, 15) as usize;
+        let ch = mode.lipocyte_emit_channel.clamp(0, 15) as usize;
         let hops = mode.lipocyte_emit_hops.clamp(1, 20) as usize;
 
         emissions.push(SignalEmission {
@@ -637,10 +651,7 @@ pub fn run_signal_system(
 
 /// Emit regulation signals for all cells whose mode has regulation_emit_channel >= 8.
 /// These are unconditional emissions - any cell type can emit on regulation channels.
-pub fn emit_regulation_signals(
-    state: &CanonicalState,
-    genome: &Genome,
-) -> Vec<SignalEmission> {
+pub fn emit_regulation_signals(state: &CanonicalState, genome: &Genome) -> Vec<SignalEmission> {
     let mut emissions = Vec::new();
 
     for cell_idx in 0..state.cell_count {

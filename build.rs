@@ -13,21 +13,23 @@ fn main() {
     println!("cargo:rerun-if-changed=light_settings.ron");
     println!("cargo:rerun-if-changed=sun_settings.ron");
     println!("cargo:rerun-if-changed=fluid_render_settings.ron");
-    
+
     // Rebuild if cave system shaders change
     println!("cargo:rerun-if-changed=shaders/cave_system.wgsl");
     println!("cargo:rerun-if-changed=shaders/cave_collision.wgsl");
     println!("cargo:rerun-if-changed=shaders/cave_spatial_grid_build.wgsl");
-    
+
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows" {
         let mut res = winres::WindowsResource::new();
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let icon_path = std::path::Path::new(&manifest_dir).join("assets").join("icon.ico");
-        
+        let icon_path = std::path::Path::new(&manifest_dir)
+            .join("assets")
+            .join("icon.ico");
+
         if icon_path.exists() {
             res.set_icon(icon_path.to_str().unwrap());
         }
-        
+
         res.compile().unwrap();
     }
 }

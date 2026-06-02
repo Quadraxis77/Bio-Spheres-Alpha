@@ -81,22 +81,22 @@
 //! All behavior implementations must be `Send + Sync` to support parallel physics
 //! processing. The trait bound enforces this at compile time.
 
-pub mod devorocyte;
-pub mod vasculocyte;
-pub mod gametocyte;
+pub mod buoyocyte;
+pub mod ciliocyte;
 pub mod cognocyte;
-pub mod memorocyte;
+pub mod devorocyte;
+pub mod embryocyte;
 pub mod flagellocyte;
-pub mod test_cell;
+pub mod gametocyte;
+pub mod glueocyte;
+pub mod lipocyte;
+pub mod memorocyte;
 pub mod myocyte;
+pub mod oculocyte;
 pub mod phagocyte;
 pub mod photocyte;
-pub mod lipocyte;
-pub mod buoyocyte;
-pub mod glueocyte;
-pub mod oculocyte;
-pub mod ciliocyte;
-pub mod embryocyte;
+pub mod test_cell;
+pub mod vasculocyte;
 
 use crate::genome::ModeSettings;
 
@@ -195,14 +195,14 @@ impl TypeSpecificInstanceData {
     ) -> Self {
         Self {
             data: [
-                tail_length,           // data[0]
-                tail_thickness,        // data[1]
-                tail_amplitude,        // data[2]
-                tail_frequency,        // data[3]
-                tail_speed,            // data[4]
-                tail_taper,            // data[5]
-                debug_colors_enabled,  // data[6] - debug colors flag
-                cell_type,             // data[7] - cell_type for unified shader
+                tail_length,          // data[0]
+                tail_thickness,       // data[1]
+                tail_amplitude,       // data[2]
+                tail_frequency,       // data[3]
+                tail_speed,           // data[4]
+                tail_taper,           // data[5]
+                debug_colors_enabled, // data[6] - debug colors flag
+                cell_type,            // data[7] - cell_type for unified shader
             ],
         }
     }
@@ -214,8 +214,8 @@ impl TypeSpecificInstanceData {
     /// * `buoyancy_force` - Upward buoyancy force (0.0 to 1.0)
     pub fn buoyocyte(buoyancy_force: f32) -> Self {
         let mut data = [0.0f32; 8];
-        data[0] = buoyancy_force;  // data[0] = buoyancy force
-        data[7] = 5.0;             // data[7] = cell_type (Buoyocyte = 5)
+        data[0] = buoyancy_force; // data[0] = buoyancy force
+        data[7] = 5.0; // data[7] = cell_type (Buoyocyte = 5)
         Self { data }
     }
 

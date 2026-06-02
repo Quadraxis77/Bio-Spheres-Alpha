@@ -21,7 +21,7 @@ const PADDED_VOXELS: usize = (PADDED_RESOLUTION * PADDED_RESOLUTION * PADDED_RES
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct GpuVertex {
     pub position: [f32; 3],
-    pub fluid_type: f32,  // 0=empty, 1=water, 2=lava, 3=steam
+    pub fluid_type: f32, // 0=empty, 1=water, 2=lava, 3=steam
     pub normal: [f32; 3],
     pub _pad1: f32,
 }
@@ -30,14 +30,14 @@ pub struct GpuVertex {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct SurfaceNetsGpuParams {
-    pub grid_resolution: u32,    // Padded processing grid (130)
+    pub grid_resolution: u32, // Padded processing grid (130)
     pub iso_level: f32,
     pub cell_size: f32,
     pub max_vertices: u32,
-    
+
     pub grid_origin: [f32; 3],
     pub max_indices: u32,
-    
+
     pub density_resolution: u32, // Actual density data size (128)
     pub use_fast_early_out: u32, // 1 = check only 8 corners (organism skin), 0 = wider check (water)
     pub _pad_b: u32,
@@ -59,10 +59,10 @@ pub struct GpuSurfaceNets {
     vertex_pipeline: wgpu::ComputePipeline,
     index_pipeline: wgpu::ComputePipeline,
     finalize_pipeline: wgpu::ComputePipeline,
-    
+
     // Render pipeline
     render_pipeline: wgpu::RenderPipeline,
-    
+
     // Buffers
     density_buffer: wgpu::Buffer,
     fluid_type_buffer: wgpu::Buffer,
@@ -77,7 +77,7 @@ pub struct GpuSurfaceNets {
     params_buffer: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
     render_params_buffer: wgpu::Buffer,
-    
+
     // Smoothing
     smoothed_density_buffer: wgpu::Buffer,
     smooth_temp_buffer: wgpu::Buffer,
@@ -85,14 +85,14 @@ pub struct GpuSurfaceNets {
     smooth_pipeline: wgpu::ComputePipeline,
     smooth_bind_group: wgpu::BindGroup,
     smooth_blend_factor: f32,
-    
+
     // Bind groups
     compute_bind_group: wgpu::BindGroup,
     render_bind_group: wgpu::BindGroup,
-    
+
     // Shadow field (optional, set from gpu_scene after light field init)
     shadow_bind_group: Option<wgpu::BindGroup>,
-    
+
     // Environment cubemap for reflections (fields kept alive to prevent GPU resource deallocation)
     #[allow(dead_code)]
     cubemap_texture: wgpu::Texture,
@@ -104,7 +104,7 @@ pub struct GpuSurfaceNets {
     #[allow(dead_code)]
     cubemap_bind_group_layout: wgpu::BindGroupLayout,
     cubemap_generated: bool,
-    
+
     // WBOIT (Weighted Blended Order-Independent Transparency)
     oit_accum_texture: wgpu::Texture,
     oit_accum_view: wgpu::TextureView,
@@ -116,18 +116,18 @@ pub struct GpuSurfaceNets {
     oit_composite_bind_group_layout: wgpu::BindGroupLayout,
     #[allow(dead_code)]
     oit_sampler: wgpu::Sampler,
-    
+
     // Configuration
     max_vertices: u32,
     max_indices: u32,
     world_radius: f32,
     world_center: Vec3,
     iso_level: f32,
-    
+
     // Cached counts (updated after GPU readback)
     pub vertex_count: u32,
     pub index_count: u32,
-    
+
     // Screen dimensions
     pub width: u32,
     pub height: u32,
@@ -221,86 +221,88 @@ impl GpuSurfaceNets {
     ) -> Self {
         let max_vertices = 1_000_000u32;
         let max_indices = 3_000_000u32;
-        
+
         // Calculate grid parameters
         let world_diameter = world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = world_center - Vec3::splat(world_diameter / 2.0);
-        
+
         // Create compute shader
         let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("GPU Surface Nets Compute Shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/fluid/surface_nets_gpu.wgsl").into()
+                include_str!("../../shaders/fluid/surface_nets_gpu.wgsl").into(),
             ),
         });
-        
+
         // Create render shader
         let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("GPU Surface Nets Render Shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/fluid/density_mesh.wgsl").into()
+                include_str!("../../shaders/fluid/density_mesh.wgsl").into(),
             ),
         });
-        
+
         // Create buffers
         let density_buf_size = (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64;
         let density_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Density Buffer"),
             size: density_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        
+
         let fluid_type_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Fluid Type Buffer"),
             size: (TOTAL_VOXELS * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         let solid_mask_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Solid Mask Buffer"),
             size: (TOTAL_VOXELS * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Surface Nets Vertex Buffer"),
             size: (max_vertices as usize * std::mem::size_of::<GpuVertex>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
             mapped_at_creation: false,
         });
-        
+
         let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Surface Nets Index Buffer"),
             size: (max_indices as usize * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDEX,
             mapped_at_creation: false,
         });
-        
+
         let vertex_map_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Vertex Map Buffer"),
             size: (PADDED_VOXELS * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        
+
         let counter_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Counter Buffer"),
             size: std::mem::size_of::<Counters>() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        
+
         let counter_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Counter Staging Buffer"),
             size: std::mem::size_of::<Counters>() as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // Indirect draw buffer: index_count, instance_count, first_index, base_vertex, first_instance
         let indirect_draw_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Indirect Draw Buffer"),
@@ -308,11 +310,11 @@ impl GpuSurfaceNets {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT,
             mapped_at_creation: false,
         });
-        
+
         // Shift grid origin back by 1 cell so the 128^3 density data sits
         // at padded cells [1..128], with 1 cell of empty padding on each side
         let padded_origin = grid_origin - Vec3::splat(cell_size);
-        
+
         let params = SurfaceNetsGpuParams {
             grid_resolution: PADDED_RESOLUTION,
             iso_level: 0.5,
@@ -325,152 +327,181 @@ impl GpuSurfaceNets {
             _pad_b: 0,
             _pad_c: 0,
         };
-        
+
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Surface Nets Params Buffer"),
             contents: bytemuck::cast_slice(&[params]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        
+
         let camera_uniform = CameraUniform {
             view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
             camera_pos: [0.0, 0.0, 0.0],
             _padding: 0.0,
         };
-        
+
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Surface Nets Camera Buffer"),
             contents: bytemuck::cast_slice(&[camera_uniform]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        
+
         let render_params = DensityMeshParams::default();
         let render_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Density Mesh Render Params Buffer"),
             contents: bytemuck::cast_slice(&[render_params]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        
+
         // Compute bind group layout
-        let compute_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Surface Nets Compute Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let compute_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Surface Nets Compute Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 8,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
-        
+                ],
+            });
+
         let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Surface Nets Compute Bind Group"),
             layout: &compute_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: params_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: density_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: fluid_type_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: solid_mask_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: vertex_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: index_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: vertex_map_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 7, resource: counter_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 8, resource: indirect_draw_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: density_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: fluid_type_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: solid_mask_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: vertex_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: index_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: vertex_map_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: counter_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: indirect_draw_buffer.as_entire_binding(),
+                },
             ],
         });
-        
+
         // Compute pipeline layout
-        let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Surface Nets Compute Layout"),
-            bind_group_layouts: &[&compute_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        
+        let compute_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Surface Nets Compute Layout"),
+                bind_group_layouts: &[&compute_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
         // Create compute pipelines
         let reset_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Reset Counters Pipeline"),
@@ -480,7 +511,7 @@ impl GpuSurfaceNets {
             compilation_options: Default::default(),
             cache: None,
         });
-        
+
         let vertex_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Generate Vertices Pipeline"),
             layout: Some(&compute_pipeline_layout),
@@ -489,7 +520,7 @@ impl GpuSurfaceNets {
             compilation_options: Default::default(),
             cache: None,
         });
-        
+
         let index_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Generate Indices Pipeline"),
             layout: Some(&compute_pipeline_layout),
@@ -498,7 +529,7 @@ impl GpuSurfaceNets {
             compilation_options: Default::default(),
             cache: None,
         });
-        
+
         let finalize_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Finalize Indirect Pipeline"),
             layout: Some(&compute_pipeline_layout),
@@ -507,34 +538,35 @@ impl GpuSurfaceNets {
             compilation_options: Default::default(),
             cache: None,
         });
-        
+
         // Render bind group layout
-        let render_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Surface Nets Render Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let render_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Surface Nets Render Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
-        
+                ],
+            });
+
         let render_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Surface Nets Render Bind Group"),
             layout: &render_bind_group_layout,
@@ -549,71 +581,81 @@ impl GpuSurfaceNets {
                 },
             ],
         });
-        
+
         // Render pipeline layout
         // === Environment cubemap bind group layout (group 2) ===
-        let cubemap_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Cubemap Reflection Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::Cube,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let render_pipeline_layout = if let Some(shadow_layout) = shadow_bind_group_layout {
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Surface Nets Render Layout"),
-                bind_group_layouts: &[&render_bind_group_layout, shadow_layout, &cubemap_bind_group_layout],
-                push_constant_ranges: &[],
-            })
-        } else {
-            // Create a dummy shadow bind group layout matching the shader's group(1) expectations
-            let dummy_shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Dummy Shadow Field Layout"),
+        let cubemap_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Cubemap Reflection Bind Group Layout"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::Cube,
+                            multisampled: false,
                         },
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                 ],
             });
+
+        let render_pipeline_layout = if let Some(shadow_layout) = shadow_bind_group_layout {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Surface Nets Render Layout"),
-                bind_group_layouts: &[&render_bind_group_layout, &dummy_shadow_layout, &cubemap_bind_group_layout],
+                bind_group_layouts: &[
+                    &render_bind_group_layout,
+                    shadow_layout,
+                    &cubemap_bind_group_layout,
+                ],
+                push_constant_ranges: &[],
+            })
+        } else {
+            // Create a dummy shadow bind group layout matching the shader's group(1) expectations
+            let dummy_shadow_layout =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("Dummy Shadow Field Layout"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ],
+                });
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Surface Nets Render Layout"),
+                bind_group_layouts: &[
+                    &render_bind_group_layout,
+                    &dummy_shadow_layout,
+                    &cubemap_bind_group_layout,
+                ],
                 push_constant_ranges: &[],
             })
         };
-        
+
         // Create render pipeline - WBOIT accumulation pass (two render targets)
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Surface Nets WBOIT Pipeline"),
@@ -709,29 +751,31 @@ impl GpuSurfaceNets {
             multiview: None,
             cache: None,
         });
-        
+
         // === Density smoothing infrastructure ===
         let smooth_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Smooth Density Compute Shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/fluid/smooth_density.wgsl").into()
+                include_str!("../../shaders/fluid/smooth_density.wgsl").into(),
             ),
         });
-        
+
         let smoothed_density_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Smoothed Density Buffer"),
             size: density_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        
+
         let smooth_temp_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Smooth Temp Buffer"),
             size: density_buf_size,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        
+
         let smooth_params = SmoothDensityParams {
             grid_resolution: GRID_RESOLUTION,
             blend_factor: 0.15,
@@ -743,70 +787,84 @@ impl GpuSurfaceNets {
             contents: bytemuck::cast_slice(&[smooth_params]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        
-        let smooth_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Smooth Density Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+
+        let smooth_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Smooth Density Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
-        
+                ],
+            });
+
         let smooth_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Smooth Density Bind Group"),
             layout: &smooth_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: smooth_params_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: density_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: smoothed_density_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: smooth_temp_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: smooth_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: density_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: smoothed_density_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: smooth_temp_buffer.as_entire_binding(),
+                },
             ],
         });
-        
-        let smooth_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Smooth Density Pipeline Layout"),
-            bind_group_layouts: &[&smooth_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        
+
+        let smooth_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Smooth Density Pipeline Layout"),
+                bind_group_layouts: &[&smooth_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
         let smooth_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Smooth Density Pipeline"),
             layout: Some(&smooth_pipeline_layout),
@@ -828,7 +886,9 @@ impl GpuSurfaceNets {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Bgra8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
 
@@ -867,8 +927,10 @@ impl GpuSurfaceNets {
         // === CPU-generated cubemap uploaded via write_texture (no compute shader needed) ===
 
         // === WBOIT textures and composite pipeline ===
-        let (oit_accum_texture, oit_accum_view) = Self::create_oit_accum_texture(device, width, height);
-        let (oit_revealage_texture, oit_revealage_view) = Self::create_oit_revealage_texture(device, width, height);
+        let (oit_accum_texture, oit_accum_view) =
+            Self::create_oit_accum_texture(device, width, height);
+        let (oit_revealage_texture, oit_revealage_view) =
+            Self::create_oit_revealage_texture(device, width, height);
 
         let oit_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("OIT Composite Sampler"),
@@ -877,37 +939,38 @@ impl GpuSurfaceNets {
             ..Default::default()
         });
 
-        let oit_composite_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("OIT Composite Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+        let oit_composite_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("OIT Composite Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                    count: None,
-                },
-            ],
-        });
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        count: None,
+                    },
+                ],
+            });
 
         let oit_composite_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("OIT Composite Bind Group"),
@@ -935,49 +998,51 @@ impl GpuSurfaceNets {
             ),
         });
 
-        let oit_composite_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("OIT Composite Pipeline Layout"),
-            bind_group_layouts: &[&oit_composite_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let oit_composite_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("OIT Composite Pipeline Layout"),
+                bind_group_layouts: &[&oit_composite_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
-        let oit_composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("OIT Composite Pipeline"),
-            layout: Some(&oit_composite_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &oit_composite_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &oit_composite_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState {
-                        // Premultiplied alpha: output.rgb already multiplied by output.a
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        let oit_composite_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("OIT Composite Pipeline"),
+                layout: Some(&oit_composite_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &oit_composite_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &oit_composite_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(wgpu::BlendState {
+                            // Premultiplied alpha: output.rgb already multiplied by output.a
+                            color: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::One,
+                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                            alpha: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::One,
+                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
 
         Self {
             reset_pipeline,
@@ -1031,19 +1096,23 @@ impl GpuSurfaceNets {
             height,
         }
     }
-    
+
     /// Upload density data to GPU
     pub fn upload_density(&self, queue: &wgpu::Queue, density: &[f32]) {
         assert_eq!(density.len(), TOTAL_VOXELS);
         queue.write_buffer(&self.density_buffer, 0, bytemuck::cast_slice(density));
     }
-    
+
     /// Upload fluid type data to GPU
     pub fn upload_fluid_types(&self, queue: &wgpu::Queue, fluid_types: &[u32]) {
         assert_eq!(fluid_types.len(), TOTAL_VOXELS);
-        queue.write_buffer(&self.fluid_type_buffer, 0, bytemuck::cast_slice(fluid_types));
+        queue.write_buffer(
+            &self.fluid_type_buffer,
+            0,
+            bytemuck::cast_slice(fluid_types),
+        );
     }
-    
+
     /// Upload solid mask data to GPU
     pub fn upload_solid_mask(&self, queue: &wgpu::Queue, solid_mask: &[u32]) {
         assert_eq!(solid_mask.len(), TOTAL_VOXELS);
@@ -1064,7 +1133,7 @@ impl GpuSurfaceNets {
     pub fn fluid_type_buffer(&self) -> &wgpu::Buffer {
         &self.fluid_type_buffer
     }
-    
+
     /// Set the temporal blend factor for density smoothing
     /// Lower = more stable/slow (0.05), higher = more responsive (0.5)
     pub fn set_smooth_blend_factor(&mut self, queue: &wgpu::Queue, factor: f32) {
@@ -1075,16 +1144,20 @@ impl GpuSurfaceNets {
             _pad0: 0.0,
             _pad1: 0.0,
         };
-        queue.write_buffer(&self.smooth_params_buffer, 0, bytemuck::cast_slice(&[params]));
+        queue.write_buffer(
+            &self.smooth_params_buffer,
+            0,
+            bytemuck::cast_slice(&[params]),
+        );
     }
-    
+
     /// Run density smoothing: spatial blur + temporal blend
     /// Call after extract_to_surface_nets and before extract_mesh.
     /// Smoothed result is copied back to density_buffer so surface nets reads it.
     pub fn smooth_density(&self, encoder: &mut wgpu::CommandEncoder) {
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
         let buf_size = (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64;
-        
+
         // Compute: read raw density + prev smoothed -> write to temp
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -1095,12 +1168,24 @@ impl GpuSurfaceNets {
             pass.set_bind_group(0, &self.smooth_bind_group, &[]);
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
-        
+
         // Copy temp -> smoothed (update temporal state for next frame)
-        encoder.copy_buffer_to_buffer(&self.smooth_temp_buffer, 0, &self.smoothed_density_buffer, 0, buf_size);
-        
+        encoder.copy_buffer_to_buffer(
+            &self.smooth_temp_buffer,
+            0,
+            &self.smoothed_density_buffer,
+            0,
+            buf_size,
+        );
+
         // Copy smoothed -> density_buffer (so surface nets extraction reads smoothed data)
-        encoder.copy_buffer_to_buffer(&self.smoothed_density_buffer, 0, &self.density_buffer, 0, buf_size);
+        encoder.copy_buffer_to_buffer(
+            &self.smoothed_density_buffer,
+            0,
+            &self.density_buffer,
+            0,
+            buf_size,
+        );
     }
 
     /// Update iso level
@@ -1108,7 +1193,7 @@ impl GpuSurfaceNets {
         self.iso_level = iso_level;
         self.update_params(queue);
     }
-    
+
     /// Set smoothing level for voxel aliasing reduction
     /// Lower values = smoother, more organic surfaces (0.2-0.4)
     /// Higher values = sharper, more detailed surfaces (0.6-0.8)
@@ -1119,20 +1204,24 @@ impl GpuSurfaceNets {
         let iso_level = 0.5 + (0.5 - smoothing) * 0.6; // Maps 0.0->0.8, 1.0->0.2
         self.set_iso_level(queue, iso_level.clamp(0.1, 0.9));
     }
-    
+
     /// Enable ultra-smooth mode for maximum voxel aliasing reduction
     pub fn enable_ultra_smooth(&mut self, queue: &wgpu::Queue) {
         self.set_iso_level(queue, 0.15); // Very low iso for maximum smoothing
     }
-    
+
     /// Enable sharp mode for detailed surfaces (more voxel definition)
     pub fn enable_sharp(&mut self, queue: &wgpu::Queue) {
         self.set_iso_level(queue, 0.75); // High iso for sharp details
     }
-    
+
     /// Update render params (lighting, colors, etc.)
     pub fn update_render_params(&self, queue: &wgpu::Queue, params: &DensityMeshParams) {
-        queue.write_buffer(&self.render_params_buffer, 0, bytemuck::cast_slice(&[*params]));
+        queue.write_buffer(
+            &self.render_params_buffer,
+            0,
+            bytemuck::cast_slice(&[*params]),
+        );
     }
 
     /// Set the shadow bind group for light field shadow sampling.
@@ -1147,33 +1236,34 @@ impl GpuSurfaceNets {
         if self.cubemap_generated {
             return;
         }
-        
+
         // Procedural sky cubemap - each face has sky gradient + sun + atmospheric scattering
         let size = CUBEMAP_FACE_SIZE as usize;
         let light_dir = glam::Vec3::new(0.5, 0.8, 0.3).normalize();
-        
+
         for face in 0u32..6 {
             let mut pixels: Vec<u8> = Vec::with_capacity(size * size * 4);
-            
+
             for y in 0..size {
                 for x in 0..size {
                     let u = (x as f32 + 0.5) / size as f32 * 2.0 - 1.0;
                     let v = (y as f32 + 0.5) / size as f32 * 2.0 - 1.0;
-                    
+
                     let dir = match face {
-                        0 => glam::Vec3::new( 1.0, -v,   -u),
-                        1 => glam::Vec3::new(-1.0, -v,    u),
-                        2 => glam::Vec3::new( u,    1.0,  v),
-                        3 => glam::Vec3::new( u,   -1.0, -v),
-                        4 => glam::Vec3::new( u,   -v,    1.0),
-                        _ => glam::Vec3::new(-u,   -v,   -1.0),
-                    }.normalize();
-                    
+                        0 => glam::Vec3::new(1.0, -v, -u),
+                        1 => glam::Vec3::new(-1.0, -v, u),
+                        2 => glam::Vec3::new(u, 1.0, v),
+                        3 => glam::Vec3::new(u, -1.0, -v),
+                        4 => glam::Vec3::new(u, -v, 1.0),
+                        _ => glam::Vec3::new(-u, -v, -1.0),
+                    }
+                    .normalize();
+
                     let up = dir.y;
                     let deep = glam::Vec3::new(0.01, 0.02, 0.06);
                     let horizon = glam::Vec3::new(0.25, 0.40, 0.60);
                     let zenith = glam::Vec3::new(0.10, 0.25, 0.55);
-                    
+
                     let mut color = if up < 0.0 {
                         let t = (-up).clamp(0.0, 1.0);
                         horizon * 0.3 * (1.0 - t * t) + deep * (t * t)
@@ -1181,31 +1271,31 @@ impl GpuSurfaceNets {
                         let t = up.clamp(0.0, 1.0);
                         horizon * (1.0 - t.sqrt()) + zenith * t.sqrt()
                     };
-                    
+
                     // Atmospheric scattering near sun
                     let sun_dot = dir.dot(light_dir).max(0.0);
                     color += glam::Vec3::new(1.0, 0.85, 0.6) * sun_dot.powf(8.0) * 0.4;
-                    
+
                     // Horizon glow
                     let glow = (-up.abs() * 6.0).exp() * 0.2;
-                    let glow_tint = glam::Vec3::new(0.5, 0.6, 0.8).lerp(
-                        glam::Vec3::new(1.0, 0.8, 0.5), sun_dot * sun_dot);
+                    let glow_tint = glam::Vec3::new(0.5, 0.6, 0.8)
+                        .lerp(glam::Vec3::new(1.0, 0.8, 0.5), sun_dot * sun_dot);
                     color += glow_tint * glow;
-                    
+
                     // Sun disc
                     let sun_radius: f32 = 0.05;
-                    let disc = ((sun_dot - (sun_radius * 1.5).cos()) 
+                    let disc = ((sun_dot - (sun_radius * 1.5).cos())
                         / ((sun_radius * 0.5).cos() - (sun_radius * 1.5).cos()))
-                        .clamp(0.0, 1.0);
+                    .clamp(0.0, 1.0);
                     color += glam::Vec3::new(1.0, 0.95, 0.8) * disc * 3.0;
-                    
+
                     // Corona
                     let corona = (-(1.0 - sun_dot).max(0.0) * 20.0).exp() * 0.6;
                     color += glam::Vec3::new(1.0, 0.9, 0.7) * corona;
-                    
+
                     // Reinhard tone mapping
                     color = color / (color + glam::Vec3::ONE);
-                    
+
                     // BGRA order for Bgra8UnormSrgb, with sRGB gamma
                     let r = (color.x.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
                     let g = (color.y.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
@@ -1216,12 +1306,16 @@ impl GpuSurfaceNets {
                     pixels.push(255u8);
                 }
             }
-            
+
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.cubemap_texture,
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x: 0, y: 0, z: face },
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: face,
+                    },
                     aspect: wgpu::TextureAspect::All,
                 },
                 &pixels,
@@ -1242,13 +1336,14 @@ impl GpuSurfaceNets {
 
     /// Create a texture view for a single cubemap face (for rendering into it).
     pub fn cubemap_face_view(&self, face: u32) -> wgpu::TextureView {
-        self.cubemap_texture.create_view(&wgpu::TextureViewDescriptor {
-            label: Some(&format!("Cubemap Face {} View", face)),
-            dimension: Some(wgpu::TextureViewDimension::D2),
-            base_array_layer: face,
-            array_layer_count: Some(1),
-            ..Default::default()
-        })
+        self.cubemap_texture
+            .create_view(&wgpu::TextureViewDescriptor {
+                label: Some(&format!("Cubemap Face {} View", face)),
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: face,
+                array_layer_count: Some(1),
+                ..Default::default()
+            })
     }
 
     /// Get the cubemap face resolution.
@@ -1265,9 +1360,13 @@ impl GpuSurfaceNets {
     pub fn mark_cubemap_generated(&mut self) {
         self.cubemap_generated = true;
     }
-    
+
     /// Set initial render params from editor state (called once during initialization)
-    pub fn set_initial_params(&self, queue: &wgpu::Queue, editor_state: &crate::ui::panel_context::GenomeEditorState) {
+    pub fn set_initial_params(
+        &self,
+        queue: &wgpu::Queue,
+        editor_state: &crate::ui::panel_context::GenomeEditorState,
+    ) {
         let params = DensityMeshParams {
             base_color: [0.2, 0.5, 0.9], // Default water blue color
             ambient: editor_state.fluid_ambient,
@@ -1292,7 +1391,7 @@ impl GpuSurfaceNets {
         };
         self.update_render_params(queue, &params);
     }
-    
+
     /// Update params buffer
     fn update_params(&self, queue: &wgpu::Queue) {
         let world_diameter = self.world_radius * 2.0;
@@ -1300,7 +1399,7 @@ impl GpuSurfaceNets {
         let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
         // Shift origin back by 1 cell for padding
         let padded_origin = grid_origin - Vec3::splat(cell_size);
-        
+
         let params = SurfaceNetsGpuParams {
             grid_resolution: PADDED_RESOLUTION,
             iso_level: self.iso_level,
@@ -1313,14 +1412,14 @@ impl GpuSurfaceNets {
             _pad_b: 0,
             _pad_c: 0,
         };
-        
+
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
     }
-    
+
     /// Run surface nets extraction on GPU
     pub fn extract_mesh(&self, encoder: &mut wgpu::CommandEncoder) {
         let workgroup_count = (PADDED_RESOLUTION + 3) / 4;
-        
+
         // Pass 0: Reset counters
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -1331,7 +1430,7 @@ impl GpuSurfaceNets {
             pass.set_bind_group(0, &self.compute_bind_group, &[]);
             pass.dispatch_workgroups(1, 1, 1);
         }
-        
+
         // Pass 1: Generate vertices
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -1342,7 +1441,7 @@ impl GpuSurfaceNets {
             pass.set_bind_group(0, &self.compute_bind_group, &[]);
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
-        
+
         // Pass 2: Generate indices
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -1353,7 +1452,7 @@ impl GpuSurfaceNets {
             pass.set_bind_group(0, &self.compute_bind_group, &[]);
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
-        
+
         // Pass 3: Finalize indirect draw buffer
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -1364,7 +1463,7 @@ impl GpuSurfaceNets {
             pass.set_bind_group(0, &self.compute_bind_group, &[]);
             pass.dispatch_workgroups(1, 1, 1);
         }
-        
+
         // Copy counters for readback (optional, for debug/stats)
         encoder.copy_buffer_to_buffer(
             &self.counter_buffer,
@@ -1374,7 +1473,7 @@ impl GpuSurfaceNets {
             std::mem::size_of::<Counters>() as u64,
         );
     }
-    
+
     /// Read back mesh counts from GPU (call after extract_mesh completes)
     pub fn read_counts(&mut self, device: &wgpu::Device) {
         let slice = self.counter_staging_buffer.slice(..);
@@ -1383,7 +1482,7 @@ impl GpuSurfaceNets {
             submission_index: None,
             timeout: None,
         });
-        
+
         {
             let data = slice.get_mapped_range();
             let counters: &Counters = bytemuck::from_bytes(&data);
@@ -1392,7 +1491,7 @@ impl GpuSurfaceNets {
         }
         self.counter_staging_buffer.unmap();
     }
-    
+
     /// Render the extracted mesh using WBOIT (Weighted Blended Order-Independent Transparency).
     /// Pass 1: Render water into accumulation + revealage textures.
     /// Pass 2: Composite the OIT result over the scene.
@@ -1417,14 +1516,18 @@ impl GpuSurfaceNets {
         let aspect = self.width as f32 / self.height as f32;
         let proj = glam::Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
         let view_proj = proj * view;
-        
+
         let camera_uniform = CameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),
             _padding: 0.0,
         };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
-        
+        queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[camera_uniform]),
+        );
+
         // === Pass 1: WBOIT accumulation into offscreen targets ===
         {
             let mut oit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1435,7 +1538,12 @@ impl GpuSurfaceNets {
                         view: &self.oit_accum_view,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }),
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.0,
+                                g: 0.0,
+                                b: 0.0,
+                                a: 0.0,
+                            }),
                             store: wgpu::StoreOp::Store,
                         },
                         depth_slice: None,
@@ -1445,7 +1553,12 @@ impl GpuSurfaceNets {
                         view: &self.oit_revealage_view,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }),
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 1.0,
+                                g: 1.0,
+                                b: 1.0,
+                                a: 1.0,
+                            }),
                             store: wgpu::StoreOp::Store,
                         },
                         depth_slice: None,
@@ -1463,7 +1576,7 @@ impl GpuSurfaceNets {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            
+
             oit_pass.set_pipeline(&self.render_pipeline);
             oit_pass.set_bind_group(0, &self.render_bind_group, &[]);
             if let Some(ref shadow_bg) = self.shadow_bind_group {
@@ -1476,7 +1589,7 @@ impl GpuSurfaceNets {
             oit_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             oit_pass.draw_indexed_indirect(&self.indirect_draw_buffer, 0);
         }
-        
+
         // === Pass 2: Composite OIT result over the scene ===
         {
             let mut composite_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1494,18 +1607,18 @@ impl GpuSurfaceNets {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            
+
             composite_pass.set_pipeline(&self.oit_composite_pipeline);
             composite_pass.set_bind_group(0, &self.oit_composite_bind_group, &[]);
             composite_pass.draw(0..3, 0..1); // Fullscreen triangle
         }
     }
-    
+
     /// Resize for new screen dimensions
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        
+
         // Recreate OIT textures at new resolution
         let (accum_tex, accum_view) = Self::create_oit_accum_texture(device, width, height);
         let (reveal_tex, reveal_view) = Self::create_oit_revealage_texture(device, width, height);
@@ -1513,7 +1626,7 @@ impl GpuSurfaceNets {
         self.oit_accum_view = accum_view;
         self.oit_revealage_texture = reveal_tex;
         self.oit_revealage_view = reveal_view;
-        
+
         // Recreate composite bind group with new texture views
         self.oit_composite_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("OIT Composite Bind Group"),
@@ -1534,11 +1647,19 @@ impl GpuSurfaceNets {
             ],
         });
     }
-    
-    fn create_oit_accum_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+
+    fn create_oit_accum_texture(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("OIT Accumulation Texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1549,11 +1670,19 @@ impl GpuSurfaceNets {
         let view = texture.create_view(&Default::default());
         (texture, view)
     }
-    
-    fn create_oit_revealage_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+
+    fn create_oit_revealage_texture(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("OIT Revealage Texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1564,7 +1693,7 @@ impl GpuSurfaceNets {
         let view = texture.create_view(&Default::default());
         (texture, view)
     }
-    
+
     /// Get triangle count
     pub fn triangle_count(&self) -> u32 {
         self.index_count / 3
@@ -1572,55 +1701,63 @@ impl GpuSurfaceNets {
 }
 
 /// Generate test density data - simple sphere
-pub fn generate_test_density_sphere(center: Vec3, radius: f32, world_radius: f32, world_center: Vec3) -> Vec<f32> {
+pub fn generate_test_density_sphere(
+    center: Vec3,
+    radius: f32,
+    world_radius: f32,
+    world_center: Vec3,
+) -> Vec<f32> {
     let mut density = vec![0.0f32; TOTAL_VOXELS];
-    
+
     let world_diameter = world_radius * 2.0;
     let cell_size = world_diameter / GRID_RESOLUTION as f32;
     let grid_origin = world_center - Vec3::splat(world_diameter / 2.0);
-    
+
     for z in 0..GRID_RESOLUTION {
         for y in 0..GRID_RESOLUTION {
             for x in 0..GRID_RESOLUTION {
-                let world_pos = grid_origin + Vec3::new(
-                    (x as f32 + 0.5) * cell_size,
-                    (y as f32 + 0.5) * cell_size,
-                    (z as f32 + 0.5) * cell_size,
-                );
-                
+                let world_pos = grid_origin
+                    + Vec3::new(
+                        (x as f32 + 0.5) * cell_size,
+                        (y as f32 + 0.5) * cell_size,
+                        (z as f32 + 0.5) * cell_size,
+                    );
+
                 let dist = (world_pos - center).length();
                 let d = 1.0 - (dist / radius).clamp(0.0, 2.0);
-                
-                let idx = (x + y * GRID_RESOLUTION + z * GRID_RESOLUTION * GRID_RESOLUTION) as usize;
+
+                let idx =
+                    (x + y * GRID_RESOLUTION + z * GRID_RESOLUTION * GRID_RESOLUTION) as usize;
                 density[idx] = d.max(0.0);
             }
         }
     }
-    
+
     density
 }
 
 /// Generate test density data - metaballs
 pub fn generate_test_density_metaballs(
-    balls: &[(Vec3, f32)],  // (center, radius)
+    balls: &[(Vec3, f32)], // (center, radius)
     world_radius: f32,
     world_center: Vec3,
 ) -> Vec<f32> {
     let mut density = vec![0.0f32; TOTAL_VOXELS];
-    
+
     let world_diameter = world_radius * 2.0;
     let cell_size = world_diameter / GRID_RESOLUTION as f32;
     let grid_origin = world_center - Vec3::splat(world_diameter / 2.0);
-    
+
     for z in 0..GRID_RESOLUTION {
         for y in 0..GRID_RESOLUTION {
             for x in 0..GRID_RESOLUTION {
-                let world_pos = grid_origin + Vec3::new(
-                    (x as f32 + 0.5) * cell_size,
-                    (y as f32 + 0.5) * cell_size,
-                    (z as f32 + 0.5) * cell_size,
-                );
-                
+                let world_pos = grid_origin
+                    + Vec3::new(
+                        (x as f32 + 0.5) * cell_size,
+                        (y as f32 + 0.5) * cell_size,
+                        (z as f32 + 0.5) * cell_size,
+                    );
+
                 let mut value = 0.0f32;
                 for (center, radius) in balls {
                     let dist_sq = (world_pos - *center).length_squared();
@@ -1628,13 +1765,14 @@ pub fn generate_test_density_metaballs(
                         value += (radius * radius) / dist_sq;
                     }
                 }
-                
-                let idx = (x + y * GRID_RESOLUTION + z * GRID_RESOLUTION * GRID_RESOLUTION) as usize;
+
+                let idx =
+                    (x + y * GRID_RESOLUTION + z * GRID_RESOLUTION * GRID_RESOLUTION) as usize;
                 density[idx] = value;
             }
         }
     }
-    
+
     density
 }
 
@@ -1647,11 +1785,11 @@ pub fn generate_test_density_noise(
     seed: u32,
 ) -> Vec<f32> {
     let mut density = vec![0.0f32; TOTAL_VOXELS];
-    
+
     let world_diameter = world_radius * 2.0;
     let cell_size = world_diameter / GRID_RESOLUTION as f32;
     let grid_origin = world_center - Vec3::splat(world_diameter / 2.0);
-    
+
     // Simple hash function
     let hash = |x: i32, y: i32, z: i32| -> f32 {
         let n = (x.wrapping_mul(374761393) as u32)
@@ -1662,31 +1800,33 @@ pub fn generate_test_density_noise(
         let n = n.wrapping_mul(1103515245);
         ((n & 0x7fffffff) as f32) / (0x7fffffff as f32)
     };
-    
+
     for z in 0..GRID_RESOLUTION {
         for y in 0..GRID_RESOLUTION {
             for x in 0..GRID_RESOLUTION {
-                let world_pos = grid_origin + Vec3::new(
-                    (x as f32 + 0.5) * cell_size,
-                    (y as f32 + 0.5) * cell_size,
-                    (z as f32 + 0.5) * cell_size,
-                );
-                
+                let world_pos = grid_origin
+                    + Vec3::new(
+                        (x as f32 + 0.5) * cell_size,
+                        (y as f32 + 0.5) * cell_size,
+                        (z as f32 + 0.5) * cell_size,
+                    );
+
                 let offset = world_pos - center;
                 let dist = offset.length();
-                
+
                 // Base sphere
                 let base = 1.0 - (dist / base_radius).clamp(0.0, 1.5);
-                
+
                 // Add noise displacement
                 let noise_scale = 0.15;
                 let noise = hash(x as i32, y as i32, z as i32) * 2.0 - 1.0;
-                
-                let idx = (x + y * GRID_RESOLUTION + z * GRID_RESOLUTION * GRID_RESOLUTION) as usize;
+
+                let idx =
+                    (x + y * GRID_RESOLUTION + z * GRID_RESOLUTION * GRID_RESOLUTION) as usize;
                 density[idx] = (base + noise * noise_scale * base).max(0.0);
             }
         }
     }
-    
+
     density
 }
